@@ -11,7 +11,6 @@ backend/*.exe
 backend/*.test
 backend/*.out
 backend/vendor/
-backend/go.sum
 
 frontend/node_modules/
 frontend/dist/
@@ -32,6 +31,3 @@ docker-compose.override.yml
 .idea/
 .vscode/
 *.iml
-
-*.mod
-*.sum
