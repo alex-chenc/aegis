@@ -32,6 +32,47 @@
 
 ---
 
+## 4. 日志使用规范（重要）
+
+### 4.1 日志库
+
+项目使用 `pkg/logger` 封装的 zap 日志库，支持：
+- 文件持久化输出（logs/app.log）
+- 控制台开发输出
+- 日志轮转（lumberjack）
+- 结构化日志字段
+
+### 4.2 日志初始化要求
+
+**每个后端模块的主函数必须优先初始化日志库**，在初始化其他依赖之前完成日志配置。
+
+### 4.3 日志级别使用规范
+
+| 级别 | 使用场景 |
+|:---|:---|
+| **Debug** | 开发调试信息、详细执行流程、性能分析数据 |
+| **Info** | 关键业务操作、服务启动/关闭、重要状态变更 |
+| **Warn** | 可恢复的异常、降级操作、非预期但可处理的情况 |
+| **Error** | 错误操作、失败重试、需要关注的异常 |
+| **Fatal** | 致命错误、服务无法继续运行 |
+
+### 4.4 各层日志打印要求
+
+| 层级 | 日志要求 |
+|:---|:---|
+| **Repository** | 关键 CRUD 操作记录 Info，错误记录 Error，包含实体 ID、操作类型等字段 |
+| **Service** | 业务流程节点记录 Info，异常处理记录 Warn/Error，包含业务上下文字段 |
+| **Handler** | 请求入口/出口记录 Info，参数校验失败记录 Warn，包含请求 ID、路径等字段 |
+| **gRPC** | 连接建立/断开记录 Info，通信异常记录 Error，包含 host_id、连接状态等字段 |
+| **Worker** | 任务开始/结束记录 Info，重试记录 Warn，包含任务 ID、重试次数等字段 |
+| **主程序** | 启动/关闭记录 Info，初始化失败记录 Fatal，包含组件名称、配置信息等字段 |
+
+### 4.5 结构化日志要求
+
+**必须使用结构化字段，禁止字符串拼接**。每个日志条目应包含足够的上下文信息，便于问题排查和审计追踪。
+
+---
+
 ## 第一部分：项目初始化与基础设施
 
 ### 任务 1.1：生成项目骨架和基础文件
@@ -48,6 +89,9 @@
 6. 提供 `.env.example` 文件。
 7. 为 `backend` 和 `frontend` 提供 `Dockerfile`。
 8. 提供 `frontend/nginx.conf` 文件（来自 `infrastructure_design_v2.0_complete.md` 第 9 节）。
+
+**日志要求**：
+- **后端 `main.go`**：必须在主函数入口处**优先初始化日志库**，在初始化其他依赖之前完成日志配置，符合第 4 节规范。
 
 ### 任务 1.2：实现后端配置管理模块
 
@@ -69,14 +113,17 @@
 
 在 `backend/internal/repository` 目录下，实现所有数据库访问层代码。严格遵循 `backend_detailed_design_v2.0_complete.md` 第 5 节和 `database_structure_design_v2.0_complete.md` 的设计。
 
-1. **实现 `db.go`**：数据库连接池初始化，包含连接参数配置和连通性验证。
-2. **实现 `host_repo.go`**：`Upsert`、`UpdateHeartbeat`、`FindAll`（含分页和搜索）、`FindByID`、`Count` 方法。
-3. **实现 `template_repo.go`**：`Create`、`FindAll`、`FindByID`、`UpdateStatus`、`Delete` 方法。
-4. **实现 `rule_repo.go`**：`BatchCreate`（事务）、`FindByTemplateID`、`FindByID`、`UpdateScript`、`UpdateScriptStatus` 方法。
-5. **实现 `task_log_repo.go`**：`Create`、`UpdateResult`、`FindByGroupID`、`FindByID` 方法。
-6. **实现 `config_repo.go`**：`GetActive`、`Upsert`（含加密）、`UpdateTestStatus` 方法。
-7. **实现 `script_version_repo.go`**：`Create`、`FindByRuleAndType`、`SetCurrentVersion` 方法。
-8. **实现 `healing_log_repo.go`**：`Create`、`Update`、`FindByID`、`FindByOriginalTaskID` 方法。
+1. **实现 `db.go`**：数据库连接池初始化，包含连接参数配置和连通性验证。**[日志]**：数据库连接成功/失败必须记录 Info/Error 级别日志，包含 host、port、dbname 字段。
+2. **实现 `host_repo.go`**：`Upsert`、`UpdateHeartbeat`、`FindAll`（含分页和搜索）、`FindByID`、`Count` 方法。**[日志]**：Upsert 操作记录 Info 级别日志（含 host_id、ip、hostname），错误记录 Error 级别日志。
+3. **实现 `template_repo.go`**：`Create`、`FindAll`、`FindByID`、`UpdateStatus`、`Delete` 方法。**[日志]**：Create/Delete/UpdateStatus 记录 Info 级别日志（含 template_id、name、status），错误记录 Error 级别日志。
+4. **实现 `rule_repo.go`**：`BatchCreate`（事务）、`FindByTemplateID`、`FindByID`、`UpdateScript`、`UpdateScriptStatus` 方法。**[日志]**：BatchCreate 记录 Info 级别日志（含 count、template_id），UpdateScript 记录 Info 级别日志（含 rule_id、script_type、version）。
+5. **实现 `task_log_repo.go`**：`Create`、`UpdateResult`、`FindByGroupID`、`FindByID` 方法。**[日志]**：Create/UpdateResult 记录 Info 级别日志（含 task_id、task_type、status）。
+6. **实现 `config_repo.go`**：`GetActive`、`Upsert`（含加密）、`UpdateTestStatus` 方法。**[日志]**：Upsert 记录 Info 级别日志（含 config_id、base_url、model_name），加密失败记录 Error 级别日志。
+7. **实现 `script_version_repo.go`**：`Create`、`FindByRuleAndType`、`SetCurrentVersion` 方法。**[日志]**：Create/SetCurrentVersion 记录 Info 级别日志（含 version_id、rule_id、script_type、version）。
+8. **实现 `healing_log_repo.go`**：`Create`、`Update`、`FindByID`、`FindByOriginalTaskID` 方法。**[日志]**：Create/MarkCompleted/MarkFailed 记录 Info 级别日志（含 healing_id、original_task_id、status、attempts）。
+
+**日志要求**：
+- **Repository 层**：关键 CRUD 操作记录 Info 级别日志，错误操作记录 Error 级别日志，包含实体 ID、操作类型、影响行数等上下文字段。
 
 ### 任务 2.2：实现 Redis 缓存层
 
@@ -91,6 +138,19 @@
 5. **实现 LLM 配置缓存**：`SetLLMConfig(config)`、`GetLLMConfig()` 方法。
 6. **实现自愈状态管理**：`SetHealingStatus(taskID, status)`、`GetHealingStatus(taskID)` 方法。
 
+**日志要求**：
+- 连接初始化记录 Info 级别日志
+- 关键操作（设置/获取缓存）记录 Debug 级别日志
+- 连接异常记录 Error 级别日志
+
+**日志要求**：
+- **Redis 操作**：连接建立/断开记录 Info 级别日志，操作失败记录 Error 级别日志，包含 key、操作类型、过期时间等上下文信息。
+
+**日志要求**：
+- 客户端连接成功/失败时记录 Info/Error 级别日志，包含 Redis 地址、端口等信息
+- 关键缓存操作（Set/Get）记录 Debug 级别日志，包含 Key 和状态
+- 批量操作（BatchCheckOnline）记录 Info 级别日志，包含数量信息
+
 ### 任务 2.3：实现 MinIO 对象存储层
 
 **你的任务**：
@@ -99,6 +159,20 @@
 
 1. **实现 MinIO 客户端初始化**：创建客户端并确保所有 Bucket 存在。
 2. **实现文件操作**：`UploadFile`、`DownloadFile`、`GetPresignedURL`、`DeleteFile`、`FileExists` 方法。
+
+**日志要求**：
+- 客户端初始化记录 Info 级别日志
+- 文件上传/下载操作记录 Info 级别日志，包含 bucket 和 object name
+- 文件操作失败记录 Error 级别日志
+
+**日志要求**：
+- 客户端初始化记录 Info 级别日志
+- 文件上传/下载记录 Info 级别日志，包含文件名和 bucket 名
+- 文件不存在或操作失败记录 Warn 级别日志
+- 连接异常记录 Error 级别日志
+
+**日志要求**：
+- **MinIO 操作**：文件上传/下载/删除记录 Info 级别日志，操作失败记录 Error 级别日志，包含 bucket 名称、object 名称、文件大小等上下文信息。
 
 ---
 
@@ -114,6 +188,11 @@
 2. **实现 `validator.go`**：三层连通性校验（格式校验、网络连通性校验、模型可用性校验）。
 3. **实现 `prompts.go`**：定义所有 Prompt 模板常量（规则提取 Prompt、检查脚本生成 Prompt、修复脚本生成 Prompt、自愈修复 Prompt）。
 4. **实现 `parser.go`**：LLM 返回结果解析器，包含 JSON 提取、反序列化、字段校验和去重逻辑。
+
+**日志要求**：
+- LLM API 调用记录 Info 级别日志，包含模型名称、token 使用量
+- 重试操作记录 Warn 级别日志，包含重试次数和原因
+- 解析失败记录 Error 级别日志，包含原始响应摘要
 
 ### 任务 3.2：实现文件解析模块
 
@@ -139,6 +218,13 @@
 3. **实现分片处理逻辑**：超长文档的智能分片和分片 Prompt 构建。
 4. **实现解析状态更新**：在处理过程中持续更新 Redis 中的解析进度。
 
+**日志要求**：
+- 文件上传开始/结束记录 Info 级别日志
+- Worker 消费任务记录 Info 级别日志
+- 每个处理阶段（下载、解析、LLM调用、入库）记录 Info 级别日志
+- LLM 调用异常记录 Warn 级别日志（可重试）
+- 解析失败记录 Error 级别日志
+
 ### 任务 3.4：实现脚本生成服务
 
 **你的任务**：
@@ -149,6 +235,11 @@
 2. **实现修复脚本生成**：同上流程，使用修复脚本 Prompt。
 3. **实现脚本安全性校验**：危险命令检测、Shebang 检查、网络外联检测、长度检查。
 4. **实现脚本版本管理**：创建版本记录、更新 baseline_rules 表、上传到 MinIO。
+
+**日志要求**：
+- Worker 开始/结束处理记录 Info 级别日志
+- 安全性校验失败记录 Warn 级别日志
+- 脚本生成成功记录 Info 级别日志，包含 rule_id 和 version
 
 ### 任务 3.5：实现自愈修复服务（核心）
 
@@ -162,6 +253,13 @@
 4. **实现自愈状态管理**：更新 Redis 状态、记录数据库日志、通知前端。
 5. **实现最大重试限制**：3 次重试后标记为失败。
 
+**日志要求**：
+- 自愈触发记录 Warn 级别日志
+- 每次重试记录 Info 级别日志，包含 attempt 次数
+- LLM 修复建议记录 Debug 级别日志
+- 自愈成功记录 Info 级别日志
+- 自愈失败（达到最大重试）记录 Error 级别日志
+
 ### 任务 3.6：实现任务编排服务
 
 **你的任务**：
@@ -171,6 +269,11 @@
 1. **实现任务下发**：查询脚本 → 生成任务组 → 为每台主机创建子任务 → 通过 gRPC 下发。
 2. **实现任务结果处理**：接收 Agent 结果 → 更新状态 → 判断是否触发自愈。
 3. **实现离线主机处理**：检查 Redis 心跳 Key，离线主机直接标记失败。
+
+**日志要求**：
+- 任务下发记录 Info 级别日志，包含 task_group_id 和主机数量
+- 任务结果接收记录 Info 级别日志
+- 离线主机检测记录 Warn 级别日志
 
 ---
 
@@ -188,6 +291,14 @@
 4. **实现心跳处理**：接收 HeartbeatRequest → 更新 Redis 和数据库。
 5. **实现命令下发与结果接收**：通过 channel 接收来自 API 层的命令请求，通过 gRPC 流下发；从 Agent 流接收 CommandResult 并交给 task_service 处理。
 
+**日志要求**：
+- gRPC 服务器启动/停止记录 Info 级别日志
+- Agent 连接建立/断开记录 Info 级别日志，包含 host_id
+- Agent 注册成功记录 Info 级别日志
+- 心跳接收记录 Debug 级别日志
+- 命令下发记录 Info 级别日志
+- 通信异常记录 Error 级别日志
+
 ### 任务 4.2：实现 RESTful API (Gin)
 
 **你的任务**：
@@ -203,6 +314,14 @@
    - `GET /api/v1/agent/install-command`：返回包含动态 IP 的安装命令。该 Handler 在初始化时接收由 `ipdetect.DetectServerIP()` 检测到的 IP 地址，并将其缓存在 `AgentHandler` 结构体中。每次请求时直接返回缓存的 IP，不重复检测。返回格式为 `{"command": "curl -sSL http://{ip}:{port}/api/v1/agent/install.sh | sudo bash", "server_ip": "{ip}", "http_port": {port}, "grpc_port": {grpc_port}}`。
    - `GET /api/v1/agent/install.sh`：使用 Go 的 `text/template` 包动态生成安装脚本，将 `SERVER_ADDR`、`GRPC_ADDR` 等变量替换为实际地址。
 7. **实现中间件**：CORS、请求日志和 Panic 恢复中间件。
+
+**日志要求**：
+- HTTP 服务器启动记录 Info 级别日志
+- 每个请求入口记录 Info 级别日志，包含 method、path、client_ip
+- 请求处理成功记录 Info 级别日志
+- 参数校验失败记录 Warn 级别日志
+- 处理异常记录 Error 级别日志
+- Panic 恢复记录 Error 级别日志，包含堆栈信息
 
 ---
 
@@ -255,17 +374,19 @@
 
 编写 `backend/cmd/server/main.go`，整合所有模块。严格遵循 `backend_detailed_design_v2.0_complete.md` 第 14 节的启动流程。
 
-1. 按顺序初始化所有依赖（配置 → 数据库 → Redis → MinIO → Repository → LLM → Service → Worker → gRPC → HTTP）。
-2. **在初始化阶段（在启动 gRPC 和 HTTP 服务器之前），调用 `ipdetect.DetectServerIP(cfg.Server.ExternalIP)` 检测服务器 IP 地址**，将结果传入 `AgentHandler` 的构造函数。并将检测结果输出到日志：
-   ```go
-   serverIP := ipdetect.DetectServerIP(cfg.Server.ExternalIP)
-   logger.Info("Detected server IP", zap.String("ip", serverIP))
-   logger.Info("Agent install command", zap.String("command",
-       fmt.Sprintf("curl -sSL http://%s:%d/api/v1/agent/install.sh | sudo bash",
-           serverIP, cfg.Server.HTTPPort)))
-   ```
-3. 实现优雅关闭逻辑。
-4. 实现结构化日志初始化。
+1. **优先初始化日志库**（在初始化其他依赖之前）：调用 `logger.Init()` 初始化日志配置。
+2. 按顺序初始化所有依赖（配置 → 数据库 → Redis → MinIO → Repository → LLM → Service → Worker → gRPC → HTTP）。
+3. **在初始化阶段（在启动 gRPC 和 HTTP 服务器之前），调用 `ipdetect.DetectServerIP(cfg.Server.ExternalIP)` 检测服务器 IP 地址**，将结果传入 `AgentHandler` 的构造函数。并将检测结果输出到日志：
+4. 实现优雅关闭逻辑。
+
+**日志要求**：
+- **程序启动时优先初始化日志库**
+- 每个组件初始化开始/结束记录 Info 级别日志
+- 初始化失败记录 Fatal 级别日志（导致程序退出）
+- IP 检测成功记录 Info 级别日志
+- Agent 安装命令生成记录 Info 级别日志
+- 服务启动成功记录 Info 级别日志
+- 优雅关闭时记录 Info 级别日志
 
 ---
 
