@@ -1,18 +1,22 @@
-# --- Build Stage ---
-FROM golang:1.25-alpine AS builder
-WORKDIR /src
-ENV GOPROXY=https://goproxy.cn,direct
+ARG BASE_IMAGE=golang:1.20-alpine
+FROM ${BASE_IMAGE} AS builder
+
+WORKDIR /app
+
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/server ./cmd/main.go
 
-# --- Final Stage ---
+COPY . .
+RUN make build
+
 FROM alpine:latest
-WORKDIR /app
-COPY --from=builder /app/server .
-# HTTP port
+
+WORKDIR /root/
+
+COPY --from=builder /app/backend .
+COPY --from=builder /app/config/config.yaml .
+
 EXPOSE 8080
-# gRPC port
 EXPOSE 9090
-CMD ["./server"]
+
+CMD ["./backend"]

@@ -1,389 +1,340 @@
-# AGENTS.md
+# AGENTS.md - AI Coding Agent Guide
 
-This is the AI Benchmark Baseline System project. It's an automated baseline check and self-healing system using LLM (Tongyi Qianwen) to parse documents, generate scripts, and manage agents.
+> **Project Status**: Design/Specification Phase - No source code implemented yet.
+> This repository contains comprehensive design documents for an "Automated Baseline Check and Self-Healing System" (自动化基线检查与自愈系统).
 
-## Project Structure
+## Project Overview
 
-The codebase is located in `/code/ai-benchmark/` with the following main components:
+A platform for automated baseline security checking and self-healing for server infrastructure. The system uses LLM (Large Language Model) intelligence to parse baseline documents and generate executable scripts, deployed through agents on target hosts.
 
-| Directory | Language | Description |
-| :--- | :--- | :--- |
-| `backend/` | Go 1.25 | Core API server (Gin) and gRPC server for agent communication. |
-| `agent/` | Go 1.24 | Lightweight probe deployed on target hosts for execution and reporting. |
-| `frontend/` | Vue 3 / TS | User interface built with Vite, Pinia, and Element Plus. |
-| `baseline_system_design/` | Markdown | Detailed design documents and PRDs. |
+**Core Features**:
+- Upload baseline documents (PDF, Word, YAML) → LLM parses into check/fix rules
+- Deploy agents on servers for automated baseline checking
+- Self-healing: LLM fixes failed scripts and retries automatically
+
+---
+
+## Architecture
+
+### Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| **Backend** | Go 1.20+, Gin (REST API), gRPC (Agent communication) |
+| **Frontend** | Vue 3 (Composition API), TypeScript, Vite, Pinia, Element Plus |
+| **Agent** | Go (cross-compiled: linux/amd64, linux/arm64) |
+| **Database** | PostgreSQL |
+| **Cache** | Redis |
+| **Storage** | MinIO (file/object storage) |
+
+### Project Structure (Planned)
+
+```
+/backend
+├── cmd/server/main.go           # Entry point
+├── config/config.yaml           # Configuration
+├── internal/
+│   ├── api/handler/             # HTTP handlers
+│   ├── api/middleware/          # CORS, logging, recovery
+│   ├── grpc_server/             # Agent communication
+│   ├── service/                 # Business logic
+│   ├── repository/              # Data access layer
+│   ├── llm/                     # LLM client, prompts, parser
+│   ├── fileparser/              # PDF, Word, YAML, Excel parsers
+│   ├── storage/                 # MinIO, Redis clients
+│   ├── ipdetect/                # Server IP auto-detection
+│   └── model/                   # Data models
+├── pkg/api/v1/                  # Generated protobuf code
+├── scripts/                     # DB init scripts
+├── Makefile
+├── build.sh
+└── Dockerfile
+
+/frontend
+├── src/
+│   ├── api/                     # Axios API layer
+│   ├── components/              # Reusable components
+│   ├── composables/             # Vue composition functions
+│   ├── store/                   # Pinia stores
+│   ├── types/                   # TypeScript definitions
+│   ├── utils/                   # Helper functions
+│   └── views/                   # Page components
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+├── Makefile
+├── build.sh
+└── Dockerfile
+
+/agent
+├── cmd/agent/main.go            # Agent entry point
+├── dist/                        # Cross-compiled binaries
+├── Makefile
+├── build.sh
+└── Dockerfile
+```
+
+---
 
 ## Build Commands
 
 ### Backend (Go)
 
 ```bash
-# Build backend server (single binary with HTTP + gRPC)
-cd backend && go build -o server ./cmd/main.go
+# Build binary
+make build
+# or: go build -o backend ./cmd/main.go
 
-# Build all packages
-cd backend && go build ./...
+# Run tests
+make test
+# or: go test ./...
+
+# Run single test
+go test -v ./internal/service -run TestServiceName
+
+# Build Docker image
+./build.sh
+
+# Clean
+make clean
+```
+
+### Frontend (Vue/TypeScript)
+
+```bash
+# Install dependencies
+make install
+# or: npm install
+
+# Build for production
+make build
+# or: npm run build
+
+# Development server
+npm run dev
+
+# Run tests
+make test
+# or: npm run test
+
+# Run single test
+npm run test -- --grep "test name"
+
+# Lint
+npm run lint
+
+# Type check
+npm run type-check
+# or: vue-tsc --noEmit
+
+# Build Docker image
+./build.sh
+
+# Clean
+make clean
+# removes dist/ and node_modules/
 ```
 
 ### Agent (Go)
 
 ```bash
-# Build Agent
-cd agent && go build -o agent main.go
+# Cross-compile for all targets (linux/amd64, linux/arm64)
+make build
+
+# Cross-compile for specific target
+GOOS=linux GOARCH=amd64 go build -o ./dist/baseline-agent-linux-amd64 ./cmd/agent
+
+# Run tests
+make test
+# or: go test ./...
+
+# Upload artifacts to MinIO
+make upload
+# or: ./build.sh
+
+# Clean
+make clean
 ```
 
-### Frontend (Vue 3 / Vite)
-
-```bash
-# Install dependencies
-cd frontend && npm install
-
-# Development mode (hot reload)
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
-```
-
-## Test Commands
-
-### Go Tests (Backend & Agent)
-
-```bash
-# Run all tests in a module
-cd backend && go test ./...
-
-# Run tests with verbose output
-cd backend && go test -v ./...
-
-# Run a single test file
-cd backend && go test -v ./internal/api/hosts_test.go
-
-# Run a specific test function
-cd backend && go test -v -run TestGetHosts ./internal/api/
-
-# Run tests with coverage
-cd backend && go test -cover ./...
-
-# Run agent tests
-cd agent && go test -v ./...
-```
-
-### Frontend Tests
-
-```bash
-# Run unit tests (if Vitest is configured)
-cd frontend && npm run test:unit
-
-# Run tests in watch mode
-cd frontend && npm run test:unit -- --watch
-```
-
-## Lint & Format
-
-### Go
-
-```bash
-# Format code
-gofmt -w .
-goimports -w .
-
-# Vet code
-go vet ./...
-
-# Run golangci-lint (if configured)
-golangci-lint run
-```
-
-### Frontend
-
-```bash
-# TypeScript check
-cd frontend && vue-tsc --noEmit
-
-# Lint (if ESLint is configured)
-cd frontend && npm run lint
-```
+---
 
 ## Code Style Guidelines
 
-### Go Naming Conventions
+### Go (Backend & Agent)
 
-| Element | Convention | Example |
-| :--- | :--- | :--- |
-| Package | `lowercase` | `api`, `models`, `handler` |
-| Exported type | `PascalCase` | `HostHandler`, `AgentService` |
-| Exported function | `PascalCase` | `NewHostHandler`, `GetHosts` |
-| Unexported function | `camelCase` | `handleMessage`, `addConnection` |
-| Interface | `PascalCase` + `-er` | `Handler`, `Service` |
-| Constant | `PascalCase` or `SCREAMING_SNAKE` | `DefaultTimeout`, `MAX_RETRIES` |
-| Private member | `camelCase` | `connections`, `mu` |
-
-### Go Import Order
-
-Group imports into three sections separated by blank lines:
-1. Standard library
-2. Third-party packages
-3. Local project packages
-
+**Imports**: Group imports in 3 sections (stdlib, external, internal):
 ```go
 import (
     // Standard library
     "context"
-    "log"
+    "fmt"
     "net/http"
-
-    // Third-party
+    
+    // External packages
     "github.com/gin-gonic/gin"
-    "gorm.io/gorm"
-
-    // Local project
-    "ai-benchmark/backend/internal/models"
+    "go.uber.org/zap"
+    
+    // Internal packages
+    "baseline-system/internal/model"
+    "baseline-system/internal/repository"
 )
 ```
 
-### Go Error Handling
+**Naming**:
+- Use `camelCase` for local variables, `PascalCase` for exported
+- Repository interfaces: `HostRepository`, `TemplateRepository`
+- Service structs: `ConfigService`, `TaskService`
+- Handler functions: `GetHosts`, `UploadTemplate`
 
+**Error Handling**:
+- Always wrap errors with context: `fmt.Errorf("failed to get host: %w", err)`
+- Use custom error types for business logic errors
+- Return errors up the call stack, handle at handler level
+
+**Database**:
+- Use UUID as primary key: `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- Always include `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- Use `updated_at` with trigger for automatic updates
+
+**API Response Format**:
 ```go
-// Return errors as last value
-func (h *HostHandler) GetHosts(c *gin.Context) {
-    var hosts []models.Host
-    if err := h.DB.Find(&hosts).Error; err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
-        return
-    }
-    // ... success case
+// Success
+{
+    "code": 0,
+    "message": "success",
+    "data": { ... }
 }
 
-// Wrap errors with context where appropriate
-if err := db.AutoMigrate(&models.Host{}); err != nil {
-    log.Printf("Failed to auto migrate models: %v", err)
+// Error
+{
+    "code": 1001,
+    "message": "host not found",
+    "data": null
 }
 ```
 
-### Go Concurrency
+### TypeScript/Vue (Frontend)
 
-```go
-// Use sync.RWMutex for read-heavy workloads
-type AgentServiceHandler struct {
-    mu          sync.RWMutex
-    connections map[string]*AgentConnection
-}
-
-// Lock for write
-h.mu.Lock()
-h.connections[hostID] = conn
-h.mu.Unlock()
-
-// Lock for read
-h.mu.RLock()
-conn, ok := h.connections[hostID]
-h.mu.RUnlock()
-```
-
-### Frontend (Vue 3 + TypeScript)
-
-#### Component Structure
-
-```vue
-<template>
-  <!-- Template with kebab-case component tags -->
-  <el-card class="box-card">
-    <el-button type="primary">Click</el-button>
-  </el-card>
-</template>
-
-<script setup lang="ts">
-// Imports first
-import { ref, computed, onMounted } from 'vue';
-import { useHostStore } from '@/store/hosts';
-import type { Host } from '@/types';
-
-// Store instances
-const hostStore = useHostStore();
-
-// Reactive state
-const loading = ref(false);
-const hosts = ref<Host[]>([]);
-
-// Computed properties
-const onlineCount = computed(() => 
-  hosts.value.filter(h => h.status === 'online').length
-);
-
-// Methods
-const fetchData = async () => {
-  loading.value = true;
-  try {
-    await hostStore.fetchHosts(1, 10);
-  } finally {
-    loading.value = false;
-  }
-};
-
-// Lifecycle hooks
-onMounted(() => {
-  fetchData();
-});
-</script>
-
-<style scoped>
-/* Scoped styles */
-.box-card {
-  margin-bottom: 20px;
-}
-</style>
-```
-
-#### Frontend Naming Conventions
-
-| Element | Convention | Example |
-| :--- | :--- | :--- |
-| Component file | `PascalCase.vue` | `Dashboard.vue`, `LogTerminal.vue` |
-| Composable file | `camelCase.ts` with `use` prefix | `useWebSocket.ts` |
-| Store file | `camelCase.ts` | `hosts.ts`, `tasks.ts`, `config.ts` |
-| Type file | `index.ts` in `types/` | `types/index.ts` |
-| API file | `camelCase.ts` | `hosts.ts`, `request.ts` |
-| Interface/Type | `PascalCase` | `Host`, `Task`, `ApiResponse` |
-
-#### TypeScript Patterns
-
+**Imports**: Group and sort by path alias then external:
 ```typescript
-// Interface for data models
-export interface Host {
-  id: string;
-  ip_address: string;
-  hostname: string;
-  status: string;
-  [key: string]: any; // Allow additional properties
-}
+// Vue ecosystem
+import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 
-// Generic API response wrapper
-export interface ApiResponse<T = any> {
-  code: number;
-  message: string;
-  data: T;
-}
+// External packages
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-// Paginated response
-export interface PaginatedResponse<T> {
-  total: number;
-  items: T[];
-}
+// Internal modules
+import { useHostStore } from '@/store/hosts'
+import { fetchHosts } from '@/api/hosts'
+import type { Host } from '@/types'
 ```
 
-#### Pinia Store Pattern
+**Naming**:
+- Components: `PascalCase.vue` (e.g., `LogTerminal.vue`, `FileUpload.vue`)
+- Composables: `use*.ts` (e.g., `usePagination.ts`)
+- Store files: `camelCase.ts` (e.g., `hosts.ts`, `config.ts`)
+- Types/Interfaces: `PascalCase` with descriptive names
 
-```typescript
-import { defineStore } from 'pinia';
+**TypeScript**:
+- Prefer `interface` over `type` for object shapes
+- Use strict mode, avoid `any`
+- Define API response types in `types/api.ts`
 
-export const useHostStore = defineStore('hosts', {
-  state: () => ({
-    hosts: [] as Host[],
-    total: 0,
-    isLoading: false,
-    error: null as string | null,
-  }),
-  
-  actions: {
-    async fetchHosts(page: number, pageSize: number) {
-      this.isLoading = true;
-      try {
-        const response = await getHosts({ page, pageSize });
-        this.hosts = response.items;
-        this.total = response.total;
-      } catch (err: any) {
-        this.error = err.message;
-      } finally {
-        this.isLoading = false;
-      }
-    },
-  },
-  
-  getters: {
-    onlineCount: (state) => 
-      state.hosts.filter(h => h.status === 'online').length,
-  },
-});
-```
+**Components**:
+- Use Composition API with `<script setup lang="ts">`
+- Extract reusable logic to composables
+- Use Pinia for global state, `ref`/`reactive` for local state
 
-## Architecture & Communication
+**Data Fetching**:
+- No WebSockets - all updates are user-triggered (refresh button or after operations)
+- Use Pinia actions for API calls
+- Show loading states during data fetch
 
-### Agent-Backend (gRPC)
-
-Communication uses bidirectional streaming via gRPC:
-- **Protobuf Definitions**: `backend/proto/agent_comm.proto`
-- **Heartbeat**: Agent sends every 30 seconds
-- **Asset Collection**: Full system info on registration
-- **Command Execution**: Real-time script execution with log streaming
-
-### Frontend-Backend (RESTful)
-
-- **API Base**: `/api/v1`
-- **Endpoints**:
-  - `GET /hosts` - List all hosts
-  - `GET /hosts/:id` - Host details
-  - `GET /templates` - List templates
-  - `POST /templates` - Create template
-  - `GET /tasks` - List tasks
-  - `GET /settings` - System settings
-- **Response Format**: `{ code: number, message: string, data: T }`
-
-### Database Schema
-
-PostgreSQL with the following main tables:
-- `hosts` - Agent host information
-- `templates` - Baseline check templates
-- `baseline_rules` - Individual check/fix rules
-- `task_logs` - Execution history
-
-See `init.sql` for complete schema.
-
-## Deployment
-
-The system uses Docker Compose for orchestration:
-
-```bash
-# Start all services
-docker compose up -d
-
-# Check logs
-docker compose logs -f
-
-# Stop and remove containers
-docker compose down
-```
-
-Services: `backend_api`, `backend_grpc`, `frontend`, `agent1`, `postgres`, `redis`, `minio`
-
-## Configuration & Environment
-
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `DATABASE_URL` | PostgreSQL connection string | Required |
-| `REDIS_ADDR` | Redis server address | `localhost:6379` |
-| `REDIS_PASSWORD` | Redis password | Required |
-| `MINIO_ENDPOINT` | MinIO server endpoint | `localhost:9000` |
-| `MINIO_ROOT_USER` | MinIO access key | Required |
-| `MINIO_ROOT_PASSWORD` | MinIO secret key | Required |
-| `LLM_API_KEY` | API key for Tongyi Qianwen | Required |
-| `BACKEND_GRPC_PORT` | Port for gRPC server | `9090` |
-| `BACKEND_HTTP_PORT` | Port for API server | `8080` |
-| `AGENT_AUTH_TOKEN` | Shared secret for agent auth | Required |
-
-## Design References
-
-Detailed specifications in `baseline_system_design/`:
-- `full_system_design_document_v1.4.md` - System architecture
-- `agent_detailed_design.md` - Agent internals
-- `frontend_detailed_design.md` - Frontend structure
-- `api_communication_design.md` - API & WebSocket design
-- `database_structure_design_detailed.md` - Schema design
-- `docker_deployment_detailed.md` - Containerization
+**Element Plus**:
+- Use `ElInput`, `ElButton`, `ElTable`, `ElPagination`, `ElUpload`
+- Wrap form controls with validation
+- Use built-in message/notification for feedback
 
 ---
-**Version**: 1.1
-**Project**: AI Benchmark Baseline System
+
+## API Endpoints (REST)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| **Config** |||
+| GET | `/api/v1/config/llm` | Get LLM config (masked API key) |
+| POST | `/api/v1/config/llm` | Save LLM config |
+| POST | `/api/v1/config/llm/test` | Test LLM connectivity |
+| **Hosts** |||
+| GET | `/api/v1/hosts` | List hosts (paginated) |
+| GET | `/api/v1/hosts/:id` | Get host details |
+| **Templates** |||
+| POST | `/api/v1/templates/upload` | Upload template file |
+| GET | `/api/v1/templates/:id/status` | Get parsing status |
+| GET | `/api/v1/templates/:id/rules` | Get parsed rules |
+| **Tasks** |||
+| POST | `/api/v1/tasks/run-check` | Execute check task |
+| POST | `/api/v1/tasks/run-fix` | Execute fix task |
+| GET | `/api/v1/tasks/:id/logs` | Get task logs |
+| **Agent** |||
+| GET | `/api/v1/agent/install-command` | Get install command |
+| GET | `/api/v1/agent/install.sh` | Dynamic install script |
+| GET | `/api/v1/agent/download` | Download agent binary |
+
+---
+
+## Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `hosts` | Agent-managed host information |
+| `templates` | Uploaded baseline templates metadata |
+| `baseline_rules` | Parsed check/fix rules from templates |
+| `task_logs` | Task execution logs (check/fix) |
+| `llm_configs` | LLM service configuration |
+| `script_versions` | Script version history |
+| `self_healing_logs` | Self-healing process logs |
+
+---
+
+## Key Implementation Notes
+
+1. **No WebSocket**: All data updates are user-triggered via refresh buttons or post-operation callbacks
+
+2. **Self-Healing Flow**: When a script fails → LLM analyzes error → generates new script → retries (max 3 attempts)
+
+3. **Agent Communication**: Backend uses gRPC bidirectional streaming for real-time command execution
+
+4. **File Storage**: MinIO stores uploaded templates and agent binaries
+
+5. **IP Detection**: Backend auto-detects server IP at startup (prioritizes public IP) for agent install commands
+
+6. **API Key Security**: LLM API keys are AES-256 encrypted in database, returned masked to frontend
+
+---
+
+## Design Documents Reference
+
+Located in `baseline_system_design_v2.1/`:
+
+- `prd_design_v2.1_complete.md` - Product requirements
+- `backend_detailed_design_v2.1_complete.md` - Backend architecture
+- `frontend_detailed_design_v2.1_complete.md` - Frontend architecture
+- `database_structure_design_v2.1_complete.md` - DB schema
+- `agent_detailed_design_v2.1_complete.md` - Agent design
+- `build_system_design_v2.1_complete.md` - Build pipeline
+- `communication_structure_design_v2.1_complete.md` - API/gRPC specs
+- `infrastructure_design_v2.1_complete.md` - Deployment architecture
+- `ai_implementation_prompt_v2.1_complete.md` - LLM prompt engineering
+
+---
+
+## Development Workflow
+
+1. Read design documents first to understand architecture decisions
+2. Follow the planned project structure
+3. Use Makefiles for consistent build commands
+4. All code comments and docs in Chinese (中文) to match existing docs
+5. Test with `make test` before committing

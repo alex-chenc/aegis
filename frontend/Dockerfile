@@ -1,5 +1,5 @@
-# --- Build Stage ---
-FROM node:20-alpine AS builder
+ARG BASE_IMAGE=node:18-alpine
+FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -9,13 +9,9 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# --- Final Stage ---
-FROM nginx:1.25-alpine
+FROM nginx:1.23-alpine
 
-# 复制构建好的静态文件到 Nginx 的 web 根目录
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# 复制自定义的 Nginx 配置文件 (API 代理)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
