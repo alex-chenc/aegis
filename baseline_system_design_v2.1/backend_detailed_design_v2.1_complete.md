@@ -384,24 +384,25 @@ self_healing:
 
 ### 5.1 数据库连接池初始化 (`repository/db.go`)
 
-数据库连接池使用 Go 标准库 `database/sql` 配合 `lib/pq` 驱动实现。初始化时根据配置文件设置连接池参数，并执行一次 `db.Ping()` 确认数据库连通性。如果连接失败，程序应以明确的错误信息退出，而非静默重试。
+数据库连接池使用 GORM ORM 框架配合 `gorm.io/driver/postgres` 驱动实现。GORM 提供了类型安全的链式查询 API，自动处理连接池管理，并支持事务、钩子和迁移等高级功能。初始化时根据配置文件设置连接池参数，并执行一次 `Ping()` 确认数据库连通性。如果连接失败，程序应以明确的错误信息退出，而非静默重试。
 
 ```go
 // 伪代码示意
-func NewDB(cfg *config.DatabaseConfig) (*sql.DB, error) {
+func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
     dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
         cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode)
     
-    db, err := sql.Open("postgres", dsn)
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
     if err != nil {
-        return nil, fmt.Errorf("failed to open database: %w", err)
+        return nil, fmt.Errorf("failed to connect database: %w", err)
     }
     
-    db.SetMaxOpenConns(cfg.MaxOpenConns)
-    db.SetMaxIdleConns(cfg.MaxIdleConns)
-    db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
+    sqlDB, _ := db.DB()
+    sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+    sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+    sqlDB.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
     
-    if err := db.Ping(); err != nil {
+    if err := sqlDB.Ping(); err != nil {
         return nil, fmt.Errorf("failed to ping database: %w", err)
     }
     
@@ -411,19 +412,32 @@ func NewDB(cfg *config.DatabaseConfig) (*sql.DB, error) {
 
 ### 5.2 Repository 模式
 
-每张数据库表对应一个 Repository 结构体，封装该表的所有 CRUD 操作。Repository 接受 `*sql.DB` 作为构造参数，所有数据库操作均通过参数化查询执行以防止 SQL 注入。对于需要事务支持的场景（如批量插入规则），Repository 方法接受 `*sql.Tx` 参数。
+每张数据库表对应一个 Repository 结构体，封装该表的所有 CRUD 操作。Repository 接受 `*gorm.DB` 作为构造参数，所有数据库操作均通过 GORM 的链式 API 执行，GORM 内部自动处理参数化查询以防止 SQL 注入。对于需要事务支持的场景（如批量插入规则），使用 `db.Transaction()` 方法。
 
 以 `host_repo.go` 为例，其核心方法包括：
 
-| 方法名 | 功能描述 | SQL 操作 |
+| 方法名 | 功能描述 | GORM 操作 |
 |:---|:---|:---|
-| `Upsert(host *model.Host)` | 注册或更新主机信息，以 `ip_address` 为冲突判断键 | `INSERT ... ON CONFLICT (ip_address) DO UPDATE` |
-| `UpdateHeartbeat(hostID string)` | 更新主机的最后心跳时间 | `UPDATE hosts SET last_heartbeat_at = NOW() WHERE id = $1` |
-| `FindAll(page, pageSize int, query string)` | 分页查询主机列表，支持按 IP 或主机名模糊搜索 | `SELECT ... WHERE ip_address LIKE $1 OR hostname LIKE $1 LIMIT $2 OFFSET $3` |
-| `FindByID(id string)` | 根据 ID 查询单个主机 | `SELECT ... WHERE id = $1` |
-| `Count(query string)` | 统计符合条件的主机总数 | `SELECT COUNT(*) FROM hosts WHERE ...` |
+| `Upsert(host *model.Host)` | 注册或更新主机信息，以 `ip_address` 为冲突判断键 | `db.Clauses(clause.OnConflict{...}).Create(host)` |
+| `UpdateHeartbeat(hostID uuid.UUID)` | 更新主机的最后心跳时间 | `db.Model(&Host{}).Where("id = ?", hostID).Updates(...)` |
+| `FindAll(page, pageSize int, query string)` | 分页查询主机列表，支持按 IP 或主机名模糊搜索 | `db.Where("ip_address LIKE ? OR hostname LIKE ?", ...).Find(&hosts)` |
+| `FindByID(id uuid.UUID)` | 根据 ID 查询单个主机 | `db.First(&host, "id = ?", id)` |
+| `Count(query string)` | 统计符合条件的主机总数 | `db.Model(&Host{}).Where(...).Count(&count)` |
 
 其他 Repository（`template_repo.go`、`rule_repo.go`、`task_log_repo.go`、`config_repo.go`、`script_version_repo.go`、`healing_log_repo.go`）均遵循相同的设计模式。
+
+### 5.3 日志记录
+
+所有数据库操作均使用 `pkg/logger` 包中的 zap 日志器进行日志记录。关键操作（如创建、更新）记录 Info 级别日志，错误操作记录 Error 级别日志。日志包含操作类型、实体 ID、错误信息等上下文字段。
+
+```go
+// 日志示例
+logger.Info("host upserted successfully",
+    zap.String("id", host.ID.String()),
+    zap.String("ip", host.IPAddress),
+    zap.String("hostname", host.Hostname),
+)
+```
 
 ## 6. Redis 缓存层
 

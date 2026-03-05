@@ -4,20 +4,24 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"io"
 
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type ConfigRepository struct {
-	db            *sql.DB
+	db            *gorm.DB
 	encryptionKey []byte
 }
 
-func NewConfigRepository(db *sql.DB, encryptionKey string) *ConfigRepository {
+func NewConfigRepository(db *gorm.DB, encryptionKey string) *ConfigRepository {
 	key := []byte(encryptionKey)
 	if len(key) < 32 {
 		padded := make([]byte, 32)
@@ -70,59 +74,70 @@ func (r *ConfigRepository) decrypt(ciphertext string) (string, error) {
 }
 
 func (r *ConfigRepository) GetActive() (*model.LLMConfig, error) {
-	query := `
-		SELECT id, api_key_encrypted, api_key_masked, base_url, model_name, is_active,
-		       last_test_status, last_test_at, created_at, updated_at
-		FROM llm_configs WHERE is_active = true LIMIT 1
-	`
 	var cfg model.LLMConfig
-	err := r.db.QueryRow(query).Scan(
-		&cfg.ID, &cfg.APIKeyEncrypted, &cfg.APIKeyMasked, &cfg.BaseURL, &cfg.ModelName, &cfg.IsActive,
-		&cfg.LastTestStatus, &cfg.LastTestAt, &cfg.CreatedAt, &cfg.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
+	result := r.db.Where("is_active = ?", true).First(&cfg)
+	if result.Error != nil {
+		logger.Error("failed to get active LLM config", zap.Error(result.Error))
+		return nil, result.Error
 	}
+
+	logger.Debug("active LLM config retrieved", zap.String("id", cfg.ID.String()))
 	return &cfg, nil
 }
 
 func (r *ConfigRepository) Upsert(cfg *model.LLMConfig, apiKey string) error {
 	encryptedKey, err := r.encrypt(apiKey)
 	if err != nil {
+		logger.Error("failed to encrypt API key", zap.Error(err))
 		return err
 	}
 
-	tx, err := r.db.Begin()
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.LLMConfig{}).Where("1 = 1").Update("is_active", false).Error; err != nil {
+			return err
+		}
+
+		cfg.APIKeyEncrypted = encryptedKey
+		if err := tx.Create(cfg).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+
 	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	_, err = tx.Exec(`UPDATE llm_configs SET is_active = false`)
-	if err != nil {
+		logger.Error("failed to upsert LLM config", zap.Error(err))
 		return err
 	}
 
-	query := `
-		INSERT INTO llm_configs (api_key_encrypted, api_key_masked, base_url, model_name, is_active)
-		VALUES ($1, $2, $3, $4, true)
-		RETURNING id, created_at, updated_at
-	`
-	err = tx.QueryRow(
-		query,
-		encryptedKey, cfg.APIKeyMasked, cfg.BaseURL, cfg.ModelName,
-	).Scan(&cfg.ID, &cfg.CreatedAt, &cfg.UpdatedAt)
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	logger.Info("LLM config upserted successfully",
+		zap.String("id", cfg.ID.String()),
+		zap.String("base_url", cfg.BaseURL),
+		zap.String("model_name", cfg.ModelName),
+	)
+	return nil
 }
 
-func (r *ConfigRepository) UpdateTestStatus(id string, status string) error {
-	query := `UPDATE llm_configs SET last_test_status = $1, last_test_at = NOW() WHERE id = $2`
-	_, err := r.db.Exec(query, status, id)
-	return err
+func (r *ConfigRepository) UpdateTestStatus(id uuid.UUID, status string) error {
+	result := r.db.Model(&model.LLMConfig{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"last_test_status": status,
+			"last_test_at":     gorm.Expr("NOW()"),
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update test status",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("LLM config test status updated",
+		zap.String("id", id.String()),
+		zap.String("status", status),
+	)
+	return nil
 }
 
 func (r *ConfigRepository) DecryptAPIKey(encrypted string) (string, error) {

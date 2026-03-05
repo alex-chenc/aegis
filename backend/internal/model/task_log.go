@@ -1,21 +1,29 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type TaskLog struct {
-	ID            string     `json:"id"`
-	TaskGroupID   string     `json:"task_group_id"`
-	RuleID        string     `json:"rule_id"`
-	HostID        string     `json:"host_id"`
-	TaskType      string     `json:"task_type"`
-	Status        string     `json:"status"`
-	ScriptContent *string    `json:"script_content"`
+	ID            uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	TaskGroupID   uuid.UUID  `gorm:"type:uuid;not null;index" json:"task_group_id"`
+	RuleID        uuid.UUID  `gorm:"type:uuid;not null;index" json:"rule_id"`
+	HostID        uuid.UUID  `gorm:"type:uuid;not null;index" json:"host_id"`
+	TaskType      string     `gorm:"type:varchar(20);not null" json:"task_type"`
+	Status        string     `gorm:"type:varchar(20);not null;index" json:"status"`
+	ScriptContent *string    `gorm:"type:text" json:"script_content"`
 	ScriptVersion *int       `json:"script_version"`
-	Stdout        *string    `json:"stdout"`
-	Stderr        *string    `json:"stderr"`
+	Stdout        *string    `gorm:"type:text" json:"stdout"`
+	Stderr        *string    `gorm:"type:text" json:"stderr"`
 	ExitCode      *int       `json:"exit_code"`
-	HealingID     *string    `json:"healing_id"`
+	HealingID     *uuid.UUID `gorm:"type:uuid" json:"healing_id"`
 	StartedAt     *time.Time `json:"started_at"`
 	FinishedAt    *time.Time `json:"finished_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	CreatedAt     time.Time  `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (TaskLog) TableName() string {
+	return "task_logs"
 }

@@ -1,106 +1,142 @@
 package repository
 
 import (
-	"database/sql"
 	"time"
 
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type HealingLogRepository struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
-func NewHealingLogRepository(db *sql.DB) *HealingLogRepository {
+func NewHealingLogRepository(db *gorm.DB) *HealingLogRepository {
 	return &HealingLogRepository{db: db}
 }
 
 func (r *HealingLogRepository) Create(log *model.HealingLog) error {
-	query := `
-		INSERT INTO healing_logs (original_task_id, rule_id, host_id, script_type, trigger_error,
-			trigger_exit_code, total_attempts, max_attempts, status, started_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, created_at
-	`
-	return r.db.QueryRow(
-		query,
-		log.OriginalTaskID, log.RuleID, log.HostID, log.ScriptType, log.TriggerError,
-		log.TriggerExitCode, log.TotalAttempts, log.MaxAttempts, log.Status, log.StartedAt,
-	).Scan(&log.ID, &log.CreatedAt)
+	result := r.db.Create(log)
+	if result.Error != nil {
+		logger.Error("failed to create healing log",
+			zap.Error(result.Error),
+			zap.String("original_task_id", log.OriginalTaskID.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("healing log created",
+		zap.String("id", log.ID.String()),
+		zap.String("original_task_id", log.OriginalTaskID.String()),
+		zap.String("script_type", log.ScriptType),
+	)
+	return nil
 }
 
 func (r *HealingLogRepository) Update(log *model.HealingLog) error {
-	query := `
-		UPDATE healing_logs SET
-			total_attempts = $1, status = $2, final_script_version_id = $3,
-			attempts_detail = $4, finished_at = $5
-		WHERE id = $6
-	`
-	_, err := r.db.Exec(
-		query,
-		log.TotalAttempts, log.Status, log.FinalScriptVersionID,
-		log.AttemptsDetail, log.FinishedAt, log.ID,
+	result := r.db.Model(&model.HealingLog{}).
+		Where("id = ?", log.ID).
+		Updates(map[string]interface{}{
+			"total_attempts":          log.TotalAttempts,
+			"status":                  log.Status,
+			"final_script_version_id": log.FinalScriptVersionID,
+			"attempts_detail":         log.AttemptsDetail,
+			"finished_at":             log.FinishedAt,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update healing log",
+			zap.Error(result.Error),
+			zap.String("id", log.ID.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("healing log updated",
+		zap.String("id", log.ID.String()),
+		zap.String("status", log.Status),
+		zap.Int("total_attempts", log.TotalAttempts),
 	)
-	return err
+	return nil
 }
 
-func (r *HealingLogRepository) FindByID(id string) (*model.HealingLog, error) {
-	query := `
-		SELECT id, original_task_id, rule_id, host_id, script_type, trigger_error,
-		       trigger_exit_code, total_attempts, max_attempts, status, final_script_version_id,
-		       attempts_detail, started_at, finished_at, created_at
-		FROM healing_logs WHERE id = $1
-	`
+func (r *HealingLogRepository) FindByID(id uuid.UUID) (*model.HealingLog, error) {
 	var log model.HealingLog
-	err := r.db.QueryRow(query, id).Scan(
-		&log.ID, &log.OriginalTaskID, &log.RuleID, &log.HostID, &log.ScriptType, &log.TriggerError,
-		&log.TriggerExitCode, &log.TotalAttempts, &log.MaxAttempts, &log.Status, &log.FinalScriptVersionID,
-		&log.AttemptsDetail, &log.StartedAt, &log.FinishedAt, &log.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
+	result := r.db.First(&log, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find healing log by id", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
 	}
 	return &log, nil
 }
 
-func (r *HealingLogRepository) FindByOriginalTaskID(taskID string) (*model.HealingLog, error) {
-	query := `
-		SELECT id, original_task_id, rule_id, host_id, script_type, trigger_error,
-		       trigger_exit_code, total_attempts, max_attempts, status, final_script_version_id,
-		       attempts_detail, started_at, finished_at, created_at
-		FROM healing_logs WHERE original_task_id = $1
-	`
+func (r *HealingLogRepository) FindByOriginalTaskID(taskID uuid.UUID) (*model.HealingLog, error) {
 	var log model.HealingLog
-	err := r.db.QueryRow(query, taskID).Scan(
-		&log.ID, &log.OriginalTaskID, &log.RuleID, &log.HostID, &log.ScriptType, &log.TriggerError,
-		&log.TriggerExitCode, &log.TotalAttempts, &log.MaxAttempts, &log.Status, &log.FinalScriptVersionID,
-		&log.AttemptsDetail, &log.StartedAt, &log.FinishedAt, &log.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
+	result := r.db.Where("original_task_id = ?", taskID).First(&log)
+	if result.Error != nil {
+		logger.Error("failed to find healing log by original_task_id",
+			zap.Error(result.Error),
+			zap.String("task_id", taskID.String()),
+		)
+		return nil, result.Error
 	}
 	return &log, nil
 }
 
-func (r *HealingLogRepository) IncrementAttempts(id string) error {
-	query := `UPDATE healing_logs SET total_attempts = total_attempts + 1 WHERE id = $1`
-	_, err := r.db.Exec(query, id)
-	return err
+func (r *HealingLogRepository) IncrementAttempts(id uuid.UUID) error {
+	result := r.db.Model(&model.HealingLog{}).
+		Where("id = ?", id).
+		Update("total_attempts", gorm.Expr("total_attempts + 1"))
+
+	if result.Error != nil {
+		logger.Error("failed to increment attempts", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
+	}
+
+	logger.Debug("healing attempts incremented", zap.String("id", id.String()))
+	return nil
 }
 
-func (r *HealingLogRepository) MarkCompleted(id string, scriptVersionID string) error {
+func (r *HealingLogRepository) MarkCompleted(id uuid.UUID, scriptVersionID uuid.UUID) error {
 	now := time.Now()
-	query := `
-		UPDATE healing_logs SET status = 'healed', final_script_version_id = $1, finished_at = $2
-		WHERE id = $3
-	`
-	_, err := r.db.Exec(query, scriptVersionID, now, id)
-	return err
+	result := r.db.Model(&model.HealingLog{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":                  "healed",
+			"final_script_version_id": scriptVersionID,
+			"finished_at":             now,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to mark healing completed", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
+	}
+
+	logger.Info("healing marked as completed",
+		zap.String("id", id.String()),
+		zap.String("script_version_id", scriptVersionID.String()),
+	)
+	return nil
 }
 
-func (r *HealingLogRepository) MarkFailed(id string) error {
+func (r *HealingLogRepository) MarkFailed(id uuid.UUID) error {
 	now := time.Now()
-	query := `UPDATE healing_logs SET status = 'failed', finished_at = $1 WHERE id = $2`
-	_, err := r.db.Exec(query, now, id)
-	return err
+	result := r.db.Model(&model.HealingLog{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":      "failed",
+			"finished_at": now,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to mark healing failed", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
+	}
+
+	logger.Warn("healing marked as failed", zap.String("id", id.String()))
+	return nil
 }

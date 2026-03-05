@@ -1,86 +1,89 @@
 package repository
 
 import (
-	"database/sql"
 	"time"
 
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type TaskLogRepository struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
-func NewTaskLogRepository(db *sql.DB) *TaskLogRepository {
+func NewTaskLogRepository(db *gorm.DB) *TaskLogRepository {
 	return &TaskLogRepository{db: db}
 }
 
 func (r *TaskLogRepository) Create(log *model.TaskLog) error {
-	query := `
-		INSERT INTO task_logs (task_group_id, rule_id, host_id, task_type, status, script_content, script_version)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, created_at
-	`
-	return r.db.QueryRow(
-		query,
-		log.TaskGroupID, log.RuleID, log.HostID, log.TaskType, log.Status,
-		log.ScriptContent, log.ScriptVersion,
-	).Scan(&log.ID, &log.CreatedAt)
-}
-
-func (r *TaskLogRepository) UpdateResult(id string, stdout, stderr *string, exitCode *int, status string, finishedAt time.Time) error {
-	query := `
-		UPDATE task_logs SET stdout = $1, stderr = $2, exit_code = $3, status = $4, finished_at = $5
-		WHERE id = $6
-	`
-	_, err := r.db.Exec(query, stdout, stderr, exitCode, status, finishedAt, id)
-	return err
-}
-
-func (r *TaskLogRepository) FindByGroupID(groupID string) ([]model.TaskLog, error) {
-	query := `
-		SELECT id, task_group_id, rule_id, host_id, task_type, status,
-		       script_content, script_version, stdout, stderr, exit_code, healing_id,
-		       started_at, finished_at, created_at
-		FROM task_logs WHERE task_group_id = $1
-		ORDER BY created_at
-	`
-	rows, err := r.db.Query(query, groupID)
-	if err != nil {
-		return nil, err
+	result := r.db.Create(log)
+	if result.Error != nil {
+		logger.Error("failed to create task log",
+			zap.Error(result.Error),
+			zap.String("task_group_id", log.TaskGroupID.String()),
+		)
+		return result.Error
 	}
-	defer rows.Close()
 
-	var logs []model.TaskLog
-	for rows.Next() {
-		var l model.TaskLog
-		if err := rows.Scan(
-			&l.ID, &l.TaskGroupID, &l.RuleID, &l.HostID, &l.TaskType, &l.Status,
-			&l.ScriptContent, &l.ScriptVersion, &l.Stdout, &l.Stderr, &l.ExitCode, &l.HealingID,
-			&l.StartedAt, &l.FinishedAt, &l.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		logs = append(logs, l)
-	}
-	return logs, rows.Err()
-}
-
-func (r *TaskLogRepository) FindByID(id string) (*model.TaskLog, error) {
-	query := `
-		SELECT id, task_group_id, rule_id, host_id, task_type, status,
-		       script_content, script_version, stdout, stderr, exit_code, healing_id,
-		       started_at, finished_at, created_at
-		FROM task_logs WHERE id = $1
-	`
-	var l model.TaskLog
-	err := r.db.QueryRow(query, id).Scan(
-		&l.ID, &l.TaskGroupID, &l.RuleID, &l.HostID, &l.TaskType, &l.Status,
-		&l.ScriptContent, &l.ScriptVersion, &l.Stdout, &l.Stderr, &l.ExitCode, &l.HealingID,
-		&l.StartedAt, &l.FinishedAt, &l.CreatedAt,
+	logger.Info("task log created",
+		zap.String("id", log.ID.String()),
+		zap.String("task_group_id", log.TaskGroupID.String()),
+		zap.String("task_type", log.TaskType),
 	)
-	if err != nil {
-		return nil, err
+	return nil
+}
+
+func (r *TaskLogRepository) UpdateResult(id uuid.UUID, stdout, stderr *string, exitCode *int, status string, finishedAt time.Time) error {
+	result := r.db.Model(&model.TaskLog{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"stdout":      stdout,
+			"stderr":      stderr,
+			"exit_code":   exitCode,
+			"status":      status,
+			"finished_at": finishedAt,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update task result",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
 	}
-	return &l, nil
+
+	logger.Info("task result updated",
+		zap.String("id", id.String()),
+		zap.String("status", status),
+	)
+	return nil
+}
+
+func (r *TaskLogRepository) FindByGroupID(groupID uuid.UUID) ([]model.TaskLog, error) {
+	var logs []model.TaskLog
+	result := r.db.Where("task_group_id = ?", groupID).Order("created_at").Find(&logs)
+	if result.Error != nil {
+		logger.Error("failed to find task logs by group_id",
+			zap.Error(result.Error),
+			zap.String("group_id", groupID.String()),
+		)
+		return nil, result.Error
+	}
+
+	logger.Debug("task logs found", zap.Int("count", len(logs)), zap.String("group_id", groupID.String()))
+	return logs, nil
+}
+
+func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
+	var log model.TaskLog
+	result := r.db.First(&log, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find task log by id", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
+	}
+	return &log, nil
 }

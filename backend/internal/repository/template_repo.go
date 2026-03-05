@@ -1,89 +1,94 @@
 package repository
 
 import (
-	"database/sql"
-
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type TemplateRepository struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
-func NewTemplateRepository(db *sql.DB) *TemplateRepository {
+func NewTemplateRepository(db *gorm.DB) *TemplateRepository {
 	return &TemplateRepository{db: db}
 }
 
 func (r *TemplateRepository) Create(template *model.Template) error {
-	query := `
-		INSERT INTO templates (name, file_type, minio_object_name, llm_prompt_template, status)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, created_at, updated_at
-	`
-	return r.db.QueryRow(
-		query,
-		template.Name, template.FileType, template.MinioObjectName,
-		template.LLMPromptTemplate, template.Status,
-	).Scan(&template.ID, &template.CreatedAt, &template.UpdatedAt)
+	result := r.db.Create(template)
+	if result.Error != nil {
+		logger.Error("failed to create template", zap.Error(result.Error), zap.String("name", template.Name))
+		return result.Error
+	}
+
+	logger.Info("template created successfully",
+		zap.String("id", template.ID.String()),
+		zap.String("name", template.Name),
+		zap.String("file_type", template.FileType),
+	)
+	return nil
 }
 
 func (r *TemplateRepository) FindAll(page, pageSize int) ([]model.Template, error) {
-	offset := (page - 1) * pageSize
-	query := `
-		SELECT id, name, file_type, minio_object_name, llm_prompt_template,
-		       status, error_message, rule_count, created_at, updated_at
-		FROM templates
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-	`
-	rows, err := r.db.Query(query, pageSize, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var templates []model.Template
-	for rows.Next() {
-		var t model.Template
-		if err := rows.Scan(
-			&t.ID, &t.Name, &t.FileType, &t.MinioObjectName, &t.LLMPromptTemplate,
-			&t.Status, &t.ErrorMessage, &t.RuleCount, &t.CreatedAt, &t.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		templates = append(templates, t)
+	offset := (page - 1) * pageSize
+
+	result := r.db.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&templates)
+	if result.Error != nil {
+		logger.Error("failed to find templates", zap.Error(result.Error))
+		return nil, result.Error
 	}
-	return templates, rows.Err()
+
+	logger.Debug("templates found", zap.Int("count", len(templates)), zap.Int("page", page))
+	return templates, nil
 }
 
-func (r *TemplateRepository) FindByID(id string) (*model.Template, error) {
-	query := `
-		SELECT id, name, file_type, minio_object_name, llm_prompt_template,
-		       status, error_message, rule_count, created_at, updated_at
-		FROM templates WHERE id = $1
-	`
-	var t model.Template
-	err := r.db.QueryRow(query, id).Scan(
-		&t.ID, &t.Name, &t.FileType, &t.MinioObjectName, &t.LLMPromptTemplate,
-		&t.Status, &t.ErrorMessage, &t.RuleCount, &t.CreatedAt, &t.UpdatedAt,
+func (r *TemplateRepository) FindByID(id uuid.UUID) (*model.Template, error) {
+	var template model.Template
+	result := r.db.First(&template, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find template by id", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
+	}
+	return &template, nil
+}
+
+func (r *TemplateRepository) UpdateStatus(id uuid.UUID, status string, errorMessage *string, ruleCount int) error {
+	result := r.db.Model(&model.Template{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":        status,
+			"error_message": errorMessage,
+			"rule_count":    ruleCount,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update template status",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+			zap.String("status", status),
+		)
+		return result.Error
+	}
+
+	logger.Info("template status updated",
+		zap.String("id", id.String()),
+		zap.String("status", status),
+		zap.Int("rule_count", ruleCount),
 	)
-	if err != nil {
-		return nil, err
+	return nil
+}
+
+func (r *TemplateRepository) Delete(id uuid.UUID) error {
+	result := r.db.Delete(&model.Template{}, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to delete template", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
 	}
-	return &t, nil
-}
 
-func (r *TemplateRepository) UpdateStatus(id, status string, errorMessage *string, ruleCount int) error {
-	query := `
-		UPDATE templates SET status = $1, error_message = $2, rule_count = $3, updated_at = NOW()
-		WHERE id = $4
-	`
-	_, err := r.db.Exec(query, status, errorMessage, ruleCount, id)
-	return err
-}
-
-func (r *TemplateRepository) Delete(id string) error {
-	query := `DELETE FROM templates WHERE id = $1`
-	_, err := r.db.Exec(query, id)
-	return err
+	logger.Info("template deleted", zap.String("id", id.String()))
+	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type AttemptDetail struct {
@@ -35,19 +37,23 @@ func (a *AttemptsDetail) Scan(value interface{}) error {
 }
 
 type HealingLog struct {
-	ID                   string         `json:"id"`
-	OriginalTaskID       string         `json:"original_task_id"`
-	RuleID               string         `json:"rule_id"`
-	HostID               string         `json:"host_id"`
-	ScriptType           string         `json:"script_type"`
-	TriggerError         string         `json:"trigger_error"`
-	TriggerExitCode      int            `json:"trigger_exit_code"`
-	TotalAttempts        int            `json:"total_attempts"`
-	MaxAttempts          int            `json:"max_attempts"`
-	Status               string         `json:"status"`
-	FinalScriptVersionID *string        `json:"final_script_version_id"`
-	AttemptsDetail       AttemptsDetail `json:"attempts_detail"`
-	StartedAt            time.Time      `json:"started_at"`
+	ID                   uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	OriginalTaskID       uuid.UUID      `gorm:"type:uuid;not null;index" json:"original_task_id"`
+	RuleID               uuid.UUID      `gorm:"type:uuid;not null;index" json:"rule_id"`
+	HostID               uuid.UUID      `gorm:"type:uuid;not null;index" json:"host_id"`
+	ScriptType           string         `gorm:"type:varchar(10);not null" json:"script_type"`
+	TriggerError         string         `gorm:"type:text;not null" json:"trigger_error"`
+	TriggerExitCode      int            `gorm:"not null" json:"trigger_exit_code"`
+	TotalAttempts        int            `gorm:"not null;default:0" json:"total_attempts"`
+	MaxAttempts          int            `gorm:"not null;default:3" json:"max_attempts"`
+	Status               string         `gorm:"type:varchar(20);not null;default:'healing';index" json:"status"`
+	FinalScriptVersionID *uuid.UUID     `gorm:"type:uuid" json:"final_script_version_id"`
+	AttemptsDetail       AttemptsDetail `gorm:"type:jsonb" json:"attempts_detail"`
+	StartedAt            time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"started_at"`
 	FinishedAt           *time.Time     `json:"finished_at"`
-	CreatedAt            time.Time      `json:"created_at"`
+	CreatedAt            time.Time      `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (HealingLog) TableName() string {
+	return "self_healing_logs"
 }

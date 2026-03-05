@@ -1,93 +1,107 @@
 package repository
 
 import (
-	"database/sql"
+	"time"
 
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type HostRepository struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
-func NewHostRepository(db *sql.DB) *HostRepository {
+func NewHostRepository(db *gorm.DB) *HostRepository {
 	return &HostRepository{db: db}
 }
 
 func (r *HostRepository) Upsert(host *model.Host) error {
-	query := `
-		INSERT INTO hosts (ip_address, hostname, os_type, agent_version, last_heartbeat_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (ip_address) DO UPDATE SET
-			hostname = EXCLUDED.hostname,
-			os_type = EXCLUDED.os_type,
-			agent_version = EXCLUDED.agent_version,
-			last_heartbeat_at = EXCLUDED.last_heartbeat_at,
-			updated_at = NOW()
-		RETURNING id, created_at, updated_at
-	`
-	return r.db.QueryRow(
-		query,
-		host.IPAddress, host.Hostname, host.OSType, host.AgentVersion, host.LastHeartbeatAt,
-	).Scan(&host.ID, &host.CreatedAt, &host.UpdatedAt)
+	result := r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "ip_address"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"hostname", "os_type", "agent_version", "last_heartbeat_at", "updated_at",
+		}),
+	}).Create(host)
+
+	if result.Error != nil {
+		logger.Error("failed to upsert host", zap.Error(result.Error), zap.String("ip", host.IPAddress))
+		return result.Error
+	}
+
+	logger.Info("host upserted successfully",
+		zap.String("id", host.ID.String()),
+		zap.String("ip", host.IPAddress),
+		zap.String("hostname", host.Hostname),
+	)
+	return nil
 }
 
-func (r *HostRepository) UpdateHeartbeat(hostID string) error {
-	query := `UPDATE hosts SET last_heartbeat_at = NOW(), updated_at = NOW() WHERE id = $1`
-	_, err := r.db.Exec(query, hostID)
-	return err
+func (r *HostRepository) UpdateHeartbeat(hostID uuid.UUID) error {
+	result := r.db.Model(&model.Host{}).
+		Where("id = ?", hostID).
+		Updates(map[string]interface{}{
+			"last_heartbeat_at": time.Now(),
+			"updated_at":        time.Now(),
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update heartbeat", zap.Error(result.Error), zap.String("host_id", hostID.String()))
+		return result.Error
+	}
+
+	logger.Debug("heartbeat updated", zap.String("host_id", hostID.String()))
+	return nil
 }
 
 func (r *HostRepository) FindAll(page, pageSize int, query string) ([]model.Host, error) {
-	offset := (page - 1) * pageSize
-	sqlQuery := `
-		SELECT id, ip_address, hostname, os_type, agent_version, last_heartbeat_at, created_at, updated_at
-		FROM hosts
-		WHERE ($1 = '' OR ip_address LIKE $1 OR hostname LIKE $1)
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-	searchPattern := "%" + query + "%"
-	rows, err := r.db.Query(sqlQuery, searchPattern, pageSize, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var hosts []model.Host
-	for rows.Next() {
-		var h model.Host
-		if err := rows.Scan(
-			&h.ID, &h.IPAddress, &h.Hostname, &h.OSType, &h.AgentVersion,
-			&h.LastHeartbeatAt, &h.CreatedAt, &h.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		hosts = append(hosts, h)
+	offset := (page - 1) * pageSize
+
+	db := r.db.Model(&model.Host{})
+	if query != "" {
+		searchPattern := "%" + query + "%"
+		db = db.Where("ip_address LIKE ? OR hostname LIKE ?", searchPattern, searchPattern)
 	}
-	return hosts, rows.Err()
+
+	result := db.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&hosts)
+	if result.Error != nil {
+		logger.Error("failed to find hosts", zap.Error(result.Error))
+		return nil, result.Error
+	}
+
+	logger.Debug("hosts found", zap.Int("count", len(hosts)), zap.Int("page", page))
+	return hosts, nil
 }
 
-func (r *HostRepository) FindByID(id string) (*model.Host, error) {
-	query := `
-		SELECT id, ip_address, hostname, os_type, agent_version, last_heartbeat_at, created_at, updated_at
-		FROM hosts WHERE id = $1
-	`
-	var h model.Host
-	err := r.db.QueryRow(query, id).Scan(
-		&h.ID, &h.IPAddress, &h.Hostname, &h.OSType, &h.AgentVersion,
-		&h.LastHeartbeatAt, &h.CreatedAt, &h.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
+func (r *HostRepository) FindByID(id uuid.UUID) (*model.Host, error) {
+	var host model.Host
+	result := r.db.First(&host, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find host by id", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
 	}
-	return &h, nil
+	return &host, nil
 }
 
-func (r *HostRepository) Count(query string) (int, error) {
-	sqlQuery := `SELECT COUNT(*) FROM hosts WHERE ($1 = '' OR ip_address LIKE $1 OR hostname LIKE $1)`
-	searchPattern := "%" + query + "%"
-	var count int
-	err := r.db.QueryRow(sqlQuery, searchPattern).Scan(&count)
-	return count, err
+func (r *HostRepository) Count(query string) (int64, error) {
+	var count int64
+
+	db := r.db.Model(&model.Host{})
+	if query != "" {
+		searchPattern := "%" + query + "%"
+		db = db.Where("ip_address LIKE ? OR hostname LIKE ?", searchPattern, searchPattern)
+	}
+
+	result := db.Count(&count)
+	if result.Error != nil {
+		logger.Error("failed to count hosts", zap.Error(result.Error))
+		return 0, result.Error
+	}
+
+	return count, nil
 }

@@ -1,120 +1,110 @@
 package repository
 
 import (
-	"context"
-	"database/sql"
-
 	"baseline-system/internal/model"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type RuleRepository struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
-func NewRuleRepository(db *sql.DB) *RuleRepository {
+func NewRuleRepository(db *gorm.DB) *RuleRepository {
 	return &RuleRepository{db: db}
 }
 
 func (r *RuleRepository) BatchCreate(rules []*model.BaselineRule) error {
-	ctx := context.Background()
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	query := `
-		INSERT INTO baseline_rules (template_id, title, check_content, fix_content)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, script_status, created_at, updated_at
-	`
-
-	for _, rule := range rules {
-		err := tx.QueryRow(
-			query,
-			rule.TemplateID, rule.Title, rule.CheckContent, rule.FixContent,
-		).Scan(&rule.ID, &rule.ScriptStatus, &rule.CreatedAt, &rule.UpdatedAt)
-		if err != nil {
-			return err
-		}
+	if len(rules) == 0 {
+		return nil
 	}
 
-	return tx.Commit()
-}
-
-func (r *RuleRepository) FindByTemplateID(templateID string) ([]model.BaselineRule, error) {
-	query := `
-		SELECT id, template_id, title, check_content, fix_content,
-		       generated_check_script, generated_fix_script,
-		       check_script_version, fix_script_version, script_status,
-		       created_at, updated_at
-		FROM baseline_rules WHERE template_id = $1
-		ORDER BY created_at
-	`
-	rows, err := r.db.Query(query, templateID)
-	if err != nil {
-		return nil, err
+	result := r.db.CreateInBatches(rules, 100)
+	if result.Error != nil {
+		logger.Error("failed to batch create rules", zap.Error(result.Error), zap.Int("count", len(rules)))
+		return result.Error
 	}
-	defer rows.Close()
 
-	var rules []model.BaselineRule
-	for rows.Next() {
-		var r model.BaselineRule
-		if err := rows.Scan(
-			&r.ID, &r.TemplateID, &r.Title, &r.CheckContent, &r.FixContent,
-			&r.GeneratedCheckScript, &r.GeneratedFixScript,
-			&r.CheckScriptVersion, &r.FixScriptVersion, &r.ScriptStatus,
-			&r.CreatedAt, &r.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		rules = append(rules, r)
-	}
-	return rules, rows.Err()
-}
-
-func (r *RuleRepository) FindByID(id string) (*model.BaselineRule, error) {
-	query := `
-		SELECT id, template_id, title, check_content, fix_content,
-		       generated_check_script, generated_fix_script,
-		       check_script_version, fix_script_version, script_status,
-		       created_at, updated_at
-		FROM baseline_rules WHERE id = $1
-	`
-	var rule model.BaselineRule
-	err := r.db.QueryRow(query, id).Scan(
-		&rule.ID, &rule.TemplateID, &rule.Title, &rule.CheckContent, &rule.FixContent,
-		&rule.GeneratedCheckScript, &rule.GeneratedFixScript,
-		&rule.CheckScriptVersion, &rule.FixScriptVersion, &rule.ScriptStatus,
-		&rule.CreatedAt, &rule.UpdatedAt,
+	logger.Info("rules batch created successfully",
+		zap.Int("count", len(rules)),
+		zap.String("template_id", rules[0].TemplateID.String()),
 	)
-	if err != nil {
-		return nil, err
+	return nil
+}
+
+func (r *RuleRepository) FindByTemplateID(templateID uuid.UUID) ([]model.BaselineRule, error) {
+	var rules []model.BaselineRule
+	result := r.db.Where("template_id = ?", templateID).Order("created_at").Find(&rules)
+	if result.Error != nil {
+		logger.Error("failed to find rules by template_id",
+			zap.Error(result.Error),
+			zap.String("template_id", templateID.String()),
+		)
+		return nil, result.Error
+	}
+
+	logger.Debug("rules found", zap.Int("count", len(rules)), zap.String("template_id", templateID.String()))
+	return rules, nil
+}
+
+func (r *RuleRepository) FindByID(id uuid.UUID) (*model.BaselineRule, error) {
+	var rule model.BaselineRule
+	result := r.db.First(&rule, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find rule by id", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
 	}
 	return &rule, nil
 }
 
-func (r *RuleRepository) UpdateScript(ruleID, scriptType, scriptContent string, version int) error {
-	var query string
-	if scriptType == "CHECK" {
-		query = `
-			UPDATE baseline_rules SET generated_check_script = $1, check_script_version = $2,
-				script_status = 'ready', updated_at = NOW()
-			WHERE id = $3
-		`
-	} else {
-		query = `
-			UPDATE baseline_rules SET generated_fix_script = $1, fix_script_version = $2,
-				script_status = 'ready', updated_at = NOW()
-			WHERE id = $3
-		`
+func (r *RuleRepository) UpdateScript(ruleID uuid.UUID, scriptType, scriptContent string, version int) error {
+	updates := map[string]interface{}{
+		"script_status": "ready",
 	}
-	_, err := r.db.Exec(query, scriptContent, version, ruleID)
-	return err
+
+	if scriptType == "CHECK" {
+		updates["generated_check_script"] = scriptContent
+		updates["check_script_version"] = version
+	} else {
+		updates["generated_fix_script"] = scriptContent
+		updates["fix_script_version"] = version
+	}
+
+	result := r.db.Model(&model.BaselineRule{}).Where("id = ?", ruleID).Updates(updates)
+	if result.Error != nil {
+		logger.Error("failed to update rule script",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+			zap.String("script_type", scriptType),
+		)
+		return result.Error
+	}
+
+	logger.Info("rule script updated",
+		zap.String("rule_id", ruleID.String()),
+		zap.String("script_type", scriptType),
+		zap.Int("version", version),
+	)
+	return nil
 }
 
-func (r *RuleRepository) UpdateScriptStatus(ruleID, status string) error {
-	query := `UPDATE baseline_rules SET script_status = $1, updated_at = NOW() WHERE id = $2`
-	_, err := r.db.Exec(query, status, ruleID)
-	return err
+func (r *RuleRepository) UpdateScriptStatus(ruleID uuid.UUID, status string) error {
+	result := r.db.Model(&model.BaselineRule{}).
+		Where("id = ?", ruleID).
+		Update("script_status", status)
+
+	if result.Error != nil {
+		logger.Error("failed to update script status",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+			zap.String("status", status),
+		)
+		return result.Error
+	}
+
+	logger.Debug("script status updated", zap.String("rule_id", ruleID.String()), zap.String("status", status))
+	return nil
 }
