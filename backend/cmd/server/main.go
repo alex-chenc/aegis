@@ -1,0 +1,157 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"baseline-system/config"
+	"baseline-system/internal/api"
+	"baseline-system/internal/api/handler"
+	"baseline-system/internal/grpc_server"
+	"baseline-system/internal/ipdetect"
+	"baseline-system/internal/repository"
+	"baseline-system/internal/service"
+	"baseline-system/internal/storage"
+	"baseline-system/pkg/logger"
+
+	"go.uber.org/zap"
+)
+
+func main() {
+	// Parse command line flags
+	configPath := flag.String("config", "config/config.yaml", "config file path")
+	flag.Parse()
+
+	fmt.Println("Baseline System Server starting...")
+
+	// Initialize logger FIRST (per design spec)
+	if err := logger.Init(&logger.Config{
+		Level:    "info",
+		FileName: "server.log",
+		MaxSize:  100,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
+
+	logger.Info("server initializing", zap.String("config", *configPath))
+
+	// Load configuration
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		logger.Fatal("failed to load config", zap.Error(err))
+	}
+	logger.Info("config loaded successfully")
+
+	// Initialize database
+	db, err := repository.NewDB(&cfg.Database)
+	if err != nil {
+		logger.Fatal("failed to connect database", zap.Error(err))
+	}
+	logger.Info("database connected")
+
+	// Initialize Redis
+	redisClient, err := storage.NewRedisClient(&cfg.Redis)
+	if err != nil {
+		logger.Fatal("failed to connect Redis", zap.Error(err))
+	}
+	logger.Info("Redis connected")
+
+	// Initialize MinIO
+	minioClient, err := storage.NewMinIOClient(&cfg.MinIO)
+	if err != nil {
+		logger.Fatal("failed to connect MinIO", zap.Error(err))
+	}
+	logger.Info("MinIO connected")
+
+	// Initialize repositories
+	hostRepo := repository.NewHostRepository(db)
+	templateRepo := repository.NewTemplateRepository(db)
+	ruleRepo := repository.NewRuleRepository(db)
+	taskLogRepo := repository.NewTaskLogRepository(db)
+	configRepo := repository.NewConfigRepository(db, "default-encryption-key")
+	scriptVersionRepo := repository.NewScriptVersionRepository(db)
+	healingLogRepo := repository.NewHealingLogRepository(db)
+
+	// Initialize services
+	executor := service.NewExecutor(2)
+	llmClient := service.NewLLMClient(&cfg.LLM)
+	templateService := service.NewTemplateService(templateRepo, ruleRepo, minioClient, redisClient, llmClient, 3)
+	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, minioClient, llmClient, 2)
+	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
+	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, ruleRepo, taskLogRepo, minioClient, llmClient, 3)
+
+	// Cross-wire services
+	taskService.SetSelfHealingService(selfHealingService)
+
+	// Start background workers
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	templateService.StartWorkers(ctx)
+	scriptGenService.StartWorkers(ctx)
+	selfHealingService.StartWorkers(ctx)
+
+	logger.Info("background workers started")
+
+	// Detect server IP
+	serverIP := ipdetect.DetectServerIP(cfg.Server.ExternalIP)
+	logger.Info("server IP detected",
+		zap.String("ip", serverIP),
+		zap.String("http_port", fmt.Sprintf("%d", cfg.Server.HTTPPort)),
+		zap.String("grpc_port", fmt.Sprintf("%d", cfg.Server.GRPCPort)),
+	)
+
+	// Initialize gRPC server
+	grpcServer := grpc_server.NewGRPCServer(hostRepo, redisClient, cfg.Server.GRPCPort)
+	if err := grpcServer.Start(); err != nil {
+		logger.Fatal("failed to start gRPC server", zap.Error(err))
+	}
+	defer grpcServer.Stop()
+	logger.Info("gRPC server started", zap.Int("port", cfg.Server.GRPCPort))
+
+	// Initialize handlers
+	configHandler := handler.NewConfigHandler(configRepo)
+	hostHandler := handler.NewHostHandler(hostRepo, redisClient)
+	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient)
+	taskHandler := handler.NewTaskHandler(taskService, grpcServer)
+	agentHandler := handler.NewAgentHandler(grpcServer, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
+
+	// Initialize HTTP router
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, agentHandler)
+	router.Setup(grpcServer)
+
+	// Start HTTP server
+	go func() {
+		addr := fmt.Sprintf(":%d", cfg.Server.HTTPPort)
+		logger.Info("HTTP server starting", zap.String("addr", addr))
+		if err := router.Run(addr); err != nil {
+			logger.Fatal("failed to start HTTP server", zap.Error(err))
+		}
+	}()
+
+	logger.Info("server started successfully",
+		zap.String("http_addr", fmt.Sprintf("http://localhost:%d", cfg.Server.HTTPPort)),
+		zap.String("grpc_addr", fmt.Sprintf("localhost:%d", cfg.Server.GRPCPort)),
+		zap.String("server_ip", serverIP),
+	)
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	logger.Info("shutting down...")
+
+	// Graceful shutdown
+	cancel()
+	time.Sleep(2 * time.Second)
+
+	logger.Info("server stopped")
+}
