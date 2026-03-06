@@ -35,30 +35,31 @@ func NewMinIOClient(cfg *config.MinIOConfig) (*MinIOClient, error) {
 	}
 
 	// 确保所有必需的 Bucket 存在
-	for _, bucket := range cfg.Buckets {
-		exists, err := client.BucketExists(ctx, bucket)
+	for _, bucketName := range cfg.Buckets {
+		exists, err := client.BucketExists(ctx, bucketName)
 		if err != nil {
 			logger.Error("failed to check bucket",
 				zap.Error(err),
-				zap.String("bucket", bucket),
+				zap.String("bucket", bucketName),
 			)
-			return nil, fmt.Errorf("failed to check bucket %s: %w", bucket, err)
+			return nil, fmt.Errorf("failed to check bucket %s: %w", bucketName, err)
 		}
+
 		if !exists {
-			err = client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+			err = client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 			if err != nil {
 				logger.Error("failed to create bucket",
 					zap.Error(err),
-					zap.String("bucket", bucket),
+					zap.String("bucket", bucketName),
 				)
-				return nil, fmt.Errorf("failed to create bucket %s: %w", bucket, err)
+				return nil, fmt.Errorf("failed to create bucket %s: %w", bucketName, err)
 			}
 			logger.Info("bucket created successfully",
-				zap.String("bucket", bucket),
+				zap.String("bucket", bucketName),
 			)
 		} else {
 			logger.Debug("bucket already exists",
-				zap.String("bucket", bucket),
+				zap.String("bucket", bucketName),
 			)
 		}
 	}
@@ -82,6 +83,10 @@ func (m *MinIOClient) Context() context.Context {
 	return m.ctx
 }
 
+// ============================================================================
+// File Operations
+// ============================================================================
+
 // UploadFile uploads a file to the specified bucket
 func (m *MinIOClient) UploadFile(bucket, objectName string, reader io.Reader, size int64, contentType string) error {
 	_, err := m.client.PutObject(m.ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
@@ -92,6 +97,7 @@ func (m *MinIOClient) UploadFile(bucket, objectName string, reader io.Reader, si
 			zap.Error(err),
 			zap.String("bucket", bucket),
 			zap.String("object", objectName),
+			zap.Int64("size", size),
 		)
 		return err
 	}
@@ -116,14 +122,14 @@ func (m *MinIOClient) DownloadFile(bucket, objectName string) (io.ReadCloser, er
 		return nil, err
 	}
 
-	logger.Debug("file downloaded successfully",
+	logger.Debug("file download initiated",
 		zap.String("bucket", bucket),
 		zap.String("object", objectName),
 	)
 	return obj, nil
 }
 
-// GetPresignedURL generates a presigned URL for downloading
+// GetPresignedURL generates a presigned URL for file download
 func (m *MinIOClient) GetPresignedURL(bucket, objectName string, expiry time.Duration) (string, error) {
 	url, err := m.client.PresignedGetObject(m.ctx, bucket, objectName, expiry, nil)
 	if err != nil {
@@ -166,7 +172,8 @@ func (m *MinIOClient) DeleteFile(bucket, objectName string) error {
 func (m *MinIOClient) FileExists(bucket, objectName string) (bool, error) {
 	_, err := m.client.StatObject(m.ctx, bucket, objectName, minio.StatObjectOptions{})
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+		errResp := minio.ToErrorResponse(err)
+		if errResp.Code == "NoSuchKey" {
 			logger.Debug("file does not exist",
 				zap.String("bucket", bucket),
 				zap.String("object", objectName),
