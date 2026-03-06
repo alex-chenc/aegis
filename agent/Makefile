@@ -1,26 +1,16 @@
-# agent/Makefile
-
-.PHONY: all build clean test upload
+.PHONY: all build clean test
 
 BINARY_NAME=baseline-agent
-TARGETS=linux/amd64 linux/arm64
 
 all: build
 
 build:
-	@echo "Cross-compiling Agent..."
-	docker run --rm -v "$(PWD)":/usr/src/myapp -w /usr/src/myapp golang:1.20-alpine sh -c ' \
-	for target in $(TARGETS); do \
-		GOOS=$$(echo $$target | cut -d'/' -f1) GOARCH=$$(echo $$target | cut -d'/' -f2) go build -v -o ./dist/$(BINARY_NAME)-$$GOOS-$$GOARCH ./cmd/agent; \
-	done'
+	@echo "Building agent..."
+	GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
+	GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
 
 clean:
-	@echo "Cleaning..."
 	rm -rf dist
 
 test:
-	@echo "Running tests..."
 	go test ./...
-
-upload:
-	@./build.sh

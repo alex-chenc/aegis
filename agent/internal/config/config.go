@@ -7,17 +7,17 @@ import (
 	"path/filepath"
 )
 
+// Config Agent 配置结构
 type Config struct {
-	ServerAddr string `toml:"server_addr"`
-	GRPCAddr   string `toml:"grpc_addr"`
-	HostID     string `toml:"host_id"`
-	LogLevel   string `toml:"log_level"`
-	LogFile    string `toml:"log_file"`
+	ServerAddr string `toml:"ServerAddr"`
+	AuthToken  string `toml:"AuthToken"`
+	HostID     string `toml:"HostID"`
 }
 
 const configPath = "/etc/baseline-agent/config.toml"
 
-func Load() (*Config, error) {
+// LoadConfig 加载配置文件，如果 HostID 为空则生成 UUID 并回写
+func LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -28,7 +28,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Generate HostID if empty
+	// 如果 HostID 为空，生成新的 UUID 并回写
 	if cfg.HostID == "" {
 		cfg.HostID = uuid.New().String()
 		if err := saveConfig(&cfg); err != nil {

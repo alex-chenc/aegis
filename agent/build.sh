@@ -1,19 +1,15 @@
 #!/bin/bash
 set -e
 
-MINIO_ENDPOINT=${MINIO_ENDPOINT:-"http://localhost:9000"}
-MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-"minio_admin"}
-MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-"a_third_strong_secret_password"}
-MINIO_BUCKET="agent-artifacts"
+echo "Building Baseline Agent..."
 
-make build
+# Cross-compile for amd64
+echo "Building linux/amd64..."
+GOOS=linux GOARCH=amd64 go build -o ./dist/baseline-agent-linux-amd64 ./cmd/agent
 
-echo "Configuring MinIO client..."
-mc alias set myminio ${MINIO_ENDPOINT} ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}
+# Cross-compile for arm64
+echo "Building linux/arm64..."
+GOOS=linux GOARCH=arm64 go build -o ./dist/baseline-agent-linux-arm64 ./cmd/agent
 
-mc mb myminio/${MINIO_BUCKET} --ignore-existing
-
-echo "Uploading artifacts to MinIO bucket: ${MINIO_BUCKET}..."
-mc cp --recursive dist/ myminio/${MINIO_BUCKET}/
-
-echo "Upload complete."
+echo "Build complete!"
+ls -lh dist/

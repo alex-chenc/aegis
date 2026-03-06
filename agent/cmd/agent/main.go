@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,54 +9,49 @@ import (
 	"baseline-agent/internal/asset"
 	"baseline-agent/internal/client"
 	"baseline-agent/internal/config"
-	"baseline-agent/internal/logger"
-
-	"go.uber.org/zap"
+	"baseline-agent/internal/executor"
 )
 
 func main() {
-	// Parse command line flags
-	configPath := flag.String("config", "/etc/baseline-agent/config.toml", "config file path")
-	flag.Parse()
+	fmt.Println("Baseline Agent v2.2.0 starting...")
 
-	// Load config
-	cfg, err := config.Load()
+	// 加载配置
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("Config loaded: ServerAddr=%s, HostID=%s\n", cfg.ServerAddr, cfg.HostID)
 
-	// Initialize logger
-	if err := logger.Init(cfg.LogFile, cfg.LogLevel); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to init logger: %v\n", err)
+	// 采集资产信息
+	assetInfo, err := asset.Collect()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to collect asset info: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	fmt.Printf("Asset info: IP=%s, Hostname=%s, OS=%s\n", assetInfo.IPAddress, assetInfo.Hostname, assetInfo.OSType)
 
-	logger.Info("agent starting",
-		zap.String("version", asset.AgentVersion),
-		zap.String("config_path", *configPath),
-	)
+	// 创建执行器（最大并发 2 个）
+	exec := executor.NewExecutor(2)
+	fmt.Println("Executor created with max concurrency 2")
 
-	// Create client
-	agentClient := client.NewClient(cfg.GRPCAddr, cfg.HostID, 2)
+	// 创建客户端
+	client := client.NewClient(cfg, exec)
 
-	// Connect with retry
-	if err := agentClient.Connect(); err != nil {
-		logger.Error("failed to connect", zap.Error(err))
-		os.Exit(1)
-	}
-	defer agentClient.Close()
+	// 启动客户端
+	go func() {
+		if err := client.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Client error: %v\n", err)
+		}
+	}()
+	fmt.Println("Client started")
 
-	logger.Info("agent connected successfully",
-		zap.String("host_id", cfg.HostID),
-		zap.String("grpc_addr", cfg.GRPCAddr),
-	)
-
-	// Wait for shutdown signal
+	// 等待关闭信号
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	logger.Info("agent shutting down")
+	fmt.Println("Shutting down...")
+	client.Close()
+	fmt.Println("Agent stopped")
 }
