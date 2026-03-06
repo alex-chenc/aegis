@@ -1,1 +1,108 @@
 package api
+
+import (
+	"github.com/gin-gonic/gin"
+	"baseline-system/internal/api/handler"
+	"baseline-system/internal/api/middleware"
+	"baseline-system/internal/grpc_server"
+)
+
+// Router Gin 路由器
+type Router struct {
+	engine          *gin.Engine
+	configHandler   *handler.ConfigHandler
+	hostHandler     *handler.HostHandler
+	templateHandler *handler.TemplateHandler
+	taskHandler     *handler.TaskHandler
+	agentHandler    *handler.AgentHandler
+}
+
+// NewRouter 创建路由器
+func NewRouter(
+	configHandler *handler.ConfigHandler,
+	hostHandler *handler.HostHandler,
+	templateHandler *handler.TemplateHandler,
+	taskHandler *handler.TaskHandler,
+	agentHandler *handler.AgentHandler,
+) *Router {
+	return &Router{
+		configHandler:   configHandler,
+		hostHandler:     hostHandler,
+		templateHandler: templateHandler,
+		taskHandler:     taskHandler,
+		agentHandler:    agentHandler,
+	}
+}
+
+// Setup 设置路由和中间件
+func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
+	r.engine = gin.Default()
+
+	// 全局中间件
+	r.engine.Use(middleware.CORS())
+	r.engine.Use(middleware.RequestLogger())
+	r.engine.Use(middleware.Recovery())
+
+	// 健康检查端点
+	r.engine.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "ok",
+		})
+	})
+
+	// API v1 路由组
+	v1 := r.engine.Group("/api/v1")
+	{
+		// 配置接口
+		config := v1.Group("/config")
+		{
+			config.GET("/llm", r.configHandler.GetLLMConfig)
+			config.POST("/llm", r.configHandler.SaveLLMConfig)
+			config.POST("/llm/test", r.configHandler.TestLLMConnection)
+		}
+
+		// 主机接口
+		hosts := v1.Group("/hosts")
+		{
+			hosts.GET("", r.hostHandler.ListHosts)
+			hosts.GET("/:id", r.hostHandler.GetHost)
+		}
+
+		// 模板接口
+		templates := v1.Group("/templates")
+		{
+			templates.POST("/upload", r.templateHandler.UploadTemplate)
+			templates.GET("", r.templateHandler.ListTemplates)
+			templates.GET("/:id/status", r.templateHandler.GetTemplateStatus)
+			templates.GET("/:id/rules", r.templateHandler.GetTemplateRules)
+			templates.DELETE("/:id", r.templateHandler.DeleteTemplate)
+		}
+
+		// 任务接口
+		tasks := v1.Group("/tasks")
+		{
+			tasks.POST("/run-check", r.taskHandler.RunCheck)
+			tasks.POST("/run-fix", r.taskHandler.RunFix)
+			tasks.GET("/:id/status", r.taskHandler.GetTaskStatus)
+			tasks.GET("/:id/logs", r.taskHandler.GetTaskLogs)
+		}
+
+		// Agent 接口
+		agent := v1.Group("/agent")
+		{
+			agent.GET("/install-command", r.agentHandler.GetInstallCommand)
+			agent.GET("/install.sh", r.agentHandler.GetInstallScript)
+			agent.GET("/download", r.agentHandler.DownloadAgent)
+		}
+	}
+}
+
+// GetEngine 返回 Gin 引擎
+func (r *Router) GetEngine() *gin.Engine {
+	return r.engine
+}
+
+// Run 启动 HTTP 服务器
+func (r *Router) Run(addr string) error {
+	return r.engine.Run(addr)
+}
