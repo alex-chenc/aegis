@@ -101,6 +101,10 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 根据 `build_system_design_v1.6_complete.md`、`infrastructure_design_v2.2_complete.md` 和其他相关文档，生成以下文件和目录结构：
 
+**技能调用要求**：
+- **后端文件**：写代码前必须调用 `superpowers` skill
+- **前端文件**：写代码前必须使用 `ui-ux-pro-max` skill
+
 1. 创建 `backend`、`frontend`、`agent` 三个子项目的完整目录结构。后端目录结构必须严格遵循 `backend_detailed_design_v2.2_complete.md` 第 3 节的定义。
 2. 为每个子项目编写 `Makefile` 和 `build.sh`。
 3. 提供 `agent/pkg/api/v1/agent_comm.proto` 文件。
@@ -160,6 +164,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `backend/internal/storage/redis_client.go` 中，实现 Redis 客户端封装。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 6 节的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **实现 Redis 客户端初始化**：连接池配置和连通性验证。
 2. **实现 Agent 心跳管理**：`SetHeartbeat(hostID)`、`IsOnline(hostID)`、`BatchCheckOnline(hostIDs)` 方法。
 3. **实现模板解析状态管理**：`SetParseStatus(templateID, status)`、`GetParseStatus(templateID)` 方法。
@@ -188,6 +195,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 在 `backend/internal/storage/minio_client.go` 中，实现 MinIO 客户端封装。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 7 节的设计。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **实现 MinIO 客户端初始化**：创建客户端并确保所有 Bucket 存在。
 2. **实现文件操作**：`UploadFile`、`DownloadFile`、`GetPresignedURL`、`DeleteFile`、`FileExists` 方法。
@@ -219,6 +229,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `backend/internal/llm` 目录下，实现 LLM 交互模块。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 8 节的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **实现 `client.go`**：LLM 客户端封装，包含 OpenAI 兼容 API 调用、超时控制、指数退避重试和速率限制处理。
 2. **实现 `validator.go`**：三层连通性校验（格式校验、网络连通性校验、模型可用性校验）。
 3. **实现 `prompts.go`**：定义所有 Prompt 模板常量（规则提取 Prompt、检查脚本生成 Prompt、修复脚本生成 Prompt、自愈修复 Prompt）。
@@ -236,6 +249,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `backend/internal/fileparser` 目录下，实现文件解析模块。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 9.2 节的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **定义 `parser.go` 接口**：`FileParser` 接口和工厂函数 `NewParser`。
 2. **实现 `pdf_parser.go`**：PDF 文件解析器。
 3. **实现 `word_parser.go`**：Word (DOCX) 文件解析器。
@@ -249,6 +265,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `backend/internal/service/template_service.go` 中，实现模板解析的完整业务流程。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 9 节和第 10 节的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **实现文件上传流程**：接收文件 → 校验 → 存储到 MinIO → 创建数据库记录 → 初始化 Redis 状态 → 投递到解析队列。
 2. **实现模板解析 Worker**：从队列消费 → 下载文件 → 解析内容 → 文本预处理 → 构建 LLM Prompt → 调用 LLM → 解析返回结果 → 批量入库 → 触发脚本生成。
 3. **实现分片处理逻辑**：超长文档的智能分片和分片 Prompt 构建。
@@ -258,7 +277,7 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 - 文件上传开始/结束记录 Info 级别日志
 - Worker 消费任务记录 Info 级别日志
-- 每个处理阶段（下载、解析、LLM调用、入库）记录 Info 级别日志
+- 每个处理阶段（下载、解析、LLM 调用、入库）记录 Info 级别日志
 - LLM 调用异常记录 Warn 级别日志（可重试）
 - 解析失败记录 Error 级别日志
 
@@ -267,6 +286,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 在 `backend/internal/service/template_service.go`（或独立文件）中，实现脚本自动生成逻辑。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 11 节的设计。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **实现脚本生成 Worker**：从队列消费规则 ID → 构建检查脚本 Prompt → 调用 LLM → 安全性校验 → 存储脚本。
 2. **实现修复脚本生成**：同上流程，使用修复脚本 Prompt。
@@ -284,6 +306,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 在 `backend/internal/service/self_healing_service.go` 中，实现自愈修复的完整业务流程。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 12 节的设计。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **实现自愈触发判断**：根据脚本类型和退出码判断是否需要触发自愈。
 2. **实现自愈 Prompt 构建**：组装原始脚本、错误信息、执行环境和历史修复尝试信息。
@@ -305,6 +330,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `backend/internal/service/task_service.go` 中，实现任务编排逻辑。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 13 节的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **实现任务下发**：查询脚本 → 生成任务组 → 为每台主机创建子任务 → 通过 gRPC 下发。
 2. **实现任务结果处理**：接收 Agent 结果 → 更新状态 → 判断是否触发自愈。
 3. **实现离线主机处理**：检查 Redis 心跳 Key，离线主机直接标记失败。
@@ -324,6 +352,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 在 `backend/internal/grpc_server` 目录下，实现 gRPC 服务器。遵循 `communication_structure_design_v2.2_complete.md` 的 gRPC 协议设计。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **实现 `server.go`**：gRPC 服务器启动和 `Register` RPC 方法。
 2. **实现 `agent_manager.go`**：线程安全的 Agent 连接管理器，支持按 host_id 查找连接和下发命令。
@@ -345,6 +376,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 在 `backend/internal/api` 目录下，使用 Gin 框架实现所有 RESTful API 接口。严格遵循 `communication_structure_design_v2.2_complete.md` 第 4 节的所有接口定义。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **实现 `router.go`**：注册所有路由和中间件。
 2. **实现 `handler/config_handler.go`**：LLM 配置的获取、更新和测试接口。
@@ -375,10 +409,13 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 
 在 `agent` 目录下，实现 Agent 的全部功能。严格遵循 `agent_detailed_design_v2.2_complete.md` 的设计。
 
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
+
 1. **实现 `internal/config` 模块**: 加载 `/etc/baseline-agent/config.toml`，如果 `HostID` 为空则生成并回写。
 2. **实现 `internal/asset` 模块**: 实现 `Collect()` 函数，采集 IP、主机名、系统类型。
 3. **实现 `internal/client` 模块**: 实现 gRPC 客户端，包含指数退避重连、发送 `AssetInfo` 进行注册、定时发送心跳、接收并分发 `ServerCommand`。
-4. **实现 `internal/executor` 模块**: 实现 `ExecuteCommand` 方法，包含创建临时脚本、超时控制、并发限制 (2个)、日志捕获和结果回传。
+4. **实现 `internal/executor` 模块**: 实现 `ExecuteCommand` 方法，包含创建临时脚本、超时控制、并发限制 (2 个)、日志捕获和结果回传。
 5. **编写 `cmd/agent/main.go`**: 整合所有模块，启动 Agent 的主循环。
 
 ---
@@ -424,6 +461,9 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **你的任务**：
 
 编写 `backend/cmd/server/main.go`，整合所有模块。严格遵循 `backend_detailed_design_v2.2_complete.md` 第 14 节的启动流程。
+
+**技能调用要求**：
+- **写代码前必须调用** `superpowers` skill
 
 1. **优先初始化日志库**（在初始化其他依赖之前）：调用 `logger.Init()` 初始化日志配置。
 2. 按顺序初始化所有依赖（配置 → 数据库 → Redis → MinIO → Repository → LLM → Service → Worker → gRPC → HTTP）。
