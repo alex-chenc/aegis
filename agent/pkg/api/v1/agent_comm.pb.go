@@ -191,3 +191,19 @@ func (x *executeCommandServer) Recv() (*CommandRequest, error) {
 	}
 	return m, nil
 }
+
+// GetExecute returns the Execute field if present
+func (x *CommandRequest) GetExecute() *CommandExecute {
+	if x, ok := x.Request.(*CommandRequest_Execute); ok {
+		return x.Execute
+	}
+	return nil
+}
+
+// GetResult returns the Result field if present
+func (x *CommandRequest) GetResult() *CommandResult {
+	if x, ok := x.Request.(*CommandRequest_Result); ok {
+		return x.Result
+	}
+	return nil
+}
