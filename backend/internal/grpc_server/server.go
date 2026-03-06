@@ -1,0 +1,328 @@
+package grpc_server
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	"baseline-system/internal/model"
+	"baseline-system/internal/repository"
+	"baseline-system/internal/storage"
+	"baseline-system/pkg/api/v1"
+	"baseline-system/pkg/logger"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+)
+
+// GRPCServer gRPC 服务器
+type GRPCServer struct {
+	pb.UnimplementedAgentServiceServer
+	server           *grpc.Server
+	hostRepo         *repository.HostRepository
+	redisClient      *storage.RedisClient
+	agentConnections sync.Map // map[uuid.UUID]*AgentConnection
+	port             int
+}
+
+// AgentConnection Agent 连接信息
+type AgentConnection struct {
+	HostID uuid.UUID
+	Stream pb.AgentService_ExecuteCommandServer
+	Ctx    context.Context
+	Cancel context.CancelFunc
+	Inbox  chan *pb.CommandExecute
+}
+
+// NewGRPCServer 创建 gRPC 服务器
+func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, port int) *GRPCServer {
+	return &GRPCServer{
+		hostRepo:    hostRepo,
+		redisClient: redisClient,
+		port:        port,
+	}
+}
+
+// Start 启动 gRPC 服务器
+func (s *GRPCServer) Start() error {
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+	if err != nil {
+		logger.Error("failed to listen",
+			zap.Error(err),
+			zap.Int("port", s.port),
+		)
+		return err
+	}
+
+	s.server = grpc.NewServer()
+	pb.RegisterAgentServiceServer(s.server, s)
+
+	logger.Info("gRPC server starting",
+		zap.Int("port", s.port),
+	)
+
+	go func() {
+		if err := s.server.Serve(lis); err != nil {
+			logger.Error("failed to serve gRPC",
+				zap.Error(err),
+			)
+		}
+	}()
+
+	return nil
+}
+
+// Stop 停止 gRPC 服务器
+func (s *GRPCServer) Stop() {
+	logger.Info("stopping gRPC server")
+	if s.server != nil {
+		s.server.GracefulStop()
+	}
+
+	// 关闭所有 Agent 连接
+	s.agentConnections.Range(func(key, value interface{}) bool {
+		conn := value.(*AgentConnection)
+		if conn.Cancel != nil {
+			conn.Cancel()
+		}
+		return true
+	})
+}
+
+// Register 处理 Agent 注册
+func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	logger.Info("agent register request received",
+		zap.String("host_id", req.HostId),
+		zap.String("hostname", req.AssetInfo.Hostname),
+		zap.String("ip", req.AssetInfo.IpAddress),
+	)
+
+	// 验证 Auth Token
+	// TODO: 从配置读取并验证
+
+	// 如果 host_id 为空，生成新的
+	var hostID uuid.UUID
+	var err error
+
+	if req.HostId == "" {
+		hostID = uuid.New()
+	} else {
+		hostID, err = uuid.Parse(req.HostId)
+		if err != nil {
+			logger.Error("invalid host_id format",
+				zap.Error(err),
+				zap.String("host_id", req.HostId),
+			)
+			return &pb.RegisterResponse{
+				Success: false,
+				Message: "invalid host_id format",
+			}, nil
+		}
+	}
+
+	// 创建或更新主机记录
+	host := &model.Host{
+		ID:              hostID,
+		IPAddress:       req.AssetInfo.IpAddress,
+		Hostname:        req.AssetInfo.Hostname,
+		OSType:          req.AssetInfo.OsType,
+		AgentVersion:    req.AssetInfo.AgentVersion,
+		LastHeartbeatAt: time.Now(),
+	}
+
+	if err := s.hostRepo.Upsert(host); err != nil {
+		logger.Error("failed to upsert host",
+			zap.Error(err),
+			zap.String("host_id", hostID.String()),
+		)
+		return &pb.RegisterResponse{
+			Success: false,
+			Message: fmt.Sprintf("failed to register host: %v", err),
+		}, nil
+	}
+
+	// 在 Redis 中设置 session
+	sessionKey := fmt.Sprintf("agent:session:%s", hostID.String())
+	if err := s.redisClient.Client().Set(ctx, sessionKey, "active", 0).Err(); err != nil {
+		logger.Error("failed to set agent session",
+			zap.Error(err),
+			zap.String("host_id", hostID.String()),
+		)
+	}
+
+	logger.Info("agent registered successfully",
+		zap.String("host_id", hostID.String()),
+		zap.String("ip", req.AssetInfo.IpAddress),
+		zap.String("hostname", req.AssetInfo.Hostname),
+	)
+
+	return &pb.RegisterResponse{
+		Success: true,
+		HostId:  hostID.String(),
+		Message: "registration successful",
+	}, nil
+}
+
+// Heartbeat 处理 Agent 心跳
+func (s *GRPCServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	hostID, err := uuid.Parse(req.HostId)
+	if err != nil {
+		logger.Error("invalid host_id in heartbeat",
+			zap.Error(err),
+			zap.String("host_id", req.HostId),
+		)
+		return &pb.HeartbeatResponse{
+			Success: false,
+			Message: "invalid host_id",
+		}, nil
+	}
+
+	// 更新 Redis 心跳
+	if err := s.redisClient.SetHeartbeat(req.HostId); err != nil {
+		logger.Error("failed to set heartbeat in Redis",
+			zap.Error(err),
+			zap.String("host_id", req.HostId),
+		)
+		return &pb.HeartbeatResponse{
+			Success: false,
+			Message: fmt.Sprintf("failed to update heartbeat: %v", err),
+		}, nil
+	}
+
+	// 异步更新数据库心跳
+	go func() {
+		if err := s.hostRepo.UpdateHeartbeat(hostID); err != nil {
+			logger.Error("failed to update heartbeat in database",
+				zap.Error(err),
+				zap.String("host_id", req.HostId),
+			)
+		}
+	}()
+
+	logger.Debug("heartbeat received",
+		zap.String("host_id", req.HostId),
+		zap.Int64("timestamp", req.Timestamp),
+	)
+
+	return &pb.HeartbeatResponse{
+		Success: true,
+		Message: "heartbeat received",
+	}, nil
+}
+
+// ExecuteCommand 双向流命令执行
+func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer) error {
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+
+	var hostID uuid.UUID
+	var connection *AgentConnection
+
+	// 创建收件箱通道
+	inbox := make(chan *pb.CommandExecute, 100)
+
+	// 接收消息循环
+	for {
+		req, err := stream.Recv()
+		if err != nil {
+			logger.Error("ExecuteCommand stream error",
+				zap.Error(err),
+				zap.Stringer("host_id", hostID),
+			)
+
+			// 清理连接
+			if connection != nil {
+				s.agentConnections.Delete(hostID)
+				if connection.Cancel != nil {
+					connection.Cancel()
+				}
+			}
+			return err
+		}
+
+		switch r := req.Request.(type) {
+		case *pb.CommandRequest_Execute:
+			// Agent 发送命令执行请求
+			if r.Execute != nil {
+				hostID, _ = uuid.Parse(r.Execute.HostId)
+				connection = &AgentConnection{
+					HostID: hostID,
+					Stream: stream,
+					Ctx:    ctx,
+					Cancel: cancel,
+					Inbox:  inbox,
+				}
+
+				s.agentConnections.Store(hostID, connection)
+
+				logger.Info("agent connection established",
+					zap.Stringer("host_id", hostID),
+				)
+			}
+
+		case *pb.CommandRequest_Result:
+			// Agent 返回命令执行结果
+			result := r.Result
+			logger.Info("command result received",
+				zap.String("task_id", result.TaskId),
+				zap.Stringer("host_id", hostID),
+				zap.Int32("exit_code", result.ExitCode),
+				zap.Bool("is_final", result.IsFinal),
+			)
+
+			// TODO: 将结果传递给 TaskService 处理
+		}
+	}
+}
+
+// SendCommand 向指定 Agent 发送命令
+func (s *GRPCServer) SendCommand(hostID uuid.UUID, execute *pb.CommandExecute) error {
+	value, ok := s.agentConnections.Load(hostID)
+	if !ok {
+		logger.Warn("agent connection not found",
+			zap.Stringer("host_id", hostID),
+		)
+		return fmt.Errorf("agent not connected")
+	}
+
+	conn := value.(*AgentConnection)
+
+	select {
+	case conn.Inbox <- execute:
+		err := conn.Stream.Send(&pb.CommandRequest{
+			Request: &pb.CommandRequest_Execute{
+				Execute: execute,
+			},
+		})
+		if err != nil {
+			logger.Error("failed to send command to agent",
+				zap.Error(err),
+				zap.Stringer("host_id", hostID),
+				zap.String("task_id", execute.TaskId),
+			)
+			return err
+		}
+
+		logger.Debug("command sent to agent",
+			zap.Stringer("host_id", hostID),
+			zap.String("task_id", execute.TaskId),
+		)
+		return nil
+
+	case <-conn.Ctx.Done():
+		return fmt.Errorf("connection closed")
+	}
+}
+
+// GetConnectedAgents 获取已连接的 Agent 数量
+func (s *GRPCServer) GetConnectedAgents() int {
+	count := 0
+	s.agentConnections.Range(func(key, value interface{}) bool {
+		count++
+		return true
+	})
+	return count
+}
