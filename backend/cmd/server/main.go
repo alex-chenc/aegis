@@ -14,6 +14,7 @@ import (
 	"baseline-system/internal/api/handler"
 	"baseline-system/internal/grpc_server"
 	"baseline-system/internal/ipdetect"
+	"baseline-system/internal/llm"
 	"baseline-system/internal/repository"
 	"baseline-system/internal/service"
 	"baseline-system/internal/storage"
@@ -80,15 +81,12 @@ func main() {
 	healingLogRepo := repository.NewHealingLogRepository(db)
 
 	// Initialize services
-	executor := service.NewExecutor(2)
-	llmClient := service.NewLLMClient(&cfg.LLM)
+	llmClient := llm.NewLLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.ModelName, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	_ = llmClient
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, minioClient, redisClient, llmClient, 3)
 	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, minioClient, llmClient, 2)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, ruleRepo, taskLogRepo, minioClient, llmClient, 3)
-
-	// Cross-wire services
-	taskService.SetSelfHealingService(selfHealingService)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
