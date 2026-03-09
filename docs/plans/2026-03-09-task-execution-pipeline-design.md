@@ -1,0 +1,512 @@
+# Task Execution Pipeline Design
+
+**Date:** 2026-03-09
+**Version:** 1.0
+**Status:** Approved for Implementation
+
+## Overview
+
+Implement complete task execution pipeline for AI baseline check system. The pipeline orchestrates script generation (via LLM), task creation, agent dispatch (via gRPC), and result processing with self-healing capability.
+
+## Architecture
+
+### Data Flow
+
+```
+Frontend
+    │ POST /api/v1/tasks/run-check
+    ▼
+TaskHandler (Validation)
+    │
+    ▼
+TaskService (Orchestrator)
+    ├─► ScriptGenerationService (async queue)
+    ├─► TaskLogRepository (persistence)
+    └─► GRPCServer (dispatch)
+         │
+         ▼
+    Agent (execution)
+         │
+         ▼
+    ProcessTaskResult (callback)
+         │
+         ├─► Update TaskLog
+         └─► SelfHealingService (if failed)
+```
+
+### Key Components
+
+1. **TaskHandler** - HTTP request validation and routing
+2. **TaskService** - Orchestrates entire task lifecycle
+3. **ScriptGenerationService** - Async LLM script generation (existing)
+4. **TaskLogRepository** - Task persistence (existing)
+5. **GRPCServer** - Bidirectional streaming to agents (existing, needs integration)
+6. **SelfHealingService** - Auto-retry failed scripts (existing)
+
+## Design Decisions
+
+### Decision 1: Async Script Generation with Queue
+
+**Status:** APPROVED
+
+**Approach:**
+- Return task_group_id immediately (202 Accepted)
+- Create TaskLog records with status="pending"
+- Queue script generation if scripts don't exist
+- Workers pick up generation tasks from Redis queue
+- Update status: pending → generating → running → success/failed
+
+**Rationale:**
+- Fast API response (<100ms)
+- Non-blocking for user
+- Handles LLM latency (5-30s)
+- Reuses existing `ScriptGenerationService` queue infrastructure
+
+**Trade-offs:**
+- ✅ Better UX (no timeout risk)
+- ✅ Scalable (can add workers)
+- ❌ More complex status tracking
+- ❌ User must poll for progress
+
+### Decision 2: Orchestrated Pipeline (Not Event-Driven)
+
+**Status:** APPROVED
+
+**Approach:**
+- `TaskService` acts as single coordinator
+- Direct method calls between services
+- No event bus or message broker
+
+**Rationale:**
+- Simpler to implement and debug
+- Clear data flow
+- Matches existing codebase patterns
+- Easier to test
+
+### Decision 3: Task-Per-Rule-Host Pair
+
+**Status:** APPROVED
+
+**Approach:**
+- Each (rule_id, host_id) combination = 1 TaskLog record
+- TaskGroupID groups all tasks from single API call
+- Individual task failures don't block others
+
+**Rationale:**
+- Granular status tracking
+- Partial failure handling
+- Clear progress reporting
+
+## API Specifications
+
+### POST /api/v1/tasks/run-check
+
+**Request:**
+```json
+{
+  "rule_ids": ["uuid1", "uuid2"],
+  "host_ids": ["uuid3", "uuid4"]
+}
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "code": 0,
+  "message": "check tasks queued",
+  "data": {
+    "task_group_id": "uuid-new",
+    "total_tasks": 4,
+    "dispatched": 3,
+    "failed": 1,
+    "failed_hosts": ["uuid4"]
+  }
+}
+```
+
+**Error Response (400):**
+```json
+{
+  "code": 400,
+  "message": "invalid request: rule_ids cannot be empty",
+  "data": null
+}
+```
+
+### POST /api/v1/tasks/run-fix
+
+Same structure as run-check, different `task_type` field.
+
+### GET /api/v1/tasks/:id/status
+
+**Path Parameter:**
+- `id` - TaskGroupID (UUID)
+
+**Response:**
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_group_id": "uuid",
+    "total": 10,
+    "pending": 2,
+    "generating": 1,
+    "running": 3,
+    "success": 3,
+    "failed": 1,
+    "progress_percent": 40
+  }
+}
+```
+
+### GET /api/v1/tasks/:id/logs
+
+**Path Parameter:**
+- `id` - TaskGroupID (UUID)
+
+**Query Parameters:**
+- `status` (optional) - Filter by status
+- `limit` (optional) - Max results (default: 100)
+
+**Response:**
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_group_id": "uuid",
+    "tasks": [
+      {
+        "task_id": "uuid",
+        "rule_id": "uuid",
+        "rule_title": "SSH配置检查",
+        "host_id": "uuid",
+        "hostname": "web-server-01",
+        "status": "success",
+        "script_content": "#!/bin/bash\necho 'checking SSH'",
+        "stdout": "SSH configured properly",
+        "stderr": "",
+        "exit_code": 0,
+        "script_version": 2,
+        "started_at": "2026-03-09T10:00:00Z",
+        "finished_at": "2026-03-09T10:00:05Z"
+      }
+    ],
+    "total": 10
+  }
+}
+```
+
+## Task Lifecycle
+
+### State Machine
+
+```
+pending → generating → running → success
+    │          │          │
+    │          │          └─► failed
+    │          │
+    │          └─► failed (generation error)
+    │
+    └─► failed (host offline)
+```
+
+### State Transitions
+
+1. **pending** → TaskLog created, waiting for script
+   - Trigger: API call received
+   - Actions: Queue script generation if needed
+
+2. **generating** → Script being generated by LLM
+   - Trigger: Worker picks up generation task
+   - Actions: Update status, call LLM
+
+3. **running** → Dispatched to agent, awaiting result
+   - Trigger: Script ready, sent via gRPC
+   - Actions: Send CommandExecute to agent
+
+4. **success** → Agent returned exit_code=0
+   - Trigger: Agent sends result
+   - Actions: Update TaskLog, no healing needed
+
+5. **failed** → Agent returned exit_code≠0 OR error
+   - Trigger: Agent result or generation error
+   - Actions: Update TaskLog, trigger self-healing
+
+## Database Changes
+
+### TaskLog Table
+
+Existing table schema is sufficient. No schema changes needed.
+
+**Key Fields:**
+- `status`: pending, generating, running, success, failed
+- `script_content`: Generated script
+- `stdout`, `stderr`, `exit_code`: Agent execution results
+
+### Status Values
+
+```go
+const (
+    TaskStatusPending    = "pending"
+    TaskStatusGenerating = "generating"
+    TaskStatusRunning    = "running"
+    TaskStatusSuccess    = "success"
+    TaskStatusFailed     = "failed"
+)
+```
+
+## Service Layer Design
+
+### TaskService Methods
+
+#### DispatchTask(ctx, req) (*TaskDispatchResponse, error)
+
+**Responsibilities:**
+1. Validate rule_ids and host_ids exist
+2. Check host online status (Redis)
+3. For each (rule, host) pair:
+   - Get rule from DB
+   - Check if script exists
+   - Create TaskLog (status="pending" or "generating")
+   - If script missing, queue generation
+   - If script ready and host online, dispatch via gRPC
+
+**Error Handling:**
+- Invalid UUID → return error
+- Rule not found → log warning, skip
+- Host offline → create failed TaskLog, include in response
+
+#### ProcessTaskResult(ctx, taskID, exitCode, stdout, stderr) error
+
+**Responsibilities:**
+1. Find TaskLog by ID
+2. Update result fields (stdout, stderr, exit_code, status)
+3. If failed, trigger SelfHealingService
+
+#### GetTaskGroupStatus(groupID) (*TaskGroupStatus, error)
+
+**Responsibilities:**
+1. Query all tasks in group
+2. Count by status
+3. Calculate progress percentage
+
+#### GetTaskLogs(groupID, filters) ([]TaskLog, error)
+
+**Responsibilities:**
+1. Query tasks by group_id
+2. Join with rules and hosts tables
+3. Apply filters
+4. Return enriched data
+
+### GRPCServer Integration
+
+#### Current State
+- ✅ `SendCommand()` method exists
+- ✅ Bidirectional streaming implemented
+- ✅ Agent connection management ready
+- ❌ Result callback not connected to TaskService
+
+#### Required Changes
+
+1. **Add TaskService reference to GRPCServer**
+   ```go
+   type GRPCServer struct {
+       // ... existing fields
+       taskService *service.TaskService  // NEW
+   }
+   ```
+
+2. **Connect result handler to TaskService**
+   ```go
+   case *pb.CommandRequest_Result:
+       result := r.Result
+       taskID, _ := uuid.Parse(result.TaskId)
+       
+       // Call TaskService to process result
+       s.taskService.ProcessTaskResult(
+           ctx, taskID, 
+           int(result.ExitCode),
+           result.Stdout,
+           result.Stderr,
+       )
+   ```
+
+3. **Dispatch flow in TaskService**
+   ```go
+   // Create CommandExecute message
+   cmd := &pb.CommandExecute{
+       TaskId:       taskLog.ID.String(),
+       ScriptType:   taskLog.TaskType,
+       ScriptContent: *taskLog.ScriptContent,
+   }
+   
+   // Send via gRPC
+   if err := s.grpcServer.SendCommand(hostID, cmd); err != nil {
+       // Mark task as failed
+       s.updateTaskStatus(taskLog.ID, "failed", "gRPC dispatch error")
+   }
+   ```
+
+## Error Handling Matrix
+
+| Error Type | HTTP Status | Task Status | Retry? | Notes |
+|------------|-------------|-------------|--------|-------|
+| Invalid UUID | 400 | N/A | No | Request rejected |
+| Empty arrays | 400 | N/A | No | Request rejected |
+| Rule not found | 202 | failed | No | Logged, task skipped |
+| Host offline | 202 | failed | No | Task created with error |
+| Script generation timeout | 202 | failed | Yes | Worker retries (3x) |
+| LLM error | 202 | failed | Yes | Worker retries (3x) |
+| gRPC send failed | 202 | failed | No | Agent must reconnect |
+| Agent exit_code=0 | 202 | success | No | Task complete |
+| Agent exit_code≠0 | 202 | failed | Yes | Self-healing triggered |
+
+## Concurrency & Thread Safety
+
+### No Locking Required For:
+- TaskLog creation (UUID unique, no conflicts)
+- Status updates (single writer per task)
+- Progress counting (read-only aggregation)
+
+### Potential Race Conditions:
+1. **Script generation + Task dispatch**
+   - Solution: Check script existence in transaction
+   - If NULL, mark as "generating", skip dispatch
+   - Worker updates to "running" after dispatch
+
+2. **Agent disconnect during execution**
+   - Solution: Timeout handling in gRPC stream
+   - Mark task as "failed" on stream error
+
+## Performance Considerations
+
+### Expected Load
+- **Concurrent tasks:** < 100 per batch
+- **Task frequency:** 1-10 requests per minute
+- **LLM calls:** 1 per unique rule (cached after first)
+
+### Optimization Opportunities
+1. **Script caching:** Reuse generated scripts across runs
+2. **Batch gRPC dispatch:** Send multiple commands in parallel
+3. **Database connection pooling:** Already configured in GORM
+4. **Redis pipelining:** Batch host status checks
+
+### Bottlenecks
+1. **LLM generation:** 5-30s per script
+   - Mitigation: Async workers, progress tracking
+2. **Agent execution:** 1-60s per script
+   - Mitigation: Parallel dispatch, no blocking
+
+## Security Considerations
+
+### Script Safety
+- ✅ Existing: Script validation in `ScriptGenerationService.validateScript()`
+- ✅ Checks for dangerous commands (rm -rf /, etc.)
+- ✅ Shebang requirement
+- ✅ Length limits
+
+### Authentication
+- ✅ gRPC agent auth token (already implemented)
+- ⚠️ API endpoint auth not in scope (assumed internal use)
+
+### Input Validation
+- UUID format validation
+- Array size limits (max 100 rules × 100 hosts)
+- Script content sanitization (existing)
+
+## Monitoring & Observability
+
+### Metrics to Track
+- Tasks created per minute
+- Tasks by status (gauge)
+- Average task duration
+- Script generation success rate
+- Self-healing trigger rate
+
+### Logging Strategy
+- **INFO:** Task created, dispatched, completed
+- **WARN:** Host offline, script generation retry
+- **ERROR:** LLM failure, gRPC error, validation failure
+- **DEBUG:** Detailed execution trace (optional)
+
+### Health Checks
+- Database connectivity
+- Redis connectivity
+- gRPC server status
+- LLM client availability
+
+## Testing Strategy
+
+### Unit Tests
+- [ ] TaskHandler request validation
+- [ ] TaskService.DispatchTask() logic
+- [ ] TaskService.ProcessTaskResult() logic
+- [ ] TaskService.GetTaskGroupStatus() aggregation
+- [ ] Status transitions
+
+### Integration Tests
+- [ ] End-to-end: API → TaskLog → gRPC mock → Result
+- [ ] Script generation integration
+- [ ] Host offline handling
+- [ ] Self-healing trigger
+
+### Manual Test Scenarios
+1. **Happy path:** All hosts online, scripts exist → immediate dispatch
+2. **Script generation:** Scripts missing → generation → dispatch
+3. **Host offline:** Some hosts offline → partial dispatch
+4. **Agent failure:** Exit code non-zero → self-healing
+5. **gRPC failure:** Agent disconnect → task marked failed
+
+## Implementation Phases
+
+### Phase 1: Core Task Dispatch (P0)
+- Implement TaskHandler endpoints
+- Implement TaskService.DispatchTask()
+- Integrate with existing repositories
+- Return task_group_id
+
+### Phase 2: gRPC Integration (P0)
+- Connect GRPCServer to TaskService
+- Implement SendCommand flow
+- Handle result callbacks
+- Update TaskLog on completion
+
+### Phase 3: Script Generation Integration (P1)
+- Connect ScriptGenerationService
+- Handle "generating" status
+- Update task status after generation
+- Dispatch ready tasks
+
+### Phase 4: Self-Healing Integration (P2)
+- Connect SelfHealingService
+- Implement retry logic
+- Track healing attempts
+
+### Phase 5: Status & Logs APIs (P1)
+- Implement GetTaskStatus endpoint
+- Implement GetTaskLogs endpoint
+- Add filtering and pagination
+
+## Open Questions
+
+1. ✅ **RESOLVED:** Script generation timing → Async queue
+2. Should we implement task cancellation?
+   - Out of scope for v1
+3. Should we limit concurrent tasks per host?
+   - Yes, max 1 task per host at a time (prevent resource contention)
+4. Task timeout handling?
+   - Add `timeout_at` field, worker cleanup
+   - Out of scope for v1
+
+## Success Criteria
+
+- [ ] API endpoints respond < 100ms
+- [ ] TaskLogs created for all valid tasks
+- [ ] Scripts generated via LLM successfully
+- [ ] Tasks dispatched to online agents via gRPC
+- [ ] Results processed and stored correctly
+- [ ] Self-healing triggered for failures
+- [ ] Status endpoint shows accurate progress
+- [ ] Logs endpoint returns complete task history
