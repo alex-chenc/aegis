@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>主机列表</span>
-          <el-button @click="refresh">刷新</el-button>
+          <el-button @click="refresh" :loading="loading">刷新</el-button>
         </div>
       </template>
       
@@ -22,17 +22,19 @@
           </template>
         </el-table-column>
       </el-table>
+      
+      <el-empty v-if="!loading && hosts.length === 0" description="暂无数据" />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onMounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useHostStore } from '@/store/hosts'
 
 const hostStore = useHostStore()
-const hosts = ref([])
-const loading = ref(false)
+const { hosts, loading } = storeToRefs(hostStore)
 
 const refresh = () => {
   hostStore.fetchHosts()

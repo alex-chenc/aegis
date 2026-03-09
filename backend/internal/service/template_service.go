@@ -18,13 +18,15 @@ import (
 )
 
 type TemplateService struct {
-	templateRepo *repository.TemplateRepository
-	ruleRepo     *repository.RuleRepository
-	configRepo   *repository.ConfigRepository
-	minioClient  *storage.MinIOClient
-	redisClient  *storage.RedisClient
-	parseQueue   chan ParseTask
-	workerCount  int
+	templateRepo  *repository.TemplateRepository
+	ruleRepo      *repository.RuleRepository
+	configRepo    *repository.ConfigRepository
+	minioClient   *storage.MinIOClient
+	redisClient   *storage.RedisClient
+	llmTimeout    int
+	llmMaxRetries int
+	parseQueue    chan ParseTask
+	workerCount   int
 }
 
 type ParseTask struct {
@@ -39,16 +41,20 @@ func NewTemplateService(
 	configRepo *repository.ConfigRepository,
 	minioClient *storage.MinIOClient,
 	redisClient *storage.RedisClient,
+	llmTimeout int,
+	llmMaxRetries int,
 	workerCount int,
 ) *TemplateService {
 	return &TemplateService{
-		templateRepo: templateRepo,
-		ruleRepo:     ruleRepo,
-		configRepo:   configRepo,
-		minioClient:  minioClient,
-		redisClient:  redisClient,
-		parseQueue:   make(chan ParseTask, 100),
-		workerCount:  workerCount,
+		templateRepo:  templateRepo,
+		ruleRepo:      ruleRepo,
+		configRepo:    configRepo,
+		minioClient:   minioClient,
+		redisClient:   redisClient,
+		llmTimeout:    llmTimeout,
+		llmMaxRetries: llmMaxRetries,
+		parseQueue:    make(chan ParseTask, 100),
+		workerCount:   workerCount,
 	}
 }
 
@@ -147,7 +153,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 		return
 	}
 
-	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, s.llmTimeout, s.llmMaxRetries)
 
 	prompt := llm.GetRuleExtractionPrompt(content)
 	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, 0.1)

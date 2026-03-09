@@ -7,7 +7,18 @@
       
       <el-form :model="form" label-width="120px">
         <el-form-item label="API Key">
-          <el-input v-model="form.api_key" type="password" placeholder="请输入 API Key" show-password />
+          <el-input 
+            v-model="form.api_key" 
+            :type="apiKeyVisible ? 'text' : 'password'" 
+            placeholder="请输入 API Key"
+          >
+            <template #suffix>
+              <el-icon @click="toggleApiKeyVisibility" class="cursor-pointer">
+                <View v-if="apiKeyVisible" />
+                <Hide v-else />
+              </el-icon>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="Base URL">
           <el-input v-model="form.base_url" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
@@ -49,9 +60,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, View, Hide } from '@element-plus/icons-vue'
 import { useConfigStore } from '@/store/config'
 import { getInstallCommand } from '@/api/config'
+import { getFullAPIKey } from '@/api/config'
 import type { InstallCommand } from '@/types'
 
 const configStore = useConfigStore()
@@ -64,11 +76,14 @@ const installCommand = ref('')
 const installInfo = ref<InstallCommand | null>(null)
 const saving = ref(false)
 const testing = ref(false)
+const apiKeyVisible = ref(false)
+const originalApiKey = ref('')
 
 const saveConfig = async () => {
   saving.value = true
   try {
     await configStore.saveLLMConfig(form.value.api_key, form.value.base_url, form.value.model_name)
+    originalApiKey.value = form.value.api_key
     ElMessage.success('配置保存成功')
   } catch (e: any) {
     ElMessage.error(e.message || '保存失败')
@@ -87,6 +102,24 @@ const testConnection = async () => {
   } finally {
     testing.value = false
   }
+}
+
+const toggleApiKeyVisibility = async () => {
+  if (!apiKeyVisible.value && !originalApiKey.value) {
+    try {
+      const data = await getFullAPIKey()
+      originalApiKey.value = data.api_key
+      form.value.api_key = originalApiKey.value
+    } catch (e: any) {
+      ElMessage.error('获取API Key失败')
+      return
+    }
+  } else if (!apiKeyVisible.value) {
+    form.value.api_key = originalApiKey.value
+  } else {
+    form.value.api_key = configStore.llmConfig?.api_key_masked || ''
+  }
+  apiKeyVisible.value = !apiKeyVisible.value
 }
 
 const copyCommand = async () => {
@@ -148,6 +181,7 @@ onMounted(async () => {
     if (configStore.llmConfig) {
       form.value.base_url = configStore.llmConfig.base_url
       form.value.model_name = configStore.llmConfig.model_name
+      form.value.api_key = configStore.llmConfig.api_key_masked || ''
     }
   } catch {
     // ignore
@@ -162,5 +196,8 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.cursor-pointer {
+  cursor: pointer;
 }
 </style>

@@ -34,6 +34,8 @@ func NewScriptGenerationService(
 	scriptVersionRepo *repository.ScriptVersionRepository,
 	configRepo *repository.ConfigRepository,
 	minioClient *storage.MinIOClient,
+	llmTimeout int,
+	llmMaxRetries int,
 	workerCount int,
 ) *ScriptGenerationService {
 	return &ScriptGenerationService{
@@ -109,7 +111,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		return
 	}
 
-	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 120, 3)
 
 	var prompt string
 	if task.ScriptType == "CHECK" {

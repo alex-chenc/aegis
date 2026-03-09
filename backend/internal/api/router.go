@@ -59,6 +59,7 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			config.GET("/llm", r.configHandler.GetLLMConfig)
 			config.POST("/llm", r.configHandler.SaveLLMConfig)
 			config.POST("/llm/test", r.configHandler.TestLLMConnection)
+		config.GET("/llm/full-key", r.configHandler.GetFullAPIKey)
 		}
 
 		// 主机接口

@@ -19,6 +19,8 @@ import (
 	"baseline-system/internal/storage"
 	"baseline-system/pkg/logger"
 
+	_ "baseline-system/pkg/api/v1"
+
 	"go.uber.org/zap"
 )
 
@@ -80,10 +82,10 @@ func main() {
 	healingLogRepo := repository.NewHealingLogRepository(db)
 
 	// Initialize services
-	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, 3)
-	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, 2)
+	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
+	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 2)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
-	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, 3)
+	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())

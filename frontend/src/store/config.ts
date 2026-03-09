@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { getLLMConfig, saveLLMConfig, testLLMConnection, getInstallCommand } from '@/api/config'
+import { getLLMConfig, saveLLMConfig, testLLMConnection, getInstallCommand, getFullAPIKey } from '@/api/config'
 
 interface ConfigState {
   llmConfig: {
@@ -45,6 +45,11 @@ export const useConfigStore = defineStore('config', {
 
     async fetchInstallCommand() {
       this.installCommand = await getInstallCommand()
+    },
+
+    async fetchFullAPIKey(): Promise<string> {
+      const response = await getFullAPIKey()
+      return response.api_key
     }
   }
 })

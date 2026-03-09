@@ -24,11 +24,10 @@ type GRPCServer struct {
 	server           *grpc.Server
 	hostRepo         *repository.HostRepository
 	redisClient      *storage.RedisClient
-	agentConnections sync.Map // map[uuid.UUID]*AgentConnection
+	agentConnections sync.Map
 	port             int
 }
 
-// AgentConnection Agent 连接信息
 type AgentConnection struct {
 	HostID uuid.UUID
 	Stream pb.AgentService_ExecuteCommandServer

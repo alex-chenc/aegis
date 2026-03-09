@@ -30,3 +30,9 @@ export function getInstallCommand(): Promise<InstallCommand> {
     method: 'get'
   })
 }
+export function getFullAPIKey(): Promise<{ api_key: string }> {
+  return request<any, { api_key: string }>({
+    url: '/config/llm/full-key',
+    method: 'get'
+  })
+}

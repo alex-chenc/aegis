@@ -181,3 +181,34 @@ func maskAPIKey(apiKey string) string {
 	}
 	return apiKey[:4] + "****" + apiKey[len(apiKey)-4:]
 }
+
+// GetFullAPIKey 获取完整API Key（需要验证）
+func (h *ConfigHandler) GetFullAPIKey(c *gin.Context) {
+	config, err := h.configRepo.GetActive()
+	if err != nil {
+		logger.Error("failed to get LLM config", zap.Error(err))
+		c.JSON(http.StatusOK, gin.H{
+			"code":    500,
+			"message": "failed to get config",
+		})
+		return
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		logger.Error("failed to decrypt API key", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to decrypt api key",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"api_key": apiKey,
+		},
+	})
+}

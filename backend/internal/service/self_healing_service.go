@@ -44,6 +44,8 @@ func NewSelfHealingService(
 	ruleRepo *repository.RuleRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	minioClient *storage.MinIOClient,
+	llmTimeout int,
+	llmMaxRetries int,
 	maxRetries int,
 ) *SelfHealingService {
 	return &SelfHealingService{
@@ -157,7 +159,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		return
 	}
 
-	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 120, 3)
 
 	var lastError string
 	var fixedScript string

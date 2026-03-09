@@ -1,6 +1,6 @@
-# 后端详细设计文档 - V2.5 完整版
+# 后端详细设计文档 - V2.6 完整版
 
-**版本**: 2.5
+**版本**: 2.6
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,9 +8,10 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
-| 2.5 | 2026-03-09 | Sisyphus | **动态LLM配置**。所有服务(TemplateService, ScriptGenerationService, SelfHealingService)现在从数据库动态获取LLM配置，解决API Key刷新后丢失的问题。修复Agent下载URL使用容器内部地址的问题。 |
-| 2.4 | 2026-03-09 | Sisyphus | **修复实现问题**。实现真实的LLM配置保存和连接测试，修复模板上传后不触发解析的问题(QueueTemplate)，修复Agent下载返回JSON改为重定向，添加encryptionKey参数到ConfigHandler。 |
-| 2.3 | 2026-03-09 | Sisyphus | **IP检测策略调整**。将IP检测优先级从"优先公网IP"改为"优先本地IP"，确保Agent能从本地网络访问后端服务。增加Docker网段过滤范围（172.17-31.x.x），修复模板上传API实现。 |
+| 2.6 | 2026-03-09 | Sisyphus | **LLM 超时优化**。超时时间从 60 秒优化为 120 秒，解决 PDF 解析超时问题。所有服务（TemplateService, ScriptGenerationService, SelfHealingService）使用配置值。添加获取完整 API Key 接口。 |
+| 2.5 | 2026-03-09 | Sisyphus | **动态 LLM 配置**。所有服务 (TemplateService, ScriptGenerationService, SelfHealingService) 现在从数据库动态获取 LLM 配置，解决 API Key 刷新后丢失的问题。修复 Agent 下载 URL 使用容器内部地址的问题。 |
+| 2.4 | 2026-03-09 | Sisyphus | **修复实现问题**。实现真实的 LLM 配置保存和连接测试，修复模板上传后不触发解析的问题 (QueueTemplate)，修复 Agent 下载返回 JSON 改为重定向，添加 encryptionKey 参数到 ConfigHandler。 |
+| 2.3 | 2026-03-09 | Sisyphus | **IP 检测策略调整**。将 IP 检测优先级从"优先公网 IP"改为"优先本地 IP"，确保 Agent 能从本地网络访问后端服务。增加 Docker 网段过滤范围（172.17-31.x.x），修复模板上传 API 实现。 |
 | 2.1 | 2026-03-05 | Manus AI | **补充 IP 检测模块**。新增第 8 节「服务器 IP 自动检测模块」，设计了优先公网 IP 的多策略自动检测逻辑，更新 Agent 安装命令 API 的返回内容，使前端可直接复制粘贴安装命令。 |
 | 2.0 | 2026-03-05 | Manus AI | **全新文档**。补充 V1.6 中缺失的后端详细设计，涵盖项目结构、数据库访问层、Redis 缓存层、MinIO 对象存储层、LLM 交互模块、文件上传与解析模块、提示词自动生成与数据入库模块、脚本自动生成模块、自愈修复模块等全部后端核心逻辑。 |
 

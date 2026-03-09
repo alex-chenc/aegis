@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/minio/minio-go/v7 v7.0.98
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/spf13/viper v1.18.2
