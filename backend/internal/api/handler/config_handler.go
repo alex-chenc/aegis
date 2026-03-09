@@ -1,47 +1,50 @@
 package handler
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"time"
 
+	"baseline-system/internal/llm"
+	"baseline-system/internal/model"
 	"baseline-system/internal/repository"
 	"baseline-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// ConfigHandler LLM 配置 Handler
 type ConfigHandler struct {
-	configRepo *repository.ConfigRepository
+	configRepo    *repository.ConfigRepository
+	encryptionKey string
 }
 
-// NewConfigHandler 创建配置 Handler
-func NewConfigHandler(configRepo *repository.ConfigRepository) *ConfigHandler {
+func NewConfigHandler(configRepo *repository.ConfigRepository, encryptionKey string) *ConfigHandler {
 	return &ConfigHandler{
-		configRepo: configRepo,
+		configRepo:    configRepo,
+		encryptionKey: encryptionKey,
 	}
 }
 
-// LLMConfigRequest LLM 配置请求
 type LLMConfigRequest struct {
 	APIKey    string `json:"api_key"`
 	BaseURL   string `json:"base_url"`
 	ModelName string `json:"model_name"`
 }
 
-// GetLLMConfig 获取 LLM 配置
 func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
 	config, err := h.configRepo.GetActive()
 	if err != nil {
 		logger.Error("failed to get LLM config", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusOK, gin.H{
 			"code":    500,
 			"message": "failed to get config",
 		})
 		return
 	}
 
-	// 返回脱敏的 API Key
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
@@ -54,7 +57,6 @@ func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
 	})
 }
 
-// SaveLLMConfig 保存 LLM 配置
 func (h *ConfigHandler) SaveLLMConfig(c *gin.Context) {
 	var req LLMConfigRequest
 
@@ -66,21 +68,56 @@ func (h *ConfigHandler) SaveLLMConfig(c *gin.Context) {
 		return
 	}
 
-	// TODO: 调用 Service 保存配置
-	// 需要实现 service.ConfigService
+	if req.APIKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "API key is required",
+		})
+		return
+	}
+
+	if req.BaseURL == "" {
+		req.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
+
+	if req.ModelName == "" {
+		req.ModelName = "qwen-plus"
+	}
+
+	config := &model.LLMConfig{
+		ID:           uuid.New(),
+		BaseURL:      req.BaseURL,
+		ModelName:    req.ModelName,
+		IsActive:     true,
+		APIKeyMasked: maskAPIKey(req.APIKey),
+	}
+
+	if err := h.configRepo.Upsert(config, req.APIKey); err != nil {
+		logger.Error("failed to save LLM config", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to save config",
+		})
+		return
+	}
+
+	logger.Info("LLM config saved successfully",
+		zap.String("id", config.ID.String()),
+		zap.String("base_url", config.BaseURL),
+		zap.String("model_name", config.ModelName),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "config saved successfully",
 		"data": gin.H{
-			"api_key_masked": maskAPIKey(req.APIKey),
-			"base_url":       req.BaseURL,
-			"model_name":     req.ModelName,
+			"api_key_masked": config.APIKeyMasked,
+			"base_url":       config.BaseURL,
+			"model_name":     config.ModelName,
 		},
 	})
 }
 
-// TestLLMConnection 测试 LLM 连通性
 func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 	var req LLMConfigRequest
 
@@ -92,8 +129,41 @@ func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 		return
 	}
 
-	// TODO: 调用 LLM Service 测试连通性
-	// 需要实现 service.LLMService
+	if req.APIKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "API key is required",
+		})
+		return
+	}
+
+	if req.BaseURL == "" {
+		req.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
+
+	if req.ModelName == "" {
+		req.ModelName = "qwen-plus"
+	}
+
+	client := llm.NewLLMClient(req.APIKey, req.BaseURL, req.ModelName, 30, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := client.ChatCompletion(ctx, "You are a helpful assistant.", "Hi, please respond with 'OK' to confirm you're working.", 0.1)
+	if err != nil {
+		logger.Error("LLM connection test failed", zap.Error(err))
+		c.JSON(http.StatusOK, gin.H{
+			"code":    1001,
+			"message": fmt.Sprintf("connection failed: %v", err),
+		})
+		return
+	}
+
+	logger.Info("LLM connection test successful",
+		zap.String("base_url", req.BaseURL),
+		zap.String("model_name", req.ModelName),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -105,7 +175,6 @@ func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 	})
 }
 
-// maskAPIKey 脱敏 API Key
 func maskAPIKey(apiKey string) string {
 	if len(apiKey) <= 8 {
 		return "****"

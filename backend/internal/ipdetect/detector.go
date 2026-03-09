@@ -21,15 +21,11 @@ func DetectServerIP(configuredIP string) string {
 		return configuredIP
 	}
 
-	if ip := queryPublicIP(); ip != "" {
+	if ip := getLocalIP(); ip != "" {
 		return ip
 	}
 
 	if ip := getOutboundIP(); ip != "" {
-		return ip
-	}
-
-	if ip := getLocalIP(); ip != "" {
 		return ip
 	}
 
@@ -93,7 +89,21 @@ func getLocalIP() string {
 				continue
 			}
 			ipStr := ip.String()
-			if strings.HasPrefix(ipStr, "172.17.") {
+			if strings.HasPrefix(ipStr, "172.17.") ||
+				strings.HasPrefix(ipStr, "172.18.") ||
+				strings.HasPrefix(ipStr, "172.19.") ||
+				strings.HasPrefix(ipStr, "172.20.") ||
+				strings.HasPrefix(ipStr, "172.21.") ||
+				strings.HasPrefix(ipStr, "172.22.") ||
+				strings.HasPrefix(ipStr, "172.23.") ||
+				strings.HasPrefix(ipStr, "172.24.") ||
+				strings.HasPrefix(ipStr, "172.25.") ||
+				strings.HasPrefix(ipStr, "172.26.") ||
+				strings.HasPrefix(ipStr, "172.27.") ||
+				strings.HasPrefix(ipStr, "172.28.") ||
+				strings.HasPrefix(ipStr, "172.29.") ||
+				strings.HasPrefix(ipStr, "172.30.") ||
+				strings.HasPrefix(ipStr, "172.31.") {
 				continue
 			}
 			return ipStr

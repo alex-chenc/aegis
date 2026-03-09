@@ -16,19 +16,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// SelfHealingService 自愈修复服务
 type SelfHealingService struct {
 	healingLogRepo    *repository.HealingLogRepository
 	scriptVersionRepo *repository.ScriptVersionRepository
+	configRepo        *repository.ConfigRepository
 	ruleRepo          *repository.RuleRepository
 	taskLogRepo       *repository.TaskLogRepository
 	minioClient       *storage.MinIOClient
-	llmClient         *llm.LLMClient
 	healingQueue      chan HealingTask
 	maxRetries        int
 }
 
-// HealingTask 自愈修复任务
 type HealingTask struct {
 	OriginalTaskID uuid.UUID
 	RuleID         uuid.UUID
@@ -39,29 +37,27 @@ type HealingTask struct {
 	ExitCode       int
 }
 
-// NewSelfHealingService 创建自愈修复服务
 func NewSelfHealingService(
 	healingLogRepo *repository.HealingLogRepository,
 	scriptVersionRepo *repository.ScriptVersionRepository,
+	configRepo *repository.ConfigRepository,
 	ruleRepo *repository.RuleRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	minioClient *storage.MinIOClient,
-	llmClient *llm.LLMClient,
 	maxRetries int,
 ) *SelfHealingService {
 	return &SelfHealingService{
 		healingLogRepo:    healingLogRepo,
 		scriptVersionRepo: scriptVersionRepo,
+		configRepo:        configRepo,
 		ruleRepo:          ruleRepo,
 		taskLogRepo:       taskLogRepo,
 		minioClient:       minioClient,
-		llmClient:         llmClient,
 		healingQueue:      make(chan HealingTask, 100),
 		maxRetries:        maxRetries,
 	}
 }
 
-// TriggerHealing 触发自愈修复
 func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
 	logger.Info("triggering self-healing",
 		zap.String("original_task_id", task.OriginalTaskID.String()),
@@ -143,7 +139,26 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		return
 	}
 
-	// 自愈修复循环
+	config, err := s.configRepo.GetActive()
+	if err != nil {
+		logger.Error("failed to get LLM config",
+			zap.Error(err),
+			zap.String("original_task_id", task.OriginalTaskID.String()),
+		)
+		return
+	}
+
+	apiKey, err := s.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		logger.Error("failed to decrypt API key",
+			zap.Error(err),
+			zap.String("original_task_id", task.OriginalTaskID.String()),
+		)
+		return
+	}
+
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+
 	var lastError string
 	var fixedScript string
 	var scriptVersionID uuid.UUID
@@ -168,8 +183,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		history := s.buildHealingHistory(healingLog.AttemptsDetail)
 		prompt := llm.GetSelfHealingFixPrompt(task.ScriptContent, task.ErrorMessage, task.ExitCode, history)
 
-		// 调用 LLM 生成修复脚本
-		llmResponse, err := s.llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本调试专家", prompt, 0.1)
+		llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本调试专家", prompt, 0.1)
 		if err != nil {
 			logger.Error("failed to call LLM for healing",
 				zap.Error(err),

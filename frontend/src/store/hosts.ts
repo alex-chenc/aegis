@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { getHosts, type Host } from '@/api/hosts'
+import { getHosts } from '@/api/hosts'
+import type { Host } from '@/types'
 
 interface HostState {
   hosts: Host[]
@@ -15,12 +16,11 @@ export const useHostStore = defineStore('hosts', {
   }),
 
   actions: {
-    async fetchHosts(page = 1, pageSize = 10, query = '') {
+    async fetchHosts(page = 1, pageSize = 100, query = '') {
       this.loading = true
       try {
-        const data = await getHosts({ page, pageSize, query })
-        this.hosts = data
-        this.total = data.length
+        this.hosts = await getHosts({ page, pageSize, query })
+        this.total = this.hosts.length
       } finally {
         this.loading = false
       }

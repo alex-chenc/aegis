@@ -2,8 +2,12 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
 
+	"baseline-system/internal/fileparser"
+	"baseline-system/internal/model"
 	"baseline-system/internal/repository"
+	"baseline-system/internal/service"
 	"baseline-system/internal/storage"
 	"baseline-system/pkg/logger"
 
@@ -12,135 +16,194 @@ import (
 	"go.uber.org/zap"
 )
 
-// TemplateHandler 模板 Handler
 type TemplateHandler struct {
-	templateRepo *repository.TemplateRepository
-	ruleRepo     *repository.RuleRepository
-	minioClient  *storage.MinIOClient
+	templateRepo    *repository.TemplateRepository
+	ruleRepo        *repository.RuleRepository
+	minioClient     *storage.MinIOClient
+	redisClient     *storage.RedisClient
+	templateService *service.TemplateService
 }
 
-// NewTemplateHandler 创建模板 Handler
 func NewTemplateHandler(
 	templateRepo *repository.TemplateRepository,
 	ruleRepo *repository.RuleRepository,
 	minioClient *storage.MinIOClient,
+	redisClient *storage.RedisClient,
+	templateService *service.TemplateService,
 ) *TemplateHandler {
 	return &TemplateHandler{
-		templateRepo: templateRepo,
-		ruleRepo:     ruleRepo,
-		minioClient:  minioClient,
+		templateRepo:    templateRepo,
+		ruleRepo:        ruleRepo,
+		minioClient:     minioClient,
+		redisClient:     redisClient,
+		templateService: templateService,
 	}
 }
 
-// UploadTemplate 上传模板
 func (h *TemplateHandler) UploadTemplate(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "missing file",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "missing file"})
 		return
 	}
 
-	// TODO: 实现文件上传逻辑
-	// 1. 保存文件到 MinIO
-	// 2. 创建数据库记录
-	// 3. 加入解析队列
+	if file.Size > 50*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "file size exceeds 50MB limit"})
+		return
+	}
+
+	ext := filepath.Ext(file.Filename)
+	fileType := ext[1:]
+	if fileType == "docx" {
+		fileType = "word"
+	}
+
+	templateID := uuid.New()
+	objectName := templateID.String() + "/" + file.Filename
+
+	src, err := file.Open()
+	if err != nil {
+		logger.Error("failed to open uploaded file", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to process file"})
+		return
+	}
+	defer src.Close()
+
+	_, err = h.minioClient.UploadFile("baseline-templates", objectName, src, file.Size, "application/octet-stream")
+	if err != nil {
+		logger.Error("failed to upload file to MinIO", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to store file"})
+		return
+	}
+
+	template := &model.Template{
+		ID:              templateID,
+		Name:            file.Filename,
+		FileType:        fileType,
+		MinioObjectName: objectName,
+		Status:          "parsing",
+		RuleCount:       0,
+	}
+
+	err = h.templateRepo.Create(template)
+	if err != nil {
+		logger.Error("failed to create template record", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to create template"})
+		return
+	}
+
+	err = h.redisClient.SetParseStatus(templateID.String(), "parsing", 0, "文件已上传，等待解析...")
+	if err != nil {
+		logger.Warn("failed to set parse status in redis", zap.Error(err))
+	}
+
+	err = h.templateService.QueueTemplate(templateID, fileparser.FileType(fileType), objectName)
+	if err != nil {
+		logger.Error("failed to queue template for parsing", zap.Error(err))
+		errMsg := "加入解析队列失败"
+		h.templateRepo.UpdateStatus(templateID, "failed", &errMsg, 0)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to queue template"})
+		return
+	}
+
+	logger.Info("template uploaded successfully",
+		zap.String("template_id", templateID.String()),
+		zap.String("filename", file.Filename),
+		zap.Int64("size", file.Size),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "template uploaded",
 		"data": gin.H{
+			"id":          templateID.String(),
 			"filename":    file.Filename,
 			"size":        file.Size,
-			"template_id": uuid.New().String(),
+			"template_id": templateID.String(),
 		},
 	})
 }
 
-// ListTemplates 获取模板列表
 func (h *TemplateHandler) ListTemplates(c *gin.Context) {
+	templates, err := h.templateRepo.FindAll(1, 100)
+	if err != nil {
+		logger.Error("failed to list templates", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to list templates"})
+		return
+	}
 
-	// TODO: 查询模板列表
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    []interface{}{},
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": templates})
 }
 
-// GetTemplateStatus 获取模板解析状态
 func (h *TemplateHandler) GetTemplateStatus(c *gin.Context) {
 	id := c.Param("id")
 	templateID, err := uuid.Parse(id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "invalid template id",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid template id"})
 		return
 	}
 
-	// TODO: 查询 Redis 状态
+	status, progress, message, err := h.redisClient.GetParseStatus(templateID.String())
+	if err != nil {
+		template, dbErr := h.templateRepo.FindByID(templateID)
+		if dbErr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "template not found"})
+			return
+		}
+		status = template.Status
+		progress = 100
+		if template.Status == "completed" {
+			message = "解析完成"
+		} else if template.Status == "failed" && template.ErrorMessage != nil {
+			message = *template.ErrorMessage
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
 		"data": gin.H{
 			"template_id": templateID.String(),
-			"status":      "completed",
-			"progress":    100,
-			"message":     "解析完成",
+			"status":      status,
+			"progress":    progress,
+			"message":     message,
 		},
 	})
 }
 
-// GetTemplateRules 获取模板规则
 func (h *TemplateHandler) GetTemplateRules(c *gin.Context) {
 	id := c.Param("id")
 	templateID, err := uuid.Parse(id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "invalid template id",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid template id"})
 		return
 	}
 
 	rules, err := h.ruleRepo.FindByTemplateID(templateID)
 	if err != nil {
 		logger.Error("failed to get template rules", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "failed to get rules",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to get rules"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    rules,
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": rules})
 }
 
-// DeleteTemplate 删除模板
 func (h *TemplateHandler) DeleteTemplate(c *gin.Context) {
 	id := c.Param("id")
 	templateID, err := uuid.Parse(id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "invalid template id",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid template id"})
 		return
 	}
 
-	// TODO: 删除模板和关联规则
-	logger.Info("template deleted", zap.String("template_id", templateID.String()))
+	err = h.templateRepo.Delete(templateID)
+	if err != nil {
+		logger.Error("failed to delete template", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to delete template"})
+		return
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "template deleted",
-	})
+	logger.Info("template deleted", zap.String("template_id", templateID.String()))
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "template deleted"})
 }

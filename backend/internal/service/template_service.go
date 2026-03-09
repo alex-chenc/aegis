@@ -17,39 +17,36 @@ import (
 	"go.uber.org/zap"
 )
 
-// TemplateService 模板解析服务
 type TemplateService struct {
 	templateRepo *repository.TemplateRepository
 	ruleRepo     *repository.RuleRepository
+	configRepo   *repository.ConfigRepository
 	minioClient  *storage.MinIOClient
 	redisClient  *storage.RedisClient
-	llmClient    *llm.LLMClient
 	parseQueue   chan ParseTask
 	workerCount  int
 }
 
-// ParseTask 解析任务
 type ParseTask struct {
 	TemplateID uuid.UUID
 	FileType   fileparser.FileType
 	MinIOPath  string
 }
 
-// NewTemplateService 创建模板解析服务
 func NewTemplateService(
 	templateRepo *repository.TemplateRepository,
 	ruleRepo *repository.RuleRepository,
+	configRepo *repository.ConfigRepository,
 	minioClient *storage.MinIOClient,
 	redisClient *storage.RedisClient,
-	llmClient *llm.LLMClient,
 	workerCount int,
 ) *TemplateService {
 	return &TemplateService{
 		templateRepo: templateRepo,
 		ruleRepo:     ruleRepo,
+		configRepo:   configRepo,
 		minioClient:  minioClient,
 		redisClient:  redisClient,
-		llmClient:    llmClient,
 		parseQueue:   make(chan ParseTask, 100),
 		workerCount:  workerCount,
 	}
@@ -130,9 +127,30 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 
 	s.updateParseStatus(task.TemplateID, "parsing", 60, "调用 LLM 提取规则...")
 
-	// 调用 LLM 提取规则
+	config, err := s.configRepo.GetActive()
+	if err != nil {
+		logger.Error("failed to get LLM config",
+			zap.Error(err),
+			zap.String("template_id", task.TemplateID.String()),
+		)
+		s.updateParseStatus(task.TemplateID, "failed", 0, "LLM配置未设置，请先在设置页面配置API Key")
+		return
+	}
+
+	apiKey, err := s.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		logger.Error("failed to decrypt API key",
+			zap.Error(err),
+			zap.String("template_id", task.TemplateID.String()),
+		)
+		s.updateParseStatus(task.TemplateID, "failed", 0, "API Key解密失败")
+		return
+	}
+
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+
 	prompt := llm.GetRuleExtractionPrompt(content)
-	llmResponse, err := s.llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, 0.1)
+	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, 0.1)
 	if err != nil {
 		logger.Error("failed to call LLM",
 			zap.Error(err),

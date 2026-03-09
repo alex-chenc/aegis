@@ -1,22 +1,20 @@
-ARG BASE_IMAGE=golang:1.20-alpine
-FROM ${BASE_IMAGE} AS builder
-
-WORKDIR /app
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-RUN make build
-
 FROM alpine:latest
 
 WORKDIR /root/
 
-COPY --from=builder /app/backend .
-COPY --from=builder /app/config/config.yaml .
+# Install ca-certificates for HTTPS connections
+RUN apk add --no-cache ca-certificates
 
+# Copy the pre-built binary
+COPY backend .
+
+# Create config directory and copy config file
+RUN mkdir -p config
+COPY config/config.yaml config/
+
+# Expose ports
 EXPOSE 8080
 EXPOSE 9090
 
+# Run command
 CMD ["./backend"]

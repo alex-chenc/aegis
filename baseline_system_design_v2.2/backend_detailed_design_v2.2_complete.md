@@ -1,13 +1,16 @@
-# 后端详细设计文档 - V2.2 完整版
+# 后端详细设计文档 - V2.5 完整版
 
-**版本**: 2.2
+**版本**: 2.5
 **状态**: 定稿
-**作者**: Manus AI
+**作者**: Manus AI, Sisyphus
 
 ## 1. 修订历史
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.5 | 2026-03-09 | Sisyphus | **动态LLM配置**。所有服务(TemplateService, ScriptGenerationService, SelfHealingService)现在从数据库动态获取LLM配置，解决API Key刷新后丢失的问题。修复Agent下载URL使用容器内部地址的问题。 |
+| 2.4 | 2026-03-09 | Sisyphus | **修复实现问题**。实现真实的LLM配置保存和连接测试，修复模板上传后不触发解析的问题(QueueTemplate)，修复Agent下载返回JSON改为重定向，添加encryptionKey参数到ConfigHandler。 |
+| 2.3 | 2026-03-09 | Sisyphus | **IP检测策略调整**。将IP检测优先级从"优先公网IP"改为"优先本地IP"，确保Agent能从本地网络访问后端服务。增加Docker网段过滤范围（172.17-31.x.x），修复模板上传API实现。 |
 | 2.1 | 2026-03-05 | Manus AI | **补充 IP 检测模块**。新增第 8 节「服务器 IP 自动检测模块」，设计了优先公网 IP 的多策略自动检测逻辑，更新 Agent 安装命令 API 的返回内容，使前端可直接复制粘贴安装命令。 |
 | 2.0 | 2026-03-05 | Manus AI | **全新文档**。补充 V1.6 中缺失的后端详细设计，涵盖项目结构、数据库访问层、Redis 缓存层、MinIO 对象存储层、LLM 交互模块、文件上传与解析模块、提示词自动生成与数据入库模块、脚本自动生成模块、自愈修复模块等全部后端核心逻辑。 |
 
@@ -105,20 +108,23 @@ V1.6 版本的设计文档中，后端部分仅在通讯层文档中定义了 AP
 
 后端需要在启动时自动检测自身对外可达的 IP 地址，并将其嵌入到 Agent 安装命令和安装脚本中，使前端用户可以直接复制粘贴命令完成 Agent 安装，无需手动填写服务器地址。
 
-检测策略遵循「优先公网 IP」的原则，按以下优先级依次尝试，直到获取到有效 IP 为止。
+**重要说明**：V2.3 版本将检测策略从"优先公网IP"改为"优先本地IP"，原因是：
+1. 大多数部署场景下，Agent 和后端在同一局域网内通信
+2. 公网IP可能无法从内网访问（NAT、防火墙等原因）
+3. 本地IP更稳定可靠，适合实际生产环境
+
+检测策略遵循「优先本地IP」的原则，按以下优先级依次尝试，直到获取到有效 IP 为止。
 
 | 优先级 | 策略 | 说明 |
 |:--:|:---|:---|
-| 1 | **读取配置文件** | 如果 `config.yaml` 中 `server.external_ip` 字段不为空，直接使用该值，跳过所有自动检测步骤。适用于管理员明确知道服务器公网 IP 的场景。 |
-| 2 | **公网 IP 查询服务** | 依次请求多个公网 IP 查询服务（如 `https://api.ipify.org`、`https://ifconfig.me/ip`、`https://icanhazip.com`），获取服务器的公网 IP 地址。适用于服务器有公网访问能力的场景。 |
-| 3 | **出站连接本机 IP** | 通过向 `8.8.8.8:80` 建立 UDP 连接（不实际发送数据），获取本机用于对外通讯的网卡 IP 地址。此方法可以准确识别默认路由对应的网卡 IP，避免返回 `127.0.0.1` 或 Docker 虚拟网卡 IP。 |
-| 4 | **枚举本机网卡** | 遍历所有网络接口，过滤掉回环地址（`127.x.x.x`）和 Docker 虚拟网卡地址（`172.x.x.x`、`10.x.x.x` 段中的 Docker 默认段），返回第一个有效的 IPv4 地址。 |
-| 5 | **兜底值** | 如果所有策略均失败，返回 `127.0.0.1`，并在日志中输出 `WARN` 级别警告，提示管理员手动配置 `server.external_ip`。 |
+| 1 | **读取配置文件** | 如果 `config.yaml` 中 `server.external_ip` 字段不为空，或环境变量 `SERVER_EXTERNAL_IP` 已设置，直接使用该值，跳过所有自动检测步骤。适用于管理员明确知道服务器 IP 的场景。 |
+| 2 | **枚举本机网卡** | 遍历所有网络接口，过滤掉回环地址（`127.x.x.x`）、Docker 虚拟网卡地址（`172.17-31.x.x` 段），返回第一个有效的 IPv4 地址。这是最可靠的方式，优先使用。 |
+| 3 | **出站连接本机 IP** | 通过向 `8.8.8.8:80` 建立 UDP 连接（不实际发送数据），获取本机用于对外通讯的网卡 IP 地址。此方法可以准确识别默认路由对应的网卡 IP。 |
+| 4 | **兜底值** | 如果所有策略均失败，返回 `127.0.0.1`，并在日志中输出 `WARN` 级别警告，提示管理员手动配置 `server.external_ip`。 |
 
 ### 4.2 IP 检测器实现 (`internal/ipdetect/detector.go`)
 
 ```go
-// 伪代码示意
 package ipdetect
 
 import (
@@ -130,7 +136,7 @@ import (
     "time"
 )
 
-// 公网 IP 查询服务列表（按优先级排序）
+// 公网 IP 查询服务列表（保留备用，但默认不使用）
 var publicIPServices = []string{
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
@@ -140,14 +146,15 @@ var publicIPServices = []string{
 
 // DetectServerIP 按优先级检测服务器对外可达的 IP 地址
 // configuredIP: 来自配置文件的 external_ip 字段，非空则直接返回
+// 优先级：配置文件 > 本地网卡 > 出站连接IP > 兜底值
 func DetectServerIP(configuredIP string) string {
     // 策略 1：使用配置文件中的显式配置
     if configuredIP != "" {
         return configuredIP
     }
 
-    // 策略 2：查询公网 IP 服务
-    if ip := queryPublicIP(); ip != "" {
+    // 策略 2：枚举本机网卡（优先）
+    if ip := getLocalIP(); ip != "" {
         return ip
     }
 
@@ -156,50 +163,8 @@ func DetectServerIP(configuredIP string) string {
         return ip
     }
 
-    // 策略 4：枚举本机网卡
-    if ip := getLocalIP(); ip != "" {
-        return ip
-    }
-
-    // 策略 5：兜底
+    // 策略 4：兜底
     return "127.0.0.1"
-}
-
-// queryPublicIP 依次请求公网 IP 查询服务，返回第一个成功的结果
-func queryPublicIP() string {
-    client := &http.Client{
-        Timeout: 3 * time.Second, // 每个服务最多等待 3 秒
-    }
-    for _, serviceURL := range publicIPServices {
-        ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-        req, _ := http.NewRequestWithContext(ctx, "GET", serviceURL, nil)
-        resp, err := client.Do(req)
-        cancel()
-        if err != nil {
-            continue
-        }
-        defer resp.Body.Close()
-        body, err := io.ReadAll(resp.Body)
-        if err != nil {
-            continue
-        }
-        ip := strings.TrimSpace(string(body))
-        if net.ParseIP(ip) != nil {
-            return ip
-        }
-    }
-    return ""
-}
-
-// getOutboundIP 通过建立 UDP 连接获取本机出站 IP
-func getOutboundIP() string {
-    conn, err := net.Dial("udp", "8.8.8.8:80")
-    if err != nil {
-        return ""
-    }
-    defer conn.Close()
-    localAddr := conn.LocalAddr().(*net.UDPAddr)
-    return localAddr.IP.String()
 }
 
 // getLocalIP 枚举网卡，过滤回环和 Docker 虚拟网卡，返回第一个有效 IPv4
@@ -226,8 +191,8 @@ func getLocalIP() string {
                 continue
             }
             ipStr := ip.String()
-            // 过滤 Docker 默认网段 172.17.x.x
-            if strings.HasPrefix(ipStr, "172.17.") {
+            // 过滤 Docker 默认网段 172.17.x.x - 172.31.x.x
+            if isDockerBridgeIP(ipStr) {
                 continue
             }
             return ipStr
@@ -235,9 +200,79 @@ func getLocalIP() string {
     }
     return ""
 }
+
+// isDockerBridgeIP 检查是否为 Docker 桥接网络 IP
+func isDockerBridgeIP(ipStr string) bool {
+    // Docker 默认使用 172.17.0.0/16 到 172.31.0.0/16
+    prefixes := []string{
+        "172.17.", "172.18.", "172.19.", "172.20.",
+        "172.21.", "172.22.", "172.23.", "172.24.",
+        "172.25.", "172.26.", "172.27.", "172.28.",
+        "172.29.", "172.30.", "172.31.",
+    }
+    for _, prefix := range prefixes {
+        if strings.HasPrefix(ipStr, prefix) {
+            return true
+        }
+    }
+    return false
+}
+
+// getOutboundIP 通过建立 UDP 连接获取本机出站 IP
+func getOutboundIP() string {
+    conn, err := net.Dial("udp", "8.8.8.8:80")
+    if err != nil {
+        return ""
+    }
+    defer conn.Close()
+    localAddr := conn.LocalAddr().(*net.UDPAddr)
+    return localAddr.IP.String()
+}
+
+// queryPublicIP 依次请求公网 IP 查询服务（保留备用）
+func queryPublicIP() string {
+    client := &http.Client{
+        Timeout: 3 * time.Second,
+    }
+    for _, serviceURL := range publicIPServices {
+        ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+        req, _ := http.NewRequestWithContext(ctx, "GET", serviceURL, nil)
+        resp, err := client.Do(req)
+        cancel()
+        if err != nil {
+            continue
+        }
+        defer resp.Body.Close()
+        body, err := io.ReadAll(resp.Body)
+        if err != nil {
+            continue
+        }
+        ip := strings.TrimSpace(string(body))
+        if net.ParseIP(ip) != nil {
+            return ip
+        }
+    }
+    return ""
+}
 ```
 
-### 4.3 IP 检测结果的缓存与使用
+### 4.3 配置方式
+
+推荐在 `.env` 文件或 `docker-compose.yml` 中设置 `SERVER_PUBLIC_IP` 环境变量：
+
+```bash
+# .env
+SERVER_PUBLIC_IP=192.168.1.100
+```
+
+或在 `docker-compose.yml` 中：
+
+```yaml
+environment:
+  SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
+```
+
+### 4.4 IP 检测结果的缓存与使用
 
 IP 检测在后端服务**启动时执行一次**，结果存储在内存中（作为 `AgentHandler` 的字段）。后续每次调用 `/api/v1/agent/install-command` 和 `/api/v1/agent/install.sh` 接口时，直接使用缓存的 IP 值，不重复检测。
 

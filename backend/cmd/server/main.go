@@ -14,7 +14,6 @@ import (
 	"baseline-system/internal/api/handler"
 	"baseline-system/internal/grpc_server"
 	"baseline-system/internal/ipdetect"
-	"baseline-system/internal/llm"
 	"baseline-system/internal/repository"
 	"baseline-system/internal/service"
 	"baseline-system/internal/storage"
@@ -81,12 +80,10 @@ func main() {
 	healingLogRepo := repository.NewHealingLogRepository(db)
 
 	// Initialize services
-	llmClient := llm.NewLLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.ModelName, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
-	_ = llmClient
-	templateService := service.NewTemplateService(templateRepo, ruleRepo, minioClient, redisClient, llmClient, 3)
-	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, minioClient, llmClient, 2)
+	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, 3)
+	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, 2)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
-	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, ruleRepo, taskLogRepo, minioClient, llmClient, 3)
+	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, 3)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -115,11 +112,11 @@ func main() {
 	logger.Info("gRPC server started", zap.Int("port", cfg.Server.GRPCPort))
 
 	// Initialize handlers
-	configHandler := handler.NewConfigHandler(configRepo)
+	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient)
-	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient)
+	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService)
 	taskHandler := handler.NewTaskHandler(taskService, grpcServer)
-	agentHandler := handler.NewAgentHandler(grpcServer, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
+	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, agentHandler)

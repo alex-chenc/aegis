@@ -1,13 +1,7 @@
 import request from './index'
+import type { Template, BaselineRule, ParseStatus } from '@/types'
 
-export interface Template {
-  id: string
-  name: string
-  file_type: string
-  status: string
-  rule_count: number
-  created_at: string
-}
+export { type Template, type BaselineRule, type ParseStatus }
 
 export function uploadTemplate(file: File) {
   const formData = new FormData()
@@ -28,15 +22,15 @@ export function getTemplates(params?: { page?: number; pageSize?: number }) {
   })
 }
 
-export function getTemplateStatus(id: string) {
-  return request<any, { status: string; progress: number; message: string }>({
+export function getTemplateStatus(id: string): Promise<ParseStatus> {
+  return request<any, ParseStatus>({
     url: `/templates/${id}/status`,
     method: 'get'
   })
 }
 
-export function getTemplateRules(id: string) {
-  return request<any, any[]>({
+export function getTemplateRules(id: string): Promise<BaselineRule[]> {
+  return request<any, BaselineRule[]>({
     url: `/templates/${id}/rules`,
     method: 'get'
   })

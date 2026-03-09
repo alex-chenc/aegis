@@ -1,13 +1,7 @@
 import request from './index'
+import type { LLMConfig, InstallCommand } from '@/types'
 
-export interface LLMConfig {
-  api_key_masked: string
-  base_url: string
-  model_name: string
-  is_active: boolean
-}
-
-export function getLLMConfig() {
+export function getLLMConfig(): Promise<LLMConfig> {
   return request<any, LLMConfig>({
     url: '/config/llm',
     method: 'get'
@@ -30,8 +24,8 @@ export function testLLMConnection(data: { api_key: string; base_url: string; mod
   })
 }
 
-export function getInstallCommand() {
-  return request<any, { command: string; server_ip: string; http_port: number; grpc_port: number }>({
+export function getInstallCommand(): Promise<InstallCommand> {
+  return request<any, InstallCommand>({
     url: '/agent/install-command',
     method: 'get'
   })

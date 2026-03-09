@@ -186,7 +186,7 @@ services:
       # 服务配置
       SERVER_HTTP_PORT: 8080
       SERVER_GRPC_PORT: 9090
-      SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
+      SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
       # Agent 配置
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       AGENT_HEARTBEAT_TIMEOUT: 90
@@ -196,7 +196,7 @@ services:
       SELF_HEALING_ENABLED: "true"
     ports:
       - "8080:8080"
-      - "9090:9090"
+      - "19090:9090"
     networks:
       - baseline-network
     healthcheck:
@@ -215,7 +215,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
+      - "8081:80"
     networks:
       - baseline-network
     healthcheck:

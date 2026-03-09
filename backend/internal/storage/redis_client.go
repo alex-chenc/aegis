@@ -113,6 +113,9 @@ func (r *RedisClient) IsOnline(hostID string) (bool, error) {
 
 // BatchCheckOnline checks online status for multiple hosts
 func (r *RedisClient) BatchCheckOnline(hostIDs []string) (map[string]bool, error) {
+	if len(hostIDs) == 0 {
+		return make(map[string]bool), nil
+	}
 	keys := make([]string, len(hostIDs))
 	for i, hostID := range hostIDs {
 		keys[i] = heartbeatKey(hostID)

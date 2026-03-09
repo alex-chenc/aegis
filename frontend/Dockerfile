@@ -1,17 +1,9 @@
-ARG BASE_IMAGE=node:18-alpine
-FROM ${BASE_IMAGE} AS builder
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
-RUN npm run build
-
 FROM nginx:1.23-alpine
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy the pre-built static files to Nginx's web root directory
+COPY dist /usr/share/nginx/html
+
+# Copy Nginx configuration file
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80

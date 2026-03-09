@@ -15,35 +15,32 @@ import (
 	"go.uber.org/zap"
 )
 
-// ScriptGenerationService 脚本生成服务
 type ScriptGenerationService struct {
 	ruleRepo          *repository.RuleRepository
 	scriptVersionRepo *repository.ScriptVersionRepository
+	configRepo        *repository.ConfigRepository
 	minioClient       *storage.MinIOClient
-	llmClient         *llm.LLMClient
 	generateQueue     chan GenerateTask
 	workerCount       int
 }
 
-// GenerateTask 脚本生成任务
 type GenerateTask struct {
 	RuleID     uuid.UUID
-	ScriptType string // CHECK or FIX
+	ScriptType string
 }
 
-// NewScriptGenerationService 创建脚本生成服务
 func NewScriptGenerationService(
 	ruleRepo *repository.RuleRepository,
 	scriptVersionRepo *repository.ScriptVersionRepository,
+	configRepo *repository.ConfigRepository,
 	minioClient *storage.MinIOClient,
-	llmClient *llm.LLMClient,
 	workerCount int,
 ) *ScriptGenerationService {
 	return &ScriptGenerationService{
 		ruleRepo:          ruleRepo,
 		scriptVersionRepo: scriptVersionRepo,
+		configRepo:        configRepo,
 		minioClient:       minioClient,
-		llmClient:         llmClient,
 		generateQueue:     make(chan GenerateTask, 100),
 		workerCount:       workerCount,
 	}
@@ -85,7 +82,6 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		zap.String("script_type", task.ScriptType),
 	)
 
-	// 获取规则
 	rule, err := s.ruleRepo.FindByID(task.RuleID)
 	if err != nil {
 		logger.Error("failed to find rule",
@@ -95,7 +91,26 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		return
 	}
 
-	// 构建 prompt
+	config, err := s.configRepo.GetActive()
+	if err != nil {
+		logger.Error("failed to get LLM config",
+			zap.Error(err),
+			zap.String("rule_id", task.RuleID.String()),
+		)
+		return
+	}
+
+	apiKey, err := s.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		logger.Error("failed to decrypt API key",
+			zap.Error(err),
+			zap.String("rule_id", task.RuleID.String()),
+		)
+		return
+	}
+
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 30, 3)
+
 	var prompt string
 	if task.ScriptType == "CHECK" {
 		prompt = llm.GetCheckScriptGenerationPrompt(rule.CheckContent)
@@ -103,8 +118,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		prompt = llm.GetFixScriptGenerationPrompt(rule.FixContent)
 	}
 
-	// 调用 LLM 生成脚本
-	llmResponse, err := s.llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本工程师", prompt, 0.1)
+	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本工程师", prompt, 0.1)
 	if err != nil {
 		logger.Error("failed to call LLM for script generation",
 			zap.Error(err),

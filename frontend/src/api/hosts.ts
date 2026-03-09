@@ -1,14 +1,7 @@
 import request from './index'
+import type { Host } from '@/types'
 
-export interface Host {
-  id: string
-  ip_address: string
-  hostname: string
-  os_type: string
-  agent_version: string
-  last_heartbeat_at: string
-  online: boolean
-}
+export { type Host }
 
 export function getHosts(params?: { page?: number; pageSize?: number; query?: string }) {
   return request<any, Host[]>({
