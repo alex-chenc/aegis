@@ -2,9 +2,10 @@
   <div id="app">
     <el-container>
       <el-header>
-        <div class="logo">基线检查与自愈系统</div>
+        <div class="logo">AI基线检查系统</div>
         <el-menu mode="horizontal" :router="true" :default-active="$route.path">
           <el-menu-item index="/">工作台</el-menu-item>
+          <el-menu-item index="/tasks">任务中心</el-menu-item>
           <el-menu-item index="/dashboard">主机列表</el-menu-item>
           <el-menu-item index="/settings">系统配置</el-menu-item>
         </el-menu>

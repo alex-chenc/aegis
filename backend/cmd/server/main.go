@@ -113,11 +113,18 @@ func main() {
 	defer grpcServer.Stop()
 	logger.Info("gRPC server started", zap.Int("port", cfg.Server.GRPCPort))
 
+	// Set gRPC server on task service for command dispatch
+	grpcServer.SetTaskLogRepo(taskLogRepo)
+	grpcServer.SetTaskResultCallback(taskService.ProcessTaskResult)
+
+	taskService.SetGRPCServer(grpcServer)
+	taskService.SetScriptGenService(scriptGenService)
+
 	// Initialize handlers
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
-	hostHandler := handler.NewHostHandler(hostRepo, redisClient)
+	hostHandler := handler.NewHostHandler(hostRepo, redisClient, grpcServer)
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService)
-	taskHandler := handler.NewTaskHandler(taskService, grpcServer)
+	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, scriptGenService, grpcServer)
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
 
 	// Initialize HTTP router

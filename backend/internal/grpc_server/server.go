@@ -10,7 +10,7 @@ import (
 	"baseline-system/internal/model"
 	"baseline-system/internal/repository"
 	"baseline-system/internal/storage"
-	"baseline-system/pkg/api/v1"
+	pb "baseline-system/pkg/api/v1"
 	"baseline-system/pkg/logger"
 
 	"github.com/google/uuid"
@@ -18,14 +18,17 @@ import (
 	"google.golang.org/grpc"
 )
 
-// GRPCServer gRPC 服务器
+type TaskResultCallback func(taskID uuid.UUID, stdout, stderr string, exitCode int, status string)
+
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
-	server           *grpc.Server
-	hostRepo         *repository.HostRepository
-	redisClient      *storage.RedisClient
-	agentConnections sync.Map
-	port             int
+	server             *grpc.Server
+	hostRepo           *repository.HostRepository
+	taskLogRepo        *repository.TaskLogRepository
+	redisClient        *storage.RedisClient
+	agentConnections   sync.Map
+	port               int
+	taskResultCallback TaskResultCallback
 }
 
 type AgentConnection struct {
@@ -36,13 +39,20 @@ type AgentConnection struct {
 	Inbox  chan *pb.CommandExecute
 }
 
-// NewGRPCServer 创建 gRPC 服务器
 func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, port int) *GRPCServer {
 	return &GRPCServer{
 		hostRepo:    hostRepo,
 		redisClient: redisClient,
 		port:        port,
 	}
+}
+
+func (s *GRPCServer) SetTaskLogRepo(taskLogRepo *repository.TaskLogRepository) {
+	s.taskLogRepo = taskLogRepo
+}
+
+func (s *GRPCServer) SetTaskResultCallback(callback TaskResultCallback) {
+	s.taskResultCallback = callback
 }
 
 // Start 启动 gRPC 服务器
@@ -263,7 +273,6 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 			}
 
 		case *pb.CommandRequest_Result:
-			// Agent 返回命令执行结果
 			result := r.Result
 			logger.Info("command result received",
 				zap.String("task_id", result.TaskId),
@@ -272,48 +281,87 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				zap.Bool("is_final", result.IsFinal),
 			)
 
-			// TODO: 将结果传递给 TaskService 处理
+			if result.IsFinal && s.taskResultCallback != nil {
+				taskID, err := uuid.Parse(result.TaskId)
+				if err != nil {
+					logger.Error("invalid task_id in result",
+						zap.String("task_id", result.TaskId),
+						zap.Error(err),
+					)
+					continue
+				}
+
+				status := "success"
+				if result.ExitCode != 0 {
+					status = "failed"
+				}
+
+				s.taskResultCallback(
+					taskID,
+					result.Stdout,
+					result.Stderr,
+					int(result.ExitCode),
+					status,
+				)
+			}
 		}
 	}
 }
 
-// SendCommand 向指定 Agent 发送命令
+// SendCommand 向指定 Agent 发送命令，支持重试等待连接建立
 func (s *GRPCServer) SendCommand(hostID uuid.UUID, execute *pb.CommandExecute) error {
-	value, ok := s.agentConnections.Load(hostID)
-	if !ok {
-		logger.Warn("agent connection not found",
-			zap.Stringer("host_id", hostID),
-		)
-		return fmt.Errorf("agent not connected")
-	}
+	maxRetries := 3
+	retryInterval := 500 * time.Millisecond
 
-	conn := value.(*AgentConnection)
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		value, ok := s.agentConnections.Load(hostID)
+		if !ok {
+			if attempt < maxRetries-1 {
+				logger.Debug("agent connection not found, retrying",
+					zap.Stringer("host_id", hostID),
+					zap.Int("attempt", attempt+1),
+					zap.Int("max_retries", maxRetries),
+				)
+				time.Sleep(retryInterval)
+				continue
+			}
+			logger.Warn("agent connection not found after retries",
+				zap.Stringer("host_id", hostID),
+				zap.Int("attempts", maxRetries),
+			)
+			return fmt.Errorf("agent not connected")
+		}
 
-	select {
-	case conn.Inbox <- execute:
-		err := conn.Stream.Send(&pb.CommandRequest{
-			Request: &pb.CommandRequest_Execute{
-				Execute: execute,
-			},
-		})
-		if err != nil {
-			logger.Error("failed to send command to agent",
-				zap.Error(err),
+		conn := value.(*AgentConnection)
+
+		select {
+		case conn.Inbox <- execute:
+			err := conn.Stream.Send(&pb.CommandRequest{
+				Request: &pb.CommandRequest_Execute{
+					Execute: execute,
+				},
+			})
+			if err != nil {
+				logger.Error("failed to send command to agent",
+					zap.Error(err),
+					zap.Stringer("host_id", hostID),
+					zap.String("task_id", execute.TaskId),
+				)
+				return err
+			}
+
+			logger.Debug("command sent to agent",
 				zap.Stringer("host_id", hostID),
 				zap.String("task_id", execute.TaskId),
 			)
-			return err
+			return nil
+
+		case <-conn.Ctx.Done():
+			return fmt.Errorf("connection closed")
 		}
-
-		logger.Debug("command sent to agent",
-			zap.Stringer("host_id", hostID),
-			zap.String("task_id", execute.TaskId),
-		)
-		return nil
-
-	case <-conn.Ctx.Done():
-		return fmt.Errorf("connection closed")
 	}
+
+	return fmt.Errorf("agent not connected")
 }
 
 // GetConnectedAgents 获取已连接的 Agent 数量
@@ -324,4 +372,22 @@ func (s *GRPCServer) GetConnectedAgents() int {
 		return true
 	})
 	return count
+}
+
+// IsAgentConnected 检查指定 Agent 是否建立了双向流连接
+func (s *GRPCServer) IsAgentConnected(hostID uuid.UUID) bool {
+	_, ok := s.agentConnections.Load(hostID)
+	return ok
+}
+
+// GetConnectedHostIDs 获取所有已建立双向流连接的主机ID列表
+func (s *GRPCServer) GetConnectedHostIDs() []uuid.UUID {
+	var hostIDs []uuid.UUID
+	s.agentConnections.Range(func(key, value interface{}) bool {
+		if hostID, ok := key.(uuid.UUID); ok {
+			hostIDs = append(hostIDs, hostID)
+		}
+		return true
+	})
+	return hostIDs
 }

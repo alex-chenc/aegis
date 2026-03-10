@@ -87,3 +87,154 @@ func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
 	}
 	return &log, nil
 }
+
+func (r *TaskLogRepository) UpdateStatus(id uuid.UUID, status string) error {
+	result := r.db.Model(&model.TaskLog{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":     status,
+			"started_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update task status",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
+	}
+	return nil
+}
+
+type TaskGroupSummary struct {
+	TaskGroupID  uuid.UUID  `gorm:"column:task_group_id" json:"task_group_id"`
+	TaskCount    int        `gorm:"column:task_count" json:"task_count"`
+	TaskType     string     `gorm:"column:task_type" json:"task_type"`
+	Status       string     `gorm:"column:status" json:"status"`
+	SuccessCount int        `gorm:"column:success_count" json:"success_count"`
+	FailedCount  int        `gorm:"column:failed_count" json:"failed_count"`
+	PendingCount int        `gorm:"column:pending_count" json:"pending_count"`
+	RunningCount int        `gorm:"column:running_count" json:"running_count"`
+	CreatedAt    time.Time  `gorm:"column:created_at" json:"created_at"`
+	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at"`
+}
+
+type ListTaskGroupsParams struct {
+	Page      int
+	PageSize  int
+	Status    string
+	TaskType  string
+	StartTime *time.Time
+	EndTime   *time.Time
+	Search    string
+}
+
+func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskGroupSummary, error) {
+	offset := (params.Page - 1) * params.PageSize
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := r.db.Table("task_logs").
+		Select(`
+			task_group_id,
+			COUNT(*) as task_count,
+			MAX(task_type) as task_type,
+			CASE 
+				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				ELSE 'partial'
+			END as status,
+			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+			SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+			SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_count,
+			MIN(created_at) as created_at,
+			MAX(finished_at) as finished_at
+		`).
+		Group("task_group_id")
+
+	if params.Status != "" {
+		query = query.Having(`
+			CASE 
+				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				ELSE 'partial'
+			END = ?
+		`, params.Status)
+	}
+
+	if params.TaskType != "" {
+		query = query.Where("task_type = ?", params.TaskType)
+	}
+
+	if params.StartTime != nil {
+		query = query.Where("created_at >= ?", params.StartTime)
+	}
+
+	if params.EndTime != nil {
+		query = query.Where("created_at <= ?", params.EndTime)
+	}
+
+	if params.Search != "" {
+		search := "%" + params.Search + "%"
+		query = query.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN baseline_rules br ON tl.rule_id = br.id WHERE br.title ILIKE ?)", search)
+	}
+
+	var summaries []TaskGroupSummary
+	result := query.Order("created_at DESC").Limit(params.PageSize).Offset(offset).Scan(&summaries)
+	if result.Error != nil {
+		logger.Error("failed to list task groups",
+			zap.Error(result.Error),
+			zap.Int("page", params.Page),
+			zap.Int("page_size", params.PageSize),
+		)
+		return nil, result.Error
+	}
+
+	return summaries, nil
+}
+
+func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64, error) {
+	subQuery := r.db.Table("task_logs").
+		Select(`task_group_id,
+			CASE 
+				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				ELSE 'partial'
+			END as status
+		`).
+		Group("task_group_id")
+
+	if params.TaskType != "" {
+		subQuery = subQuery.Where("task_type = ?", params.TaskType)
+	}
+
+	if params.StartTime != nil {
+		subQuery = subQuery.Where("created_at >= ?", params.StartTime)
+	}
+
+	if params.EndTime != nil {
+		subQuery = subQuery.Where("created_at <= ?", params.EndTime)
+	}
+
+	if params.Search != "" {
+		search := "%" + params.Search + "%"
+		subQuery = subQuery.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN baseline_rules br ON tl.rule_id = br.id WHERE br.title ILIKE ?)", search)
+	}
+
+	var count int64
+	result := r.db.Table("(?) as sub", subQuery).Count(&count)
+	if result.Error != nil {
+		logger.Error("failed to count task groups", zap.Error(result.Error))
+		return 0, result.Error
+	}
+
+	return count, nil
+}

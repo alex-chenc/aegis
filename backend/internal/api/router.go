@@ -1,10 +1,10 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
 	"baseline-system/internal/api/handler"
 	"baseline-system/internal/api/middleware"
 	"baseline-system/internal/grpc_server"
+	"github.com/gin-gonic/gin"
 )
 
 // Router Gin 路由器
@@ -59,7 +59,7 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			config.GET("/llm", r.configHandler.GetLLMConfig)
 			config.POST("/llm", r.configHandler.SaveLLMConfig)
 			config.POST("/llm/test", r.configHandler.TestLLMConnection)
-		config.GET("/llm/full-key", r.configHandler.GetFullAPIKey)
+			config.GET("/llm/full-key", r.configHandler.GetFullAPIKey)
 		}
 
 		// 主机接口
@@ -82,10 +82,12 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 		// 任务接口
 		tasks := v1.Group("/tasks")
 		{
+			tasks.GET("", r.taskHandler.ListTasks)
 			tasks.POST("/run-check", r.taskHandler.RunCheck)
 			tasks.POST("/run-fix", r.taskHandler.RunFix)
 			tasks.GET("/:id/status", r.taskHandler.GetTaskStatus)
 			tasks.GET("/:id/logs", r.taskHandler.GetTaskLogs)
+			tasks.GET("/:id", r.taskHandler.GetTaskDetail)
 		}
 
 		// Agent 接口

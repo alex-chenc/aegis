@@ -15,19 +15,32 @@ export interface TaskLog {
   task_group_id: string
   rule_id: string
   host_id: string
+  rule_title?: string
+  hostname?: string
   task_type: 'check' | 'fix'
   status: 'pending' | 'running' | 'success' | 'failed'
-  script_content: string
-  stdout: string
-  stderr: string
-  exit_code: number
-  started_at: string
-  finished_at: string
+  script_content?: string
+  stdout?: string
+  stderr?: string
+  exit_code?: number
+  started_at?: string
+  finished_at?: string
 }
 
 export interface RunTaskResponse {
   task_group_id: string
   task_ids: string[]
+  task_count: number
+}
+
+export interface TaskGroupStatus {
+  task_group_id: string
+  status: string
+  total: number
+  pending: number
+  running: number
+  success: number
+  failed: number
 }
 
 export function runCheck(data: RunCheckRequest) {
@@ -50,5 +63,63 @@ export function getTaskLogs(taskGroupId: string) {
   return request<any, TaskLog[]>({
     url: `/tasks/${taskGroupId}/logs`,
     method: 'get'
+  })
+}
+
+export function getTaskStatus(taskGroupId: string) {
+  return request<any, TaskGroupStatus>({
+    url: `/tasks/${taskGroupId}/status`,
+    method: 'get'
+  })
+}
+
+export function getTaskDetail(taskId: string) {
+  return request<any, TaskLog>({
+    url: `/tasks/${taskId}`,
+    method: 'get'
+  })
+}
+
+export function triggerSelfHealing(taskId: string) {
+  return request<any, TaskLog>({
+    url: `/tasks/${taskId}`,
+    method: 'get'
+  })
+}
+
+export interface TaskGroupSummary {
+  task_group_id: string
+  task_count: number
+  task_type: 'check' | 'fix'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'partial'
+  success_count: number
+  failed_count: number
+  pending_count: number
+  running_count: number
+  created_at: string
+  finished_at?: string
+}
+
+export interface ListTasksParams {
+  page?: number
+  page_size?: number
+  status?: string
+  task_type?: string
+  search?: string
+}
+
+export interface ListTasksResponse {
+  items: TaskGroupSummary[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export function listTasks(params: ListTasksParams) {
+  return request<any, ListTasksResponse>({
+    url: '/tasks',
+    method: 'get',
+    params
   })
 }

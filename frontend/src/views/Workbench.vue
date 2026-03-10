@@ -141,7 +141,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { uploadTemplate, getTemplates, getTemplateStatus, getTemplateRules } from '@/api/templates'
 import { useHostStore } from '@/store/hosts'
@@ -149,6 +150,7 @@ import { useTaskStore } from '@/store/tasks'
 import type { UploadRequestOptions } from 'element-plus'
 import type { Template, BaselineRule, ParseStatus, Host } from '@/types'
 
+const router = useRouter()
 const hostStore = useHostStore()
 const taskStore = useTaskStore()
 
@@ -363,7 +365,17 @@ const executeCheck = async () => {
     taskStore.setSelectedHosts(selectedHostIds.value)
     const result = await taskStore.executeCheck()
     if (result) {
-      ElMessage.success(`检测任务已下发，任务ID: ${result.task_group_id}`)
+      ElMessageBox.confirm(
+        `检测任务已下发，任务ID: ${result.task_group_id}`,
+        '任务已创建',
+        {
+          confirmButtonText: '查看任务',
+          cancelButtonText: '关闭',
+          type: 'success'
+        }
+      ).then(() => {
+        router.push(`/tasks/${result.task_group_id}`)
+      }).catch(() => {})
     }
   } catch (e: any) {
     ElMessage.error(e.message || '下发失败')
@@ -383,7 +395,17 @@ const executeFix = async () => {
     taskStore.setSelectedHosts(selectedHostIds.value)
     const result = await taskStore.executeFix()
     if (result) {
-      ElMessage.success(`修复任务已下发，任务ID: ${result.task_group_id}`)
+      ElMessageBox.confirm(
+        `修复任务已下发，任务ID: ${result.task_group_id}`,
+        '任务已创建',
+        {
+          confirmButtonText: '查看任务',
+          cancelButtonText: '关闭',
+          type: 'success'
+        }
+      ).then(() => {
+        router.push(`/tasks/${result.task_group_id}`)
+      }).catch(() => {})
     }
   } catch (e: any) {
     ElMessage.error(e.message || '下发失败')

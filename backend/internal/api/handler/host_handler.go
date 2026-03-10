@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"baseline-system/internal/grpc_server"
 	"baseline-system/internal/repository"
 	"baseline-system/internal/storage"
 	"baseline-system/pkg/logger"
@@ -12,21 +13,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// HostHandler 主机 Handler
 type HostHandler struct {
 	hostRepo    *repository.HostRepository
 	redisClient *storage.RedisClient
+	grpcServer  *grpc_server.GRPCServer
 }
 
-// NewHostHandler 创建主机 Handler
-func NewHostHandler(hostRepo *repository.HostRepository, redisClient *storage.RedisClient) *HostHandler {
+func NewHostHandler(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, grpcServer *grpc_server.GRPCServer) *HostHandler {
 	return &HostHandler{
 		hostRepo:    hostRepo,
 		redisClient: redisClient,
+		grpcServer:  grpcServer,
 	}
 }
 
-// HostResponse 主机响应
 type HostResponse struct {
 	ID              string `json:"id"`
 	IPAddress       string `json:"ip_address"`
@@ -37,7 +37,6 @@ type HostResponse struct {
 	Online          bool   `json:"online"`
 }
 
-// ListHosts 获取主机列表
 func (h *HostHandler) ListHosts(c *gin.Context) {
 	page := 1
 	pageSize := 10
@@ -53,17 +52,13 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		return
 	}
 
-	// 批量检查在线状态
-	hostIDs := make([]string, len(hosts))
-	for i, host := range hosts {
-		hostIDs[i] = host.ID.String()
-	}
-
-	onlineMap, _ := h.redisClient.BatchCheckOnline(hostIDs)
-
-	// 构建响应
 	result := make([]HostResponse, len(hosts))
 	for i, host := range hosts {
+		online := false
+		if h.grpcServer != nil {
+			online = h.grpcServer.IsAgentConnected(host.ID)
+		}
+
 		result[i] = HostResponse{
 			ID:              host.ID.String(),
 			IPAddress:       host.IPAddress,
@@ -71,7 +66,7 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			OSType:          host.OSType,
 			AgentVersion:    host.AgentVersion,
 			LastHeartbeatAt: host.LastHeartbeatAt.Format("2006-01-02 15:04:05"),
-			Online:          onlineMap[host.ID.String()],
+			Online:          online,
 		}
 	}
 
@@ -82,7 +77,6 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 	})
 }
 
-// GetHost 获取主机详情
 func (h *HostHandler) GetHost(c *gin.Context) {
 	id := c.Param("id")
 	hostID, err := uuid.Parse(id)
@@ -103,7 +97,10 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 		return
 	}
 
-	online, _ := h.redisClient.IsOnline(id)
+	online := false
+	if h.grpcServer != nil {
+		online = h.grpcServer.IsAgentConnected(host.ID)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,

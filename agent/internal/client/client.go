@@ -44,8 +44,8 @@ func (c *Client) Run() error {
 
 	for {
 		if err := c.connect(); err != nil {
-			logger.Error("Connection failed, retrying", 
-				zap.Error(err), 
+			logger.Error("Connection failed, retrying",
+				zap.Error(err),
 				zap.Duration("interval", reconnectInterval))
 			time.Sleep(reconnectInterval)
 			reconnectInterval *= 2
@@ -76,7 +76,8 @@ func (c *Client) connect() error {
 		return err
 	}
 
-	go c.sendHeartbeats()
+	// 心跳延迟到 run() 中双向流建立后启动
+	// 这样确保 Agent 显示在线时，双向流已经准备好接收命令
 	return nil
 }
 
@@ -139,7 +140,23 @@ func (c *Client) run() {
 		return
 	}
 
-	logger.Info("Command stream established, waiting for commands...")
+	if err := c.stream.Send(&pb.CommandRequest{
+		Request: &pb.CommandRequest_Execute{
+			Execute: &pb.CommandExecute{
+				HostId:        c.hostID,
+				ScriptContent: "",
+			},
+		},
+	}); err != nil {
+		logger.Error("Failed to send ready signal", zap.Error(err))
+		return
+	}
+
+	logger.Info("Command stream established, starting heartbeat...")
+
+	go c.sendHeartbeats()
+
+	logger.Info("Waiting for commands...")
 
 	for {
 		select {
