@@ -125,6 +125,16 @@ func (r *RuleRepository) HasTasks(ruleID uuid.UUID) (bool, int64, error) {
 
 // Delete 删除规则（仅当无关联任务时可删除）
 func (r *RuleRepository) Delete(ruleID uuid.UUID) error {
+	// 先删除关联的 script_versions
+	if err := r.db.Where("rule_id = ?", ruleID).Delete(&model.ScriptVersion{}).Error; err != nil {
+		logger.Error("failed to delete script versions",
+			zap.Error(err),
+			zap.String("rule_id", ruleID.String()),
+		)
+		return err
+	}
+
+	// 再删除规则
 	result := r.db.Delete(&model.BaselineRule{}, "id = ?", ruleID)
 	if result.Error != nil {
 		logger.Error("failed to delete rule",
