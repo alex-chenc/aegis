@@ -125,10 +125,11 @@ func main() {
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient, grpcServer)
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService)
 	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, scriptGenService, grpcServer)
+	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, agentHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler)
 	router.Setup(grpcServer)
 
 	// Start HTTP server
@@ -137,6 +138,20 @@ func main() {
 		logger.Info("HTTP server starting", zap.String("addr", addr))
 		if err := router.Run(addr); err != nil {
 			logger.Fatal("failed to start HTTP server", zap.Error(err))
+		}
+	}()
+
+	// Start task timeout checker
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				taskService.CheckTimeoutTasks()
+			}
 		}
 	}()
 

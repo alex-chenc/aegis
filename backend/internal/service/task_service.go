@@ -196,6 +196,30 @@ func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string,
 	)
 }
 
+func (s *TaskService) CheckTimeoutTasks() {
+	tasks, err := s.taskLogRepo.FindRunningTasks()
+	if err != nil {
+		logger.Error("failed to find running tasks", zap.Error(err))
+		return
+	}
+
+	timeout := 5 * time.Minute
+	now := time.Now()
+
+	for _, task := range tasks {
+		if task.StartedAt != nil {
+			elapsed := now.Sub(*task.StartedAt)
+			if elapsed > timeout {
+				logger.Warn("task timeout, marking as failed",
+					zap.String("task_id", task.ID.String()),
+					zap.Duration("elapsed", elapsed),
+				)
+				s.ProcessTaskResult(task.ID, "", "任务执行超时（超过5分钟）", -1, "failed")
+			}
+		}
+	}
+}
+
 func (s *TaskService) TriggerSelfHealing(taskID uuid.UUID) error {
 	taskLog, err := s.taskLogRepo.FindByID(taskID)
 	if err != nil {

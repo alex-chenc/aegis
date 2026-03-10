@@ -7,30 +7,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Router Gin 路由器
 type Router struct {
-	engine          *gin.Engine
-	configHandler   *handler.ConfigHandler
-	hostHandler     *handler.HostHandler
-	templateHandler *handler.TemplateHandler
-	taskHandler     *handler.TaskHandler
-	agentHandler    *handler.AgentHandler
+	engine                 *gin.Engine
+	configHandler          *handler.ConfigHandler
+	hostHandler            *handler.HostHandler
+	templateHandler        *handler.TemplateHandler
+	taskHandler            *handler.TaskHandler
+	taskHandlerWithHealing *handler.TaskHandlerWithHealing
+	agentHandler           *handler.AgentHandler
 }
 
-// NewRouter 创建路由器
 func NewRouter(
 	configHandler *handler.ConfigHandler,
 	hostHandler *handler.HostHandler,
 	templateHandler *handler.TemplateHandler,
 	taskHandler *handler.TaskHandler,
+	taskHandlerWithHealing *handler.TaskHandlerWithHealing,
 	agentHandler *handler.AgentHandler,
 ) *Router {
 	return &Router{
-		configHandler:   configHandler,
-		hostHandler:     hostHandler,
-		templateHandler: templateHandler,
-		taskHandler:     taskHandler,
-		agentHandler:    agentHandler,
+		configHandler:          configHandler,
+		hostHandler:            hostHandler,
+		templateHandler:        templateHandler,
+		taskHandler:            taskHandler,
+		taskHandlerWithHealing: taskHandlerWithHealing,
+		agentHandler:           agentHandler,
 	}
 }
 
@@ -88,6 +89,8 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			tasks.GET("/:id/status", r.taskHandler.GetTaskStatus)
 			tasks.GET("/:id/logs", r.taskHandler.GetTaskLogs)
 			tasks.GET("/:id", r.taskHandler.GetTaskDetail)
+			tasks.POST("/:id/heal", r.taskHandlerWithHealing.TriggerSelfHealing)
+			tasks.GET("/:id/healing-status", r.taskHandlerWithHealing.GetHealingStatus)
 		}
 
 		// Agent 接口

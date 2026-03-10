@@ -419,3 +419,161 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		},
 	})
 }
+
+type TaskHandlerWithHealing struct {
+	*TaskHandler
+	healingService *service.SelfHealingService
+	ruleRepo       *repository.RuleRepository
+	taskLogRepo    *repository.TaskLogRepository
+}
+
+func NewTaskHandlerWithHealing(
+	taskService *service.TaskService,
+	taskLogRepo *repository.TaskLogRepository,
+	scriptGenService *service.ScriptGenerationService,
+	grpcServer *grpc_server.GRPCServer,
+	healingService *service.SelfHealingService,
+	ruleRepo *repository.RuleRepository,
+) *TaskHandlerWithHealing {
+	return &TaskHandlerWithHealing{
+		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, scriptGenService, grpcServer),
+		healingService: healingService,
+		ruleRepo:       ruleRepo,
+		taskLogRepo:    taskLogRepo,
+	}
+}
+
+type TriggerHealingRequest struct {
+	UserSuggestion string `json:"user_suggestion"`
+}
+
+func (h *TaskHandlerWithHealing) TriggerSelfHealing(c *gin.Context) {
+	taskIDStr := c.Param("id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_id",
+		})
+		return
+	}
+
+	var req TriggerHealingRequest
+	c.ShouldBindJSON(&req)
+
+	taskLog, err := h.taskLogRepo.FindByID(taskID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "task not found",
+		})
+		return
+	}
+
+	if taskLog.Status != "failed" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "task is not in failed state, self-healing is only available for failed tasks",
+		})
+		return
+	}
+
+	scriptType := "CHECK"
+	if taskLog.TaskType == "fix" {
+		scriptType = "FIX"
+	}
+
+	errMsg := ""
+	if taskLog.Stderr != nil {
+		errMsg = *taskLog.Stderr
+	} else if taskLog.Stdout != nil {
+		errMsg = *taskLog.Stdout
+	}
+
+	exitCode := -1
+	if taskLog.ExitCode != nil {
+		exitCode = *taskLog.ExitCode
+	}
+
+	scriptContent := ""
+	if taskLog.ScriptContent != nil {
+		scriptContent = *taskLog.ScriptContent
+	}
+
+	healingTask := service.HealingTask{
+		OriginalTaskID: taskID,
+		RuleID:         taskLog.RuleID,
+		HostID:         taskLog.HostID,
+		ScriptType:     scriptType,
+		ScriptContent:  scriptContent,
+		ErrorMessage:   errMsg,
+		ExitCode:       exitCode,
+		UserSuggestion: req.UserSuggestion,
+	}
+
+	if err := h.healingService.TriggerHealing(healingTask); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to trigger self-healing: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "self-healing triggered successfully",
+		"data": gin.H{
+			"task_id":     taskIDStr,
+			"rule_id":     taskLog.RuleID.String(),
+			"script_type": scriptType,
+			"status":      "healing",
+		},
+	})
+}
+
+func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
+	taskIDStr := c.Param("id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_id",
+		})
+		return
+	}
+
+	healingLog, err := h.healingService.GetHealingLogByTaskID(taskID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to get healing status",
+		})
+		return
+	}
+
+	if healingLog == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "no healing record found",
+			"data":    nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"id":                   healingLog.ID.String(),
+			"original_task_id":     healingLog.OriginalTaskID.String(),
+			"rule_id":              healingLog.RuleID.String(),
+			"script_type":          healingLog.ScriptType,
+			"status":               healingLog.Status,
+			"total_attempts":       healingLog.TotalAttempts,
+			"max_attempts":         healingLog.MaxAttempts,
+			"final_script_version": healingLog.FinalScriptVersionID,
+			"last_error":           healingLog.LastError,
+			"user_suggestion":      healingLog.UserSuggestion,
+		},
+	})
+}

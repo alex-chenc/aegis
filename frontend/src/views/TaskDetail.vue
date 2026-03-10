@@ -42,7 +42,7 @@
         <span>任务列表</span>
       </template>
 
-      <el-table :data="tasks" style="width: 100%">
+      <el-table :data="tasksWithState" style="width: 100%">
         <el-table-column prop="rule_title" label="规则标题" min-width="180">
           <template #default="{ row }">
             {{ getRuleTitle(row.rule_id) }}
@@ -60,21 +60,36 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column label="状态" width="140">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
+            <el-tooltip 
+              v-if="row.displayState === '脚本修复失败'" 
+              :content="row.healingStatus?.last_error || '未知错误'" 
+              placement="top"
+            >
+              <el-tag :type="getStateTagType(row.displayState)" size="small">
+                {{ row.displayState }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="getStateTagType(row.displayState)" size="small">
+              {{ row.displayState }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="脚本" width="150">
+        <el-table-column label="脚本" width="100">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="showScript(row, 'script')">
-              查看脚本
+            <el-button 
+              link 
+              type="primary" 
+              size="small" 
+              @click="showScript(row, 'script')"
+              :disabled="row.displayState === '脚本修复中'"
+            >
+              {{ row.displayState === '脚本修复中' ? '修复中' : '查看脚本' }}
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column label="结果" width="150">
+        <el-table-column label="结果" width="100">
           <template #default="{ row }">
             <el-button
               v-if="row.stdout || row.stderr"
@@ -88,16 +103,26 @@
             <span v-else style="color: #999">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="220">
           <template #default="{ row }">
-            <el-button
-              v-if="row.status === 'failed'"
-              link
-              type="warning"
-              size="small"
-              @click="triggerHealing(row.id)"
+            <el-button 
+              v-if="canReExecute(row.displayState)"
+              link 
+              type="primary" 
+              size="small" 
+              @click="reExecute(row)"
+              :loading="reexecutingTask === row.id"
             >
-              自愈修复
+              重新下发
+            </el-button>
+            <el-button 
+              v-if="row.displayState === '检查失败' || row.displayState === '脚本修复失败'"
+              link 
+              type="warning" 
+              size="small" 
+              @click="openSuggestionDialog(row)"
+            >
+              修复建议
             </el-button>
           </template>
         </el-table-column>
@@ -109,6 +134,25 @@
         <pre class="script-content">{{ currentScript }}</pre>
       </div>
     </el-dialog>
+
+    <el-dialog v-model="suggestionDialogVisible" title="修复建议" width="500px">
+      <el-form>
+        <el-form-item label="修复建议">
+          <el-input
+            v-model="suggestionText"
+            type="textarea"
+            :rows="4"
+            placeholder="请输入您的修复建议，系统会将建议发送给大模型进行脚本修复"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="suggestionDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitSuggestion" :loading="submittingSuggestion">
+          提交修复
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -116,8 +160,20 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getTaskLogs, getTaskStatus, triggerSelfHealing, type TaskLog, type TaskGroupStatus } from '@/api/tasks'
+import { 
+  getTaskLogs, 
+  getTaskStatus, 
+  triggerSelfHealing, 
+  getHealingStatus,
+  runCheck,
+  runFix,
+  type TaskLog, 
+  type TaskGroupStatus,
+  type HealingStatus 
+} from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
+
+type DisplayState = '执行中' | '检查成功' | '检查失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败'
 
 const route = useRoute()
 const router = useRouter()
@@ -127,11 +183,57 @@ const taskGroupId = route.params.id as string
 const loading = ref(false)
 const refreshing = ref(false)
 const tasks = ref<TaskLog[]>([])
+const healingStatusMap = ref<Record<string, HealingStatus>>({})
 const status = ref<TaskGroupStatus | null>(null)
 const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
 const currentScript = ref('')
+const reexecutingTask = ref<string | null>(null)
+const suggestionDialogVisible = ref(false)
+const suggestionText = ref('')
+const selectedTask = ref<TaskLog | null>(null)
+const submittingSuggestion = ref(false)
 let pollTimer: number | null = null
+
+const tasksWithState = computed(() => {
+  return tasks.value.map(task => {
+    const healingStatus = healingStatusMap.value[task.id]
+    const displayState = getDisplayState(task.status, healingStatus)
+    return {
+      ...task,
+      displayState,
+      healingStatus
+    }
+  })
+})
+
+function getDisplayState(taskStatus: string, healingStatus?: HealingStatus): DisplayState {
+  if (taskStatus === 'running' || taskStatus === 'pending') return '执行中'
+  if (taskStatus === 'success') return '检查成功'
+  if (taskStatus === 'failed') {
+    if (!healingStatus) return '检查失败'
+    if (healingStatus.status === 'healing') return '脚本修复中'
+    if (healingStatus.status === 'healed') return '脚本修复成功'
+    if (healingStatus.status === 'failed') return '脚本修复失败'
+  }
+  return '检查失败'
+}
+
+function getStateTagType(state: DisplayState): string {
+  switch (state) {
+    case '执行中': return 'warning'
+    case '检查成功': return 'success'
+    case '检查失败': return 'danger'
+    case '脚本修复中': return 'warning'
+    case '脚本修复成功': return 'success'
+    case '脚本修复失败': return 'danger'
+    default: return 'info'
+  }
+}
+
+function canReExecute(state: DisplayState): boolean {
+  return state === '检查失败' || state === '脚本修复成功'
+}
 
 const progressPercent = computed(() => {
   if (!status.value || status.value.total === 0) return 0
@@ -145,77 +247,83 @@ const progressStatus = computed(() => {
   return ''
 })
 
-const getRuleTitle = (ruleId: string) => {
-  return ruleId.substring(0, 8) + '...'
-}
+const getRuleTitle = (ruleId: string) => ruleId.substring(0, 8) + '...'
 
 const getHostname = (hostId: string) => {
   const host = hostStore.hosts.find(h => h.id === hostId)
-  return host ? `${host.hostname} (${host.ip_address})` : hostId.substring(0, 8)
-}
-
-const getStatusType = (status: string) => {
-  switch (status) {
-    case 'pending': return 'info'
-    case 'running': return 'warning'
-    case 'success': return 'success'
-    case 'failed': return 'danger'
-    default: return 'info'
-  }
-}
-
-const getStatusText = (status: string) => {
-  switch (status) {
-    case 'pending': return '待执行'
-    case 'running': return '执行中'
-    case 'success': return '成功'
-    case 'failed': return '失败'
-    default: return status
-  }
+  return host ? host.hostname + ' (' + host.ip_address + ')' : hostId.substring(0, 8)
 }
 
 const showScript = (task: TaskLog, type: 'script' | 'result') => {
   if (type === 'script') {
-    scriptDialogTitle.value = `检测脚本`
+    scriptDialogTitle.value = '脚本内容'
     currentScript.value = task.script_content || '// 脚本内容为空'
   } else {
-    scriptDialogTitle.value = `执行结果`
+    scriptDialogTitle.value = '执行结果'
     let content = ''
-    if (task.stdout) {
-      content += `=== STDOUT ===\n${task.stdout}\n\n`
-    }
-    if (task.stderr) {
-      content += `=== STDERR ===\n${task.stderr}\n\n`
-    }
-    if (task.exit_code !== undefined) {
-      content += `=== EXIT CODE: ${task.exit_code} ===`
-    }
+    if (task.stdout) content += '=== STDOUT ===\n' + task.stdout + '\n\n'
+    if (task.stderr) content += '=== STDERR ===\n' + task.stderr + '\n\n'
+    if (task.exit_code !== undefined) content += '=== EXIT CODE: ' + task.exit_code + ' ==='
     currentScript.value = content || '// 无执行结果'
   }
   scriptDialogVisible.value = true
 }
 
-const triggerHealing = async (taskId: string) => {
+const openSuggestionDialog = (task: TaskLog) => {
+  selectedTask.value = task
+  suggestionText.value = ''
+  suggestionDialogVisible.value = true
+}
+
+const submitSuggestion = async () => {
+  if (!selectedTask.value) return
+  submittingSuggestion.value = true
   try {
-    const result = await triggerSelfHealing(taskId)
-    if (result.success) {
-      ElMessage.success('自愈修复已触发，请稍后刷新查看结果')
-      await refresh()
-    }
+    await triggerSelfHealing(selectedTask.value.id, suggestionText.value)
+    ElMessage.success('修复建议已提交，系统正在进行脚本修复')
+    suggestionDialogVisible.value = false
+    await fetchHealingStatuses()
   } catch (e: any) {
-    ElMessage.error(e.message || '自愈修复失败')
+    ElMessage.error(e.message || '提交失败')
+  } finally {
+    submittingSuggestion.value = false
+  }
+}
+
+const reExecute = async (task: TaskLog) => {
+  reexecutingTask.value = task.id
+  try {
+    const action = task.task_type === 'check' ? runCheck : runFix
+    await action({ rule_ids: [task.rule_id], host_ids: [task.host_id] })
+    ElMessage.success('重新下发成功')
+    delete healingStatusMap.value[task.id]
+    await refresh()
+  } catch (e: any) {
+    ElMessage.error(e.message || '重新下发失败')
+  } finally {
+    reexecutingTask.value = null
+  }
+}
+
+const fetchHealingStatuses = async () => {
+  const failedTasks = tasks.value.filter(t => t.status === 'failed')
+  const healingTasks = Object.values(healingStatusMap.value).filter(h => h.status === 'healing')
+  const taskIds = [...new Set([...failedTasks.map(t => t.id), ...healingTasks.map(h => h.original_task_id)])]
+  for (const taskId of taskIds) {
+    try {
+      const healingStatus = await getHealingStatus(taskId)
+      if (healingStatus) healingStatusMap.value[taskId] = healingStatus
+    } catch { }
   }
 }
 
 const refresh = async () => {
   refreshing.value = true
   try {
-    const [logs, statusData] = await Promise.all([
-      getTaskLogs(taskGroupId),
-      getTaskStatus(taskGroupId)
-    ])
+    const [logs, statusData] = await Promise.all([getTaskLogs(taskGroupId), getTaskStatus(taskGroupId)])
     tasks.value = logs
     status.value = statusData
+    await fetchHealingStatuses()
   } catch (e: any) {
     ElMessage.error(e.message || '刷新失败')
   } finally {
@@ -223,15 +331,13 @@ const refresh = async () => {
   }
 }
 
-const goBack = () => {
-  router.push('/')
-}
+const goBack = () => router.push('/tasks')
 
 const startPolling = () => {
-  pollTimer = window.setInterval(() => {
-    if (status.value && (status.value.pending > 0 || status.value.running > 0)) {
-      refresh()
-    }
+  pollTimer = window.setInterval(async () => {
+    const hasRunning = status.value && (status.value.pending > 0 || status.value.running > 0)
+    const hasHealing = Object.values(healingStatusMap.value).some(h => h.status === 'healing')
+    if (hasRunning || hasHealing) await refresh()
   }, 3000)
 }
 
@@ -246,34 +352,11 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-  }
-})
+onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 </script>
 
 <style scoped>
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.script-viewer {
-  background: #1e1e1e;
-  border-radius: 4px;
-  padding: 12px;
-  max-height: 500px;
-  overflow: auto;
-}
-
-.script-content {
-  color: #d4d4d4;
-  font-family: 'Fira Code', monospace;
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0;
-}
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.script-viewer { background: #1e1e1e; border-radius: 4px; padding: 12px; max-height: 500px; overflow: auto; }
+.script-content { color: #d4d4d4; font-family: 'Fira Code', monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; margin: 0; }
 </style>

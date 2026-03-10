@@ -18,13 +18,31 @@ export interface TaskLog {
   rule_title?: string
   hostname?: string
   task_type: 'check' | 'fix'
-  status: 'pending' | 'running' | 'success' | 'failed'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'healing'
   script_content?: string
   stdout?: string
   stderr?: string
   exit_code?: number
   started_at?: string
   finished_at?: string
+  healing_status?: HealingStatus
+}
+
+export interface HealingStatus {
+  id: string
+  original_task_id: string
+  rule_id: string
+  script_type: string
+  status: 'healing' | 'healed' | 'failed'
+  total_attempts: number
+  max_attempts: number
+  final_script_version?: string
+  last_error?: string
+  user_suggestion?: string
+}
+
+export interface TriggerHealingRequest {
+  user_suggestion?: string
 }
 
 export interface RunTaskResponse {
@@ -80,9 +98,17 @@ export function getTaskDetail(taskId: string) {
   })
 }
 
-export function triggerSelfHealing(taskId: string) {
-  return request<any, TaskLog>({
-    url: `/tasks/${taskId}`,
+export function triggerSelfHealing(taskId: string, userSuggestion?: string) {
+  return request<any, { code: number; message: string; data: { task_id: string; rule_id: string; script_type: string; status: string } }>({
+    url: `/tasks/${taskId}/heal`,
+    method: 'post',
+    data: { user_suggestion: userSuggestion }
+  })
+}
+
+export function getHealingStatus(taskId: string) {
+  return request<any, HealingStatus | null>({
+    url: `/tasks/${taskId}/healing-status`,
     method: 'get'
   })
 }

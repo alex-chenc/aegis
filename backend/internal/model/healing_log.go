@@ -49,6 +49,8 @@ type HealingLog struct {
 	Status               string         `gorm:"type:varchar(20);not null;default:'healing';index" json:"status"`
 	FinalScriptVersionID *uuid.UUID     `gorm:"type:uuid" json:"final_script_version_id"`
 	AttemptsDetail       AttemptsDetail `gorm:"type:jsonb" json:"attempts_detail"`
+	UserSuggestion       string         `gorm:"type:text" json:"user_suggestion"`
+	LastError            string         `gorm:"type:text" json:"last_error"`
 	StartedAt            time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"started_at"`
 	FinishedAt           *time.Time     `json:"finished_at"`
 	CreatedAt            time.Time      `gorm:"autoCreateTime" json:"created_at"`

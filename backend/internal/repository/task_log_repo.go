@@ -238,3 +238,13 @@ func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64,
 
 	return count, nil
 }
+
+func (r *TaskLogRepository) FindRunningTasks() ([]model.TaskLog, error) {
+	var tasks []model.TaskLog
+	result := r.db.Where("status = ?", "running").Find(&tasks)
+	if result.Error != nil {
+		logger.Error("failed to find running tasks", zap.Error(result.Error))
+		return nil, result.Error
+	}
+	return tasks, nil
+}

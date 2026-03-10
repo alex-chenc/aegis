@@ -140,3 +140,33 @@ func (r *HealingLogRepository) MarkFailed(id uuid.UUID) error {
 	logger.Warn("healing marked as failed", zap.String("id", id.String()))
 	return nil
 }
+
+func (r *HealingLogRepository) UpdateLastError(id uuid.UUID, lastError string) error {
+	result := r.db.Model(&model.HealingLog{}).
+		Where("id = ?", id).
+		Update("last_error", lastError)
+
+	if result.Error != nil {
+		logger.Error("failed to update last error", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
+	}
+	return nil
+}
+
+func (r *HealingLogRepository) GetLatestByOriginalTaskID(taskID uuid.UUID) (*model.HealingLog, error) {
+	var log model.HealingLog
+	result := r.db.Where("original_task_id = ?", taskID).
+		Order("created_at DESC").
+		First(&log)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		logger.Error("failed to get latest healing log",
+			zap.Error(result.Error),
+			zap.String("task_id", taskID.String()),
+		)
+		return nil, result.Error
+	}
+	return &log, nil
+}

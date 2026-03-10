@@ -35,6 +35,7 @@ type HealingTask struct {
 	ScriptContent  string
 	ErrorMessage   string
 	ExitCode       int
+	UserSuggestion string
 }
 
 func NewSelfHealingService(
@@ -116,9 +117,9 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		zap.Int("worker_id", workerID),
 		zap.String("original_task_id", task.OriginalTaskID.String()),
 		zap.String("rule_id", task.RuleID.String()),
+		zap.String("user_suggestion", task.UserSuggestion),
 	)
 
-	// 创建自愈日志记录
 	healingLog := &model.HealingLog{
 		OriginalTaskID:  task.OriginalTaskID,
 		RuleID:          task.RuleID,
@@ -130,6 +131,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		MaxAttempts:     s.maxRetries,
 		Status:          "healing",
 		AttemptsDetail:  make(model.AttemptsDetail, 0),
+		UserSuggestion:  task.UserSuggestion,
 		StartedAt:       time.Now(),
 	}
 
@@ -184,6 +186,10 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		// 构建自愈 Prompt
 		history := s.buildHealingHistory(healingLog.AttemptsDetail)
 		prompt := llm.GetSelfHealingFixPrompt(task.ScriptContent, task.ErrorMessage, task.ExitCode, history)
+
+		if task.UserSuggestion != "" {
+			prompt = fmt.Sprintf("%s\n\n用户提供的修复建议：%s", prompt, task.UserSuggestion)
+		}
 
 		llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本调试专家", prompt, 0.1)
 		if err != nil {
@@ -280,6 +286,19 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.String("script_version_id", scriptVersionID.String()),
 		)
 
+		// 更新规则的脚本
+		if err := s.updateRuleScript(task.RuleID, task.ScriptType, fixedScript); err != nil {
+			logger.Error("failed to update rule script",
+				zap.Error(err),
+				zap.Stringer("rule_id", task.RuleID),
+			)
+		} else {
+			logger.Info("rule script updated after healing",
+				zap.Stringer("rule_id", task.RuleID),
+				zap.String("script_type", task.ScriptType),
+			)
+		}
+
 		// 成功修复，标记为完成
 		if err := s.healingLogRepo.MarkCompleted(healingLog.ID, scriptVersionID); err != nil {
 			logger.Error("failed to mark healing completed",
@@ -300,6 +319,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 	// 所有尝试都失败
 	healingLog.Status = "failed"
 	healingLog.FinishedAt = pointerToTime(time.Now())
+	healingLog.LastError = lastError
 
 	if err := s.healingLogRepo.Update(healingLog); err != nil {
 		logger.Error("failed to update failed healing log",
@@ -314,6 +334,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Stringer("healing_id", healingLog.ID),
 		)
 	}
+
+	s.healingLogRepo.UpdateLastError(healingLog.ID, lastError)
 
 	logger.Error("self-healing failed after all attempts",
 		zap.Stringer("healing_id", healingLog.ID),
@@ -345,12 +367,10 @@ func (s *SelfHealingService) buildHealingHistory(attempts model.AttemptsDetail) 
 }
 
 func (s *SelfHealingService) validateScript(script string) error {
-	// 1. Shebang 检查
 	if !strings.HasPrefix(script, "#!") {
 		return fmt.Errorf("script must start with shebang (#!/bin/bash)")
 	}
 
-	// 2. 危险命令检测
 	dangerousPatterns := []string{
 		"rm -rf /",
 		"mkfs.",
@@ -366,12 +386,19 @@ func (s *SelfHealingService) validateScript(script string) error {
 		}
 	}
 
-	// 3. 长度检查
 	if len(script) > 10000 {
 		return fmt.Errorf("script too long: %d bytes (max 10000)", len(script))
 	}
 
 	return nil
+}
+
+func (s *SelfHealingService) updateRuleScript(ruleID uuid.UUID, scriptType, scriptContent string) error {
+	return s.ruleRepo.UpdateScript(ruleID, scriptType, scriptContent, 0)
+}
+
+func (s *SelfHealingService) GetHealingLogByTaskID(taskID uuid.UUID) (*model.HealingLog, error) {
+	return s.healingLogRepo.GetLatestByOriginalTaskID(taskID)
 }
 
 // ShouldTriggerHealing 判断是否应该触发自愈
