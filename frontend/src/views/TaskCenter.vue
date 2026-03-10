@@ -4,7 +4,17 @@
       <template #header>
         <div class="card-header">
           <span>任务中心</span>
-          <el-button @click="refresh" :loading="loading">刷新</el-button>
+          <div class="header-actions">
+            <el-button 
+              type="danger" 
+              :disabled="selectedTaskIds.length === 0" 
+              @click="handleBatchDelete"
+              v-if="taskGroups.length > 0"
+            >
+              批量删除 ({{ selectedTaskIds.length }})
+            </el-button>
+            <el-button @click="refresh" :loading="loading">刷新</el-button>
+          </div>
         </div>
       </template>
 
@@ -35,7 +45,13 @@
         </el-input>
       </div>
 
-      <el-table :data="taskGroups" style="width: 100%; margin-top: 15px" v-loading="loading">
+      <el-table 
+        :data="taskGroups" 
+        style="width: 100%; margin-top: 15px" 
+        v-loading="loading"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="task_group_id" label="任务组ID" width="280">
           <template #default="{ row }">
             <el-link type="primary" @click="goToDetail(row.task_group_id)">
@@ -73,10 +89,19 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100">
+        <el-table-column label="操作" width="140">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="goToDetail(row.task_group_id)">
               详情
+            </el-button>
+            <el-button 
+              link 
+              type="danger" 
+              size="small" 
+              @click="handleDeleteTaskGroup(row)"
+              :disabled="row.status === 'running' || row.status === 'pending'"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -100,14 +125,15 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listTasks, type TaskGroupSummary } from '@/api/tasks'
+import { listTasks, deleteTask, batchDeleteTasks, type TaskGroupSummary } from '@/api/tasks'
 
 const router = useRouter()
 
 const loading = ref(false)
 const taskGroups = ref<TaskGroupSummary[]>([])
+const selectedTaskIds = ref<string[]>([])
 
 const filters = reactive({
   status: '',
@@ -133,6 +159,7 @@ const fetchTasks = async () => {
     })
     taskGroups.value = result.items
     pagination.total = result.total
+    selectedTaskIds.value = []
   } catch (e: any) {
     ElMessage.error(e.message || '获取任务列表失败')
   } finally {
@@ -156,6 +183,10 @@ const handleSizeChange = () => {
 
 const handlePageChange = () => {
   fetchTasks()
+}
+
+const handleSelectionChange = (selection: TaskGroupSummary[]) => {
+  selectedTaskIds.value = selection.map(item => item.task_group_id)
 }
 
 const getStatusType = (status: string) => {
@@ -189,6 +220,72 @@ const goToDetail = (taskGroupId: string) => {
   router.push(`/tasks/${taskGroupId}`)
 }
 
+const handleDeleteTaskGroup = async (row: TaskGroupSummary) => {
+  if (row.status === 'running' || row.status === 'pending') {
+    ElMessage.warning('运行中的任务无法删除')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm(`确定删除任务组 "${row.task_group_id.substring(0, 8)}..." ？`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await deleteTask(row.task_group_id)
+    ElMessage.success('任务已删除')
+    fetchTasks()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
+    }
+  }
+}
+
+const handleBatchDelete = async () => {
+  if (selectedTaskIds.value.length === 0) {
+    ElMessage.warning('请先选择要删除的任务')
+    return
+  }
+  
+  const deletableTasks = taskGroups.value.filter(
+    item => selectedTaskIds.value.includes(item.task_group_id) && 
+            item.status !== 'running' && 
+            item.status !== 'pending'
+  )
+  
+  const skippedCount = selectedTaskIds.value.length - deletableTasks.length
+  
+  if (deletableTasks.length === 0) {
+    ElMessage.warning('选中的任务都在运行中，无法删除')
+    return
+  }
+  
+  let message = `确定删除选中的 ${deletableTasks.length} 个任务？`
+  if (skippedCount > 0) {
+    message += `\n（已跳过 ${skippedCount} 个运行中的任务）`
+  }
+  
+  try {
+    await ElMessageBox.confirm(message, '批量删除确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    const result = await batchDeleteTasks(deletableTasks.map(t => t.task_group_id))
+    const deletedCount = result?.deleted_count ?? 0
+    const resultSkippedCount = result?.skipped_count ?? 0
+    ElMessage.success(`成功删除 ${deletedCount} 个任务${resultSkippedCount > 0 ? `，跳过 ${resultSkippedCount} 个` : ''}`)
+    fetchTasks()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '批量删除失败')
+    }
+  }
+}
+
 onMounted(() => {
   fetchTasks()
 })
@@ -199,6 +296,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .filter-bar {

@@ -103,7 +103,7 @@
             <span v-else style="color: #999">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220">
+        <el-table-column label="操作" width="280">
           <template #default="{ row }">
             <el-button 
               v-if="canReExecute(row.displayState)"
@@ -116,13 +116,21 @@
               重新下发
             </el-button>
             <el-button 
-              v-if="row.displayState === '检查失败' || row.displayState === '脚本修复失败'"
+              v-if="row.displayState === '检测失败' || row.displayState === '修复失败' || row.displayState === '脚本修复失败'"
               link 
               type="warning" 
               size="small" 
               @click="openSuggestionDialog(row)"
             >
               修复建议
+            </el-button>
+            <el-button 
+              link 
+              type="danger" 
+              size="small" 
+              @click="deleteTask(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -159,7 +167,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { 
   getTaskLogs, 
   getTaskStatus, 
@@ -167,13 +175,14 @@ import {
   getHealingStatus,
   runCheck,
   runFix,
+  deleteTask as deleteTaskApi,
   type TaskLog, 
   type TaskGroupStatus,
   type HealingStatus 
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '执行中' | '检查成功' | '检查失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败'
+type DisplayState = '检测中' | '检测成功' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败'
 
 const route = useRoute()
 const router = useRouter()
@@ -198,7 +207,7 @@ let pollTimer: number | null = null
 const tasksWithState = computed(() => {
   return tasks.value.map(task => {
     const healingStatus = healingStatusMap.value[task.id]
-    const displayState = getDisplayState(task.status, healingStatus)
+    const displayState = getDisplayState(task.task_type, task.status, healingStatus)
     return {
       ...task,
       displayState,
@@ -207,32 +216,46 @@ const tasksWithState = computed(() => {
   })
 })
 
-function getDisplayState(taskStatus: string, healingStatus?: HealingStatus): DisplayState {
-  if (taskStatus === 'running' || taskStatus === 'pending') return '执行中'
-  if (taskStatus === 'success') return '检查成功'
+function getDisplayState(taskType: string, taskStatus: string, healingStatus?: HealingStatus): DisplayState {
+  const isFix = taskType === 'fix'
+  
+  if (taskStatus === 'running' || taskStatus === 'pending') {
+    return isFix ? '修复中' : '检测中'
+  }
+  if (taskStatus === 'success') {
+    return isFix ? '修复成功' : '检测成功'
+  }
   if (taskStatus === 'failed') {
-    if (!healingStatus) return '检查失败'
+    if (!healingStatus) {
+      return isFix ? '修复失败' : '检测失败'
+    }
     if (healingStatus.status === 'healing') return '脚本修复中'
     if (healingStatus.status === 'healed') return '脚本修复成功'
     if (healingStatus.status === 'failed') return '脚本修复失败'
   }
-  return '检查失败'
+  return isFix ? '修复失败' : '检测失败'
 }
 
 function getStateTagType(state: DisplayState): string {
   switch (state) {
-    case '执行中': return 'warning'
-    case '检查成功': return 'success'
-    case '检查失败': return 'danger'
-    case '脚本修复中': return 'warning'
-    case '脚本修复成功': return 'success'
-    case '脚本修复失败': return 'danger'
+    case '检测中':
+    case '修复中':
+    case '脚本修复中':
+      return 'warning'
+    case '检测成功':
+    case '修复成功':
+    case '脚本修复成功':
+      return 'success'
+    case '检测失败':
+    case '修复失败':
+    case '脚本修复失败':
+      return 'danger'
     default: return 'info'
   }
 }
 
 function canReExecute(state: DisplayState): boolean {
-  return state === '检查失败' || state === '脚本修复成功'
+  return state === '检测失败' || state === '修复失败' || state === '脚本修复成功'
 }
 
 const progressPercent = computed(() => {
@@ -294,14 +317,36 @@ const reExecute = async (task: TaskLog) => {
   reexecutingTask.value = task.id
   try {
     const action = task.task_type === 'check' ? runCheck : runFix
-    await action({ rule_ids: [task.rule_id], host_ids: [task.host_id] })
+    const result = await action({ rule_ids: [task.rule_id], host_ids: [task.host_id] })
     ElMessage.success('重新下发成功')
     delete healingStatusMap.value[task.id]
-    await refresh()
+    if (result && result.task_group_id) {
+      router.push('/tasks/' + result.task_group_id)
+    } else {
+      await refresh()
+    }
   } catch (e: any) {
     ElMessage.error(e.message || '重新下发失败')
   } finally {
     reexecutingTask.value = null
+  }
+}
+
+const deleteTask = async (task: TaskLog) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该任务吗？', '删除确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await deleteTaskApi(task.id)
+    ElMessage.success('删除成功')
+    delete healingStatusMap.value[task.id]
+    await refresh()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
+    }
   }
 }
 

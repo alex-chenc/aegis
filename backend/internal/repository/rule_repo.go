@@ -108,3 +108,59 @@ func (r *RuleRepository) UpdateScriptStatus(ruleID uuid.UUID, status string) err
 	logger.Debug("script status updated", zap.String("rule_id", ruleID.String()), zap.String("status", status))
 	return nil
 }
+
+// HasTasks 检查规则是否有关联任务
+func (r *RuleRepository) HasTasks(ruleID uuid.UUID) (bool, int64, error) {
+	var count int64
+	result := r.db.Table("task_logs").Where("rule_id = ?", ruleID).Count(&count)
+	if result.Error != nil {
+		logger.Error("failed to count tasks for rule",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+		)
+		return false, 0, result.Error
+	}
+	return count > 0, count, nil
+}
+
+// Delete 删除规则（仅当无关联任务时可删除）
+func (r *RuleRepository) Delete(ruleID uuid.UUID) error {
+	result := r.db.Delete(&model.BaselineRule{}, "id = ?", ruleID)
+	if result.Error != nil {
+		logger.Error("failed to delete rule",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("rule deleted", zap.String("rule_id", ruleID.String()))
+	return nil
+}
+
+// UpdateScriptContent 直接更新脚本内容（用于用户手动编辑保存）
+func (r *RuleRepository) UpdateScriptContent(ruleID uuid.UUID, scriptType, scriptContent string) error {
+	updates := map[string]interface{}{}
+
+	if scriptType == "CHECK" {
+		updates["generated_check_script"] = scriptContent
+	} else {
+		updates["generated_fix_script"] = scriptContent
+	}
+
+	result := r.db.Model(&model.BaselineRule{}).Where("id = ?", ruleID).Updates(updates)
+	if result.Error != nil {
+		logger.Error("failed to update rule script content",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+			zap.String("script_type", scriptType),
+		)
+		return result.Error
+	}
+
+	logger.Info("rule script content updated",
+		zap.String("rule_id", ruleID.String()),
+		zap.String("script_type", scriptType),
+	)
+	return nil
+}

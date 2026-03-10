@@ -1,14 +1,15 @@
-# 通讯层设计文档 - V2.2 完整版
+# 通讯层设计文档 - V2.3 完整版
 
-**版本**: 2.1
+**版本**: 2.3
 **状态**: 定稿
-**作者**: Manus AI
+**作者**: Manus AI, Sisyphus
 
 ## 1. 修订历史
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
-| 2.1 | 2026-03-09 | Sisyphus | **实现验证**。验证所有API接口与实际实现一致，确认模板上传、规则查询、任务下发等核心接口可用。 |
+| 2.3 | 2026-03-10 | Sisyphus | **规则与任务管理API增强**。新增规则脚本生成、脚本更新、规则删除、规则任务检查、任务批量删除等API接口。 |
+| 2.2 | 2026-03-09 | Sisyphus | **实现验证**。验证所有API接口与实际实现一致，确认模板上传、规则查询、任务下发等核心接口可用。 |
 | 2.0 | 2026-03-05 | Manus AI | **全面更新**。在 V1.6 基础上补充模板解析状态查询 API、脚本生成状态 API、修复任务下发 API、自愈流程状态 API、模板删除 API，完善所有接口的请求/响应 JSON Schema，补充错误码定义。 |
 | 1.6 | 2026-03-05 | Manus AI | 完整重写，包含 gRPC Protobuf 定义和 RESTful API 详细 JSON Schema。 |
 
@@ -575,7 +576,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 
 ## 5. API 接口汇总
 
-以下是 V2.2 版本所有 API 接口的完整汇总。
+以下是 V2.3 版本所有 API 接口的完整汇总。
 
 | 方法 | 路径 | 描述 | 版本 |
 |:---|:---|:---|:---|
@@ -589,14 +590,19 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 | GET | `/api/v1/hosts` | 获取主机列表 | V1.6 |
 | POST | `/api/v1/templates/upload` | 上传模板文件 | V1.6 |
 | GET | `/api/v1/templates` | 获取模板列表 | V1.6 |
-| GET | `/api/v1/templates/{id}/status` | 获取模板解析状态 | **V2.2 新增** |
+| GET | `/api/v1/templates/{id}/status` | 获取模板解析状态 | V2.2 |
 | GET | `/api/v1/templates/{id}/rules` | 获取模板规则列表 | V1.6 |
-| DELETE | `/api/v1/templates/{id}` | 删除模板 | **V2.2 新增** |
-| GET | `/api/v1/rules/{id}/scripts` | 获取规则脚本内容 | **V2.2 新增** |
-| POST | `/api/v1/rules/{id}/scripts/regenerate` | 重新生成脚本 | **V2.2 新增** |
-| GET | `/api/v1/rules/{id}/scripts/versions` | 获取脚本版本历史 | **V2.2 新增** |
+| DELETE | `/api/v1/templates/{id}` | 删除模板 | V2.2 |
+| GET | `/api/v1/rules/{id}` | 获取规则脚本内容 | **V2.3 新增** |
+| GET | `/api/v1/rules/{id}/has-tasks` | 检查规则是否有关联任务 | **V2.3 新增** |
+| POST | `/api/v1/rules/{id}/scripts/generate` | 生成规则脚本 | **V2.3 新增** |
+| PUT | `/api/v1/rules/{id}/scripts` | 更新规则脚本 | **V2.3 新增** |
+| DELETE | `/api/v1/rules/{id}` | 删除规则 | **V2.3 新增** |
 | POST | `/api/v1/tasks/run-check` | 下发检查任务 | V1.6 |
-| POST | `/api/v1/tasks/run-fix` | 下发修复任务 | **V2.2 新增** |
-| GET | `/api/v1/tasks/{group_id}/status` | 获取任务组状态 | **V2.2 新增** |
+| POST | `/api/v1/tasks/run-fix` | 下发修复任务 | V2.2 |
+| GET | `/api/v1/tasks` | 获取任务列表 | V2.2 |
+| GET | `/api/v1/tasks/{group_id}/status` | 获取任务组状态 | V2.2 |
 | GET | `/api/v1/tasks/{task_id}/logs` | 获取任务日志 | V1.6 更新 |
-| GET | `/api/v1/healing/{healing_id}` | 获取自愈详情 | **V2.2 新增** |
+| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | **V2.3 新增** |
+| DELETE | `/api/v1/tasks/batch` | 批量删除任务 | **V2.3 新增** |
+| GET | `/api/v1/healing/{healing_id}` | 获取自愈详情 | V2.2 |

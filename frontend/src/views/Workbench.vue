@@ -54,19 +54,15 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="版本" width="80">
+            <el-table-column label="默认脚本" width="140">
               <template #default="{ row }">
-                <div class="version-info">
-                  <div>检:v{{ row.check_script_version || 0 }}</div>
-                  <div>修:v{{ row.fix_script_version || 0 }}</div>
-                </div>
+                <el-button link type="primary" size="small" @click="openScriptEditor(row, 'CHECK')">检测脚本</el-button>
+                <el-button link type="warning" size="small" @click="openScriptEditor(row, 'FIX')">修复脚本</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="180" fixed="right">
+            <el-table-column label="操作" width="80" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" size="small" @click="showScript(row, 'check')">检测</el-button>
-                <el-button link type="primary" size="small" @click="showScript(row, 'fix')">修复</el-button>
-                <el-button link type="success" size="small" @click="editScript(row)">编辑</el-button>
+                <el-button link type="danger" size="small" @click="handleDeleteRule(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -127,28 +123,50 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="scriptDialogVisible" :title="scriptDialogTitle" width="70%">
-      <div class="script-viewer">
-        <div class="script-header">
-          <span>脚本内容</span>
-          <el-button link @click="copyScript">复制</el-button>
-        </div>
-        <pre class="script-content">{{ currentScript }}</pre>
+    <!-- Script Editor Dialog -->
+    <el-dialog v-model="scriptDialogVisible" :title="scriptDialogTitle" width="70%" :close-on-click-modal="false">
+      <div v-if="scriptLoading" class="loading-container">
+        <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+        <span style="margin-left: 10px">正在请求AI生成脚本...</span>
       </div>
+      <div v-else>
+        <el-input
+          v-model="scriptContent"
+          type="textarea"
+          :rows="20"
+          class="script-editor"
+          placeholder="脚本内容"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="scriptDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveScript" :loading="scriptSaving" :disabled="scriptLoading || !scriptContent">
+          保存
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
-import { uploadTemplate, getTemplates, getTemplateStatus, getTemplateRules } from '@/api/templates'
+import { UploadFilled, Loading } from '@element-plus/icons-vue'
+import { 
+  uploadTemplate, 
+  getTemplates, 
+  getTemplateStatus, 
+  getTemplateRules, 
+  generateScript, 
+  updateScript, 
+  hasRuleTasks, 
+  deleteRule 
+} from '@/api/templates'
 import { useHostStore } from '@/store/hosts'
 import { useTaskStore } from '@/store/tasks'
 import type { UploadRequestOptions } from 'element-plus'
-import type { Template, BaselineRule, ParseStatus, Host } from '@/types'
+import type { Template, BaselineRule, ParseStatus } from '@/types'
 
 const router = useRouter()
 const hostStore = useHostStore()
@@ -163,9 +181,14 @@ const rules = ref<BaselineRule[]>([])
 const parseStatus = ref<ParseStatus | null>(null)
 const selectedRules = ref<BaselineRule[]>([])
 const selectedHostIds = ref<string[]>([])
+
 const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
-const currentScript = ref('')
+const scriptContent = ref('')
+const scriptLoading = ref(false)
+const scriptSaving = ref(false)
+const currentEditRule = ref<BaselineRule | null>(null)
+const currentScriptType = ref<'CHECK' | 'FIX'>('CHECK')
 
 const hosts = computed(() => hostStore.hosts)
 
@@ -294,64 +317,87 @@ const getScriptStatusText = (status: string) => {
   }
 }
 
-const showScript = (rule: BaselineRule, type: 'check' | 'fix') => {
-  scriptDialogTitle.value = type === 'check' ? `检测脚本 - ${rule.title}` : `修复脚本 - ${rule.title}`
-  currentScript.value = type === 'check' 
-    ? (rule.generated_check_script || '// 检测脚本尚未生成')
-    : (rule.generated_fix_script || '// 修复脚本尚未生成')
-  scriptDialogVisible.value = true
-}
-
-const copyScript = async () => {
-  if (!currentScript.value) {
-    ElMessage.warning('没有可复制的内容')
-    return
-  }
-  
-  const success = await copyToClipboard(currentScript.value)
-  if (success) {
-    ElMessage.success('已复制到剪贴板')
-  } else {
-    ElMessage.error('复制失败')
-  }
-}
-
-const copyToClipboard = async (text: string): Promise<boolean> => {
-  if (navigator.clipboard && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch (err) {
-      console.warn('Clipboard API failed:', err)
-    }
-  }
-  
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  
-  try {
-    const success = document.execCommand('copy')
-    document.body.removeChild(textarea)
-    return success
-  } catch {
-    document.body.removeChild(textarea)
-    return false
-  }
-}
-
 const truncate = (text: string, length: number): string => {
   if (!text) return ''
   return text.length > length ? text.substring(0, length) + '...' : text
 }
 
-const editScript = (rule: BaselineRule) => {
-  ElMessage.info('脚本编辑功能开发中...')
+const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX') => {
+  currentEditRule.value = rule
+  currentScriptType.value = scriptType
+  scriptDialogTitle.value = scriptType === 'CHECK' ? `编辑检测脚本 - ${rule.title}` : `编辑修复脚本 - ${rule.title}`
+  
+  const existingScript = scriptType === 'CHECK' ? rule.generated_check_script : rule.generated_fix_script
+  
+  if (existingScript) {
+    scriptContent.value = existingScript
+    scriptDialogVisible.value = true
+  } else {
+    scriptLoading.value = true
+    scriptContent.value = ''
+    scriptDialogVisible.value = true
+    
+    try {
+      const result = await generateScript(rule.id, scriptType)
+      if (result.script_content) {
+        scriptContent.value = result.script_content
+      } else if (result.status === 'generating') {
+        ElMessage.info('脚本生成任务已提交，请稍后刷新查看')
+        scriptDialogVisible.value = false
+      }
+    } catch (e: any) {
+      ElMessage.error(e.message || '生成脚本失败')
+      scriptDialogVisible.value = false
+    } finally {
+      scriptLoading.value = false
+    }
+  }
+}
+
+const saveScript = async () => {
+  if (!currentEditRule.value || !scriptContent.value) return
+  
+  scriptSaving.value = true
+  try {
+    await updateScript(currentEditRule.value.id, currentScriptType.value, scriptContent.value)
+    ElMessage.success('脚本保存成功')
+    
+    if (currentScriptType.value === 'CHECK') {
+      currentEditRule.value.generated_check_script = scriptContent.value
+    } else {
+      currentEditRule.value.generated_fix_script = scriptContent.value
+    }
+    
+    scriptDialogVisible.value = false
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    scriptSaving.value = false
+  }
+}
+
+const handleDeleteRule = async (rule: BaselineRule) => {
+  try {
+    const hasTasksResult = await hasRuleTasks(rule.id)
+    if (hasTasksResult.has_tasks) {
+      ElMessage.error(`该规则有关联任务，无法删除`)
+      return
+    }
+    
+    await ElMessageBox.confirm(`确定删除规则 "${rule.title}"？`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await deleteRule(rule.id)
+    ElMessage.success('规则已删除')
+    rules.value = rules.value.filter(r => r.id !== rule.id)
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
+    }
+  }
 }
 
 const executeCheck = async () => {
@@ -426,25 +472,10 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
 }
-.script-viewer {
-  background: #1e1e1e;
-  border-radius: 4px;
-  padding: 12px;
-}
-.script-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #fff;
-  margin-bottom: 8px;
-}
-.script-content {
-  color: #d4d4d4;
-  font-family: 'Fira Code', monospace;
+.script-editor :deep(textarea) {
+  font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0;
+  line-height: 1.5;
 }
 .text-truncate {
   display: inline-block;
@@ -453,8 +484,11 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.version-info {
-  font-size: 11px;
-  color: #666;
+.loading-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: #409eff;
 }
 </style>

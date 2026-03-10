@@ -248,3 +248,53 @@ func (r *TaskLogRepository) FindRunningTasks() ([]model.TaskLog, error) {
 	}
 	return tasks, nil
 }
+
+func (r *TaskLogRepository) Delete(id uuid.UUID) error {
+	result := r.db.Delete(&model.TaskLog{}, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to delete task", zap.Error(result.Error), zap.String("id", id.String()))
+		return result.Error
+	}
+	logger.Info("task deleted", zap.String("id", id.String()))
+	return nil
+}
+
+func (r *TaskLogRepository) DeleteByGroupID(groupID uuid.UUID) (int64, error) {
+	result := r.db.Where("task_group_id = ?", groupID).Delete(&model.TaskLog{})
+	if result.Error != nil {
+		logger.Error("failed to delete task group", zap.Error(result.Error), zap.String("group_id", groupID.String()))
+		return 0, result.Error
+	}
+	logger.Info("task group deleted", zap.String("group_id", groupID.String()), zap.Int64("count", result.RowsAffected))
+	return result.RowsAffected, nil
+}
+
+func (r *TaskLogRepository) BatchDeleteByGroupIDs(groupIDs []uuid.UUID) (int64, int64, error) {
+	if len(groupIDs) == 0 {
+		return 0, 0, nil
+	}
+
+	var totalTasksInGroups int64
+	r.db.Model(&model.TaskLog{}).Where("task_group_id IN ?", groupIDs).Count(&totalTasksInGroups)
+
+	result := r.db.Where("task_group_id IN ? AND status IN ?", groupIDs, []string{"success", "failed"}).
+		Delete(&model.TaskLog{})
+
+	if result.Error != nil {
+		logger.Error("failed to batch delete task groups",
+			zap.Error(result.Error),
+			zap.Int("requested_count", len(groupIDs)),
+		)
+		return 0, 0, result.Error
+	}
+
+	deletedCount := result.RowsAffected
+	skippedCount := totalTasksInGroups - deletedCount
+
+	logger.Info("batch delete task groups completed",
+		zap.Int64("deleted", deletedCount),
+		zap.Int64("skipped", skippedCount),
+	)
+
+	return deletedCount, skippedCount, nil
+}

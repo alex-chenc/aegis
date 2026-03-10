@@ -15,6 +15,7 @@ type Router struct {
 	taskHandler            *handler.TaskHandler
 	taskHandlerWithHealing *handler.TaskHandlerWithHealing
 	agentHandler           *handler.AgentHandler
+	ruleHandler            *handler.RuleHandler
 }
 
 func NewRouter(
@@ -24,6 +25,7 @@ func NewRouter(
 	taskHandler *handler.TaskHandler,
 	taskHandlerWithHealing *handler.TaskHandlerWithHealing,
 	agentHandler *handler.AgentHandler,
+	ruleHandler *handler.RuleHandler,
 ) *Router {
 	return &Router{
 		configHandler:          configHandler,
@@ -32,6 +34,7 @@ func NewRouter(
 		taskHandler:            taskHandler,
 		taskHandlerWithHealing: taskHandlerWithHealing,
 		agentHandler:           agentHandler,
+		ruleHandler:            ruleHandler,
 	}
 }
 
@@ -80,6 +83,16 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			templates.DELETE("/:id", r.templateHandler.DeleteTemplate)
 		}
 
+		// 规则接口
+		rules := v1.Group("/rules")
+		{
+			rules.GET("/:id", r.ruleHandler.GetScript)
+			rules.GET("/:id/has-tasks", r.ruleHandler.HasTasks)
+			rules.POST("/:id/scripts/generate", r.ruleHandler.GenerateScript)
+			rules.PUT("/:id/scripts", r.ruleHandler.UpdateScript)
+			rules.DELETE("/:id", r.ruleHandler.DeleteRule)
+		}
+
 		// 任务接口
 		tasks := v1.Group("/tasks")
 		{
@@ -89,6 +102,8 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			tasks.GET("/:id/status", r.taskHandler.GetTaskStatus)
 			tasks.GET("/:id/logs", r.taskHandler.GetTaskLogs)
 			tasks.GET("/:id", r.taskHandler.GetTaskDetail)
+			tasks.DELETE("/:id", r.taskHandler.DeleteTask)
+			tasks.DELETE("/batch", r.taskHandler.BatchDeleteTasks)
 			tasks.POST("/:id/heal", r.taskHandlerWithHealing.TriggerSelfHealing)
 			tasks.GET("/:id/healing-status", r.taskHandlerWithHealing.GetHealingStatus)
 		}

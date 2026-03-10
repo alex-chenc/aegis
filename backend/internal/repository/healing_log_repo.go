@@ -170,3 +170,19 @@ func (r *HealingLogRepository) GetLatestByOriginalTaskID(taskID uuid.UUID) (*mod
 	}
 	return &log, nil
 }
+
+func (r *HealingLogRepository) DeleteByOriginalTaskIDs(taskIDs []uuid.UUID) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	result := r.db.Where("original_task_id IN ?", taskIDs).Delete(&model.HealingLog{})
+	if result.Error != nil {
+		logger.Error("failed to delete healing logs by task_ids",
+			zap.Error(result.Error),
+			zap.Int("count", len(taskIDs)),
+		)
+		return result.Error
+	}
+	logger.Info("healing logs deleted", zap.Int64("count", result.RowsAffected))
+	return nil
+}

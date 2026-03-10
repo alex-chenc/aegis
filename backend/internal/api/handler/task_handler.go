@@ -14,6 +14,7 @@ import (
 type TaskHandler struct {
 	taskService      *service.TaskService
 	taskLogRepo      *repository.TaskLogRepository
+	healingLogRepo   *repository.HealingLogRepository
 	scriptGenService *service.ScriptGenerationService
 	grpcServer       *grpc_server.GRPCServer
 }
@@ -21,12 +22,14 @@ type TaskHandler struct {
 func NewTaskHandler(
 	taskService *service.TaskService,
 	taskLogRepo *repository.TaskLogRepository,
+	healingLogRepo *repository.HealingLogRepository,
 	scriptGenService *service.ScriptGenerationService,
 	grpcServer *grpc_server.GRPCServer,
 ) *TaskHandler {
 	return &TaskHandler{
 		taskService:      taskService,
 		taskLogRepo:      taskLogRepo,
+		healingLogRepo:   healingLogRepo,
 		scriptGenService: scriptGenService,
 		grpcServer:       grpcServer,
 	}
@@ -430,13 +433,14 @@ type TaskHandlerWithHealing struct {
 func NewTaskHandlerWithHealing(
 	taskService *service.TaskService,
 	taskLogRepo *repository.TaskLogRepository,
+	healingLogRepo *repository.HealingLogRepository,
 	scriptGenService *service.ScriptGenerationService,
 	grpcServer *grpc_server.GRPCServer,
 	healingService *service.SelfHealingService,
 	ruleRepo *repository.RuleRepository,
 ) *TaskHandlerWithHealing {
 	return &TaskHandlerWithHealing{
-		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, scriptGenService, grpcServer),
+		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer),
 		healingService: healingService,
 		ruleRepo:       ruleRepo,
 		taskLogRepo:    taskLogRepo,
@@ -574,6 +578,144 @@ func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
 			"final_script_version": healingLog.FinalScriptVersionID,
 			"last_error":           healingLog.LastError,
 			"user_suggestion":      healingLog.UserSuggestion,
+		},
+	})
+}
+
+func (h *TaskHandler) DeleteTask(c *gin.Context) {
+	taskGroupIDStr := c.Param("id")
+	taskGroupID, err := uuid.Parse(taskGroupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_group_id",
+		})
+		return
+	}
+
+	logs, err := h.taskLogRepo.FindByGroupID(taskGroupID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "task group not found",
+		})
+		return
+	}
+
+	if len(logs) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "task group not found",
+		})
+		return
+	}
+
+	for _, log := range logs {
+		if log.Status == "running" || log.Status == "pending" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "cannot delete running or pending tasks",
+			})
+			return
+		}
+	}
+
+	taskIDs := make([]uuid.UUID, len(logs))
+	for i, log := range logs {
+		taskIDs[i] = log.ID
+	}
+
+	if h.healingLogRepo != nil {
+		if err := h.healingLogRepo.DeleteByOriginalTaskIDs(taskIDs); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "failed to delete healing logs",
+			})
+			return
+		}
+	}
+
+	deletedCount, err := h.taskLogRepo.DeleteByGroupID(taskGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to delete task group",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "task group deleted successfully",
+		"data": gin.H{
+			"deleted_count": deletedCount,
+		},
+	})
+}
+
+type BatchDeleteRequest struct {
+	TaskGroupIDs []string `json:"task_ids" binding:"required,min=1"`
+}
+
+func (h *TaskHandler) BatchDeleteTasks(c *gin.Context) {
+	var req BatchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	groupIDs := make([]uuid.UUID, 0, len(req.TaskGroupIDs))
+	for _, idStr := range req.TaskGroupIDs {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		groupIDs = append(groupIDs, id)
+	}
+
+	if len(groupIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "no valid task group IDs provided",
+		})
+		return
+	}
+
+	var allTaskIDs []uuid.UUID
+	for _, groupID := range groupIDs {
+		logs, err := h.taskLogRepo.FindByGroupID(groupID)
+		if err != nil {
+			continue
+		}
+		for _, log := range logs {
+			if log.Status != "running" && log.Status != "pending" {
+				allTaskIDs = append(allTaskIDs, log.ID)
+			}
+		}
+	}
+
+	if h.healingLogRepo != nil && len(allTaskIDs) > 0 {
+		h.healingLogRepo.DeleteByOriginalTaskIDs(allTaskIDs)
+	}
+
+	deletedCount, skippedCount, err := h.taskLogRepo.BatchDeleteByGroupIDs(groupIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to batch delete task groups",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "batch delete completed",
+		"data": gin.H{
+			"deleted_count": deletedCount,
+			"skipped_count": skippedCount,
 		},
 	})
 }

@@ -1,106 +1,96 @@
 # AI基线检查系统
 
-> **版本**: 2.5.0
-> **状态**: 开发中
+> **版本**: 2.7.0  
+> **状态**: 生产可用
 
 ## 项目概述
 
-一个面向运维和安全工程师的内部管理平台，通过结合大语言模型（LLM）的智能解析能力和 Agent 的自动化执行能力，实现服务器基线配置的智能检查与自动修复。
+AI基线检查系统是一个面向运维和安全工程师的服务器基线自动化管理平台。系统结合大语言模型（LLM）的智能解析能力与 Agent 的自动化执行能力，实现从基线文档到自动化检查修复的完整闭环。
 
-**核心功能**：
-- 上传基线文档（PDF、Word、YAML）→ LLM 智能解析为检查/修复规则
-- 在服务器上部署 Agent 执行自动化基线检查
-- **智能检测脚本生成**：点击检测按钮，LLM 自动生成检测脚本
-- **智能修复脚本生成**：点击修复按钮，LLM 自动生成修复脚本
-- **任务进度追踪**：实时查看任务执行状态和进度
-- **自愈功能**：LLM 自动分析错误并修复失败的脚本
+### 核心能力
 
-## 技术栈
-
-| 组件 | 技术 |
+| 功能 | 说明 |
 |------|------|
-| **后端** | Go 1.20+, Gin (REST API), gRPC (Agent 通讯) |
-| **前端** | Vue 3 (Composition API), TypeScript, Vite, Pinia, Element Plus |
-| **Agent** | Go (交叉编译：linux/amd64, linux/arm64) |
-| **数据库** | PostgreSQL 14 |
-| **缓存** | Redis 7 |
-| **存储** | MinIO (文件/对象存储) |
+| **智能文档解析** | 上传 PDF/Word/YAML 基线文档，LLM 自动解析为检查/修复规则 |
+| **脚本自动生成** | 点击按钮即可让 LLM 生成检测脚本和修复脚本，支持在线编辑保存 |
+| **批量主机管理** | 一键在多台服务器上执行基线检查和修复 |
+| **任务进度追踪** | 实时查看任务执行状态、脚本输出、错误信息 |
+| **智能自愈** | 脚本执行失败时，LLM 自动分析错误原因并生成修复后的脚本重试 |
+
+### 系统架构
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   浏览器     │────▶│   后端服务   │────▶│   Agent    │
+│  (Vue 3)    │◀────│  (Go/gRPC)  │◀────│  (目标主机) │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+    ┌──────────┐    ┌──────────┐    ┌──────────┐
+    │PostgreSQL│    │  Redis   │    │  MinIO   │
+    └──────────┘    └──────────┘    └──────────┘
+```
 
 ## 快速开始
 
-### 1. 准备环境
+### 环境要求
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- 8GB+ 可用内存
+
+### 一键部署
 
 ```bash
-docker --version
-docker-compose --version
-```
+# 1. 克隆项目
+git clone <repository-url>
+cd ai-benchmark
 
-### 2. 配置环境变量
-
-```bash
+# 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env，修改密码和密钥
-```
+vim .env  # 修改数据库密码、Redis密码、MinIO密钥等
 
-### 3. 构建镜像
+# 3. 构建并启动
+docker compose up -d --build
 
-```bash
-cd backend && ./build.sh && cd ..
-cd frontend && ./build.sh && cd ..
-```
-
-### 4. 启动服务
-
-```bash
-docker-compose up -d
-```
-
-### 5. 验证部署
-
-```bash
-docker-compose ps
+# 4. 验证服务
 curl http://localhost:8080/health
-# 浏览器打开 http://localhost
+# 浏览器访问 http://localhost:8081
 ```
 
-## 项目结构
+### 配置 LLM
 
-```
-.
-├── backend/                 # Go 后端服务
-│   ├── cmd/server/         # 入口程序
-│   ├── config/             # 配置管理
-│   ├── internal/           # 内部包
-│   ├── pkg/                # 公共包
-│   └── scripts/            # 数据库脚本
-├── frontend/               # Vue 3 前端
-│   └── src/
-├── agent/                  # Go Agent
-│   ├── cmd/agent/
-│   └── dist/
-├── docker-compose.yml
-├── .env.example
-└── docs/
-    └── plans/
-```
+首次使用需要在「系统配置」页面配置大模型服务：
 
-## 设计文档
+1. 进入「系统配置」页面
+2. 填写 API Key 和 Base URL（默认支持阿里云 DashScope）
+3. 点击「连通性测试」验证配置
+4. 保存配置
 
-所有设计文档位于 `baseline_system_design_v2.1/` 目录。
+### 部署 Agent
 
-## 开发指南
+在「系统配置」页面获取 Agent 安装命令，在目标服务器上执行：
 
 ```bash
-# 后端
-cd backend && make build && make test
-
-# 前端
-cd frontend && npm run dev
-
-# Agent
-cd agent && make build
+curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
 ```
 
-## License
+### 使用流程
 
-内部项目，未授权。
+1. **上传基线文档** → 系统自动解析规则
+2. **编辑脚本** → 点击规则脚本按钮，LLM 自动生成或手动编辑
+3. **选择主机和规则** → 下发检测/修复任务
+4. **查看结果** → 实时追踪任务进度和执行日志
+
+### 默认端口
+
+| 服务 | 端口 |
+|------|------|
+| 前端 Web | 8081 |
+| 后端 HTTP API | 8080 |
+| 后端 gRPC | 9090 |
+| PostgreSQL | 5432 |
+| Redis | 6379 |
+| MinIO API | 9000 |
+| MinIO Console | 9001 |

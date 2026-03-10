@@ -124,12 +124,13 @@ func main() {
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient, grpcServer)
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService)
-	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, scriptGenService, grpcServer)
-	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
+	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer)
+	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
+	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler)
 	router.Setup(grpcServer)
 
 	// Start HTTP server

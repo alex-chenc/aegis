@@ -106,6 +106,13 @@ export function triggerSelfHealing(taskId: string, userSuggestion?: string) {
   })
 }
 
+export function deleteTask(taskId: string) {
+  return request<any, { code: number; message: string }>({
+    url: `/tasks/${taskId}`,
+    method: 'delete'
+  })
+}
+
 export function getHealingStatus(taskId: string) {
   return request<any, HealingStatus | null>({
     url: `/tasks/${taskId}/healing-status`,
@@ -147,5 +154,13 @@ export function listTasks(params: ListTasksParams) {
     url: '/tasks',
     method: 'get',
     params
+  })
+}
+
+export function batchDeleteTasks(taskGroupIds: string[]) {
+  return request<any, { deleted_count: number; skipped_count: number }>({
+    url: '/tasks/batch',
+    method: 'delete',
+    data: { task_ids: taskGroupIds }
   })
 }
