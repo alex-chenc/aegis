@@ -230,7 +230,6 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 	var hostID uuid.UUID
 	var connection *AgentConnection
 
-	// 创建收件箱通道
 	inbox := make(chan *pb.CommandExecute, 100)
 
 	// 接收消息循环
