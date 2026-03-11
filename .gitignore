@@ -3,6 +3,7 @@
 *.tmp
 *.swp
 *~
+.opencode
 .DS_Store
 Thumbs.db
 
