@@ -23,14 +23,19 @@
         <el-card style="margin-top: 20px" v-if="currentTemplate">
           <template #header>
             <div class="card-header">
-              <span>规则列表 ({{ rules.length }} 条)</span>
+              <span>规则列表 (共 {{ rules.length }} 条，已选 {{ selectedRules.length }} 条)</span>
               <div>
-                <el-button @click="selectAllRules" type="primary" link>全选</el-button>
-                <el-button @click="clearRules" link>清空</el-button>
+                <el-button @click="toggleSelectAll" type="primary" link>{{ isAllSelected ? '取消全选' : '全选' }}</el-button>
+                <el-button @click="clearSelection" link>清空选择</el-button>
               </div>
             </div>
           </template>
-          <el-table :data="rules" v-loading="loading" @selection-change="handleSelectionChange">
+          <el-table 
+            ref="tableRef"
+            :data="rules" 
+            v-loading="loading" 
+            @selection-change="handleSelectionChange"
+          >
             <el-table-column type="selection" width="55" />
             <el-table-column prop="title" label="规则标题" min-width="180" show-overflow-tooltip />
             <el-table-column label="检测内容" min-width="150">
@@ -57,7 +62,22 @@
             <el-table-column label="默认脚本" width="120">
               <template #default="{ row }">
                 <div class="script-buttons">
+                  <el-tooltip 
+                    v-if="row.check_script_status === 'failed'"
+                    :content="row.check_script_error || '生成失败'" 
+                    placement="top"
+                  >
+                    <el-button 
+                      link 
+                      type="danger" 
+                      size="small" 
+                      @click="openScriptEditor(row, 'CHECK')"
+                    >
+                      检测脚本(失败)
+                    </el-button>
+                  </el-tooltip>
                   <el-button 
+                    v-else
                     link 
                     :type="getScriptButtonType(row.check_script_status)" 
                     size="small" 
@@ -67,7 +87,23 @@
                   >
                     {{ getScriptButtonText(row.check_script_status, '检测') }}
                   </el-button>
+                  
+                  <el-tooltip 
+                    v-if="row.fix_script_status === 'failed'"
+                    :content="row.fix_script_error || '生成失败'" 
+                    placement="top"
+                  >
+                    <el-button 
+                      link 
+                      type="danger" 
+                      size="small" 
+                      @click="openScriptEditor(row, 'FIX')"
+                    >
+                      修复脚本(失败)
+                    </el-button>
+                  </el-tooltip>
                   <el-button 
+                    v-else
                     link 
                     :type="getScriptButtonType(row.fix_script_status)" 
                     size="small" 
@@ -169,7 +205,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Loading } from '@element-plus/icons-vue'
@@ -202,6 +238,8 @@ const parseStatus = ref<ParseStatus | null>(null)
 const selectedRules = ref<BaselineRule[]>([])
 const selectedHostIds = ref<string[]>([])
 
+const tableRef = ref()
+
 const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
 const scriptContent = ref('')
@@ -211,6 +249,10 @@ const currentEditRule = ref<BaselineRule | null>(null)
 const currentScriptType = ref<'CHECK' | 'FIX'>('CHECK')
 
 const hosts = computed(() => hostStore.hosts)
+
+const isAllSelected = computed(() => {
+  return rules.value.length > 0 && selectedRules.value.length === rules.value.length
+})
 
 let statusPollTimer: number | null = null
 
@@ -262,11 +304,14 @@ const fetchRules = async (templateId: string) => {
   try {
     rules.value = await getTemplateRules(templateId)
     rules.value.forEach(rule => {
-      if (!rule.check_script_status) {
+      if (!rule.check_script_status || rule.check_script_status === 'ready') {
         rule.check_script_status = rule.generated_check_script ? 'generated' : 'pending'
       }
-      if (!rule.fix_script_status) {
+      if (!rule.fix_script_status || rule.fix_script_status === 'ready') {
         rule.fix_script_status = rule.generated_fix_script ? 'generated' : 'pending'
+      }
+      if (!rule.script_status || rule.script_status === 'ready') {
+        rule.script_status = (rule.check_script_status === 'generated' || rule.fix_script_status === 'generated') ? 'generated' : 'pending'
       }
     })
     parseStatus.value = { status: 'completed', progress: 100, message: `解析完成，共 ${rules.value.length} 条规则` }
@@ -319,12 +364,16 @@ const handleSelectionChange = (selection: BaselineRule[]) => {
   selectedRules.value = selection
 }
 
-const selectAllRules = () => {
-  selectedRules.value = [...rules.value]
+const toggleSelectAll = () => {
+  if (tableRef.value) {
+    tableRef.value.toggleAllSelection()
+  }
 }
 
-const clearRules = () => {
-  selectedRules.value = []
+const clearSelection = () => {
+  if (tableRef.value) {
+    tableRef.value.clearSelection()
+  }
 }
 
 const getScriptStatusType = (status: string) => {
@@ -333,7 +382,7 @@ const getScriptStatusType = (status: string) => {
     case 'pending': return 'warning'
     case 'generating': return 'info'
     case 'failed': return 'danger'
-    default: return 'info'
+    default: return 'warning'
   }
 }
 
@@ -343,7 +392,7 @@ const getScriptStatusText = (status: string) => {
     case 'pending': return '待生成'
     case 'generating': return '生成中'
     case 'failed': return '生成失败'
-    default: return status
+    default: return '待生成'
   }
 }
 
@@ -359,10 +408,10 @@ const getScriptButtonType = (status: string) => {
 
 const getScriptButtonText = (status: string, label: string) => {
   switch (status) {
-    case 'generating': return `生成中...`
+    case 'generating': return '生成中...'
     case 'generated': return `${label}脚本`
     case 'pending': return `${label}脚本`
-    case 'failed': return `重新生成`
+    case 'failed': return '重新生成'
     default: return `${label}脚本`
   }
 }
@@ -375,6 +424,7 @@ const truncate = (text: string, length: number): string => {
 const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX') => {
   const statusField = scriptType === 'CHECK' ? 'check_script_status' : 'fix_script_status'
   if (rule[statusField] === 'generating') {
+    ElMessage.info('脚本正在生成中，请稍候')
     return
   }
 
@@ -411,7 +461,13 @@ const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX')
       }
     } catch (e: any) {
       rule[statusField] = 'failed'
-      ElMessage.error(e.message || '生成脚本失败')
+      const errorMsg = e.message || '生成脚本失败'
+      if (scriptType === 'CHECK') {
+        rule.check_script_error = errorMsg
+      } else {
+        rule.fix_script_error = errorMsg
+      }
+      ElMessage.error(errorMsg)
       scriptDialogVisible.value = false
     } finally {
       scriptLoading.value = false

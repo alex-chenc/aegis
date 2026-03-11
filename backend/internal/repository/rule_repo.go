@@ -142,6 +142,45 @@ func (r *RuleRepository) UpdateScriptStatusByType(ruleID uuid.UUID, scriptType, 
 	return nil
 }
 
+func (r *RuleRepository) UpdateScriptStatusWithError(ruleID uuid.UUID, scriptType, status, errorMsg string) error {
+	updates := map[string]interface{}{
+		"script_status": status,
+	}
+
+	if scriptType == "CHECK" {
+		updates["check_script_status"] = status
+		if errorMsg != "" {
+			updates["check_script_error"] = errorMsg
+		}
+	} else {
+		updates["fix_script_status"] = status
+		if errorMsg != "" {
+			updates["fix_script_error"] = errorMsg
+		}
+	}
+
+	result := r.db.Model(&model.BaselineRule{}).
+		Where("id = ?", ruleID).
+		Updates(updates)
+
+	if result.Error != nil {
+		logger.Error("failed to update script status with error",
+			zap.Error(result.Error),
+			zap.String("rule_id", ruleID.String()),
+			zap.String("script_type", scriptType),
+			zap.String("status", status),
+		)
+		return result.Error
+	}
+
+	logger.Debug("script status with error updated",
+		zap.String("rule_id", ruleID.String()),
+		zap.String("script_type", scriptType),
+		zap.String("status", status),
+	)
+	return nil
+}
+
 // HasTasks 检查规则是否有关联任务
 func (r *RuleRepository) HasTasks(ruleID uuid.UUID) (bool, int64, error) {
 	var count int64

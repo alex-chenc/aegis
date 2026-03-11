@@ -182,6 +182,8 @@ export interface BaselineRule {
   fix_script_version: number
   check_script_status: 'pending' | 'generating' | 'generated' | 'failed'
   fix_script_status: 'pending' | 'generating' | 'generated' | 'failed'
+  check_script_error?: string
+  fix_script_error?: string
   script_status: 'pending' | 'generating' | 'generated' | 'failed'
 }
 

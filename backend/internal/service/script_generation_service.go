@@ -94,31 +94,19 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 
 	rule, err := s.ruleRepo.FindByID(task.RuleID)
 	if err != nil {
-		logger.Error("failed to find rule",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", "规则不存在")
 		return
 	}
 
 	config, err := s.configRepo.GetActive()
 	if err != nil {
-		logger.Error("failed to get LLM config",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", "LLM配置未设置")
 		return
 	}
 
 	apiKey, err := s.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
 	if err != nil {
-		logger.Error("failed to decrypt API key",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", "API密钥解密失败")
 		return
 	}
 
@@ -133,38 +121,21 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 
 	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本工程师", prompt, 0.1)
 	if err != nil {
-		logger.Error("failed to call LLM for script generation",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-			zap.String("script_type", task.ScriptType),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("LLM调用失败: %v", err))
 		return
 	}
 
-	// 解析脚本
 	script, err := llm.ParseScript(llmResponse)
 	if err != nil {
-		logger.Error("failed to parse generated script",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本解析失败: %v", err))
 		return
 	}
 
-	// 安全性校验
 	if err := s.validateScript(script); err != nil {
-		logger.Error("script validation failed",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-			zap.String("script_type", task.ScriptType),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本安全校验失败: %v", err))
 		return
 	}
 
-	// 获取当前版本号
 	var version int
 	if task.ScriptType == "CHECK" {
 		version = rule.CheckScriptVersion + 1
@@ -172,7 +143,6 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		version = rule.FixScriptVersion + 1
 	}
 
-	// 创建脚本版本记录
 	scriptVersion := &model.ScriptVersion{
 		RuleID:           task.RuleID,
 		ScriptType:       task.ScriptType,
@@ -183,40 +153,24 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 	}
 
 	if err := s.scriptVersionRepo.Create(scriptVersion); err != nil {
-		logger.Error("failed to create script version",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("版本记录创建失败: %v", err))
 		return
 	}
 
-	// 上传脚本到 MinIO
 	minIOPath := fmt.Sprintf("%s/%d/%s.sh", task.RuleID.String(), version, strings.ToLower(task.ScriptType))
 	_, err = s.minioClient.UploadFile("generated-scripts", minIOPath, strings.NewReader(script), int64(len(script)), "application/x-sh")
 	if err != nil {
-		logger.Error("failed to upload script to MinIO",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("MinIO上传失败: %v", err))
 		return
 	}
 
 	if err := s.ruleRepo.UpdateScript(task.RuleID, task.ScriptType, script, version); err != nil {
-		logger.Error("failed to update rule script",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
-		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("规则更新失败: %v", err))
 		return
 	}
 
-	if err := s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "generated"); err != nil {
-		logger.Error("failed to set generated status",
-			zap.Error(err),
-			zap.String("rule_id", task.RuleID.String()),
-		)
+	if err := s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "generated", ""); err != nil {
+		logger.Error("failed to set generated status", zap.Error(err), zap.String("rule_id", task.RuleID.String()))
 	}
 
 	logger.Info("script generated successfully",
