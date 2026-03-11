@@ -54,10 +54,30 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="默认脚本" width="140">
+            <el-table-column label="默认脚本" width="120">
               <template #default="{ row }">
-                <el-button link type="primary" size="small" @click="openScriptEditor(row, 'CHECK')">检测脚本</el-button>
-                <el-button link type="warning" size="small" @click="openScriptEditor(row, 'FIX')">修复脚本</el-button>
+                <div class="script-buttons">
+                  <el-button 
+                    link 
+                    :type="getScriptButtonType(row.check_script_status)" 
+                    size="small" 
+                    :disabled="row.check_script_status === 'generating'"
+                    :loading="row.check_script_status === 'generating'"
+                    @click="openScriptEditor(row, 'CHECK')"
+                  >
+                    {{ getScriptButtonText(row.check_script_status, '检测') }}
+                  </el-button>
+                  <el-button 
+                    link 
+                    :type="getScriptButtonType(row.fix_script_status)" 
+                    size="small" 
+                    :disabled="row.fix_script_status === 'generating'"
+                    :loading="row.fix_script_status === 'generating'"
+                    @click="openScriptEditor(row, 'FIX')"
+                  >
+                    {{ getScriptButtonText(row.fix_script_status, '修复') }}
+                  </el-button>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="80" fixed="right">
@@ -241,6 +261,14 @@ const fetchRules = async (templateId: string) => {
   loading.value = true
   try {
     rules.value = await getTemplateRules(templateId)
+    rules.value.forEach(rule => {
+      if (!rule.check_script_status) {
+        rule.check_script_status = rule.generated_check_script ? 'generated' : 'pending'
+      }
+      if (!rule.fix_script_status) {
+        rule.fix_script_status = rule.generated_fix_script ? 'generated' : 'pending'
+      }
+    })
     parseStatus.value = { status: 'completed', progress: 100, message: `解析完成，共 ${rules.value.length} 条规则` }
   } catch (e: any) {
     ElMessage.error(e.message || '获取规则失败')
@@ -303,6 +331,7 @@ const getScriptStatusType = (status: string) => {
   switch (status) {
     case 'generated': return 'success'
     case 'pending': return 'warning'
+    case 'generating': return 'info'
     case 'failed': return 'danger'
     default: return 'info'
   }
@@ -312,8 +341,29 @@ const getScriptStatusText = (status: string) => {
   switch (status) {
     case 'generated': return '已生成'
     case 'pending': return '待生成'
+    case 'generating': return '生成中'
     case 'failed': return '生成失败'
     default: return status
+  }
+}
+
+const getScriptButtonType = (status: string) => {
+  switch (status) {
+    case 'generated': return 'success'
+    case 'pending': return 'primary'
+    case 'generating': return 'info'
+    case 'failed': return 'danger'
+    default: return 'primary'
+  }
+}
+
+const getScriptButtonText = (status: string, label: string) => {
+  switch (status) {
+    case 'generating': return `生成中...`
+    case 'generated': return `${label}脚本`
+    case 'pending': return `${label}脚本`
+    case 'failed': return `重新生成`
+    default: return `${label}脚本`
   }
 }
 
@@ -323,6 +373,11 @@ const truncate = (text: string, length: number): string => {
 }
 
 const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX') => {
+  const statusField = scriptType === 'CHECK' ? 'check_script_status' : 'fix_script_status'
+  if (rule[statusField] === 'generating') {
+    return
+  }
+
   currentEditRule.value = rule
   currentScriptType.value = scriptType
   scriptDialogTitle.value = scriptType === 'CHECK' ? `编辑检测脚本 - ${rule.title}` : `编辑修复脚本 - ${rule.title}`
@@ -331,8 +386,10 @@ const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX')
   
   if (existingScript) {
     scriptContent.value = existingScript
+    scriptLoading.value = false
     scriptDialogVisible.value = true
   } else {
+    rule[statusField] = 'generating'
     scriptLoading.value = true
     scriptContent.value = ''
     scriptDialogVisible.value = true
@@ -341,16 +398,41 @@ const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX')
       const result = await generateScript(rule.id, scriptType)
       if (result.script_content) {
         scriptContent.value = result.script_content
+        rule[statusField] = 'generated'
+        if (scriptType === 'CHECK') {
+          rule.generated_check_script = result.script_content
+        } else {
+          rule.generated_fix_script = result.script_content
+        }
+        updateOverallScriptStatus(rule)
       } else if (result.status === 'generating') {
         ElMessage.info('脚本生成任务已提交，请稍后刷新查看')
         scriptDialogVisible.value = false
       }
     } catch (e: any) {
+      rule[statusField] = 'failed'
       ElMessage.error(e.message || '生成脚本失败')
       scriptDialogVisible.value = false
     } finally {
       scriptLoading.value = false
     }
+  }
+}
+
+const updateOverallScriptStatus = (rule: BaselineRule) => {
+  const checkStatus = rule.check_script_status
+  const fixStatus = rule.fix_script_status
+  
+  if (checkStatus === 'generated' && fixStatus === 'generated') {
+    rule.script_status = 'generated'
+  } else if (checkStatus === 'generating' || fixStatus === 'generating') {
+    rule.script_status = 'generating'
+  } else if (checkStatus === 'failed' && fixStatus === 'failed') {
+    rule.script_status = 'failed'
+  } else if (checkStatus === 'generated' || fixStatus === 'generated') {
+    rule.script_status = 'generated'
+  } else {
+    rule.script_status = 'pending'
   }
 }
 
@@ -364,9 +446,12 @@ const saveScript = async () => {
     
     if (currentScriptType.value === 'CHECK') {
       currentEditRule.value.generated_check_script = scriptContent.value
+      currentEditRule.value.check_script_status = 'generated'
     } else {
       currentEditRule.value.generated_fix_script = scriptContent.value
+      currentEditRule.value.fix_script_status = 'generated'
     }
+    updateOverallScriptStatus(currentEditRule.value)
     
     scriptDialogVisible.value = false
   } catch (e: any) {
@@ -490,5 +575,14 @@ onMounted(async () => {
   justify-content: center;
   padding: 40px;
   color: #409eff;
+}
+.script-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.script-buttons .el-button {
+  padding: 2px 0;
 }
 </style>

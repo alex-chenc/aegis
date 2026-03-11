@@ -84,12 +84,21 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		zap.String("script_type", task.ScriptType),
 	)
 
+	if err := s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "generating"); err != nil {
+		logger.Error("failed to set generating status",
+			zap.Error(err),
+			zap.String("rule_id", task.RuleID.String()),
+		)
+		return
+	}
+
 	rule, err := s.ruleRepo.FindByID(task.RuleID)
 	if err != nil {
 		logger.Error("failed to find rule",
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -99,6 +108,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -108,6 +118,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -127,6 +138,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.String("rule_id", task.RuleID.String()),
 			zap.String("script_type", task.ScriptType),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -137,6 +149,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -147,6 +160,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.String("rule_id", task.RuleID.String()),
 			zap.String("script_type", task.ScriptType),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -173,6 +187,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
@@ -184,16 +199,24 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
 	}
 
-	// 更新规则表的脚本版本
 	if err := s.ruleRepo.UpdateScript(task.RuleID, task.ScriptType, script, version); err != nil {
 		logger.Error("failed to update rule script",
 			zap.Error(err),
 			zap.String("rule_id", task.RuleID.String()),
 		)
+		s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "failed")
 		return
+	}
+
+	if err := s.ruleRepo.UpdateScriptStatusByType(task.RuleID, task.ScriptType, "generated"); err != nil {
+		logger.Error("failed to set generated status",
+			zap.Error(err),
+			zap.String("rule_id", task.RuleID.String()),
+		)
 	}
 
 	logger.Info("script generated successfully",

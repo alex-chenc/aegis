@@ -30,7 +30,9 @@ export interface BaselineRule {
   generated_fix_script?: string
   check_script_version: number
   fix_script_version: number
-  script_status: 'pending' | 'generated' | 'failed'
+  check_script_status: 'pending' | 'generating' | 'generated' | 'failed'
+  fix_script_status: 'pending' | 'generating' | 'generated' | 'failed'
+  script_status: 'pending' | 'generating' | 'generated' | 'failed'
 }
 
 export interface ParseStatus {

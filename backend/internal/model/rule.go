@@ -16,6 +16,8 @@ type BaselineRule struct {
 	GeneratedFixScript   *string   `gorm:"type:text" json:"generated_fix_script"`
 	CheckScriptVersion   int       `gorm:"default:0" json:"check_script_version"`
 	FixScriptVersion     int       `gorm:"default:0" json:"fix_script_version"`
+	CheckScriptStatus    string    `gorm:"type:varchar(20);default:'pending'" json:"check_script_status"`
+	FixScriptStatus      string    `gorm:"type:varchar(20);default:'pending'" json:"fix_script_status"`
 	ScriptStatus         string    `gorm:"type:varchar(20);default:'pending'" json:"script_status"`
 	CreatedAt            time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt            time.Time `gorm:"autoUpdateTime" json:"updated_at"`

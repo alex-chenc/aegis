@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS baseline_rules (
     generated_fix_script TEXT,
     check_script_version INT DEFAULT 0,
     fix_script_version INT DEFAULT 0,
+    check_script_status VARCHAR(20) DEFAULT 'pending',
+    fix_script_status VARCHAR(20) DEFAULT 'pending',
     script_status VARCHAR(20) DEFAULT 'pending',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
