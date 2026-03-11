@@ -1,6 +1,6 @@
-# 前端项目详细设计文档 - V2.10 完整版
+# 前端项目详细设计文档 - V2.12 完整版
 
-**版本**: 2.10
+**版本**: 2.12
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.12 | 2026-03-11 | Sisyphus | **脚本生成校验**。新增：下发检测/修复任务前校验脚本生成状态；计算属性checkScriptStatus/fixScriptStatus检查选中规则的脚本状态；el-alert组件显示警告提示；下发按钮禁用逻辑增加脚本状态校验。 |
+| 2.11 | 2026-03-11 | Sisyphus | **UI重构**。规则列表改为大框架设计（一个"规则列表"卡片内包含所有文件分组）；文件分页改为每页5个；添加滚动条（最大高度600px，自定义滚动条样式）；"一键生成检测/修复脚本"按钮移至文件头部右侧；UI美化（圆角卡片、悬浮效果、文件图标、规则数量badge、分离背景）；修复批量脚本生成函数名冲突导致的无限递归问题。 |
 | 2.10 | 2026-03-11 | Sisyphus | **规则列表增强**。新增：规则列表分页（每个文件下规则表格支持分页）；检测内容/修复方法列显示（支持tooltip悬浮查看）；一键生成检测/修复脚本按钮（批量生成，并发数2）；已上传文件列表分页。 |
 | 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：MD5去重（前端计算MD5，重复时弹窗提示）；文件大小限制（>5MB禁止上传）；规则列表按文件分组（卡片+折叠面板）；显示解析时间（绝对时间格式）；删除文件功能（弹窗确认后删除文件及规则）。 |
 | 2.7 | 2026-03-11 | Metis | **Bug 修复：解析状态刷新优化**。修复 Workbench 组件中 refreshStatus 函数在 completed 状态下刷新时未重置 parseStatus 的问题。现在刷新 completed 状态会先显示加载状态，然后加载规则列表。 |
@@ -233,34 +235,99 @@ export interface TaskLog {
 
 工作台是核心功能页面，提供模板上传、规则查看、脚本预览、主机选择和任务下发功能。
 
-**页面布局**:
-- 左侧 (el-col :span="16"): 模板上传区 + 规则列表表格
-- 右侧 (el-col :span="8"): 解析状态 + 主机选择 + 执行操作
+**页面布局 (V2.11重构)**:
+- 左侧 (el-col :span="16"): 
+  - 模板上传卡片 (upload-card)
+  - 规则列表大卡片 (rules-card) - 包含所有文件分组
+- 右侧 (el-col :span="8"): 
+  - 已上传文件卡片 (sidebar-card)
+  - 选择执行主机卡片
+  - 执行操作卡片
+
+**规则列表卡片设计 (V2.11)**:
+- 卡片标题："规则列表"，显示总规则数和文件数
+- 规则容器 (rules-container): 最大高度600px，超出可滚动，自定义滚动条样式
+- 每个文件显示为一个带圆角背景的区域 (file-section)
+- 文件头部 (file-header): 
+  - 左侧：文件图标、文件名、状态标签、规则数和时间
+  - 右侧：一键生成检测脚本、一键生成修复脚本、删除按钮
+- 规则折叠面板 (rules-collapse): 点击展开查看规则表格
+- 底部分页：每页5个文件
 
 **核心功能**:
 
-1. **模板上传**: 支持 PDF、Word、YAML 格式的拖拽上传
-2. **解析状态轮询**: 上传后自动轮询解析状态，每2秒检查一次
-3. **规则列表**: 表格展示解析后的规则，支持多选
-4. **脚本查看**: 点击"查看检测"/"查看修复"按钮弹出对话框显示脚本内容
+1. **模板上传**: 支持 PDF、Word、YAML 格式的拖拽上传，MD5去重，5MB大小限制
+2. **规则列表**: 大框架设计，文件分组显示，每页5个文件，支持滚动
+3. **批量脚本生成**: "一键生成检测脚本"和"一键生成修复脚本"按钮位于文件头部右侧
+4. **脚本查看**: 点击"检测"/"修复"按钮打开编辑对话框
 5. **主机选择**: Checkbox列表选择执行主机，显示在线状态
-6. **任务下发**: "下发检测"和"下发修复"按钮，禁用状态控制
+6. **任务下发**: "下发检测"和"下发修复"按钮
+
+**脚本状态校验 (V2.12)**:
+- 下发检测任务前校验所有选中规则的检测脚本状态
+- 下发修复任务前校验所有选中规则的修复脚本状态
+- 未生成完成时禁用下发按钮，显示警告提示
+- 提示信息："有 X 个检测脚本未生成，请点击'一键生成检测脚本'或单独生成"
+- 正在生成时提示："有 X 个检测脚本正在生成中，请稍候..."
+
+**计算属性**:
+```typescript
+const checkScriptStatus = computed(() => {
+  const rules = allSelectedRules.value
+  let pending = 0, generating = 0
+  rules.forEach(rule => {
+    if (rule.check_script_status === 'generating') generating++
+    else if (rule.check_script_status !== 'generated') pending++
+  })
+  return { ready: pending === 0 && generating === 0, pending, generating }
+})
+```
+
+**UI组件**:
+```vue
+<el-alert v-if="checkScriptWarning" :title="checkScriptWarning" type="warning" />
+<el-button :disabled="!checkScriptStatus.ready">下发检测</el-button>
+```
+
+**UI设计规范 (V2.11)**:
+- 圆角卡片 (border-radius: 12px)
+- 悬浮效果 (hover时边框颜色变化和阴影)
+- 文件图标 (Document图标)
+- 规则数量badge
+- 自定义滚动条 (宽度6px，圆角)
+- 分离背景色 (#fafbfc)
+- 文件区域悬浮效果
 
 **关键代码结构**:
 ```vue
 <template>
-  <el-row :gutter="20">
+  <el-row :gutter="24">
     <el-col :span="16">
       <!-- 模板上传卡片 -->
-      <!-- 规则列表表格（带选择框） -->
+      <el-card class="upload-card">...</el-card>
+      
+      <!-- 规则列表大卡片 -->
+      <el-card class="rules-card">
+        <div class="rules-container" style="max-height: 600px; overflow-y: auto">
+          <div v-for="tpl in paginatedTemplates" class="file-section">
+            <div class="file-header">
+              <!-- 文件信息 + 操作按钮（靠右） -->
+            </div>
+            <el-collapse>
+              <!-- 规则表格 -->
+            </el-collapse>
+          </div>
+        </div>
+        <!-- 文件分页（每页5个） -->
+      </el-card>
     </el-col>
     <el-col :span="8">
-      <!-- 解析状态卡片 -->
+      <!-- 已上传文件卡片 -->
       <!-- 主机选择卡片 -->
       <!-- 执行操作卡片 -->
     </el-col>
   </el-row>
-  <!-- 脚本查看对话框 -->
+  <!-- 脚本编辑对话框 -->
 </template>
 ```
 

@@ -17,6 +17,7 @@ type TaskHandler struct {
 	healingLogRepo   *repository.HealingLogRepository
 	scriptGenService *service.ScriptGenerationService
 	grpcServer       *grpc_server.GRPCServer
+	ruleRepo         *repository.RuleRepository
 }
 
 func NewTaskHandler(
@@ -25,6 +26,7 @@ func NewTaskHandler(
 	healingLogRepo *repository.HealingLogRepository,
 	scriptGenService *service.ScriptGenerationService,
 	grpcServer *grpc_server.GRPCServer,
+	ruleRepo *repository.RuleRepository,
 ) *TaskHandler {
 	return &TaskHandler{
 		taskService:      taskService,
@@ -32,6 +34,7 @@ func NewTaskHandler(
 		healingLogRepo:   healingLogRepo,
 		scriptGenService: scriptGenService,
 		grpcServer:       grpcServer,
+		ruleRepo:         ruleRepo,
 	}
 }
 
@@ -96,6 +99,18 @@ func (h *TaskHandler) RunCheck(c *gin.Context) {
 		return
 	}
 
+	unreadyRules := h.checkScriptsReady(req.RuleIDs, "CHECK")
+	if len(unreadyRules) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "检测脚本未生成完成，请等待脚本生成后再下发",
+			"data": gin.H{
+				"unready_count": len(unreadyRules),
+			},
+		})
+		return
+	}
+
 	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "check")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -134,6 +149,18 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 		return
 	}
 
+	unreadyRules := h.checkScriptsReady(req.RuleIDs, "FIX")
+	if len(unreadyRules) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "修复脚本未生成完成，请等待脚本生成后再下发",
+			"data": gin.H{
+				"unready_count": len(unreadyRules),
+			},
+		})
+		return
+	}
+
 	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -152,6 +179,34 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 			TaskCount:   len(result.TaskIDs),
 		},
 	})
+}
+
+func (h *TaskHandler) checkScriptsReady(ruleIDs []string, scriptType string) []string {
+	var unreadyRules []string
+	for _, ruleIDStr := range ruleIDs {
+		ruleID, err := uuid.Parse(ruleIDStr)
+		if err != nil {
+			unreadyRules = append(unreadyRules, ruleIDStr)
+			continue
+		}
+
+		rule, err := h.ruleRepo.FindByID(ruleID)
+		if err != nil {
+			unreadyRules = append(unreadyRules, ruleIDStr)
+			continue
+		}
+
+		if scriptType == "CHECK" {
+			if rule.CheckScriptStatus != "generated" {
+				unreadyRules = append(unreadyRules, ruleIDStr)
+			}
+		} else {
+			if rule.FixScriptStatus != "generated" {
+				unreadyRules = append(unreadyRules, ruleIDStr)
+			}
+		}
+	}
+	return unreadyRules
 }
 
 func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
@@ -440,7 +495,7 @@ func NewTaskHandlerWithHealing(
 	ruleRepo *repository.RuleRepository,
 ) *TaskHandlerWithHealing {
 	return &TaskHandlerWithHealing{
-		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer),
+		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, ruleRepo),
 		healingService: healingService,
 		ruleRepo:       ruleRepo,
 		taskLogRepo:    taskLogRepo,

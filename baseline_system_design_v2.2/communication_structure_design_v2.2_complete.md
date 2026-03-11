@@ -1,6 +1,6 @@
-# 通讯层设计文档 - V2.3 完整版
+# 通讯层设计文档 - V2.5 完整版
 
-**版本**: 2.3
+**版本**: 2.5
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.5 | 2026-03-11 | Sisyphus | **脚本状态校验**。POST /api/v1/tasks/run-check和run-fix接口新增脚本状态校验，未生成完成返回400错误。 |
+| 2.4 | 2026-03-11 | Sisyphus | **批量脚本生成API**。新增 POST /api/v1/templates/:id/generate-scripts 接口，支持批量生成检测/修复脚本，返回队列状态。 |
 | 2.3 | 2026-03-10 | Sisyphus | **规则与任务管理API增强**。新增规则脚本生成、脚本更新、规则删除、规则任务检查、任务批量删除等API接口。 |
 | 2.2 | 2026-03-09 | Sisyphus | **实现验证**。验证所有API接口与实际实现一致，确认模板上传、规则查询、任务下发等核心接口可用。 |
 | 2.0 | 2026-03-05 | Manus AI | **全面更新**。在 V1.6 基础上补充模板解析状态查询 API、脚本生成状态 API、修复任务下发 API、自愈流程状态 API、模板删除 API，完善所有接口的请求/响应 JSON Schema，补充错误码定义。 |
@@ -337,6 +339,34 @@ Query Parameters: `page` (int, default 1), `pageSize` (int, default 20), `query`
 }
 ```
 
+**`POST /api/v1/templates/{id}/generate-scripts`** — V2.4 新增
+
+批量生成模板下所有规则的检测或修复脚本。后端使用队列控制并发数（默认2）。
+
+请求体:
+```json
+{
+  "script_type": "CHECK"
+}
+```
+
+响应体 (200 OK):
+```json
+{
+  "total": 10,
+  "queued": 5,
+  "skipped": 2,
+  "generated": 3
+}
+```
+
+| 字段 | 说明 |
+|:---|:---|
+| total | 模板下规则总数 |
+| queued | 已加入生成队列的数量 |
+| skipped | 已在生成中，跳过的数量 |
+| generated | 已存在脚本，无需生成的数量 |
+
 **`DELETE /api/v1/templates/{id}`** — V2.2 新增
 
 删除指定模板及其关联的所有规则和脚本。
@@ -425,12 +455,12 @@ Query Parameters: `script_type` (string, required, "CHECK" 或 "FIX")
 
 **`POST /api/v1/tasks/run-check`**
 
-下发检查任务。
+下发检查任务。V2.4新增脚本状态校验，若选中规则中有检测脚本未生成，返回400错误。
 
 请求体:
 ```json
 {
-  "rule_id": "uuid-rule-1",
+  "rule_ids": ["uuid-rule-1", "uuid-rule-2"],
   "host_ids": ["uuid-host-1", "uuid-host-2"]
 }
 ```
@@ -439,10 +469,19 @@ Query Parameters: `script_type` (string, required, "CHECK" 或 "FIX")
 ```json
 {
   "task_group_id": "uuid-task-group-1",
-  "tasks": [
-    {"task_id": "uuid-task-1", "host_id": "uuid-host-1", "status": "PENDING"},
-    {"task_id": "uuid-task-2", "host_id": "uuid-host-2", "status": "PENDING"}
-  ]
+  "task_ids": ["uuid-task-1", "uuid-task-2"],
+  "task_count": 2
+}
+```
+
+错误响应 (400 Bad Request) — V2.4 新增:
+```json
+{
+  "code": 400,
+  "message": "检测脚本未生成完成，请等待脚本生成后再下发",
+  "data": {
+    "unready_count": 2
+  }
 }
 ```
 
@@ -576,7 +615,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 
 ## 5. API 接口汇总
 
-以下是 V2.3 版本所有 API 接口的完整汇总。
+以下是 V2.4 版本所有 API 接口的完整汇总。
 
 | 方法 | 路径 | 描述 | 版本 |
 |:---|:---|:---|:---|
@@ -592,17 +631,18 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 | GET | `/api/v1/templates` | 获取模板列表 | V1.6 |
 | GET | `/api/v1/templates/{id}/status` | 获取模板解析状态 | V2.2 |
 | GET | `/api/v1/templates/{id}/rules` | 获取模板规则列表 | V1.6 |
+| POST | `/api/v1/templates/{id}/generate-scripts` | 批量生成脚本 | **V2.4 新增** |
 | DELETE | `/api/v1/templates/{id}` | 删除模板 | V2.2 |
-| GET | `/api/v1/rules/{id}` | 获取规则脚本内容 | **V2.3 新增** |
-| GET | `/api/v1/rules/{id}/has-tasks` | 检查规则是否有关联任务 | **V2.3 新增** |
-| POST | `/api/v1/rules/{id}/scripts/generate` | 生成规则脚本 | **V2.3 新增** |
-| PUT | `/api/v1/rules/{id}/scripts` | 更新规则脚本 | **V2.3 新增** |
-| DELETE | `/api/v1/rules/{id}` | 删除规则 | **V2.3 新增** |
+| GET | `/api/v1/rules/{id}` | 获取规则脚本内容 | V2.3 |
+| GET | `/api/v1/rules/{id}/has-tasks` | 检查规则是否有关联任务 | V2.3 |
+| POST | `/api/v1/rules/{id}/scripts/generate` | 生成规则脚本 | V2.3 |
+| PUT | `/api/v1/rules/{id}/scripts` | 更新规则脚本 | V2.3 |
+| DELETE | `/api/v1/rules/{id}` | 删除规则 | V2.3 |
 | POST | `/api/v1/tasks/run-check` | 下发检查任务 | V1.6 |
 | POST | `/api/v1/tasks/run-fix` | 下发修复任务 | V2.2 |
 | GET | `/api/v1/tasks` | 获取任务列表 | V2.2 |
 | GET | `/api/v1/tasks/{group_id}/status` | 获取任务组状态 | V2.2 |
 | GET | `/api/v1/tasks/{task_id}/logs` | 获取任务日志 | V1.6 更新 |
-| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | **V2.3 新增** |
-| DELETE | `/api/v1/tasks/batch` | 批量删除任务 | **V2.3 新增** |
+| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | V2.3 |
+| DELETE | `/api/v1/tasks/batch` | 批量删除任务 | V2.3 |
 | GET | `/api/v1/healing/{healing_id}` | 获取自愈详情 | V2.2 |

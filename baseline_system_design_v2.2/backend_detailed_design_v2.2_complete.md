@@ -1,6 +1,6 @@
-# 后端详细设计文档 - V2.9 完整版
+# 后端详细设计文档 - V2.11 完整版
 
-**版本**: 2.9
+**版本**: 2.11
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.11 | 2026-03-11 | Sisyphus | **脚本状态校验**。RunCheck/RunFix接口新增脚本状态校验逻辑，检查选中规则的check_script_status/fix_script_status是否为"generated"，未生成完成返回400错误和未生成数量。 |
+| 2.10 | 2026-03-11 | Sisyphus | **Bug修复与API增强**。修复：模板删除500错误（DeleteWithRules方法需按正确顺序删除关联表：self_healing_logs→task_logs→script_versions→baseline_rules）；规则删除500错误（Delete方法需删除关联的self_healing_logs、task_logs、script_versions）。新增：批量脚本生成API (POST /api/v1/templates/:id/generate-scripts)，支持并发数控制（默认2）。 |
 | 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：数据库 templates 表添加 display_name（显示名称）、file_md5（文件MD5）字段；新增 MD5 检查 API (/api/v1/templates/check-md5)；文件名重复时自动追加随机后缀；删除模板时级联删除文件和 Redis 状态。 |
 | 2.7 | 2026-03-11 | Metis | **Bug 修复：规则去重逻辑**。修复 TemplateService 中 BatchCreate 直接插入规则导致重复的问题。新增 FindByTemplateIDAndTitles 方法在 RuleRepository 中查询已存在规则，保存前过滤重复规则，确保同一模板不会产生重复规则。 |
 | 2.6 | 2026-03-09 | Sisyphus | **LLM 超时优化**。超时时间从 60 秒优化为 120 秒，解决 PDF 解析超时问题。所有服务（TemplateService, ScriptGenerationService, SelfHealingService）使用配置值。添加获取完整 API Key 接口。 |

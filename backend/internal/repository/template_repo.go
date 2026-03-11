@@ -154,12 +154,44 @@ func (r *TemplateRepository) CountByName(name string) (int64, error) {
 
 func (r *TemplateRepository) DeleteWithRules(id uuid.UUID) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var ruleIDs []uuid.UUID
+		if err := tx.Model(&model.BaselineRule{}).Where("template_id = ?", id).Pluck("id", &ruleIDs).Error; err != nil {
+			return err
+		}
+
+		if len(ruleIDs) > 0 {
+			var taskLogIDs []uuid.UUID
+			if err := tx.Model(&model.TaskLog{}).Where("rule_id IN ?", ruleIDs).Pluck("id", &taskLogIDs).Error; err != nil {
+				return err
+			}
+
+			if len(taskLogIDs) > 0 {
+				if err := tx.Where("original_task_id IN ?", taskLogIDs).Delete(&model.HealingLog{}).Error; err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Where("rule_id IN ?", ruleIDs).Delete(&model.TaskLog{}).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Where("rule_id IN ?", ruleIDs).Delete(&model.HealingLog{}).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Where("rule_id IN ?", ruleIDs).Delete(&model.ScriptVersion{}).Error; err != nil {
+				return err
+			}
+		}
+
 		if err := tx.Where("template_id = ?", id).Delete(&model.BaselineRule{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Delete(&model.Template{}, "id = ?", id).Error; err != nil {
 			return err
 		}
+
+		logger.Info("template and related data deleted", zap.String("template_id", id.String()), zap.Int("rules", len(ruleIDs)))
 		return nil
 	})
 }
