@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"strings"
+	"time"
 
 	"baseline-system/internal/fileparser"
 	"baseline-system/internal/llm"
@@ -187,16 +189,54 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 		rule.TemplateID = task.TemplateID
 	}
 
-	s.updateParseStatus(task.TemplateID, "parsing", 90, "保存规则到数据库...")
+	s.updateParseStatus(task.TemplateID, "parsing", 90, "检查已存在规则...")
 
-	// 批量保存规则
-	if err := s.ruleRepo.BatchCreate(rules); err != nil {
-		logger.Error("failed to save rules",
+	// 提取规则标题列表（去重）
+	titleSet := make(map[string]bool)
+	titles := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		if !titleSet[rule.Title] {
+			titles = append(titles, rule.Title)
+			titleSet[rule.Title] = true
+		}
+	}
+
+	// 查询已存在的规则标题
+	existingTitles, err := s.ruleRepo.FindByTemplateIDAndTitles(task.TemplateID, titles)
+	if err != nil {
+		logger.Error("failed to check existing rules",
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("保存规则失败：%v", err))
+		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("检查已存在规则失败：%v", err))
 		return
+	}
+
+	// 过滤出不存在的规则
+	newRules := make([]*model.BaselineRule, 0, len(rules))
+	for _, rule := range rules {
+		if !existingTitles[rule.Title] {
+			newRules = append(newRules, rule)
+		}
+	}
+
+	logger.Info("rule deduplication result",
+		zap.String("template_id", task.TemplateID.String()),
+		zap.Int("total_rules", len(rules)),
+		zap.Int("existing_rules", len(existingTitles)),
+		zap.Int("new_rules", len(newRules)),
+	)
+
+	// 批量保存新规则
+	if len(newRules) > 0 {
+		if err := s.ruleRepo.BatchCreate(newRules); err != nil {
+			logger.Error("failed to save rules",
+				zap.Error(err),
+				zap.String("template_id", task.TemplateID.String()),
+			)
+			s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("保存规则失败：%v", err))
+			return
+		}
 	}
 
 	// 更新模板状态
@@ -250,11 +290,7 @@ func (s *TemplateService) QueueTemplate(templateID uuid.UUID, fileType fileparse
 }
 
 // UploadTemplate 上传模板文件
-func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, reader io.Reader, fileSize int64) (*model.Template, error) {
-	// 生成 template_id
-	templateID := uuid.New()
-
-	// 确定文件类型
+func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, reader io.Reader, fileSize int64, fileMD5 string) (*model.Template, error) {
 	var fileType fileparser.FileType
 	ext := filename[strings.LastIndex(filename, "."):]
 	switch strings.ToLower(ext) {
@@ -274,12 +310,33 @@ func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, r
 		return nil, fmt.Errorf("unsupported file type: %s", ext)
 	}
 
-	// 生成 MinIO 对象名
+	var templateID uuid.UUID
+	var isNewTemplate bool
+	var displayName string
+
+	count, err := s.templateRepo.CountByName(filename)
+	if err != nil {
+		return nil, fmt.Errorf("检查已存在模板失败：%w", err)
+	}
+
+	if count > 0 {
+		templateID = uuid.New()
+		isNewTemplate = true
+		randomSuffix := generateRandomSuffix(3)
+		displayName = filename[:len(filename)-len(ext)] + "_" + randomSuffix + ext
+		logger.Info("filename exists, using new display name",
+			zap.String("original", filename),
+			zap.String("display_name", displayName))
+	} else {
+		templateID = uuid.New()
+		isNewTemplate = true
+		displayName = filename
+	}
+
 	minIOPath := fmt.Sprintf("%s/%s", templateID.String(), filename)
 	contentType := storage.GetContentType(filename)
 
-	// 上传到 MinIO
-	_, err := s.minioClient.UploadFile("baseline-templates", minIOPath, reader, fileSize, contentType)
+	_, err = s.minioClient.UploadFile("baseline-templates", minIOPath, reader, fileSize, contentType)
 	if err != nil {
 		logger.Error("failed to upload file to MinIO",
 			zap.Error(err),
@@ -288,24 +345,26 @@ func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, r
 		return nil, fmt.Errorf("上传文件失败：%w", err)
 	}
 
-	// 创建数据库记录
-	template := &model.Template{
-		ID:              templateID,
-		Name:            filename,
-		FileType:        string(fileType),
-		MinioObjectName: minIOPath,
-		Status:          "parsing",
+	if isNewTemplate {
+		template := &model.Template{
+			ID:              templateID,
+			Name:            filename,
+			DisplayName:     displayName,
+			FileType:        string(fileType),
+			FileMD5:         fileMD5,
+			MinioObjectName: minIOPath,
+			Status:          "parsing",
+		}
+
+		if err := s.templateRepo.Create(template); err != nil {
+			logger.Error("failed to create template record",
+				zap.Error(err),
+				zap.String("template_id", templateID.String()),
+			)
+			return nil, fmt.Errorf("创建模板记录失败：%w", err)
+		}
 	}
 
-	if err := s.templateRepo.Create(template); err != nil {
-		logger.Error("failed to create template record",
-			zap.Error(err),
-			zap.String("template_id", templateID.String()),
-		)
-		return nil, fmt.Errorf("创建模板记录失败：%w", err)
-	}
-
-	// 初始化 Redis 状态
 	if err := s.redisClient.SetParseStatus(templateID.String(), "parsing", 0, "文件已上传，等待解析..."); err != nil {
 		logger.Error("failed to initialize Redis status",
 			zap.Error(err),
@@ -313,7 +372,6 @@ func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, r
 		)
 	}
 
-	// 加入解析队列
 	if err := s.QueueTemplate(templateID, fileType, minIOPath); err != nil {
 		logger.Error("failed to queue template",
 			zap.Error(err),
@@ -325,8 +383,19 @@ func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, r
 	logger.Info("template uploaded successfully",
 		zap.String("template_id", templateID.String()),
 		zap.String("filename", filename),
-		zap.String("file_type", string(fileType)),
+		zap.String("display_name", displayName),
+		zap.Bool("is_new", isNewTemplate),
 	)
 
-	return template, nil
+	return &model.Template{ID: templateID, Name: filename, DisplayName: displayName}, nil
+}
+
+func generateRandomSuffix(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[r.Intn(len(charset))]
+	}
+	return string(b)
 }

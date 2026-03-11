@@ -1,6 +1,6 @@
-# 前端项目详细设计文档 - V2.5 完整版
+# 前端项目详细设计文档 - V2.10 完整版
 
-**版本**: 2.5
+**版本**: 2.10
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,10 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.10 | 2026-03-11 | Sisyphus | **规则列表增强**。新增：规则列表分页（每个文件下规则表格支持分页）；检测内容/修复方法列显示（支持tooltip悬浮查看）；一键生成检测/修复脚本按钮（批量生成，并发数2）；已上传文件列表分页。 |
+| 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：MD5去重（前端计算MD5，重复时弹窗提示）；文件大小限制（>5MB禁止上传）；规则列表按文件分组（卡片+折叠面板）；显示解析时间（绝对时间格式）；删除文件功能（弹窗确认后删除文件及规则）。 |
+| 2.7 | 2026-03-11 | Metis | **Bug 修复：解析状态刷新优化**。修复 Workbench 组件中 refreshStatus 函数在 completed 状态下刷新时未重置 parseStatus 的问题。现在刷新 completed 状态会先显示加载状态，然后加载规则列表。 |
+| 2.6 | 2026-03-11 | Sisyphus | **UI优化**。移除冗余的"脚本状态"列，修复脚本按钮对齐问题，优化解析状态重置逻辑。后端自动为缺少shebang的脚本添加#!/bin/bash。 |
 | 2.5 | 2026-03-09 | Sisyphus | **LLM 配置显示优化**。API Key 支持脱敏显示（sk-****-ea1a），点击眼睛图标可查看完整 API Key。后端添加获取完整 API Key 接口 (/api/v1/config/llm/full-key)。 |
 | 2.4 | 2026-03-09 | Sisyphus | **动态 LLM 配置支持**。前端现在正确显示数据库中保存的 LLM 配置，支持刷新页面后持久化显示。复制功能支持降级方案 (execCommand)。 |
 | 2.3 | 2026-03-09 | Sisyphus | **修复实现问题**。修复复制按钮 (支持降级方案)，扩展规则列表字段 (检测内容、修复内容、版本)，修复复制功能，实现真实 LLM 连接测试。 |
@@ -97,6 +101,7 @@ export function getTemplates(params?: { page?: number; pageSize?: number }): Pro
 export function getTemplateStatus(id: string): Promise<ParseStatus>
 export function getTemplateRules(id: string): Promise<BaselineRule[]>
 export function deleteTemplate(id: string): Promise<void>
+export function batchGenerateScripts(templateId: string, scriptType: 'CHECK' | 'FIX'): Promise<BatchGenerateResponse>
 ```
 
 #### `tasks.ts` - 任务管理 API (新增)
@@ -184,7 +189,6 @@ export interface BaselineRule {
   fix_script_status: 'pending' | 'generating' | 'generated' | 'failed'
   check_script_error?: string
   fix_script_error?: string
-  script_status: 'pending' | 'generating' | 'generated' | 'failed'
 }
 
 export interface ParseStatus {

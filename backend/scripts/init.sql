@@ -22,7 +22,9 @@ CREATE INDEX idx_hosts_last_heartbeat ON hosts(last_heartbeat_at);
 CREATE TABLE IF NOT EXISTS templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
     file_type VARCHAR(20) NOT NULL,
+    file_md5 VARCHAR(32),
     minio_object_name VARCHAR(255) NOT NULL,
     llm_prompt_template TEXT,
     status VARCHAR(20) NOT NULL DEFAULT 'parsing',
@@ -32,8 +34,9 @@ CREATE TABLE IF NOT EXISTS templates (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_templates_status ON templates(status);
-CREATE INDEX idx_templates_created ON templates(created_at);
+CREATE INDEX IF NOT EXISTS idx_templates_status ON templates(status);
+CREATE INDEX IF NOT EXISTS idx_templates_created ON templates(created_at);
+CREATE INDEX IF NOT EXISTS idx_templates_md5 ON templates(file_md5);
 
 CREATE TABLE IF NOT EXISTS baseline_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

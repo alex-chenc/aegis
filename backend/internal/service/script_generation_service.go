@@ -253,6 +253,70 @@ func (s *ScriptGenerationService) GenerateCheckScript(ctx context.Context, ruleI
 	return s.QueueScriptGeneration(ruleID, "CHECK")
 }
 
+type BatchGenerateResult struct {
+	Total     int `json:"total"`
+	Queued    int `json:"queued"`
+	Skipped   int `json:"skipped"`
+	Generated int `json:"generated"`
+}
+
+func (s *ScriptGenerationService) BatchGenerateForTemplate(ctx context.Context, templateID uuid.UUID, scriptType string, maxConcurrency int) (*BatchGenerateResult, error) {
+	rules, err := s.ruleRepo.FindByTemplateID(templateID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rules: %w", err)
+	}
+
+	result := &BatchGenerateResult{Total: len(rules)}
+	var queued, skipped, generated int
+
+	for _, rule := range rules {
+		var hasScript bool
+		var status string
+
+		if scriptType == "CHECK" {
+			hasScript = rule.GeneratedCheckScript != nil && *rule.GeneratedCheckScript != ""
+			status = rule.CheckScriptStatus
+		} else {
+			hasScript = rule.GeneratedFixScript != nil && *rule.GeneratedFixScript != ""
+			status = rule.FixScriptStatus
+		}
+
+		if hasScript {
+			generated++
+			continue
+		}
+
+		if status == "generating" {
+			skipped++
+			continue
+		}
+
+		if err := s.QueueScriptGeneration(rule.ID, scriptType); err != nil {
+			logger.Error("failed to queue script generation",
+				zap.Error(err),
+				zap.String("rule_id", rule.ID.String()),
+			)
+			continue
+		}
+		queued++
+	}
+
+	result.Queued = queued
+	result.Skipped = skipped
+	result.Generated = generated
+
+	logger.Info("batch script generation queued",
+		zap.String("template_id", templateID.String()),
+		zap.String("script_type", scriptType),
+		zap.Int("total", result.Total),
+		zap.Int("queued", result.Queued),
+		zap.Int("skipped", result.Skipped),
+		zap.Int("generated", result.Generated),
+	)
+
+	return result, nil
+}
+
 // GenerateFixScript 生成修复脚本
 func (s *ScriptGenerationService) GenerateFixScript(ctx context.Context, ruleID uuid.UUID) error {
 	return s.QueueScriptGeneration(ruleID, "FIX")

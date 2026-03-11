@@ -165,7 +165,6 @@ func (c *LLMClient) sendRequest(ctx context.Context, reqBody ChatCompletionReque
 }
 
 func (c *LLMClient) isRetryableError(err error) bool {
-	// Network errors and 5xx errors are retryable
 	errStr := err.Error()
 	return containsAny(errStr, []string{
 		"timeout",
@@ -175,6 +174,12 @@ func (c *LLMClient) isRetryableError(err error) bool {
 		"503",
 		"504",
 		"rate limited",
+		"dial tcp",
+		"lookup",
+		"dns",
+		"server misbehaving",
+		"no such host",
+		"temporary failure",
 	})
 }
 

@@ -154,6 +154,13 @@ services:
     image: baseline-system/backend:latest
     container_name: baseline-backend
     restart: unless-stopped
+    # DNS 配置 - 解决外部 API 域名解析问题
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 223.5.5.5
+    dns_search:
+      - .
     depends_on:
       postgres:
         condition: service_healthy

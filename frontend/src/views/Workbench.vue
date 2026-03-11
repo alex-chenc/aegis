@@ -17,131 +17,176 @@
           >
             <el-icon class="el-icon--upload"><upload-filled /></el-icon>
             <div class="el-upload__text">将基线文档拖到此处，或<em>点击上传</em></div>
+            <template #tip>
+              <div class="el-upload__tip">支持 PDF、Word、YAML 格式，最大 5MB</div>
+            </template>
           </el-upload>
         </el-card>
 
-        <el-card style="margin-top: 20px" v-if="currentTemplate">
-          <template #header>
-            <div class="card-header">
-              <span>规则列表 (共 {{ rules.length }} 条，已选 {{ selectedRules.length }} 条)</span>
-              <div>
-                <el-button @click="toggleSelectAll" type="primary" link>{{ isAllSelected ? '取消全选' : '全选' }}</el-button>
-                <el-button @click="clearSelection" link>清空选择</el-button>
+        <!-- 按文件分组的规则列表 -->
+        <div style="margin-top: 20px" v-if="templates.length > 0">
+          <el-card v-for="tpl in paginatedTemplates" :key="tpl.id" style="margin-bottom: 16px">
+            <template #header>
+              <div class="template-header">
+                <div class="template-info">
+                  <span class="template-name">{{ tpl.display_name || tpl.name }}</span>
+                  <el-tag size="small" :type="tpl.status === 'completed' ? 'success' : tpl.status === 'failed' ? 'danger' : 'info'">
+                    {{ tpl.status === 'completed' ? '已完成' : tpl.status === 'failed' ? '失败' : '解析中' }}
+                  </el-tag>
+                  <span class="template-time">{{ formatTime(tpl.created_at) }}</span>
+                  <span class="template-rules">{{ tpl.rule_count }} 条规则</span>
+                </div>
+                <el-button type="danger" size="small" @click="confirmDeleteTemplate(tpl)" :disabled="tpl.status === 'parsing'">删除</el-button>
               </div>
-            </div>
-          </template>
-          <el-table 
-            ref="tableRef"
-            :data="rules" 
-            v-loading="loading" 
-            @selection-change="handleSelectionChange"
-          >
-            <el-table-column type="selection" width="55" />
-            <el-table-column prop="title" label="规则标题" min-width="180" show-overflow-tooltip />
-            <el-table-column label="检测内容" min-width="150">
-              <template #default="{ row }">
-                <el-tooltip :content="row.check_content" placement="top">
-                  <span class="text-truncate">{{ truncate(row.check_content, 30) }}</span>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column label="修复内容" min-width="150">
-              <template #default="{ row }">
-                <el-tooltip :content="row.fix_content" placement="top">
-                  <span class="text-truncate">{{ truncate(row.fix_content, 30) }}</span>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column label="脚本状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="getScriptStatusType(row.script_status)" size="small">
-                  {{ getScriptStatusText(row.script_status) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="默认脚本" width="120">
-              <template #default="{ row }">
-                <div class="script-buttons">
-                  <el-tooltip 
-                    v-if="row.check_script_status === 'failed'"
-                    :content="row.check_script_error || '生成失败'" 
-                    placement="top"
-                  >
-                    <el-button 
-                      link 
-                      type="danger" 
-                      size="small" 
-                      @click="openScriptEditor(row, 'CHECK')"
-                    >
-                      检测脚本(失败)
-                    </el-button>
-                  </el-tooltip>
+            </template>
+            
+            <el-collapse v-if="tpl.status === 'completed' && tpl.rule_count > 0">
+              <el-collapse-item>
+                <template #title>
+                  <span>查看规则列表 ({{ getRuleCount(tpl.id) }} 条)</span>
+                </template>
+                
+                <!-- 批量操作按钮 -->
+                <div class="batch-actions">
                   <el-button 
-                    v-else
-                    link 
-                    :type="getScriptButtonType(row.check_script_status)" 
+                    type="primary" 
                     size="small" 
-                    :disabled="row.check_script_status === 'generating'"
-                    :loading="row.check_script_status === 'generating'"
-                    @click="openScriptEditor(row, 'CHECK')"
+                    @click="batchGenerateScripts(tpl.id, 'CHECK')"
+                    :loading="batchGeneratingMap[`${tpl.id}-CHECK`]"
+                    :disabled="batchGeneratingMap[`${tpl.id}-CHECK`] || getRuleCount(tpl.id) === 0"
                   >
-                    {{ getScriptButtonText(row.check_script_status, '检测') }}
+                    一键生成检测脚本
                   </el-button>
-                  
-                  <el-tooltip 
-                    v-if="row.fix_script_status === 'failed'"
-                    :content="row.fix_script_error || '生成失败'" 
-                    placement="top"
-                  >
-                    <el-button 
-                      link 
-                      type="danger" 
-                      size="small" 
-                      @click="openScriptEditor(row, 'FIX')"
-                    >
-                      修复脚本(失败)
-                    </el-button>
-                  </el-tooltip>
                   <el-button 
-                    v-else
-                    link 
-                    :type="getScriptButtonType(row.fix_script_status)" 
+                    type="warning" 
                     size="small" 
-                    :disabled="row.fix_script_status === 'generating'"
-                    :loading="row.fix_script_status === 'generating'"
-                    @click="openScriptEditor(row, 'FIX')"
+                    @click="batchGenerateScripts(tpl.id, 'FIX')"
+                    :loading="batchGeneratingMap[`${tpl.id}-FIX`]"
+                    :disabled="batchGeneratingMap[`${tpl.id}-FIX`] || getRuleCount(tpl.id) === 0"
                   >
-                    {{ getScriptButtonText(row.fix_script_status, '修复') }}
+                    一键生成修复脚本
                   </el-button>
                 </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="80" fixed="right">
-              <template #default="{ row }">
-                <el-button link type="danger" size="small" @click="handleDeleteRule(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
+                
+                <el-table 
+                  :data="getPaginatedRules(tpl.id)" 
+                  size="small"
+                  v-loading="loadingTemplateId === tpl.id"
+                  @selection-change="(selection: BaselineRule[]) => handleTemplateSelectionChange(tpl.id, selection)"
+                >
+                  <el-table-column type="selection" width="45" />
+                  <el-table-column prop="title" label="规则标题" min-width="140" show-overflow-tooltip />
+                  <el-table-column label="检测内容" min-width="180">
+                    <template #default="{ row }">
+                      <el-tooltip :content="row.check_content" placement="top" :disabled="!row.check_content || row.check_content.length <= 30">
+                        <span class="truncated-text">{{ truncate(row.check_content, 30) }}</span>
+                      </el-tooltip>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="修复方法" min-width="180">
+                    <template #default="{ row }">
+                      <el-tooltip :content="row.fix_content" placement="top" :disabled="!row.fix_content || row.fix_content.length <= 30">
+                        <span class="truncated-text">{{ truncate(row.fix_content, 30) }}</span>
+                      </el-tooltip>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="脚本" width="100">
+                    <template #default="{ row }">
+                      <div class="script-buttons">
+                        <el-button 
+                          link 
+                          :type="getScriptButtonType(row.check_script_status)" 
+                          size="small"
+                          @click="openScriptEditor(row, 'CHECK')"
+                          :loading="row.check_script_status === 'generating'"
+                        >
+                          检测
+                        </el-button>
+                        <el-button 
+                          link 
+                          :type="getScriptButtonType(row.fix_script_status)" 
+                          size="small"
+                          @click="openScriptEditor(row, 'FIX')"
+                          :loading="row.fix_script_status === 'generating'"
+                        >
+                          修复
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                
+                <!-- 规则分页 -->
+                <div class="rule-pagination" v-if="getRuleCount(tpl.id) > rulePageSize">
+                  <el-pagination
+                    v-model:current-page="rulePageMap[tpl.id]"
+                    :page-size="rulePageSize"
+                    :total="getRuleCount(tpl.id)"
+                    layout="total, prev, pager, next"
+                    small
+                    @current-change="(page: number) => handleRulePageChange(tpl.id, page)"
+                  />
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+            
+            <div v-else-if="tpl.status === 'parsing'" style="color: #909399; padding: 10px 0">
+              <el-progress :percentage="50" :indeterminate="true" />
+              <span>正在解析中...</span>
+            </div>
+            
+            <div v-else-if="tpl.status === 'failed'" style="color: #f56c6c; padding: 10px 0">
+              解析失败
+            </div>
+          </el-card>
+          
+          <!-- 文件列表分页 -->
+          <div class="file-pagination" v-if="templates.length > filePageSize">
+            <el-pagination
+              v-model:current-page="fileCurrentPage"
+              :page-size="filePageSize"
+              :total="templates.length"
+              layout="total, prev, pager, next"
+              @current-change="handleFilePageChange"
+            />
+          </div>
+        </div>
       </el-col>
 
       <el-col :span="8">
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>解析状态</span>
-              <el-button link @click="refreshStatus" :loading="statusLoading">刷新</el-button>
+              <span>已上传文件 ({{ templates.length }})</span>
+              <el-button link @click="fetchTemplates" :loading="loading">刷新</el-button>
             </div>
           </template>
-          <el-progress
-            v-if="parseStatus"
-            :percentage="parseStatus.progress"
-            :status="parseStatus.status === 'completed' ? 'success' : parseStatus.status === 'failed' ? 'exception' : undefined"
-          />
-          <div style="margin-top: 10px; color: #666">{{ parseStatus?.message || '等待上传模板' }}</div>
+          <div v-if="templates.length === 0" style="color: #909399">
+            暂无已解析文件，请上传基线文档
+          </div>
+          <div v-else>
+            <div v-for="tpl in paginatedFileList" :key="tpl.id" class="template-summary">
+              <span>{{ tpl.display_name || tpl.name }}</span>
+              <el-tag size="small" :type="tpl.status === 'completed' ? 'success' : 'info'">
+                {{ tpl.rule_count }} 条
+              </el-tag>
+            </div>
+            
+            <!-- 右侧文件列表分页 -->
+            <div class="sidebar-pagination" v-if="templates.length > sidebarPageSize">
+              <el-pagination
+                v-model:current-page="sidebarCurrentPage"
+                :page-size="sidebarPageSize"
+                :total="templates.length"
+                layout="prev, pager, next"
+                small
+                @current-change="handleSidebarPageChange"
+              />
+            </div>
+          </div>
         </el-card>
 
-        <el-card style="margin-top: 20px" v-if="rules.length > 0">
+        <el-card style="margin-top: 20px" v-if="allSelectedRules.length > 0">
           <template #header>
             <span>选择执行主机</span>
           </template>
@@ -161,12 +206,12 @@
           </el-checkbox-group>
         </el-card>
 
-        <el-card style="margin-top: 20px" v-if="selectedRules.length > 0">
+        <el-card style="margin-top: 20px" v-if="allSelectedRules.length > 0">
           <template #header>
             <span>执行操作</span>
           </template>
           <div style="margin-bottom: 10px">
-            已选择 <strong>{{ selectedRules.length }}</strong> 条规则，
+            已选择 <strong>{{ allSelectedRules.length }}</strong> 条规则，
             <strong>{{ selectedHostIds.length }}</strong> 台主机
           </div>
           <el-button type="primary" @click="executeCheck" :disabled="selectedHostIds.length === 0" :loading="executing">
@@ -205,40 +250,37 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Loading } from '@element-plus/icons-vue'
+import SparkMD5 from 'spark-md5'
 import { 
   uploadTemplate, 
   getTemplates, 
-  getTemplateStatus, 
   getTemplateRules, 
   generateScript, 
   updateScript, 
-  hasRuleTasks, 
-  deleteRule 
+  deleteTemplate,
+  checkFileMD5,
+  batchGenerateScripts
 } from '@/api/templates'
 import { useHostStore } from '@/store/hosts'
 import { useTaskStore } from '@/store/tasks'
 import type { UploadRequestOptions } from 'element-plus'
-import type { Template, BaselineRule, ParseStatus } from '@/types'
+import type { Template, BaselineRule } from '@/types'
 
 const router = useRouter()
 const hostStore = useHostStore()
 const taskStore = useTaskStore()
 
 const loading = ref(false)
-const statusLoading = ref(false)
 const executing = ref(false)
 const templates = ref<Template[]>([])
-const currentTemplate = ref<Template | null>(null)
-const rules = ref<BaselineRule[]>([])
-const parseStatus = ref<ParseStatus | null>(null)
-const selectedRules = ref<BaselineRule[]>([])
+const templateRulesMap = reactive<Record<string, BaselineRule[]>>({})
+const templateSelectionMap = reactive<Record<string, BaselineRule[]>>({})
+const loadingTemplateId = ref<string | null>(null)
 const selectedHostIds = ref<string[]>([])
-
-const tableRef = ref()
 
 const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
@@ -248,15 +290,68 @@ const scriptSaving = ref(false)
 const currentEditRule = ref<BaselineRule | null>(null)
 const currentScriptType = ref<'CHECK' | 'FIX'>('CHECK')
 
+const rulePageSize = 10
+const rulePageMap = reactive<Record<string, number>>({})
+
+const filePageSize = 5
+const fileCurrentPage = ref(1)
+
+const sidebarPageSize = 5
+const sidebarCurrentPage = ref(1)
+
+const batchGeneratingMap = reactive<Record<string, boolean>>({})
+
 const hosts = computed(() => hostStore.hosts)
 
-const isAllSelected = computed(() => {
-  return rules.value.length > 0 && selectedRules.value.length === rules.value.length
+const allSelectedRules = computed(() => {
+  const all: BaselineRule[] = []
+  Object.values(templateSelectionMap).forEach(rules => {
+    all.push(...rules)
+  })
+  return all
 })
 
-let statusPollTimer: number | null = null
+const paginatedTemplates = computed(() => {
+  const start = (fileCurrentPage.value - 1) * filePageSize
+  const end = start + filePageSize
+  return templates.value.slice(start, end)
+})
+
+const paginatedFileList = computed(() => {
+  const start = (sidebarCurrentPage.value - 1) * sidebarPageSize
+  const end = start + sidebarPageSize
+  return templates.value.slice(start, end)
+})
+
+const getRuleCount = (templateId: string): number => {
+  return templateRulesMap[templateId]?.length || 0
+}
+
+const getPaginatedRules = (templateId: string): BaselineRule[] => {
+  const rules = templateRulesMap[templateId] || []
+  const page = rulePageMap[templateId] || 1
+  const start = (page - 1) * rulePageSize
+  const end = start + rulePageSize
+  return rules.slice(start, end)
+}
+
+const handleRulePageChange = (templateId: string, page: number) => {
+  rulePageMap[templateId] = page
+}
+
+const handleFilePageChange = (page: number) => {
+  fileCurrentPage.value = page
+}
+
+const handleSidebarPageChange = (page: number) => {
+  sidebarCurrentPage.value = page
+}
 
 const handleBeforeUpload = (file: File) => {
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.error('文件大小超过 5MB，无法解析')
+    return false
+  }
   const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'text/yaml', 'application/yaml']
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!['pdf', 'docx', 'doc', 'yaml', 'yml'].includes(ext || '') && !allowedTypes.includes(file.type)) {
@@ -266,18 +361,71 @@ const handleBeforeUpload = (file: File) => {
   return true
 }
 
-const handleUpload = async (options: UploadRequestOptions) => {
-  try {
-    const result = await uploadTemplate(options.file as File)
-    ElMessage.success('上传成功')
-    await fetchTemplates()
-    const newTemplate = templates.value.find(t => t.id === result.template_id)
-    if (newTemplate) {
-      currentTemplate.value = newTemplate
-      startStatusPoll(newTemplate.id)
+const calculateMD5 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const blobSlice = File.prototype.slice
+    const chunkSize = 2097152
+    const chunks = Math.ceil(file.size / chunkSize)
+    let currentChunk = 0
+    const spark = new SparkMD5.ArrayBuffer()
+    const fileReader = new FileReader()
+
+    fileReader.onload = (e) => {
+      spark.append(e.target?.result as ArrayBuffer)
+      currentChunk++
+      if (currentChunk < chunks) {
+        loadNext()
+      } else {
+        resolve(spark.end())
+      }
     }
+
+    fileReader.onerror = () => {
+      reject(new Error('文件读取失败'))
+    }
+
+    const loadNext = () => {
+      const start = currentChunk * chunkSize
+      const end = Math.min(start + chunkSize, file.size)
+      fileReader.readAsArrayBuffer(blobSlice.call(file, start, end))
+    }
+
+    loadNext()
+  })
+}
+
+const handleUpload = async (options: UploadRequestOptions) => {
+  const file = options.file as File
+  
+  try {
+    const md5 = await calculateMD5(file)
+    const checkResult = await checkFileMD5(md5)
+    
+    if (checkResult.exists) {
+      await ElMessageBox.confirm(
+        `该文件已解析过（${checkResult.filename}），是否继续上传？`,
+        '文件已存在',
+        {
+          confirmButtonText: '继续上传',
+          cancelButtonText: '取消',
+          type: 'info'
+        }
+      )
+    }
+    
+    const result = await uploadTemplate(file, md5)
+    
+    if (result.exists) {
+      ElMessage.info('文件已存在，跳过解析')
+      return
+    }
+    
+    ElMessage.success('上传成功，正在解析...')
+    await fetchTemplates()
   } catch (e: any) {
-    ElMessage.error(e.message || '上传失败')
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '上传失败')
+    }
   }
 }
 
@@ -285,115 +433,78 @@ const fetchTemplates = async () => {
   loading.value = true
   try {
     templates.value = await getTemplates()
-    if (templates.value.length > 0 && !currentTemplate.value) {
-      const latest = templates.value[0]
-      currentTemplate.value = latest
-      if (latest.status === 'parsing') {
-        startStatusPoll(latest.id)
-      } else if (latest.status === 'completed') {
-        await fetchRules(latest.id)
+    templates.value.forEach(async (tpl) => {
+      if (tpl.status === 'completed' && tpl.rule_count > 0) {
+        await loadTemplateRules(tpl.id)
       }
-    }
+    })
   } finally {
     loading.value = false
   }
 }
 
-const fetchRules = async (templateId: string) => {
-  loading.value = true
+const loadTemplateRules = async (templateId: string) => {
+  loadingTemplateId.value = templateId
   try {
-    rules.value = await getTemplateRules(templateId)
-    rules.value.forEach(rule => {
+    const rules = await getTemplateRules(templateId)
+    rules.forEach(rule => {
       if (!rule.check_script_status || rule.check_script_status === 'ready') {
         rule.check_script_status = rule.generated_check_script ? 'generated' : 'pending'
       }
       if (!rule.fix_script_status || rule.fix_script_status === 'ready') {
         rule.fix_script_status = rule.generated_fix_script ? 'generated' : 'pending'
       }
-      if (!rule.script_status || rule.script_status === 'ready') {
-        rule.script_status = (rule.check_script_status === 'generated' || rule.fix_script_status === 'generated') ? 'generated' : 'pending'
-      }
     })
-    parseStatus.value = { status: 'completed', progress: 100, message: `解析完成，共 ${rules.value.length} 条规则` }
+    templateRulesMap[templateId] = rules
+    rulePageMap[templateId] = 1
   } catch (e: any) {
-    ElMessage.error(e.message || '获取规则失败')
+    console.error('Failed to load rules:', e)
   } finally {
-    loading.value = false
+    loadingTemplateId.value = null
   }
 }
 
-const startStatusPoll = (templateId: string) => {
-  if (statusPollTimer) clearInterval(statusPollTimer)
-  
-  const poll = async () => {
-    try {
-      statusLoading.value = true
-      const status = await getTemplateStatus(templateId)
-      parseStatus.value = status
-      
-      if (status.status === 'completed') {
-        if (statusPollTimer) clearInterval(statusPollTimer)
-        await fetchRules(templateId)
-      } else if (status.status === 'failed') {
-        if (statusPollTimer) clearInterval(statusPollTimer)
-      }
-    } finally {
-      statusLoading.value = false
-    }
-  }
-  
-  poll()
-  statusPollTimer = window.setInterval(poll, 2000)
+const handleTemplateSelectionChange = (templateId: string, selection: BaselineRule[]) => {
+  templateSelectionMap[templateId] = selection
 }
 
-const refreshStatus = async () => {
-  if (!currentTemplate.value) return
+const confirmDeleteTemplate = async (tpl: Template) => {
   try {
-    statusLoading.value = true
-    const status = await getTemplateStatus(currentTemplate.value.id)
-    parseStatus.value = status
-    if (status.status === 'completed') {
-      await fetchRules(currentTemplate.value.id)
+    await ElMessageBox.confirm(
+      `确定要删除文件 "${tpl.display_name || tpl.name}" 及其 ${tpl.rule_count} 条规则吗？此操作不可撤销。`,
+      '确认删除',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    await deleteTemplate(tpl.id)
+    ElMessage.success('删除成功')
+    
+    delete templateRulesMap[tpl.id]
+    delete templateSelectionMap[tpl.id]
+    delete rulePageMap[tpl.id]
+    
+    await fetchTemplates()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
     }
-  } finally {
-    statusLoading.value = false
   }
 }
 
-const handleSelectionChange = (selection: BaselineRule[]) => {
-  selectedRules.value = selection
-}
-
-const toggleSelectAll = () => {
-  if (tableRef.value) {
-    tableRef.value.toggleAllSelection()
-  }
-}
-
-const clearSelection = () => {
-  if (tableRef.value) {
-    tableRef.value.clearSelection()
-  }
-}
-
-const getScriptStatusType = (status: string) => {
-  switch (status) {
-    case 'generated': return 'success'
-    case 'pending': return 'warning'
-    case 'generating': return 'info'
-    case 'failed': return 'danger'
-    default: return 'warning'
-  }
-}
-
-const getScriptStatusText = (status: string) => {
-  switch (status) {
-    case 'generated': return '已生成'
-    case 'pending': return '待生成'
-    case 'generating': return '生成中'
-    case 'failed': return '生成失败'
-    default: return '待生成'
-  }
+const formatTime = (dateStr: string): string => {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  const second = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
 }
 
 const getScriptButtonType = (status: string) => {
@@ -403,16 +514,6 @@ const getScriptButtonType = (status: string) => {
     case 'generating': return 'info'
     case 'failed': return 'danger'
     default: return 'primary'
-  }
-}
-
-const getScriptButtonText = (status: string, label: string) => {
-  switch (status) {
-    case 'generating': return '生成中...'
-    case 'generated': return `${label}脚本`
-    case 'pending': return `${label}脚本`
-    case 'failed': return '重新生成'
-    default: return `${label}脚本`
   }
 }
 
@@ -454,7 +555,6 @@ const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX')
         } else {
           rule.generated_fix_script = result.script_content
         }
-        updateOverallScriptStatus(rule)
       } else if (result.status === 'generating') {
         ElMessage.info('脚本生成任务已提交，请稍后刷新查看')
         scriptDialogVisible.value = false
@@ -475,23 +575,6 @@ const openScriptEditor = async (rule: BaselineRule, scriptType: 'CHECK' | 'FIX')
   }
 }
 
-const updateOverallScriptStatus = (rule: BaselineRule) => {
-  const checkStatus = rule.check_script_status
-  const fixStatus = rule.fix_script_status
-  
-  if (checkStatus === 'generated' && fixStatus === 'generated') {
-    rule.script_status = 'generated'
-  } else if (checkStatus === 'generating' || fixStatus === 'generating') {
-    rule.script_status = 'generating'
-  } else if (checkStatus === 'failed' && fixStatus === 'failed') {
-    rule.script_status = 'failed'
-  } else if (checkStatus === 'generated' || fixStatus === 'generated') {
-    rule.script_status = 'generated'
-  } else {
-    rule.script_status = 'pending'
-  }
-}
-
 const saveScript = async () => {
   if (!currentEditRule.value || !scriptContent.value) return
   
@@ -507,7 +590,6 @@ const saveScript = async () => {
       currentEditRule.value.generated_fix_script = scriptContent.value
       currentEditRule.value.fix_script_status = 'generated'
     }
-    updateOverallScriptStatus(currentEditRule.value)
     
     scriptDialogVisible.value = false
   } catch (e: any) {
@@ -517,38 +599,46 @@ const saveScript = async () => {
   }
 }
 
-const handleDeleteRule = async (rule: BaselineRule) => {
+const batchGenerateScripts = async (templateId: string, scriptType: 'CHECK' | 'FIX') => {
+  const key = `${templateId}-${scriptType}`
+  batchGeneratingMap[key] = true
+  
   try {
-    const hasTasksResult = await hasRuleTasks(rule.id)
-    if (hasTasksResult.has_tasks) {
-      ElMessage.error(`该规则有关联任务，无法删除`)
-      return
+    const result = await batchGenerateScripts(templateId, scriptType)
+    
+    if (result.queued > 0) {
+      ElMessage.success(`已提交 ${result.queued} 个脚本生成任务，已存在 ${result.generated} 个`)
+      
+      const rules = templateRulesMap[templateId] || []
+      rules.forEach(rule => {
+        const statusField = scriptType === 'CHECK' ? 'check_script_status' : 'fix_script_status'
+        const hasScript = scriptType === 'CHECK' 
+          ? rule.generated_check_script 
+          : rule.generated_fix_script
+        if (!hasScript && rule[statusField] !== 'generating') {
+          rule[statusField] = 'generating'
+        }
+      })
+    } else if (result.generated > 0) {
+      ElMessage.info(`所有 ${result.generated} 个脚本已生成`)
+    } else if (result.skipped > 0) {
+      ElMessage.info(`${result.skipped} 个脚本正在生成中`)
     }
-    
-    await ElMessageBox.confirm(`确定删除规则 "${rule.title}"？`, '确认删除', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    await deleteRule(rule.id)
-    ElMessage.success('规则已删除')
-    rules.value = rules.value.filter(r => r.id !== rule.id)
   } catch (e: any) {
-    if (e !== 'cancel') {
-      ElMessage.error(e.message || '删除失败')
-    }
+    ElMessage.error(e.message || '批量生成失败')
+  } finally {
+    batchGeneratingMap[key] = false
   }
 }
 
 const executeCheck = async () => {
-  if (selectedRules.value.length === 0 || selectedHostIds.value.length === 0) {
+  if (allSelectedRules.value.length === 0 || selectedHostIds.value.length === 0) {
     ElMessage.warning('请选择规则和主机')
     return
   }
   executing.value = true
   try {
-    taskStore.setSelectedRules(selectedRules.value)
+    taskStore.setSelectedRules(allSelectedRules.value)
     taskStore.setSelectedHosts(selectedHostIds.value)
     const result = await taskStore.executeCheck()
     if (result) {
@@ -572,13 +662,13 @@ const executeCheck = async () => {
 }
 
 const executeFix = async () => {
-  if (selectedRules.value.length === 0 || selectedHostIds.value.length === 0) {
+  if (allSelectedRules.value.length === 0 || selectedHostIds.value.length === 0) {
     ElMessage.warning('请选择规则和主机')
     return
   }
   executing.value = true
   try {
-    taskStore.setSelectedRules(selectedRules.value)
+    taskStore.setSelectedRules(allSelectedRules.value)
     taskStore.setSelectedHosts(selectedHostIds.value)
     const result = await taskStore.executeFix()
     if (result) {
@@ -613,17 +703,42 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
 }
+.template-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.template-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.template-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.template-time {
+  color: #909399;
+  font-size: 12px;
+}
+.template-rules {
+  color: #606266;
+  font-size: 12px;
+}
+.template-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #ebeef5;
+}
+.template-summary:last-child {
+  border-bottom: none;
+}
 .script-editor :deep(textarea) {
   font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.5;
-}
-.text-truncate {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .loading-container {
   display: flex;
@@ -634,11 +749,29 @@ onMounted(async () => {
 }
 .script-buttons {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
   gap: 4px;
 }
-.script-buttons .el-button {
-  padding: 2px 0;
+.batch-actions {
+  margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
+}
+.truncated-text {
+  color: #606266;
+}
+.rule-pagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.file-pagination {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+}
+.sidebar-pagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
 }
 </style>

@@ -207,11 +207,25 @@ func (r *RedisClient) GetParseStatus(templateID string) (status string, progress
 	}
 
 	status = result["status"]
-	// Parse progress as int
 	progress, _ = strconv.Atoi(result["progress"])
 	message = result["message"]
 
 	return status, progress, message, nil
+}
+
+// DeleteParseStatus deletes the parsing status for a template
+func (r *RedisClient) DeleteParseStatus(templateID string) error {
+	key := templateStatusKey(templateID)
+	err := r.client.Del(r.ctx, key).Err()
+	if err != nil {
+		logger.Warn("failed to delete template parse status",
+			zap.Error(err),
+			zap.String("template_id", templateID),
+		)
+		return err
+	}
+	logger.Debug("template parse status deleted", zap.String("template_id", templateID))
+	return nil
 }
 
 // ============================================================================

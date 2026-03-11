@@ -3,10 +3,13 @@ import type { Template, BaselineRule, ParseStatus } from '@/types'
 
 export { type Template, type BaselineRule, type ParseStatus }
 
-export function uploadTemplate(file: File) {
+export function uploadTemplate(file: File, md5?: string) {
   const formData = new FormData()
   formData.append('file', file)
-  return request<any, { template_id: string }>({
+  if (md5) {
+    formData.append('md5', md5)
+  }
+  return request<any, { template_id: string; filename?: string; exists?: boolean }>({
     url: '/templates/upload',
     method: 'post',
     data: formData,
@@ -40,6 +43,13 @@ export function deleteTemplate(id: string) {
   return request<any, void>({
     url: `/templates/${id}`,
     method: 'delete'
+  })
+}
+
+export function checkFileMD5(md5: string) {
+  return request<any, { exists: boolean; template_id?: string; filename?: string }>({
+    url: `/templates/check-md5?md5=${md5}`,
+    method: 'get'
   })
 }
 
@@ -91,5 +101,20 @@ export function deleteRule(ruleId: string) {
   return request<any, { code: number; message: string }>({
     url: `/rules/${ruleId}`,
     method: 'delete'
+  })
+}
+
+export interface BatchGenerateResponse {
+  total: number
+  queued: number
+  skipped: number
+  generated: number
+}
+
+export function batchGenerateScripts(templateId: string, scriptType: 'CHECK' | 'FIX') {
+  return request<any, BatchGenerateResponse>({
+    url: `/templates/${templateId}/generate-scripts`,
+    method: 'post',
+    data: { script_type: scriptType }
   })
 }

@@ -1,6 +1,6 @@
-# 后端详细设计文档 - V2.6 完整版
+# 后端详细设计文档 - V2.9 完整版
 
-**版本**: 2.6
+**版本**: 2.9
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：数据库 templates 表添加 display_name（显示名称）、file_md5（文件MD5）字段；新增 MD5 检查 API (/api/v1/templates/check-md5)；文件名重复时自动追加随机后缀；删除模板时级联删除文件和 Redis 状态。 |
+| 2.7 | 2026-03-11 | Metis | **Bug 修复：规则去重逻辑**。修复 TemplateService 中 BatchCreate 直接插入规则导致重复的问题。新增 FindByTemplateIDAndTitles 方法在 RuleRepository 中查询已存在规则，保存前过滤重复规则，确保同一模板不会产生重复规则。 |
 | 2.6 | 2026-03-09 | Sisyphus | **LLM 超时优化**。超时时间从 60 秒优化为 120 秒，解决 PDF 解析超时问题。所有服务（TemplateService, ScriptGenerationService, SelfHealingService）使用配置值。添加获取完整 API Key 接口。 |
 | 2.5 | 2026-03-09 | Sisyphus | **动态 LLM 配置**。所有服务 (TemplateService, ScriptGenerationService, SelfHealingService) 现在从数据库动态获取 LLM 配置，解决 API Key 刷新后丢失的问题。修复 Agent 下载 URL 使用容器内部地址的问题。 |
 | 2.4 | 2026-03-09 | Sisyphus | **修复实现问题**。实现真实的 LLM 配置保存和连接测试，修复模板上传后不触发解析的问题 (QueueTemplate)，修复 Agent 下载返回 JSON 改为重定向，添加 encryptionKey 参数到 ConfigHandler。 |

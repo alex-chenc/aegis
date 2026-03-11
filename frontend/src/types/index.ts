@@ -12,7 +12,9 @@ export interface Host {
 export interface Template {
   id: string
   name: string
+  display_name: string
   file_type: string
+  file_md5?: string
   status: 'parsing' | 'completed' | 'failed'
   error_message?: string
   rule_count: number
@@ -34,7 +36,6 @@ export interface BaselineRule {
   fix_script_status: 'pending' | 'generating' | 'generated' | 'failed'
   check_script_error?: string
   fix_script_error?: string
-  script_status: 'pending' | 'generating' | 'generated' | 'failed'
 }
 
 export interface ParseStatus {

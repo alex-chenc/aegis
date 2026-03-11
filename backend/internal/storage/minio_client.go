@@ -127,6 +127,26 @@ func (m *MinIOClient) DownloadFile(bucket, objectName string) (io.ReadCloser, er
 	return obj, nil
 }
 
+// DeleteFile deletes a file from the specified bucket
+func (m *MinIOClient) DeleteFile(bucket, objectName string) error {
+	err := m.client.RemoveObject(m.ctx, bucket, objectName, minio.RemoveObjectOptions{})
+	if err != nil {
+		logger.Error("failed to delete file",
+			zap.Error(err),
+			zap.String("bucket", bucket),
+			zap.String("object", objectName),
+		)
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	logger.Info("file deleted successfully",
+		zap.String("bucket", bucket),
+		zap.String("object", objectName),
+	)
+
+	return nil
+}
+
 // GetPresignedURL generates a presigned URL for downloading
 func (m *MinIOClient) GetPresignedURL(bucket, objectName string, expiry time.Duration) (string, error) {
 	url, err := m.client.PresignedGetObject(m.ctx, bucket, objectName, expiry, nil)
@@ -147,26 +167,6 @@ func (m *MinIOClient) GetPresignedURL(bucket, objectName string, expiry time.Dur
 	)
 
 	return url.String(), nil
-}
-
-// DeleteFile deletes a file from the specified bucket
-func (m *MinIOClient) DeleteFile(bucket, objectName string) error {
-	err := m.client.RemoveObject(m.ctx, bucket, objectName, minio.RemoveObjectOptions{})
-	if err != nil {
-		logger.Error("failed to delete file",
-			zap.Error(err),
-			zap.String("bucket", bucket),
-			zap.String("object", objectName),
-		)
-		return fmt.Errorf("failed to delete file: %w", err)
-	}
-
-	logger.Info("file deleted successfully",
-		zap.String("bucket", bucket),
-		zap.String("object", objectName),
-	)
-
-	return nil
 }
 
 // FileExists checks if a file exists in the specified bucket

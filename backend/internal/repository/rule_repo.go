@@ -206,6 +206,37 @@ func (r *RuleRepository) Delete(ruleID uuid.UUID) error {
 		return err
 	}
 
+	// 删除关联的 self_healing_logs（通过 task_logs 关联的）
+	// 先获取关联的 task_logs IDs
+	var taskLogIDs []uuid.UUID
+	if err := r.db.Model(&model.TaskLog{}).Where("rule_id = ?", ruleID).Pluck("id", &taskLogIDs).Error; err != nil {
+		logger.Error("failed to get task log ids",
+			zap.Error(err),
+			zap.String("rule_id", ruleID.String()),
+		)
+		return err
+	}
+
+	// 删除关联的 self_healing_logs
+	if len(taskLogIDs) > 0 {
+		if err := r.db.Where("original_task_id IN ?", taskLogIDs).Delete(&model.HealingLog{}).Error; err != nil {
+			logger.Error("failed to delete healing logs",
+				zap.Error(err),
+				zap.String("rule_id", ruleID.String()),
+			)
+			return err
+		}
+	}
+
+	// 删除关联的 task_logs
+	if err := r.db.Where("rule_id = ?", ruleID).Delete(&model.TaskLog{}).Error; err != nil {
+		logger.Error("failed to delete task logs",
+			zap.Error(err),
+			zap.String("rule_id", ruleID.String()),
+		)
+		return err
+	}
+
 	// 再删除规则
 	result := r.db.Delete(&model.BaselineRule{}, "id = ?", ruleID)
 	if result.Error != nil {
@@ -245,4 +276,35 @@ func (r *RuleRepository) UpdateScriptContent(ruleID uuid.UUID, scriptType, scrip
 		zap.String("script_type", scriptType),
 	)
 	return nil
+}
+
+// FindByTemplateIDAndTitles 根据模板ID和规则标题列表查询已存在的规则
+// 返回已存在规则的标题集合，用于去重
+func (r *RuleRepository) FindByTemplateIDAndTitles(templateID uuid.UUID, titles []string) (map[string]bool, error) {
+	if len(titles) == 0 {
+		return make(map[string]bool), nil
+	}
+
+	var rules []model.BaselineRule
+	result := r.db.Where("template_id = ? AND title IN ?", templateID, titles).
+		Select("title").
+		Find(&rules)
+
+	if result.Error != nil {
+		logger.Error("failed to find existing rules",
+			zap.Error(result.Error),
+			zap.String("template_id", templateID.String()))
+		return nil, result.Error
+	}
+
+	existingTitles := make(map[string]bool, len(rules))
+	for _, rule := range rules {
+		existingTitles[rule.Title] = true
+	}
+
+	logger.Debug("found existing rules",
+		zap.Int("count", len(existingTitles)),
+		zap.String("template_id", templateID.String()))
+
+	return existingTitles, nil
 }

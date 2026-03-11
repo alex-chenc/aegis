@@ -58,7 +58,6 @@ func ParseRules(llmResponse string) ([]*model.BaselineRule, error) {
 
 // ParseScript parses LLM response and extracts generated script
 func ParseScript(llmResponse string) (string, error) {
-	// The script should be the entire response
 	script := strings.TrimSpace(llmResponse)
 
 	if script == "" {
@@ -66,11 +65,11 @@ func ParseScript(llmResponse string) (string, error) {
 		return "", fmt.Errorf("empty script")
 	}
 
-	// Validate script starts with shebang
 	if !strings.HasPrefix(script, "#!") {
-		logger.Warn("script does not start with shebang",
+		logger.Info("adding shebang to script without one",
 			zap.String("first_chars", truncate(script, 20)),
 		)
+		script = "#!/bin/bash\n" + script
 	}
 
 	logger.Debug("successfully parsed script",

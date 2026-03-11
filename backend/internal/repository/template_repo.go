@@ -92,3 +92,74 @@ func (r *TemplateRepository) Delete(id uuid.UUID) error {
 	logger.Info("template deleted", zap.String("id", id.String()))
 	return nil
 }
+
+func (r *TemplateRepository) FindByName(name string) (*model.Template, error) {
+	var template model.Template
+	result := r.db.Where("name = ?", name).Order("created_at DESC").First(&template)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			logger.Info("no existing template found with name", zap.String("name", name))
+			return nil, nil
+		}
+		logger.Error("failed to find template by name", zap.Error(result.Error), zap.String("name", name))
+		return nil, result.Error
+	}
+	logger.Info("found existing template by name", zap.String("id", template.ID.String()), zap.String("name", name))
+	return &template, nil
+}
+
+func (r *TemplateRepository) ResetStatus(id uuid.UUID) error {
+	result := r.db.Model(&model.Template{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":        "parsing",
+			"error_message": nil,
+			"rule_count":    0,
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to reset template status",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("template status reset", zap.String("id", id.String()))
+	return nil
+}
+
+func (r *TemplateRepository) ExistsByMD5(md5 string) (bool, *model.Template, error) {
+	var template model.Template
+	result := r.db.Where("file_md5 = ?", md5).First(&template)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return false, nil, nil
+		}
+		logger.Error("failed to check md5", zap.Error(result.Error), zap.String("md5", md5))
+		return false, nil, result.Error
+	}
+	return true, &template, nil
+}
+
+func (r *TemplateRepository) CountByName(name string) (int64, error) {
+	var count int64
+	result := r.db.Model(&model.Template{}).Where("name = ?", name).Count(&count)
+	if result.Error != nil {
+		logger.Error("failed to count templates by name", zap.Error(result.Error), zap.String("name", name))
+		return 0, result.Error
+	}
+	return count, nil
+}
+
+func (r *TemplateRepository) DeleteWithRules(id uuid.UUID) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("template_id = ?", id).Delete(&model.BaselineRule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&model.Template{}, "id = ?", id).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}

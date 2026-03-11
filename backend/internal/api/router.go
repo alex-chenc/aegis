@@ -78,8 +78,10 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 		{
 			templates.POST("/upload", r.templateHandler.UploadTemplate)
 			templates.GET("", r.templateHandler.ListTemplates)
+			templates.GET("/check-md5", r.templateHandler.CheckMD5)
 			templates.GET("/:id/status", r.templateHandler.GetTemplateStatus)
 			templates.GET("/:id/rules", r.templateHandler.GetTemplateRules)
+			templates.POST("/:id/generate-scripts", r.templateHandler.BatchGenerateScripts)
 			templates.DELETE("/:id", r.templateHandler.DeleteTemplate)
 		}
 
