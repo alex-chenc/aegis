@@ -142,6 +142,8 @@ type TaskGroupSummary struct {
 	TaskGroupID  uuid.UUID  `gorm:"column:task_group_id" json:"task_group_id"`
 	TaskCount    int        `gorm:"column:task_count" json:"task_count"`
 	TaskType     string     `gorm:"column:task_type" json:"task_type"`
+	HasCheck     int        `gorm:"column:has_check" json:"has_check"`
+	HasFix       int        `gorm:"column:has_fix" json:"has_fix"`
 	Status       string     `gorm:"column:status" json:"status"`
 	SuccessCount int        `gorm:"column:success_count" json:"success_count"`
 	FailedCount  int        `gorm:"column:failed_count" json:"failed_count"`
@@ -172,6 +174,8 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			task_group_id,
 			COUNT(*) as task_count,
 			MAX(task_type) as task_type,
+			COALESCE(SUM(CASE WHEN task_type = 'check' THEN 1 ELSE 0 END), 0) as has_check,
+			COALESCE(SUM(CASE WHEN task_type = 'fix' THEN 1 ELSE 0 END), 0) as has_fix,
 			CASE 
 				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
 				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'

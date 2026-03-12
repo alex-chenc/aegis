@@ -312,7 +312,8 @@ function canShowScriptRepair(row: any): boolean {
 }
 
 function canReExecute(row: any): boolean {
-  return row.displayState === '检测失败' || 
+  return row.displayState === '未通过' ||
+         row.displayState === '检测失败' || 
          row.displayState === '修复失败' || 
          row.displayState === '脚本修复成功' || 
          row.displayState === '检测超时' || 

@@ -60,11 +60,12 @@
             </el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="task_type" label="类型" width="80">
+        <el-table-column prop="task_type" label="类型" min-width="100">
           <template #default="{ row }">
-            <el-tag :type="row.task_type === 'check' ? 'primary' : 'warning'" size="small">
-              {{ row.task_type === 'check' ? '检测' : '修复' }}
-            </el-tag>
+            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+              <el-tag v-if="row.has_check" type="primary" size="small">检测</el-tag>
+              <el-tag v-if="row.has_fix" type="warning" size="small">修复</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="task_count" label="任务数" width="80" />

@@ -461,6 +461,8 @@ type TaskGroupResponse struct {
 	TaskGroupID  string  `json:"task_group_id"`
 	TaskCount    int     `json:"task_count"`
 	TaskType     string  `json:"task_type"`
+	HasCheck     int     `json:"has_check"`
+	HasFix       int     `json:"has_fix"`
 	Status       string  `json:"status"`
 	SuccessCount int     `json:"success_count"`
 	FailedCount  int     `json:"failed_count"`
@@ -527,6 +529,8 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 			TaskGroupID:  s.TaskGroupID.String(),
 			TaskCount:    s.TaskCount,
 			TaskType:     s.TaskType,
+			HasCheck:     s.HasCheck,
+			HasFix:       s.HasFix,
 			Status:       s.Status,
 			SuccessCount: s.SuccessCount,
 			FailedCount:  s.FailedCount,
