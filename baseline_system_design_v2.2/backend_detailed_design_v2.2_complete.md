@@ -1,6 +1,6 @@
-# 后端详细设计文档 - V2.11 完整版
+# 后端详细设计文档 - V2.12 完整版
 
-**版本**: 2.11
+**版本**: 2.12
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.12 | 2026-03-12 | Sisyphus | **任务超时与删除API**。新增：任务超时检测机制（TaskService.StartTimeoutChecker，每30秒检查，超时5分钟标记为timeout）；新增DELETE /tasks/:id删除单个任务（DeleteSingleTask）；原DELETE /tasks/:id改为DELETE /tasks/group/:id删除任务组；ListTaskGroups查询支持timeout状态统计。 |
 | 2.11 | 2026-03-11 | Sisyphus | **脚本状态校验**。RunCheck/RunFix接口新增脚本状态校验逻辑，检查选中规则的check_script_status/fix_script_status是否为"generated"，未生成完成返回400错误和未生成数量。 |
 | 2.10 | 2026-03-11 | Sisyphus | **Bug修复与API增强**。修复：模板删除500错误（DeleteWithRules方法需按正确顺序删除关联表：self_healing_logs→task_logs→script_versions→baseline_rules）；规则删除500错误（Delete方法需删除关联的self_healing_logs、task_logs、script_versions）。新增：批量脚本生成API (POST /api/v1/templates/:id/generate-scripts)，支持并发数控制（默认2）。 |
 | 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：数据库 templates 表添加 display_name（显示名称）、file_md5（文件MD5）字段；新增 MD5 检查 API (/api/v1/templates/check-md5)；文件名重复时自动追加随机后缀；删除模板时级联删除文件和 Redis 状态。 |

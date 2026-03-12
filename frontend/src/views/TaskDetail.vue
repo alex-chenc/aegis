@@ -21,10 +21,10 @@
           <el-statistic title="执行中" :value="status.running" />
         </el-col>
         <el-col :span="4">
-          <el-statistic title="成功" :value="status.success" />
+          <el-statistic title="已完成" :value="status.success + status.failed" />
         </el-col>
         <el-col :span="4">
-          <el-statistic title="失败" :value="status.failed" />
+          <el-statistic title="超时" :value="status.timeout || 0" />
         </el-col>
         <el-col :span="4">
           <el-progress
@@ -45,7 +45,7 @@
       <el-table :data="tasksWithState" style="width: 100%">
         <el-table-column prop="rule_title" label="规则标题" min-width="180">
           <template #default="{ row }">
-            {{ getRuleTitle(row.rule_id) }}
+            {{ getRuleTitle(row) }}
           </template>
         </el-table-column>
         <el-table-column prop="hostname" label="主机" min-width="150">
@@ -63,8 +63,8 @@
         <el-table-column label="状态" width="140">
           <template #default="{ row }">
             <el-tooltip 
-              v-if="row.displayState === '脚本修复失败'" 
-              :content="row.healingStatus?.last_error || '未知错误'" 
+              v-if="row.displayState === '脚本修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'" 
+              :content="row.healingStatus?.last_error || row.stderr || '未知错误'" 
               placement="top"
             >
               <el-tag :type="getStateTagType(row.displayState)" size="small">
@@ -103,10 +103,20 @@
             <span v-else style="color: #999">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280">
+        <el-table-column label="操作" width="320">
           <template #default="{ row }">
             <el-button 
-              v-if="canReExecute(row.displayState)"
+              v-if="canShowScriptRepair(row)"
+              link 
+              type="warning" 
+              size="small" 
+              @click="triggerScriptRepair(row)"
+              :loading="repairingTask === row.id"
+            >
+              脚本修复
+            </el-button>
+            <el-button 
+              v-if="canReExecute(row)"
               link 
               type="primary" 
               size="small" 
@@ -116,9 +126,9 @@
               重新下发
             </el-button>
             <el-button 
-              v-if="row.displayState === '检测失败' || row.displayState === '修复失败' || row.displayState === '脚本修复失败'"
+              v-if="canShowSuggestion(row)"
               link 
-              type="warning" 
+              type="info" 
               size="small" 
               @click="openSuggestionDialog(row)"
             >
@@ -129,6 +139,7 @@
               type="danger" 
               size="small" 
               @click="deleteTask(row)"
+              :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === '脚本修复中'"
             >
               删除
             </el-button>
@@ -173,8 +184,7 @@ import {
   getTaskStatus, 
   triggerSelfHealing, 
   getHealingStatus,
-  runCheck,
-  runFix,
+  redispatchTask,
   deleteTask as deleteTaskApi,
   type TaskLog, 
   type TaskGroupStatus,
@@ -182,7 +192,7 @@ import {
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '检测成功' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败'
+type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '检测超时' | '修复超时'
 
 const route = useRoute()
 const router = useRouter()
@@ -198,6 +208,7 @@ const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
 const currentScript = ref('')
 const reexecutingTask = ref<string | null>(null)
+const repairingTask = ref<string | null>(null)
 const suggestionDialogVisible = ref(false)
 const suggestionText = ref('')
 const selectedTask = ref<TaskLog | null>(null)
@@ -207,7 +218,7 @@ let pollTimer: number | null = null
 const tasksWithState = computed(() => {
   return tasks.value.map(task => {
     const healingStatus = healingStatusMap.value[task.id]
-    const displayState = getDisplayState(task.task_type, task.status, healingStatus)
+    const displayState = getDisplayState(task.task_type, task.status, task.exit_code, healingStatus)
     return {
       ...task,
       displayState,
@@ -216,14 +227,23 @@ const tasksWithState = computed(() => {
   })
 })
 
-function getDisplayState(taskType: string, taskStatus: string, healingStatus?: HealingStatus): DisplayState {
+function getDisplayState(taskType: string, taskStatus: string, exitCode: number | undefined, healingStatus?: HealingStatus): DisplayState {
   const isFix = taskType === 'fix'
   
   if (taskStatus === 'running' || taskStatus === 'pending') {
     return isFix ? '修复中' : '检测中'
   }
+  if (taskStatus === 'timeout') {
+    return isFix ? '修复超时' : '检测超时'
+  }
   if (taskStatus === 'success') {
-    return isFix ? '修复成功' : '检测成功'
+    if (isFix) {
+      return '修复成功'
+    }
+    if (exitCode === 0) {
+      return '通过'
+    }
+    return '未通过'
   }
   if (taskStatus === 'failed') {
     if (!healingStatus) {
@@ -242,25 +262,48 @@ function getStateTagType(state: DisplayState): string {
     case '修复中':
     case '脚本修复中':
       return 'warning'
-    case '检测成功':
+    case '通过':
     case '修复成功':
     case '脚本修复成功':
       return 'success'
+    case '未通过':
+      return 'info'
     case '检测失败':
     case '修复失败':
     case '脚本修复失败':
+    case '检测超时':
+    case '修复超时':
       return 'danger'
     default: return 'info'
   }
 }
 
-function canReExecute(state: DisplayState): boolean {
-  return state === '检测失败' || state === '修复失败' || state === '脚本修复成功'
+function canShowScriptRepair(row: any): boolean {
+  if (row.task_type === 'check') {
+    return row.displayState === '检测失败' || row.displayState === '脚本修复失败'
+  } else {
+    return row.displayState === '修复失败' || row.displayState === '脚本修复失败'
+  }
+}
+
+function canReExecute(row: any): boolean {
+  return row.displayState === '检测失败' || 
+         row.displayState === '修复失败' || 
+         row.displayState === '脚本修复成功' || 
+         row.displayState === '检测超时' || 
+         row.displayState === '修复超时'
+}
+
+function canShowSuggestion(row: any): boolean {
+  return row.displayState === '检测失败' || 
+         row.displayState === '修复失败' || 
+         row.displayState === '脚本修复失败'
 }
 
 const progressPercent = computed(() => {
   if (!status.value || status.value.total === 0) return 0
-  return Math.round(((status.value.success + status.value.failed) / status.value.total) * 100)
+  const completed = (status.value.success || 0) + (status.value.failed || 0) + (status.value.timeout || 0)
+  return Math.round((completed / status.value.total) * 100)
 })
 
 const progressStatus = computed(() => {
@@ -270,7 +313,7 @@ const progressStatus = computed(() => {
   return ''
 })
 
-const getRuleTitle = (ruleId: string) => ruleId.substring(0, 8) + '...'
+const getRuleTitle = (task: TaskLog) => task.rule_title || task.rule_id.substring(0, 8) + '...'
 
 const getHostname = (hostId: string) => {
   const host = hostStore.hosts.find(h => h.id === hostId)
@@ -290,6 +333,19 @@ const showScript = (task: TaskLog, type: 'script' | 'result') => {
     currentScript.value = content || '// 无执行结果'
   }
   scriptDialogVisible.value = true
+}
+
+const triggerScriptRepair = async (task: TaskLog) => {
+  repairingTask.value = task.id
+  try {
+    await triggerSelfHealing(task.id, '')
+    ElMessage.success('脚本修复已触发，正在调用大模型进行修复...')
+    await fetchHealingStatuses()
+  } catch (e: any) {
+    ElMessage.error(e.message || '脚本修复失败')
+  } finally {
+    repairingTask.value = null
+  }
 }
 
 const openSuggestionDialog = (task: TaskLog) => {
@@ -316,15 +372,10 @@ const submitSuggestion = async () => {
 const reExecute = async (task: TaskLog) => {
   reexecutingTask.value = task.id
   try {
-    const action = task.task_type === 'check' ? runCheck : runFix
-    const result = await action({ rule_ids: [task.rule_id], host_ids: [task.host_id] })
+    await redispatchTask(task.id)
     ElMessage.success('重新下发成功')
     delete healingStatusMap.value[task.id]
-    if (result && result.task_group_id) {
-      router.push('/tasks/' + result.task_group_id)
-    } else {
-      await refresh()
-    }
+    await refresh()
   } catch (e: any) {
     ElMessage.error(e.message || '重新下发失败')
   } finally {

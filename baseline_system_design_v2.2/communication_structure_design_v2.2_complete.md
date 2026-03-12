@@ -1,6 +1,6 @@
-# 通讯层设计文档 - V2.5 完整版
+# 通讯层设计文档 - V2.6 完整版
 
-**版本**: 2.5
+**版本**: 2.6
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.6 | 2026-03-12 | Sisyphus | **任务删除API分离**。DELETE /tasks/:id改为删除单个任务；新增DELETE /tasks/group/:id删除任务组；任务状态支持timeout。 |
 | 2.5 | 2026-03-11 | Sisyphus | **脚本状态校验**。POST /api/v1/tasks/run-check和run-fix接口新增脚本状态校验，未生成完成返回400错误。 |
 | 2.4 | 2026-03-11 | Sisyphus | **批量脚本生成API**。新增 POST /api/v1/templates/:id/generate-scripts 接口，支持批量生成检测/修复脚本，返回队列状态。 |
 | 2.3 | 2026-03-10 | Sisyphus | **规则与任务管理API增强**。新增规则脚本生成、脚本更新、规则删除、规则任务检查、任务批量删除等API接口。 |
@@ -643,6 +644,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 | GET | `/api/v1/tasks` | 获取任务列表 | V2.2 |
 | GET | `/api/v1/tasks/{group_id}/status` | 获取任务组状态 | V2.2 |
 | GET | `/api/v1/tasks/{task_id}/logs` | 获取任务日志 | V1.6 更新 |
-| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | V2.3 |
+| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | V2.6 更新 |
+| DELETE | `/api/v1/tasks/group/{id}` | 删除任务组 | V2.6 新增 |
 | DELETE | `/api/v1/tasks/batch` | 批量删除任务 | V2.3 |
 | GET | `/api/v1/healing/{healing_id}` | 获取自愈详情 | V2.2 |

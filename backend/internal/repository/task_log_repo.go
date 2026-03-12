@@ -142,7 +142,7 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			MAX(task_type) as task_type,
 			CASE 
 				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
@@ -160,7 +160,7 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 		query = query.Having(`
 			CASE 
 				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
@@ -204,7 +204,7 @@ func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64,
 		Select(`task_group_id,
 			CASE 
 				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
@@ -266,6 +266,37 @@ func (r *TaskLogRepository) DeleteByGroupID(groupID uuid.UUID) (int64, error) {
 		return 0, result.Error
 	}
 	logger.Info("task group deleted", zap.String("group_id", groupID.String()), zap.Int64("count", result.RowsAffected))
+	return result.RowsAffected, nil
+}
+
+func (r *TaskLogRepository) FindTimedOutTasks(timeout time.Duration) ([]model.TaskLog, error) {
+	var tasks []model.TaskLog
+	cutoff := time.Now().Add(-timeout)
+	result := r.db.Where("status IN ? AND started_at < ?", []string{"running", "pending"}, cutoff).
+		Find(&tasks)
+	if result.Error != nil {
+		logger.Error("failed to find timed out tasks", zap.Error(result.Error))
+		return nil, result.Error
+	}
+	return tasks, nil
+}
+
+func (r *TaskLogRepository) MarkAsTimedOut(taskIDs []uuid.UUID) (int64, error) {
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+	result := r.db.Model(&model.TaskLog{}).
+		Where("id IN ?", taskIDs).
+		Updates(map[string]interface{}{
+			"status":      "timeout",
+			"finished_at": now,
+		})
+	if result.Error != nil {
+		logger.Error("failed to mark tasks as timed out", zap.Error(result.Error))
+		return 0, result.Error
+	}
+	logger.Info("tasks marked as timed out", zap.Int64("count", result.RowsAffected))
 	return result.RowsAffected, nil
 }
 

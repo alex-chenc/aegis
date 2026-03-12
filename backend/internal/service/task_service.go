@@ -9,7 +9,7 @@ import (
 	"baseline-system/internal/model"
 	"baseline-system/internal/repository"
 	"baseline-system/internal/storage"
-	"baseline-system/pkg/api/v1"
+	pb "baseline-system/pkg/api/v1"
 	"baseline-system/pkg/logger"
 
 	"github.com/google/uuid"
@@ -55,6 +55,10 @@ func (s *TaskService) SetGRPCServer(server *grpc_server.GRPCServer) {
 
 func (s *TaskService) SetScriptGenService(service *ScriptGenerationService) {
 	s.scriptGenService = service
+}
+
+func (s *TaskService) GetHostByID(hostID uuid.UUID) (*model.Host, error) {
+	return s.hostRepo.FindByID(hostID)
 }
 
 func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string) (*TaskCreateResult, error) {
@@ -137,6 +141,56 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 		TaskGroupID: taskGroupID,
 		TaskIDs:     taskIDs,
 	}, nil
+}
+
+func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UUID) (*model.TaskLog, error) {
+	originalTask, err := s.taskLogRepo.FindByID(originalTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find original task: %w", err)
+	}
+
+	rule, err := s.ruleRepo.FindByID(originalTask.RuleID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find rule: %w", err)
+	}
+
+	var scriptContent string
+	if originalTask.TaskType == "check" {
+		if rule.GeneratedCheckScript != nil {
+			scriptContent = *rule.GeneratedCheckScript
+		}
+	} else {
+		if rule.GeneratedFixScript != nil {
+			scriptContent = *rule.GeneratedFixScript
+		}
+	}
+
+	if scriptContent == "" && originalTask.ScriptContent != nil {
+		scriptContent = *originalTask.ScriptContent
+	}
+
+	if scriptContent == "" {
+		return nil, fmt.Errorf("script content is empty")
+	}
+
+	now := time.Now()
+	newTask := &model.TaskLog{
+		TaskGroupID:   originalTask.TaskGroupID,
+		RuleID:        originalTask.RuleID,
+		HostID:        originalTask.HostID,
+		TaskType:      originalTask.TaskType,
+		Status:        "pending",
+		ScriptContent: &scriptContent,
+		CreatedAt:     now,
+	}
+
+	if err := s.taskLogRepo.Create(newTask); err != nil {
+		return nil, fmt.Errorf("failed to create redispatch task: %w", err)
+	}
+
+	go s.dispatchToAgent(ctx, newTask.ID, newTask.HostID, newTask.RuleID, scriptContent, newTask.TaskType)
+
+	return newTask, nil
 }
 
 func (s *TaskService) dispatchToAgent(ctx context.Context, taskID, hostID, ruleID uuid.UUID, scriptContent, taskType string) {
@@ -237,4 +291,43 @@ func (s *TaskService) TriggerSelfHealing(taskID uuid.UUID) error {
 	go s.scriptGenService.GenerateFixScript(context.Background(), taskLog.RuleID)
 
 	return nil
+}
+
+const TaskTimeout = 5 * time.Minute
+
+func (s *TaskService) StartTimeoutChecker() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			s.checkAndMarkTimedOutTasks()
+		}
+	}()
+	logger.Info("task timeout checker started", zap.Duration("timeout", TaskTimeout))
+}
+
+func (s *TaskService) checkAndMarkTimedOutTasks() {
+	tasks, err := s.taskLogRepo.FindTimedOutTasks(TaskTimeout)
+	if err != nil {
+		logger.Error("failed to check timed out tasks", zap.Error(err))
+		return
+	}
+
+	if len(tasks) == 0 {
+		return
+	}
+
+	var taskIDs []uuid.UUID
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
+	}
+
+	count, err := s.taskLogRepo.MarkAsTimedOut(taskIDs)
+	if err != nil {
+		logger.Error("failed to mark tasks as timed out", zap.Error(err))
+		return
+	}
+
+	logger.Info("marked tasks as timed out", zap.Int64("count", count))
 }

@@ -143,18 +143,7 @@ func main() {
 	}()
 
 	// Start task timeout checker
-	go func() {
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				taskService.CheckTimeoutTasks()
-			}
-		}
-	}()
+	taskService.StartTimeoutChecker()
 
 	logger.Info("server started successfully",
 		zap.String("http_addr", fmt.Sprintf("http://localhost:%d", cfg.Server.HTTPPort)),

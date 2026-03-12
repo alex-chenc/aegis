@@ -4,6 +4,7 @@ import (
 	"baseline-system/internal/api/handler"
 	"baseline-system/internal/api/middleware"
 	"baseline-system/internal/grpc_server"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -104,7 +105,9 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			tasks.GET("/:id/status", r.taskHandler.GetTaskStatus)
 			tasks.GET("/:id/logs", r.taskHandler.GetTaskLogs)
 			tasks.GET("/:id", r.taskHandler.GetTaskDetail)
-			tasks.DELETE("/:id", r.taskHandler.DeleteTask)
+			tasks.POST("/:id/redispatch", r.taskHandler.RedispatchTask)
+			tasks.DELETE("/:id", r.taskHandler.DeleteSingleTask)
+			tasks.DELETE("/group/:id", r.taskHandler.DeleteTask)
 			tasks.DELETE("/batch", r.taskHandler.BatchDeleteTasks)
 			tasks.POST("/:id/heal", r.taskHandlerWithHealing.TriggerSelfHealing)
 			tasks.GET("/:id/healing-status", r.taskHandlerWithHealing.GetHealingStatus)

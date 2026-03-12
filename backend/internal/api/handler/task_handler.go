@@ -62,6 +62,7 @@ type TaskGroupStatus struct {
 	Running     int    `json:"running"`
 	Success     int    `json:"success"`
 	Failed      int    `json:"failed"`
+	Timeout     int    `json:"timeout"`
 }
 
 type TaskLogResponse struct {
@@ -79,6 +80,11 @@ type TaskLogResponse struct {
 	ExitCode      *int    `json:"exit_code"`
 	StartedAt     *string `json:"started_at"`
 	FinishedAt    *string `json:"finished_at"`
+}
+
+type RedispatchTaskResponse struct {
+	TaskID      string `json:"task_id"`
+	TaskGroupID string `json:"task_group_id"`
 }
 
 func (h *TaskHandler) RunCheck(c *gin.Context) {
@@ -245,6 +251,8 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 			status.Success++
 		case "failed":
 			status.Failed++
+		case "timeout":
+			status.Timeout++
 		}
 	}
 
@@ -252,7 +260,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 		status.Status = "running"
 	} else if status.Pending > 0 {
 		status.Status = "pending"
-	} else if status.Failed > 0 {
+	} else if status.Failed > 0 || status.Timeout > 0 {
 		status.Status = "partial_success"
 		if status.Success == 0 {
 			status.Status = "failed"
@@ -289,12 +297,39 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	}
 
 	responses := make([]TaskLogResponse, len(logs))
+	ruleTitleCache := make(map[string]string)
+	hostnameCache := make(map[string]string)
 	for i, log := range logs {
+		ruleID := log.RuleID.String()
+		hostID := log.HostID.String()
+
+		ruleTitle, ok := ruleTitleCache[ruleID]
+		if !ok {
+			ruleTitle = ruleID
+			rule, findErr := h.ruleRepo.FindByID(log.RuleID)
+			if findErr == nil {
+				ruleTitle = rule.Title
+			}
+			ruleTitleCache[ruleID] = ruleTitle
+		}
+
+		hostname, ok := hostnameCache[hostID]
+		if !ok {
+			hostname = hostID
+			host, findErr := h.taskService.GetHostByID(log.HostID)
+			if findErr == nil {
+				hostname = host.Hostname
+			}
+			hostnameCache[hostID] = hostname
+		}
+
 		responses[i] = TaskLogResponse{
 			ID:            log.ID.String(),
 			TaskGroupID:   log.TaskGroupID.String(),
 			RuleID:        log.RuleID.String(),
 			HostID:        log.HostID.String(),
+			RuleTitle:     ruleTitle,
+			Hostname:      hostname,
 			TaskType:      log.TaskType,
 			Status:        log.Status,
 			ScriptContent: log.ScriptContent,
@@ -366,6 +401,36 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 		"data":    response,
+	})
+}
+
+func (h *TaskHandler) RedispatchTask(c *gin.Context) {
+	taskIDStr := c.Param("id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_id",
+		})
+		return
+	}
+
+	newTask, err := h.taskService.RedispatchTask(c.Request.Context(), taskID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to redispatch task: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "task redispatched successfully",
+		"data": RedispatchTaskResponse{
+			TaskID:      newTask.ID.String(),
+			TaskGroupID: newTask.TaskGroupID.String(),
+		},
 	})
 }
 
@@ -705,6 +770,58 @@ func (h *TaskHandler) DeleteTask(c *gin.Context) {
 		"data": gin.H{
 			"deleted_count": deletedCount,
 		},
+	})
+}
+
+func (h *TaskHandler) DeleteSingleTask(c *gin.Context) {
+	taskIDStr := c.Param("id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_id",
+		})
+		return
+	}
+
+	taskLog, err := h.taskLogRepo.FindByID(taskID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "task not found",
+		})
+		return
+	}
+
+	if taskLog.Status == "running" || taskLog.Status == "pending" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "cannot delete running or pending task",
+		})
+		return
+	}
+
+	if h.healingLogRepo != nil {
+		if err := h.healingLogRepo.DeleteByOriginalTaskIDs([]uuid.UUID{taskID}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "failed to delete healing logs",
+			})
+			return
+		}
+	}
+
+	if err := h.taskLogRepo.Delete(taskID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to delete task",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "task deleted successfully",
 	})
 }
 

@@ -18,7 +18,7 @@ export interface TaskLog {
   rule_title?: string
   hostname?: string
   task_type: 'check' | 'fix'
-  status: 'pending' | 'running' | 'success' | 'failed' | 'healing'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'healing' | 'timeout'
   script_content?: string
   stdout?: string
   stderr?: string
@@ -51,6 +51,11 @@ export interface RunTaskResponse {
   task_count: number
 }
 
+export interface RedispatchTaskResponse {
+  task_id: string
+  task_group_id: string
+}
+
 export interface TaskGroupStatus {
   task_group_id: string
   status: string
@@ -59,6 +64,7 @@ export interface TaskGroupStatus {
   running: number
   success: number
   failed: number
+  timeout?: number
 }
 
 export function runCheck(data: RunCheckRequest) {
@@ -98,6 +104,13 @@ export function getTaskDetail(taskId: string) {
   })
 }
 
+export function redispatchTask(taskId: string) {
+  return request<any, RedispatchTaskResponse>({
+    url: `/tasks/${taskId}/redispatch`,
+    method: 'post'
+  })
+}
+
 export function triggerSelfHealing(taskId: string, userSuggestion?: string) {
   return request<any, { code: number; message: string; data: { task_id: string; rule_id: string; script_type: string; status: string } }>({
     url: `/tasks/${taskId}/heal`,
@@ -113,6 +126,13 @@ export function deleteTask(taskId: string) {
   })
 }
 
+export function deleteTaskGroup(taskGroupId: string) {
+  return request<any, { code: number; message: string; data?: { deleted_count: number } }>({
+    url: `/tasks/group/${taskGroupId}`,
+    method: 'delete'
+  })
+}
+
 export function getHealingStatus(taskId: string) {
   return request<any, HealingStatus | null>({
     url: `/tasks/${taskId}/healing-status`,
@@ -124,7 +144,7 @@ export interface TaskGroupSummary {
   task_group_id: string
   task_count: number
   task_type: 'check' | 'fix'
-  status: 'pending' | 'running' | 'success' | 'failed' | 'partial'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'partial' | 'timeout'
   success_count: number
   failed_count: number
   pending_count: number

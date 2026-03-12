@@ -24,6 +24,7 @@
           <el-option label="执行中" value="running" />
           <el-option label="成功" value="success" />
           <el-option label="失败" value="failed" />
+          <el-option label="超时" value="timeout" />
           <el-option label="部分成功" value="partial" />
         </el-select>
 
@@ -127,7 +128,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { listTasks, deleteTask, batchDeleteTasks, type TaskGroupSummary } from '@/api/tasks'
+import { listTasks, deleteTaskGroup, batchDeleteTasks, type TaskGroupSummary } from '@/api/tasks'
 
 const router = useRouter()
 
@@ -195,6 +196,7 @@ const getStatusType = (status: string) => {
     case 'running': return 'warning'
     case 'success': return 'success'
     case 'failed': return 'danger'
+    case 'timeout': return 'danger'
     case 'partial': return 'warning'
     default: return 'info'
   }
@@ -206,6 +208,7 @@ const getStatusText = (status: string) => {
     case 'running': return '执行中'
     case 'success': return '成功'
     case 'failed': return '失败'
+    case 'timeout': return '超时'
     case 'partial': return '部分成功'
     default: return status
   }
@@ -233,7 +236,7 @@ const handleDeleteTaskGroup = async (row: TaskGroupSummary) => {
       type: 'warning'
     })
     
-    await deleteTask(row.task_group_id)
+    await deleteTaskGroup(row.task_group_id)
     ElMessage.success('任务已删除')
     fetchTasks()
   } catch (e: any) {

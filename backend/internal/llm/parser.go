@@ -65,6 +65,14 @@ func ParseScript(llmResponse string) (string, error) {
 		return "", fmt.Errorf("empty script")
 	}
 
+	script = removeMarkdownCodeBlock(script)
+	script = strings.TrimSpace(script)
+
+	if script == "" {
+		logger.Error("Script is empty after removing markdown markers")
+		return "", fmt.Errorf("empty script after parsing")
+	}
+
 	if !strings.HasPrefix(script, "#!") {
 		logger.Info("adding shebang to script without one",
 			zap.String("first_chars", truncate(script, 20)),
@@ -77,6 +85,25 @@ func ParseScript(llmResponse string) (string, error) {
 	)
 
 	return script, nil
+}
+
+func removeMarkdownCodeBlock(script string) string {
+	if !strings.HasPrefix(script, "```") {
+		return script
+	}
+
+	newlineIdx := strings.Index(script, "\n")
+	if newlineIdx != -1 {
+		script = script[newlineIdx+1:]
+	} else {
+		script = script[3:]
+	}
+
+	if strings.HasSuffix(script, "```") {
+		script = script[:len(script)-3]
+	}
+
+	return script
 }
 
 // ValidateRule validates extracted rule for required fields
