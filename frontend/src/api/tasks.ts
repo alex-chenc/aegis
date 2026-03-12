@@ -75,7 +75,21 @@ export function runCheck(data: RunCheckRequest) {
   })
 }
 
+export interface RunFixInGroupRequest {
+  rule_ids: string[]
+  host_ids: string[]
+  task_group_id: string
+}
+
 export function runFix(data: RunFixRequest) {
+  return request<any, RunTaskResponse>({
+    url: '/tasks/run-fix',
+    method: 'post',
+    data
+  })
+}
+
+export function runFixInGroup(data: RunFixInGroupRequest) {
   return request<any, RunTaskResponse>({
     url: '/tasks/run-fix',
     method: 'post',

@@ -1,13 +1,15 @@
 # 数据库设计文档 - V2.2 完整版
 
-**版本**: 2.0
+**版本**: 2.2
 **状态**: 定稿
-**作者**: Manus AI
+**作者**: Manus AI, Sisyphus
 
 ## 1. 修订历史
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.2 | 2026-03-12 | Sisyphus | **修复任务状态与自愈清理**。更新：task_logs表status字段说明，修复任务exit_code!=0时status为failed；新增：重新下发时清除self_healing_logs关联记录的说明。 |
+| 2.1 | 2026-03-12 | Sisyphus | **任务重新下发支持**。task_logs表新增started_at字段用途说明（重新下发时记录下发时间）；新增Repository层UpdateForRedispatch方法说明。 |
 | 2.0 | 2026-03-05 | Manus AI | **全面更新**。在 V1.6 基础上新增 `llm_configs`（LLM 配置表）、`script_versions`（脚本版本表）、`self_healing_logs`（自愈日志表）三张表，更新 `task_logs` 表增加自愈关联字段，补充完整的 Redis 缓存数据结构设计，提供更新后的完整 `init.sql` 脚本。 |
 | 1.6 | 2026-03-05 | Manus AI | 完整重写，包含 4 张核心表的详细字段定义。 |
 
@@ -88,21 +90,60 @@ V2.2 版本的数据库包含 7 张表，按业务领域可分为三组。
 
 | 字段名 | 数据类型 | 约束 | 描述 |
 |:---|:---|:---|:---|
-| `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 记录的唯一标识符。 |
+| `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 记录的唯一标识符。**重要**：重新下发时保持此ID不变，实现原地更新。 |
 | `task_group_id` | `UUID` | `NOT NULL` | 批量任务组 ID，同一次下发的所有子任务共享此 ID。 |
 | `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (baseline_rules.id)` | 关联的基线规则 ID。 |
 | `host_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (hosts.id)` | 任务执行的目标主机 ID。 |
 | `task_type` | `VARCHAR(20)` | `NOT NULL` | 任务类型：'CHECK' 或 'FIX'。 |
-| `status` | `VARCHAR(20)` | `NOT NULL` | 任务状态：'PENDING'、'RUNNING'、'SUCCESS'、'FAILED'、'TIMEOUT'、'HEALING'。 |
-| `script_content` | `TEXT` | `NULL` | 本次执行使用的脚本内容（快照，用于审计和自愈对比）。 |
-| `script_version` | `INT` | `NULL` | 本次执行使用的脚本版本号。 |
-| `stdout` | `TEXT` | `NULL` | 任务执行的标准输出日志。 |
-| `stderr` | `TEXT` | `NULL` | 任务执行的标准错误日志。 |
-| `exit_code` | `INT` | `NULL` | 脚本执行的退出码。 |
+| `status` | `VARCHAR(20)` | `NOT NULL` | 任务状态：'PENDING'、'RUNNING'、'SUCCESS'、'FAILED'、'TIMEOUT'、'HEALING'。**V2.2更新**：SUCCESS仅表示执行过程正常完成，不代表检查通过。**修复任务特殊处理**：exit_code!=0时status为FAILED以触发自愈。 |
+| `script_content` | `TEXT` | `NULL` | 本次执行使用的脚本内容（快照，用于审计和自愈对比）。重新下发时更新为最新脚本。 |
+| `script_version` | `INT` | `NULL` | 本次执行使用的脚本版本号。重新下发时更新为当前版本。 |
+| `stdout` | `TEXT` | `NULL` | 任务执行的标准输出日志。重新下发时清空。 |
+| `stderr` | `TEXT` | `NULL` | 任务执行的标准错误日志。重新下发时清空。 |
+| `exit_code` | `INT` | `NULL` | 脚本执行的退出码。**V2.1说明**：0=通过，1=未通过，2=执行出错。重新下发时清空。 |
 | `healing_id` | `UUID` | `NULL`, `FOREIGN KEY (self_healing_logs.id)` | 关联的自愈日志 ID，如果此任务是自愈重试产生的。 |
-| `started_at` | `TIMESTAMPTZ` | `NULL` | 任务开始执行的时间戳。 |
-| `finished_at` | `TIMESTAMPTZ` | `NULL` | 任务执行完成的时间戳。 |
+| `started_at` | `TIMESTAMPTZ` | `NULL` | 任务开始执行的时间戳。**V2.1说明**：首次下发时设置为创建时间；重新下发时更新为重新下发时间。 |
+| `finished_at` | `TIMESTAMPTZ` | `NULL` | 任务执行完成的时间戳。重新下发时清空。 |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录的创建时间戳。 |
+
+**重新下发原地更新策略 — V2.2 更新**
+
+当任务需要重新下发时（如脚本修复后重试），系统采用**原地更新策略**：
+
+1. **保持 `id` 不变**：便于前端与日志链路追踪同一任务
+2. **更新脚本**：`script_content` 和 `script_version` 更新为最新版本
+3. **重置状态**：`status` 重置为 `pending`
+4. **清空结果**：`stdout`、`stderr`、`exit_code`、`finished_at` 设为 `NULL`
+5. **记录时间**：`started_at` 更新为重新下发时间
+6. **V2.2 新增：清除自愈状态**：删除 `self_healing_logs` 表中关联的自愈记录，删除 Redis 中的 `self_healing:{task_id}` 缓存
+
+**清除自愈状态的原因**：
+- 避免前端显示过时的"脚本修复成功"等状态
+- 确保根据新的执行结果判断任务状态
+- 清除历史的自愈尝试记录，使重新下发后的自愈流程从零开始
+
+**Repository 层方法**：
+
+```go
+// UpdateForRedispatch 重新下发任务时更新原有任务记录（原地更新，保留原始ID）
+// 清空上次执行的输出，重置状态为pending，更新脚本内容和版本号
+func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int) error {
+    now := time.Now()
+    result := r.db.Model(&model.TaskLog{}).
+        Where("id = ?", id).
+        Updates(map[string]interface{}{
+            "script_content": scriptContent,
+            "script_version": scriptVersion,
+            "status":         "pending",
+            "stdout":         nil,
+            "stderr":         nil,
+            "exit_code":      nil,
+            "started_at":     now,
+            "finished_at":    nil,
+        })
+    // ...
+}
+```
 
 ### 4.5 `llm_configs` (LLM 配置表) — V2.2 新增
 

@@ -39,7 +39,17 @@
 
     <el-card style="margin-top: 20px">
       <template #header>
-        <span>任务列表</span>
+        <div class="card-header">
+          <span>任务列表</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 13px; color: #666;">类型筛选：</span>
+            <el-select v-model="typeFilter" size="small" style="width: 100px;">
+              <el-option label="全部" value="all" />
+              <el-option label="检测" value="check" />
+              <el-option label="修复" value="fix" />
+            </el-select>
+          </div>
+        </div>
       </template>
 
       <el-table :data="tasksWithState" style="width: 100%">
@@ -135,6 +145,16 @@
               修复建议
             </el-button>
             <el-button 
+              v-if="row.displayState === '未通过'"
+              link 
+              type="success" 
+              size="small" 
+              @click="runFix(row)"
+              :loading="fixingTask === row.id"
+            >
+              修复
+            </el-button>
+            <el-button 
               link 
               type="danger" 
               size="small" 
@@ -185,6 +205,7 @@ import {
   triggerSelfHealing, 
   getHealingStatus,
   redispatchTask,
+  runFixInGroup,
   deleteTask as deleteTaskApi,
   type TaskLog, 
   type TaskGroupStatus,
@@ -209,6 +230,8 @@ const scriptDialogTitle = ref('')
 const currentScript = ref('')
 const reexecutingTask = ref<string | null>(null)
 const repairingTask = ref<string | null>(null)
+const fixingTask = ref<string | null>(null)
+const typeFilter = ref<'all' | 'check' | 'fix'>('all')
 const suggestionDialogVisible = ref(false)
 const suggestionText = ref('')
 const selectedTask = ref<TaskLog | null>(null)
@@ -216,15 +239,17 @@ const submittingSuggestion = ref(false)
 let pollTimer: number | null = null
 
 const tasksWithState = computed(() => {
-  return tasks.value.map(task => {
-    const healingStatus = healingStatusMap.value[task.id]
-    const displayState = getDisplayState(task.task_type, task.status, task.exit_code, healingStatus)
-    return {
-      ...task,
-      displayState,
-      healingStatus
-    }
-  })
+  return tasks.value
+    .filter(task => typeFilter.value === 'all' || task.task_type === typeFilter.value)
+    .map(task => {
+      const healingStatus = healingStatusMap.value[task.id]
+      const displayState = getDisplayState(task.task_type, task.status, task.exit_code, healingStatus)
+      return {
+        ...task,
+        displayState,
+        healingStatus
+      }
+    })
 })
 
 function getDisplayState(taskType: string, taskStatus: string, exitCode: number | undefined, healingStatus?: HealingStatus): DisplayState {
@@ -380,6 +405,23 @@ const reExecute = async (task: TaskLog) => {
     ElMessage.error(e.message || '重新下发失败')
   } finally {
     reexecutingTask.value = null
+  }
+}
+
+const runFix = async (task: TaskLog) => {
+  fixingTask.value = task.id
+  try {
+    await runFixInGroup({
+      rule_ids: [task.rule_id],
+      host_ids: [task.host_id],
+      task_group_id: task.task_group_id,
+    })
+    ElMessage.success('修复任务已创建')
+    await refresh()
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建修复任务失败')
+  } finally {
+    fixingTask.value = null
   }
 }
 

@@ -1,6 +1,6 @@
-# 通讯层设计文档 - V2.6 完整版
+# 通讯层设计文档 - V2.8 完整版
 
-**版本**: 2.6
+**版本**: 2.8
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.8 | 2026-03-12 | Sisyphus | **修复任务状态与任务组修复API**。修复：修复任务exit_code!=0时status设为failed以触发自愈；新增：POST /tasks/run-fix支持可选task_group_id参数，允许修复任务加入现有任务组；更新任务状态映射表，区分检测/修复任务的status与exit_code关系。 |
+| 2.7 | 2026-03-12 | Sisyphus | **任务重新下发API与状态映射**。新增POST /tasks/:id/redispatch接口（原地更新策略）；更新任务状态返回说明（status与exit_code分离，success+exit_code=1表示未通过而非失败）。 |
 | 2.6 | 2026-03-12 | Sisyphus | **任务删除API分离**。DELETE /tasks/:id改为删除单个任务；新增DELETE /tasks/group/:id删除任务组；任务状态支持timeout。 |
 | 2.5 | 2026-03-11 | Sisyphus | **脚本状态校验**。POST /api/v1/tasks/run-check和run-fix接口新增脚本状态校验，未生成完成返回400错误。 |
 | 2.4 | 2026-03-11 | Sisyphus | **批量脚本生成API**。新增 POST /api/v1/templates/:id/generate-scripts 接口，支持批量生成检测/修复脚本，返回队列状态。 |
@@ -486,19 +488,91 @@ Query Parameters: `script_type` (string, required, "CHECK" 或 "FIX")
 }
 ```
 
-**`POST /api/v1/tasks/run-fix`** — V2.2 新增
+**`POST /api/v1/tasks/run-fix`** — V2.2 新增，V2.8 更新
 
 下发修复任务。请求和响应格式与 `run-check` 相同。
 
-请求体:
+**请求体**:
 ```json
 {
-  "rule_id": "uuid-rule-1",
-  "host_ids": ["uuid-host-1"]
+  "rule_ids": ["uuid-rule-1"],
+  "host_ids": ["uuid-host-1"],
+  "task_group_id": "uuid-task-group-1"  // V2.8 新增：可选，指定任务组ID
 }
 ```
 
+**参数说明 — V2.8 新增**:
+- `rule_ids`: 必填，要执行修复的规则ID列表
+- `host_ids`: 必填，目标主机ID列表
+- `task_group_id`: 可选，指定任务组ID。如提供，修复任务将加入现有任务组；否则创建新任务组
+
+**使用场景**:
+- 在任务详情页面点击"修复"按钮时，传入当前任务组的ID，使修复任务与原检测任务在同一组内
+- 在工作台页面下发修复任务时，不传此参数，创建独立的新任务组
+
 响应体 (202 Accepted): 同 `run-check` 格式。
+
+**`POST /api/v1/tasks/{id}/redispatch`** — V2.7 新增
+
+重新下发任务。采用**原地更新策略**，保持 task_id 不变，更新脚本内容和版本，重置状态为 pending。
+
+请求体: 无
+
+响应体 (200 OK):
+```json
+{
+  "id": "uuid-task-1",
+  "task_group_id": "uuid-task-group-1",
+  "rule_id": "uuid-rule-1",
+  "host_id": "uuid-host-1",
+  "task_type": "check",
+  "status": "pending",
+  "script_content": "#!/bin/bash\n...",
+  "script_version": 2,
+  "started_at": "2026-03-12T10:30:00Z",
+  "created_at": "2026-03-12T10:00:00Z"
+}
+```
+
+**设计说明**：
+- **原地更新**：不创建新任务记录，而是更新原有任务的 `script_content`、`script_version`、`status` 等字段
+- **保持ID不变**：便于前端与日志链路追踪同一任务
+- **使用最新脚本**：自动获取规则的最新脚本版本（可能是自愈修复后的版本）
+- **清空上次结果**：`stdout`、`stderr`、`exit_code`、`finished_at` 被清空
+
+**`GET /api/v1/tasks`**
+
+获取任务组列表，支持分页和筛选。
+
+Query Parameters:
+- `page` (int, default 1)
+- `page_size` (int, default 10)
+- `status` (string, optional): pending, running, success, failed, timeout, partial
+- `task_type` (string, optional): check, fix
+- `search` (string, optional): 搜索规则名称
+
+响应体 (200 OK):
+```json
+{
+  "items": [
+    {
+      "task_group_id": "uuid-task-group-1",
+      "task_count": 5,
+      "task_type": "check",
+      "status": "partial",
+      "success_count": 3,
+      "failed_count": 1,
+      "pending_count": 0,
+      "running_count": 1,
+      "created_at": "2026-03-12T10:00:00Z",
+      "finished_at": null
+    }
+  ],
+  "total": 100,
+  "page": 1,
+  "page_size": 10
+}
+```
 
 **`GET /api/v1/tasks/{group_id}/status`** — V2.2 新增
 
@@ -514,7 +588,7 @@ Query Parameters: `script_type` (string, required, "CHECK" 或 "FIX")
       "task_id": "uuid-task-1",
       "host_id": "uuid-host-1",
       "hostname": "web-server-01",
-      "status": "SUCCESS",
+      "status": "success",
       "exit_code": 0,
       "is_healing": false
     },
@@ -522,13 +596,55 @@ Query Parameters: `script_type` (string, required, "CHECK" 或 "FIX")
       "task_id": "uuid-task-2",
       "host_id": "uuid-host-2",
       "hostname": "web-server-02",
-      "status": "HEALING",
+      "status": "success",
       "exit_code": 2,
       "is_healing": true,
       "healing_attempt": 1,
       "healing_max_attempts": 3
     }
   ]
+}
+```
+
+**状态与退出码映射 — V2.8 更新**：
+
+| 任务类型 | status | exit_code | 含义 | 前端显示 | 是否触发自愈 |
+|:---|:---|:---|:---|:---|:---|
+| check | `success` | `0` | 脚本执行成功，检查通过 | "通过" | 否 |
+| check | `success` | `1` | 脚本执行成功，检查不通过 | "未通过" | 否 |
+| check | `success` | `2` | 脚本执行过程出错 | "未通过" | 否 |
+| check | `failed` | `-1` | Agent通信失败 | "检测失败" | 是 |
+| **fix** | **`success`** | **`0`** | **脚本修复成功** | **"修复成功"** | **否** |
+| **fix** | **`failed`** | **`!= 0`** | **脚本修复失败** | **"修复失败"** | **是** |
+| both | `timeout` | `null` | 任务执行超时 | "超时" | 是 |
+
+**重要设计说明**：
+1. **检测任务**：`status=success` 仅表示脚本执行过程正常完成，不代表检查通过。前端需根据 `exit_code` 判断实际结果（0=通过，!=0=未通过）
+2. **修复任务**（V2.8 新增）：`exit_code != 0` 时 `status` 设为 `failed`，以触发自愈流程。这是与检测任务的关键区别
+
+**`GET /api/v1/tasks/{id}`**
+
+获取单个任务详情。
+
+响应体 (200 OK):
+```json
+{
+  "id": "uuid-task-1",
+  "task_group_id": "uuid-task-group-1",
+  "rule_id": "uuid-rule-1",
+  "rule_title": "确保密码创建要求已配置",
+  "host_id": "uuid-host-1",
+  "hostname": "web-server-01",
+  "task_type": "check",
+  "status": "success",
+  "script_content": "#!/bin/bash\nset -e\n...",
+  "script_version": 1,
+  "stdout": "检查通过：密码最小长度为14",
+  "stderr": "",
+  "exit_code": 0,
+  "started_at": "2026-03-12T10:00:01Z",
+  "finished_at": "2026-03-12T10:00:05Z",
+  "created_at": "2026-03-12T10:00:00Z"
 }
 ```
 
@@ -542,7 +658,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 ```json
 {
   "task_id": "uuid-task-1",
-  "status": "RUNNING",
+  "status": "running",
   "logs": [
     {"timestamp": "2026-03-05T14:30:01Z", "stream": "stdout", "line": "Running check..."},
     {"timestamp": "2026-03-05T14:30:02Z", "stream": "stdout", "line": "Checking /etc/ssh/sshd_config..."},
@@ -550,6 +666,48 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
   ],
   "total_lines": 3,
   "is_finished": false
+}
+```
+
+**`DELETE /api/v1/tasks/{id}`** — V2.6 更新
+
+删除单个任务。
+
+响应体 (200 OK):
+```json
+{
+  "message": "任务已删除"
+}
+```
+
+**`DELETE /api/v1/tasks/group/{id}`** — V2.6 新增
+
+删除任务组（包含所有子任务）。
+
+响应体 (200 OK):
+```json
+{
+  "message": "任务组已删除",
+  "deleted_count": 5
+}
+```
+
+**`DELETE /api/v1/tasks/batch`** — V2.3 新增
+
+批量删除任务组。
+
+请求体:
+```json
+{
+  "task_group_ids": ["uuid-group-1", "uuid-group-2"]
+}
+```
+
+响应体 (200 OK):
+```json
+{
+  "deleted_count": 10,
+  "skipped_count": 2
 }
 ```
 
@@ -616,7 +774,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 
 ## 5. API 接口汇总
 
-以下是 V2.4 版本所有 API 接口的完整汇总。
+以下是 V2.7 版本所有 API 接口的完整汇总。
 
 | 方法 | 路径 | 描述 | 版本 |
 |:---|:---|:---|:---|
@@ -632,7 +790,7 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 | GET | `/api/v1/templates` | 获取模板列表 | V1.6 |
 | GET | `/api/v1/templates/{id}/status` | 获取模板解析状态 | V2.2 |
 | GET | `/api/v1/templates/{id}/rules` | 获取模板规则列表 | V1.6 |
-| POST | `/api/v1/templates/{id}/generate-scripts` | 批量生成脚本 | **V2.4 新增** |
+| POST | `/api/v1/templates/{id}/generate-scripts` | 批量生成脚本 | V2.4 |
 | DELETE | `/api/v1/templates/{id}` | 删除模板 | V2.2 |
 | GET | `/api/v1/rules/{id}` | 获取规则脚本内容 | V2.3 |
 | GET | `/api/v1/rules/{id}/has-tasks` | 检查规则是否有关联任务 | V2.3 |
@@ -642,9 +800,11 @@ Query Parameters: `offset` (int, default 0) — 从第几行开始拉取
 | POST | `/api/v1/tasks/run-check` | 下发检查任务 | V1.6 |
 | POST | `/api/v1/tasks/run-fix` | 下发修复任务 | V2.2 |
 | GET | `/api/v1/tasks` | 获取任务列表 | V2.2 |
-| GET | `/api/v1/tasks/{group_id}/status` | 获取任务组状态 | V2.2 |
-| GET | `/api/v1/tasks/{task_id}/logs` | 获取任务日志 | V1.6 更新 |
-| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | V2.6 更新 |
-| DELETE | `/api/v1/tasks/group/{id}` | 删除任务组 | V2.6 新增 |
+| GET | `/api/v1/tasks/{id}` | 获取单个任务详情 | V2.7 |
+| POST | `/api/v1/tasks/{id}/redispatch` | 重新下发任务 | **V2.7 新增** |
+| GET | `/api/v1/tasks/{id}/status` | 获取任务状态 | V2.2 |
+| GET | `/api/v1/tasks/{id}/logs` | 获取任务日志 | V1.6 更新 |
+| DELETE | `/api/v1/tasks/{id}` | 删除单个任务 | V2.6 |
+| DELETE | `/api/v1/tasks/group/{id}` | 删除任务组 | V2.6 |
 | DELETE | `/api/v1/tasks/batch` | 批量删除任务 | V2.3 |
 | GET | `/api/v1/healing/{healing_id}` | 获取自愈详情 | V2.2 |

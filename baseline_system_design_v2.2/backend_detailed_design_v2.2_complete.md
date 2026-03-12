@@ -1,6 +1,6 @@
-# 后端详细设计文档 - V2.12 完整版
+# 后端详细设计文档 - V2.14 完整版
 
-**版本**: 2.12
+**版本**: 2.14
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.14 | 2026-03-12 | Sisyphus | **修复任务状态映射与自愈状态清理**。修复：修复任务exit_code!=0时status设为failed以触发自愈；新增：RedispatchTask清除healing状态（删除self_healing_logs记录和Redis healing status）；新增：CreateAndDispatchTasks支持可选task_group_id参数，允许修复任务加入现有任务组；新增：RedisClient.DeleteHealingStatus方法。 |
+| 2.13 | 2026-03-12 | Sisyphus | **任务重新下发与状态映射优化**。修复：RedispatchTask改为原地更新策略（保持task_id不变，更新脚本内容和版本，重置状态为pending）；新增TaskLogRepository.UpdateForRedispatch方法；修复gRPC状态映射逻辑（status始终为success，exit_code单独存储，由前端判断"通过/未通过"）。 |
 | 2.12 | 2026-03-12 | Sisyphus | **任务超时与删除API**。新增：任务超时检测机制（TaskService.StartTimeoutChecker，每30秒检查，超时5分钟标记为timeout）；新增DELETE /tasks/:id删除单个任务（DeleteSingleTask）；原DELETE /tasks/:id改为DELETE /tasks/group/:id删除任务组；ListTaskGroups查询支持timeout状态统计。 |
 | 2.11 | 2026-03-11 | Sisyphus | **脚本状态校验**。RunCheck/RunFix接口新增脚本状态校验逻辑，检查选中规则的check_script_status/fix_script_status是否为"generated"，未生成完成返回400错误和未生成数量。 |
 | 2.10 | 2026-03-11 | Sisyphus | **Bug修复与API增强**。修复：模板删除500错误（DeleteWithRules方法需按正确顺序删除关联表：self_healing_logs→task_logs→script_versions→baseline_rules）；规则删除500错误（Delete方法需删除关联的self_healing_logs、task_logs、script_versions）。新增：批量脚本生成API (POST /api/v1/templates/:id/generate-scripts)，支持并发数控制（默认2）。 |
@@ -467,6 +469,47 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 
 其他 Repository（`template_repo.go`、`rule_repo.go`、`task_log_repo.go`、`config_repo.go`、`script_version_repo.go`、`healing_log_repo.go`）均遵循相同的设计模式。
 
+#### 5.2.1 TaskLogRepository 核心方法
+
+`task_log_repo.go` 提供以下核心方法：
+
+| 方法名 | 功能描述 | GORM 操作 |
+|:---|:---|:---|
+| `Upsert(host *model.Host)` | 注册或更新主机信息，以 `ip_address` 为冲突判断键 | `db.Clauses(clause.OnConflict{...}).Create(host)` |
+| `UpdateHeartbeat(hostID uuid.UUID)` | 更新主机的最后心跳时间 | `db.Model(&Host{}).Where("id = ?", hostID).Updates(...)` |
+| `FindAll(page, pageSize int, query string)` | 分页查询主机列表，支持按 IP 或主机名模糊搜索 | `db.Where("ip_address LIKE ? OR hostname LIKE ?", ...).Find(&hosts)` |
+| `FindByID(id uuid.UUID)` | 根据 ID 查询单个主机 | `db.First(&host, "id = ?", id)` |
+| `Count(query string)` | 统计符合条件的主机总数 | `db.Model(&Host{}).Where(...).Count(&count)` |
+| `UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int)` | **V2.13新增** 重新下发任务时原地更新，重置状态为pending，清空上次执行输出，更新脚本内容和版本 | `db.Model(&TaskLog{}).Where("id = ?", id).Updates(...)` |
+
+**UpdateForRedispatch 方法详解**：
+
+该方法实现了"原地更新"策略，用于任务重新下发场景。核心逻辑：
+- 保持原始 `task_id` 不变，便于前端与日志链路追踪同一任务
+- 重置 `status` 为 `pending`
+- 清空 `stdout`、`stderr`、`exit_code`、`finished_at`（清除上次执行结果）
+- 更新 `script_content` 和 `script_version`（使用最新脚本）
+- 设置 `started_at` 为当前时间（标记重新下发时刻）
+
+```go
+func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int) error {
+    now := time.Now()
+    result := r.db.Model(&model.TaskLog{}).
+        Where("id = ?", id).
+        Updates(map[string]interface{}{
+            "script_content": scriptContent,
+            "script_version": scriptVersion,
+            "status":         "pending",
+            "stdout":         nil,
+            "stderr":         nil,
+            "exit_code":      nil,
+            "started_at":     now,
+            "finished_at":    nil,
+        })
+    // ...
+}
+```
+
 ### 5.3 日志记录
 
 所有数据库操作均使用 `pkg/logger` 包中的 zap 日志器进行日志记录。关键操作（如创建、更新）记录 Info 级别日志，错误操作记录 Error 级别日志。日志包含操作类型、实体 ID、错误信息等上下文字段。
@@ -519,7 +562,34 @@ Redis 在本系统中承担三个核心职责：Agent 在线状态缓存、模�
 | `config:llm` | `HASH` | 无 (持久) | 缓存当前生效的 LLM 配置（api_key、base_url、model），避免每次 LLM 调用都查询数据库。配置更新时同步刷新。 |
 | `self_healing:{task_id}` | `HASH` | 1h | 存储自愈修复流程的状态。字段包括 `attempt`（当前重试次数）、`status`、`last_error`。 |
 
-### 6.3 Agent 在线状态判断逻辑
+### 6.3 Redis 自愈状态管理 — V2.14 新增
+
+Redis 客户端封装层新增 `DeleteHealingStatus` 方法，用于清除任务的自愈状态缓存。
+
+**方法签名**：
+
+```go
+func (r *RedisClient) DeleteHealingStatus(taskID string) error
+```
+
+**使用场景**：
+- 任务重新下发时，清除旧的自愈状态，确保根据新的执行结果判断状态
+- 避免前端显示过时的"脚本修复成功"等状态
+
+**实现逻辑**：
+```go
+func (r *RedisClient) DeleteHealingStatus(taskID string) error {
+    key := fmt.Sprintf("self_healing:%s", taskID)
+    err := r.client.Del(r.ctx, key).Err()
+    if err != nil {
+        logger.Error("failed to delete healing status", zap.Error(err), zap.String("task_id", taskID))
+        return err
+    }
+    return nil
+}
+```
+
+### 6.4 Agent 在线状态判断逻辑
 
 在 V1.6 的设计中，主机的在线状态通过查询数据库 `hosts.last_heartbeat_at` 字段与当前时间的差值来判断。V2.2 引入 Redis 后，在线状态判断改为直接检查 Redis Key 是否存在，极大地提升了查询性能。
 
@@ -1029,13 +1099,25 @@ LLM 生成的脚本在存储和下发之前，必须经过安全性校验。校�
 
 ## 13. 任务编排与执行模块
 
-### 13.1 任务下发流程
+### 13.1 任务下发流程 — V2.14 更新
 
 当前端调用 `POST /api/v1/tasks/run-check` 或 `POST /api/v1/tasks/run-fix` 接口时，`task_service` 执行以下编排逻辑。
 
 **步骤一**：根据 `rule_id` 从数据库查询对应的基线规则，获取 `generated_check_script` 或 `generated_fix_script`。如果脚本尚未生成（字段为 NULL），返回错误提示"脚本尚未生成，请等待 AI 生成完成"。
 
-**步骤二**：生成一个 `task_group_id`（UUID），用于关联本次批量任务中的所有子任务。
+**步骤二**：确定 `task_group_id`。**V2.14 新增**：如果请求中提供了 `task_group_id`（用于修复任务加入现有任务组），则使用该 ID；否则生成新的 UUID。
+
+```go
+func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, existingGroupID ...uuid.UUID) (*TaskCreateResult, error) {
+    var taskGroupID uuid.UUID
+    if len(existingGroupID) > 0 && existingGroupID[0] != uuid.Nil {
+        taskGroupID = existingGroupID[0]
+    } else {
+        taskGroupID = uuid.New()
+    }
+    // ...
+}
+```
 
 **步骤三**：遍历 `host_ids` 列表，为每台主机创建一个独立的子任务。对于每个子任务：生成唯一的 `task_id`；在 `task_logs` 表中插入一条状态为 `RUNNING` 的记录；在 Redis 中创建 `task:status:{task_id}` 和 `task:logs:{task_id}` Key；通过 gRPC Agent Manager 查找目标主机的活跃连接，构建 `ServerCommand` 消息（包含 `task_id`、脚本内容和超时时间）并通过 gRPC 流下发。
 
@@ -1054,6 +1136,121 @@ gRPC 服务器从 Agent 接收到 `CommandResult` 后，执行以下处理逻辑
 **步骤三**：判断是否需要触发自愈流程（参见第 12.2 节的触发条件）。
 
 **步骤四**：如果不需要自愈，将最终状态写入 Redis，前端下次轮询时即可获取完整结果。
+
+### 13.3 任务状态与退出码映射 — V2.14 更新
+
+**重要设计变更**：自 V2.13 版本起，`status` 字段与 `exit_code` 字段的含义进行了明确分离。V2.14 进一步明确了修复任务的特殊处理。
+
+**核心原则**：
+- `status` 字段仅表示**任务执行过程状态**，不表示检查结果
+- `exit_code` 字段单独存储脚本的退出码，由前端判断"通过/未通过"
+- **例外**：修复任务 `exit_code != 0` 时，`status` 设为 `failed` 以触发自愈流程
+
+**状态映射规则**：
+
+| 场景 | 任务类型 | status 值 | exit_code | 前端显示 | 是否触发自愈 |
+|:---|:---|:---|:---|:---|:---|
+| 脚本执行成功，检查通过 | check | `success` | `0` | "通过" | 否 |
+| 脚本执行成功，检查不通过 | check | `success` | `1` | "未通过" | 否 |
+| 脚本执行过程出错 | check | `success` | `2` | "未通过" | 否 |
+| **脚本修复成功** | fix | `success` | `0` | "修复成功" | 否 |
+| **脚本修复失败** | fix | `failed` | `!= 0` | "修复失败" | **是** |
+| Agent 通信失败 | both | `failed` | `-1` | "检查失败"/"修复失败" | 是 |
+| 任务执行超时 | both | `timeout` | `null` | "超时" | 是 |
+
+**代码实现**（gRPC 服务器）：
+
+```go
+status := "success"
+// 对于检查任务：脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
+// exit code 会单独存储，由前端基于 exit code 判断"通过/未通过"。
+// 对于修复任务：exit code = 0 表示修复成功，exit code != 0 表示修复失败（需要触发自愈）。
+if s.taskLogRepo != nil {
+    taskLog, findErr := s.taskLogRepo.FindByID(taskID)
+    if findErr == nil && taskLog.TaskType == "fix" && result.ExitCode != 0 {
+        status = "failed"
+    }
+}
+
+s.taskResultCallback(
+    taskID,
+    result.Stdout,
+    result.Stderr,
+    int(result.ExitCode),
+    status,
+)
+```
+
+**设计理由**：
+1. **语义清晰**：`success` 表示任务执行过程正常完成，而非检查通过
+2. **职责分离**：后端负责任务编排和结果存储，前端负责业务状态展示
+3. **灵活性**：前端可根据 `exit_code` 自定义展示逻辑，无需后端修改
+4. **自愈触发**：修复任务失败时设为 `failed` 状态，自动触发 LLM 自愈流程
+
+### 13.4 任务重新下发 — V2.14 更新
+
+当用户在任务详情页面点击"重新下发"按钮时，系统采用**原地更新策略**，而非创建新任务。
+
+**设计目标**：
+- 保持 `task_id` 不变，便于前端与日志链路追踪同一任务
+- 更新脚本内容为最新版本，反映脚本修复后的变化
+- 清除上次执行结果，重置状态为待执行
+- **V2.14 新增**：清除自愈状态，确保根据新的执行结果判断状态
+
+**流程步骤**：
+
+**步骤一**：查询原始任务记录，获取关联的规则ID和主机ID。
+
+**步骤二**：获取规则的最新脚本内容（可能是自愈修复后的版本）。
+
+**步骤三**：调用 `TaskLogRepository.UpdateForRedispatch()` 原地更新任务记录：
+- 更新 `script_content` 为最新脚本
+- 更新 `script_version` 为当前版本号
+- 重置 `status` 为 `pending`
+- 清空 `stdout`、`stderr`、`exit_code`、`finished_at`
+- 设置 `started_at` 为当前时间
+
+**步骤四**：**V2.14 新增** 清除自愈状态：
+- 删除 `self_healing_logs` 表中关联的自愈记录
+- 删除 Redis 中的 `self_healing:{task_id}` 缓存
+
+**步骤五**：通过 gRPC 将任务重新下发到目标 Agent。
+
+**步骤六**：返回更新后的任务记录给前端。
+
+**代码实现**：
+
+```go
+func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UUID) (*model.TaskLog, error) {
+    originalTask, err := s.taskLogRepo.FindByID(originalTaskID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to find original task: %w", err)
+    }
+
+    // 获取最新脚本内容
+    rule, err := s.ruleRepo.FindByID(originalTask.RuleID)
+    // ... 获取 scriptContent 和 newVersion
+
+    // 原地更新任务记录
+    if err := s.taskLogRepo.UpdateForRedispatch(originalTask.ID, scriptContent, newVersion); err != nil {
+        return nil, fmt.Errorf("failed to update original task for redispatch: %w", err)
+    }
+
+    // V2.14 新增：清除自愈状态，确保根据新执行结果判断状态
+    if s.healingLogRepo != nil {
+        s.healingLogRepo.DeleteByOriginalTaskIDs([]uuid.UUID{originalTask.ID})
+    }
+    if s.redisClient != nil {
+        s.redisClient.DeleteHealingStatus(originalTask.ID.String())
+    }
+
+    // 重新加载并下发
+    updatedTask, _ := s.taskLogRepo.FindByID(originalTask.ID)
+    go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, updatedTask.RuleID, scriptContent, updatedTask.TaskType)
+
+    return updatedTask, nil
+}
+```
 
 ## 14. 后端服务启动流程
 

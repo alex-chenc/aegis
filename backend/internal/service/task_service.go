@@ -61,8 +61,13 @@ func (s *TaskService) GetHostByID(hostID uuid.UUID) (*model.Host, error) {
 	return s.hostRepo.FindByID(hostID)
 }
 
-func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string) (*TaskCreateResult, error) {
-	taskGroupID := uuid.New()
+func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, existingGroupID ...uuid.UUID) (*TaskCreateResult, error) {
+	var taskGroupID uuid.UUID
+	if len(existingGroupID) > 0 && existingGroupID[0] != uuid.Nil {
+		taskGroupID = existingGroupID[0]
+	} else {
+		taskGroupID = uuid.New()
+	}
 	var taskIDs []string
 	now := time.Now()
 
@@ -144,7 +149,6 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 }
 
 func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UUID) (*model.TaskLog, error) {
-	// 重新下发采用“原任务原地更新”策略，保持 task_id 不变，便于前端与日志链路追踪同一任务。
 	originalTask, err := s.taskLogRepo.FindByID(originalTaskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find original task: %w", err)
@@ -190,6 +194,13 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 
 	if err := s.taskLogRepo.UpdateForRedispatch(originalTask.ID, scriptContent, newVersion); err != nil {
 		return nil, fmt.Errorf("failed to update original task for redispatch: %w", err)
+	}
+
+	if s.healingLogRepo != nil {
+		s.healingLogRepo.DeleteByOriginalTaskIDs([]uuid.UUID{originalTask.ID})
+	}
+	if s.redisClient != nil {
+		s.redisClient.DeleteHealingStatus(originalTask.ID.String())
 	}
 
 	updatedTask, err := s.taskLogRepo.FindByID(originalTask.ID)

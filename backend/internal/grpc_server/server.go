@@ -291,9 +291,20 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				}
 
 				status := "success"
-				// 脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
-				// exit code 会单独存储，由前端基于 exit code 判断“通过/未通过”。
-				// status=failed 仅用于 agent 本身报错场景（如 SendCommand 失败）。
+				// 对于检查任务：脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
+				// exit code 会单独存储，由前端基于 exit code 判断"通过/未通过"。
+				// 对于修复任务：exit code = 0 表示修复成功，exit code != 0 表示修复失败（需要触发自愈）。
+				// status=failed 仅用于需要触发自愈的场景（检查任务失败、修复任务失败）。
+				if s.taskLogRepo != nil {
+					taskLog, findErr := s.taskLogRepo.FindByID(taskID)
+					if findErr == nil && taskLog.TaskType == "fix" && result.ExitCode != 0 {
+						status = "failed"
+						logger.Info("fix task failed with non-zero exit code, marking as failed for self-healing",
+							zap.String("task_id", result.TaskId),
+							zap.Int32("exit_code", result.ExitCode),
+						)
+					}
+				}
 
 				s.taskResultCallback(
 					taskID,

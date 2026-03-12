@@ -411,3 +411,20 @@ func (r *RedisClient) GetHealingStatus(taskID string) (status string, attempt in
 
 	return status, attempt, lastError, nil
 }
+
+// DeleteHealingStatus deletes the self-healing status for a task
+func (r *RedisClient) DeleteHealingStatus(taskID string) error {
+	key := selfHealingKey(taskID)
+	err := r.client.Del(r.ctx, key).Err()
+	if err != nil {
+		logger.Error("failed to delete healing status",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return err
+	}
+	logger.Debug("healing status deleted",
+		zap.String("task_id", taskID),
+	)
+	return nil
+}

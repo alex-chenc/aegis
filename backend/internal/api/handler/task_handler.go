@@ -44,8 +44,9 @@ type RunCheckRequest struct {
 }
 
 type RunFixRequest struct {
-	RuleIDs []string `json:"rule_ids"`
-	HostIDs []string `json:"host_ids"`
+	RuleIDs     []string `json:"rule_ids"`
+	HostIDs     []string `json:"host_ids"`
+	TaskGroupID string   `json:"task_group_id"`
 }
 
 type TaskResponse struct {
@@ -167,7 +168,21 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 		return
 	}
 
-	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix")
+	var result *service.TaskCreateResult
+	var err error
+	if req.TaskGroupID != "" {
+		groupID, parseErr := uuid.Parse(req.TaskGroupID)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "invalid task_group_id: " + parseErr.Error(),
+			})
+			return
+		}
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix", groupID)
+	} else {
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix")
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

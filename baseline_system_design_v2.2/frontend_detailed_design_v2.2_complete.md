@@ -1,6 +1,6 @@
-# 前端项目详细设计文档 - V2.13 完整版
+# 前端项目详细设计文档 - V2.15 完整版
 
-**版本**: 2.13
+**版本**: 2.15
 **状态**: 定稿
 **作者**: Manus AI, Sisyphus
 
@@ -8,6 +8,8 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 2.15 | 2026-03-12 | Sisyphus | **任务详情修复按钮与类型筛选**。新增：TaskDetail任务列表添加类型筛选（全部/检测/修复）；新增："修复"按钮，对"未通过"状态的任务创建同任务组修复任务；新增：runFixInGroup API函数，支持在指定任务组中创建修复任务；新增：RunFixRequest支持可选task_group_id参数。 |
+| 2.14 | 2026-03-12 | Sisyphus | **任务中心表格布局优化**。修复：TaskCenter表格列宽改为弹性布局，任务组ID、进度、创建时间、操作列使用min-width替代width，确保表格横向填充满。 |
 | 2.13 | 2026-03-12 | Sisyphus | **任务超时与删除修复**。新增：TaskCenter支持timeout状态筛选和显示；TaskDetail支持超时状态显示（检测超时/修复超时）；超时任务支持重新下发；修复任务删除API调用（deleteTaskGroup用于任务组删除，deleteTask用于单个任务删除）。 |
 | 2.12 | 2026-03-11 | Sisyphus | **脚本生成校验**。新增：下发检测/修复任务前校验脚本生成状态；计算属性checkScriptStatus/fixScriptStatus检查选中规则的脚本状态；el-alert组件显示警告提示；下发按钮禁用逻辑增加脚本状态校验。 |
 | 2.11 | 2026-03-11 | Sisyphus | **UI重构**。规则列表改为大框架设计（一个"规则列表"卡片内包含所有文件分组）；文件分页改为每页5个；添加滚动条（最大高度600px，自定义滚动条样式）；"一键生成检测/修复脚本"按钮移至文件头部右侧；UI美化（圆角卡片、悬浮效果、文件图标、规则数量badge、分离背景）；修复批量脚本生成函数名冲突导致的无限递归问题。 |
@@ -107,11 +109,21 @@ export function deleteTemplate(id: string): Promise<void>
 export function batchGenerateScripts(templateId: string, scriptType: 'CHECK' | 'FIX'): Promise<BatchGenerateResponse>
 ```
 
-#### `tasks.ts` - 任务管理 API (新增)
+#### `tasks.ts` - 任务管理 API — V2.15 更新
 ```typescript
 export function runCheck(data: RunCheckRequest): Promise<RunTaskResponse>
 export function runFix(data: RunFixRequest): Promise<RunTaskResponse>
+export function runFixInGroup(data: RunFixInGroupRequest): Promise<RunTaskResponse> // V2.15 新增
 export function getTaskLogs(taskGroupId: string): Promise<TaskLog[]>
+```
+
+**V2.15 新增类型定义**:
+```typescript
+export interface RunFixInGroupRequest {
+  rule_ids: string[]
+  host_ids: string[]
+  task_group_id: string  // 指定任务组ID，修复任务加入现有任务组
+}
 ```
 
 ## 6. 状态管理 (Pinia) (`/src/store`)
@@ -332,7 +344,181 @@ const checkScriptStatus = computed(() => {
 </template>
 ```
 
-### 8.2 Settings.vue - 设置页面
+### 8.2 TaskCenter.vue - 任务中心页面 — V2.14 更新
+
+任务中心页面展示所有任务的执行状态，支持筛选、分页和批量操作。
+
+**页面布局**:
+- 顶部：页面标题 + 操作按钮区（批量删除、刷新）
+- 筛选栏：状态筛选、类型筛选、搜索框
+- 表格区：任务组列表
+- 底部：分页控件
+
+**表格列设计 — V2.14 弹性布局**:
+
+表格采用弹性布局策略，确保横向填充满整个容器：
+
+| 列名 | 宽度设置 | 说明 |
+|:---|:---|:---|
+| 选择列 | `width="55"` | 固定宽度 |
+| 任务组ID | `min-width="280"` | **弹性宽度**，支持长ID显示 |
+| 类型 | `width="80"` | 固定宽度 |
+| 任务数 | `width="80"` | 固定宽度 |
+| 进度 | `min-width="200"` | **弹性宽度**，显示成功/失败/待执行/执行中数量 |
+| 状态 | `width="100"` | 固定宽度 |
+| 创建时间 | `min-width="180"` | **弹性宽度** |
+| 操作 | `min-width="160"` | **弹性宽度**，详情+删除按钮 |
+
+**弹性布局原理**:
+- 使用 `min-width` 替代 `width`：列宽度可以扩展以填满剩余空间
+- 固定列使用 `width`：选择列、类型、任务数、状态列保持固定
+- 弹性列使用 `min-width`：任务组ID、进度、创建时间、操作列自动扩展
+
+**关键代码**:
+```vue
+<el-table :data="taskGroups" style="width: 100%">
+  <el-table-column type="selection" width="55" />
+  <el-table-column prop="task_group_id" label="任务组ID" min-width="280">
+    <template #default="{ row }">
+      <el-link type="primary" @click="goToDetail(row.task_group_id)">
+        {{ row.task_group_id.substring(0, 8) }}...
+      </el-link>
+    </template>
+  </el-table-column>
+  <el-table-column prop="task_type" label="类型" width="80" />
+  <el-table-column prop="task_count" label="任务数" width="80" />
+  <el-table-column label="进度" min-width="200">
+    <template #default="{ row }">
+      <div class="progress-info">
+        <span class="success">{{ row.success_count }}</span> /
+        <span class="failed">{{ row.failed_count }}</span> /
+        <span class="pending">{{ row.pending_count }}</span> /
+        <span class="running">{{ row.running_count }}</span>
+      </div>
+    </template>
+  </el-table-column>
+  <el-table-column prop="status" label="状态" width="100" />
+  <el-table-column prop="created_at" label="创建时间" min-width="180" />
+  <el-table-column label="操作" min-width="160">
+    <!-- 操作按钮 -->
+  </el-table-column>
+</el-table>
+```
+
+**状态筛选选项**:
+- 待执行 (pending)
+- 执行中 (running)
+- 成功 (success)
+- 失败 (failed)
+- 超时 (timeout) — V2.13 新增
+- 部分成功 (partial)
+
+**进度显示格式**: `成功数 / 失败数 / 待执行数 / 执行中数`
+
+### 8.3 TaskDetail.vue - 任务详情页面 — V2.15 新增
+
+任务详情页面展示任务组内所有任务的执行状态，支持类型筛选和创建修复任务。
+
+**页面布局**:
+- 顶部：返回按钮 + 任务组ID
+- 进度卡片：总任务数、待执行、执行中、已完成、超时、进度条
+- 任务列表卡片：
+  - 卡片头部：标题 + 类型筛选下拉框
+  - 任务表格：规则标题、主机、类型、状态、脚本、结果、操作
+
+**类型筛选 — V2.15 新增**:
+
+卡片头部右侧添加类型筛选下拉框：
+
+```vue
+<template #header>
+  <div class="card-header">
+    <span>任务列表</span>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 13px; color: #666;">类型筛选：</span>
+      <el-select v-model="typeFilter" size="small" style="width: 100px;">
+        <el-option label="全部" value="all" />
+        <el-option label="检测" value="check" />
+        <el-option label="修复" value="fix" />
+      </el-select>
+    </div>
+  </div>
+</template>
+```
+
+**筛选逻辑**:
+```typescript
+const typeFilter = ref<'all' | 'check' | 'fix'>('all')
+
+const tasksWithState = computed(() => {
+  return tasks.value
+    .filter(task => typeFilter.value === 'all' || task.task_type === typeFilter.value)
+    .map(task => {
+      const healingStatus = healingStatusMap.value[task.id]
+      const displayState = getDisplayState(task.task_type, task.status, task.exit_code, healingStatus)
+      return { ...task, displayState, healingStatus }
+    })
+})
+```
+
+**"修复"按钮 — V2.15 新增**:
+
+在操作列中，对"未通过"状态的任务显示"修复"按钮：
+
+```vue
+<el-table-column label="操作" width="320">
+  <template #default="{ row }">
+    <!-- 其他按钮... -->
+    <el-button 
+      v-if="row.displayState === '未通过'"
+      link 
+      type="success" 
+      size="small" 
+      @click="runFix(row)"
+      :loading="fixingTask === row.id"
+    >
+      修复
+    </el-button>
+    <!-- 删除按钮... -->
+  </template>
+</el-table-column>
+```
+
+**修复任务创建逻辑**:
+```typescript
+const fixingTask = ref<string | null>(null)
+
+const runFix = async (task: TaskLog) => {
+  fixingTask.value = task.id
+  try {
+    await runFixInGroup({
+      rule_ids: [task.rule_id],
+      host_ids: [task.host_id],
+      task_group_id: task.task_group_id,
+    })
+    ElMessage.success('修复任务已创建')
+    await refresh()
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建修复任务失败')
+  } finally {
+    fixingTask.value = null
+  }
+}
+```
+
+**状态显示逻辑**:
+
+| displayState | 任务类型 | status | exit_code | 触发条件 |
+|:---|:---|:---|:---|:---|
+| 检测中 | check | running/pending | - | - |
+| 通过 | check | success | 0 | - |
+| 未通过 | check | success | != 0 | 显示"修复"按钮 |
+| 检测失败 | check | failed | - | 显示"脚本修复"按钮 |
+| 修复中 | fix | running/pending | - | - |
+| 修复成功 | fix | success | 0 | - |
+| 修复失败 | fix | failed | != 0 | 显示"脚本修复"按钮 |
+
+### 8.4 Settings.vue - 设置页面
 
 **功能**:
 1. LLM 配置表单（API Key、Base URL、模型名称）
@@ -347,7 +533,7 @@ const checkScriptStatus = computed(() => {
 </el-button>
 ```
 
-### 8.3 Dashboard.vue - 仪表盘页面
+### 8.4 Dashboard.vue - 仪表盘页面
 
 **功能**:
 - 主机列表表格（IP、主机名、系统类型、Agent版本、最后心跳、在线状态）
