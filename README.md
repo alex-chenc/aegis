@@ -1,5 +1,7 @@
 # AI基线检查系统
 
+中文 | [English](README_EN.md)
+
 ![系统预览](docs/img/index.png)
 
 ## 项目概述
@@ -55,8 +57,6 @@ AI基线检查系统是一个面向运维和安全工程师的服务器基线自
 | **类型筛选** | 任务详情页支持按类型（检测/修复）筛选      |
 | **修复建议** | 显示 LLM 生成的修复建议                    |
 
-
-
 ## 快速开始
 
 ### 环境要求
@@ -65,7 +65,7 @@ AI基线检查系统是一个面向运维和安全工程师的服务器基线自
 - Docker Compose 2.0+
 - 2GB+ 可用内存
 
-### 一键部署
+### 源码部署
 
 ```bash
 # 1. 克隆项目
@@ -84,6 +84,24 @@ curl http://localhost:8080/health
 ```
 
 浏览器访问 http://localhost:8081
+
+### 一键部署
+
+```bash
+# 1. 下载版本包
+
+# 2. 配置环境变量
+cp .env.example .env
+vim .env
+
+# 3. 启动
+docker compose up -d 
+
+# 4. 验证服务
+curl http://localhost:8080/health
+```
+浏览器访问 http://localhost:8081
+
 
 ### 配置 LLM
 
@@ -107,6 +125,7 @@ curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
 ```
 上传基线文档 → LLM解析规则 → 生成/编辑脚本 → 选择主机 → 执行检测/修复 → 查看结果
 ```
+
 ## 端口说明
 
 | 服务          | 端口 |
@@ -118,6 +137,4 @@ curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
 | Redis         | 6379 |
 | MinIO API     | 9000 |
 | MinIO Console | 9001 |
-
-
 
