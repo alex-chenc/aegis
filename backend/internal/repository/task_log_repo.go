@@ -88,6 +88,38 @@ func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
 	return &log, nil
 }
 
+// UpdateForRedispatch 重新下发任务时更新原有任务记录（原地更新，保留原始ID）
+// 清空上次执行的输出，重置状态为pending，更新脚本内容和版本号
+func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int) error {
+	now := time.Now()
+	result := r.db.Model(&model.TaskLog{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"script_content": scriptContent,
+			"script_version": scriptVersion,
+			"status":         "pending",
+			"stdout":         nil,
+			"stderr":         nil,
+			"exit_code":      nil,
+			"started_at":     now,
+			"finished_at":    nil,
+		})
+
+	if result.Error != nil {
+		logger.Error("重新下发任务更新失败",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("任务已更新为重新下发状态",
+		zap.String("id", id.String()),
+		zap.Int("script_version", scriptVersion),
+	)
+	return nil
+}
+
 func (r *TaskLogRepository) UpdateStatus(id uuid.UUID, status string) error {
 	result := r.db.Model(&model.TaskLog{}).
 		Where("id = ?", id).

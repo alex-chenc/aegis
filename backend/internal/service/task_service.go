@@ -144,6 +144,7 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 }
 
 func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UUID) (*model.TaskLog, error) {
+	// 重新下发采用“原任务原地更新”策略，保持 task_id 不变，便于前端与日志链路追踪同一任务。
 	originalTask, err := s.taskLogRepo.FindByID(originalTaskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find original task: %w", err)
@@ -173,24 +174,32 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 		return nil, fmt.Errorf("script content is empty")
 	}
 
-	now := time.Now()
-	newTask := &model.TaskLog{
-		TaskGroupID:   originalTask.TaskGroupID,
-		RuleID:        originalTask.RuleID,
-		HostID:        originalTask.HostID,
-		TaskType:      originalTask.TaskType,
-		Status:        "pending",
-		ScriptContent: &scriptContent,
-		CreatedAt:     now,
+	newVersion := 0
+	if originalTask.TaskType == "check" {
+		newVersion = rule.CheckScriptVersion
+	} else {
+		newVersion = rule.FixScriptVersion
+	}
+	if newVersion <= 0 {
+		if originalTask.ScriptVersion != nil {
+			newVersion = *originalTask.ScriptVersion
+		} else {
+			newVersion = 1
+		}
 	}
 
-	if err := s.taskLogRepo.Create(newTask); err != nil {
-		return nil, fmt.Errorf("failed to create redispatch task: %w", err)
+	if err := s.taskLogRepo.UpdateForRedispatch(originalTask.ID, scriptContent, newVersion); err != nil {
+		return nil, fmt.Errorf("failed to update original task for redispatch: %w", err)
 	}
 
-	go s.dispatchToAgent(ctx, newTask.ID, newTask.HostID, newTask.RuleID, scriptContent, newTask.TaskType)
+	updatedTask, err := s.taskLogRepo.FindByID(originalTask.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload redispatched task: %w", err)
+	}
 
-	return newTask, nil
+	go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, updatedTask.RuleID, scriptContent, updatedTask.TaskType)
+
+	return updatedTask, nil
 }
 
 func (s *TaskService) dispatchToAgent(ctx context.Context, taskID, hostID, ruleID uuid.UUID, scriptContent, taskType string) {

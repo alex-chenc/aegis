@@ -291,9 +291,9 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				}
 
 				status := "success"
-				if result.ExitCode != 0 {
-					status = "failed"
-				}
+				// 脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
+				// exit code 会单独存储，由前端基于 exit code 判断“通过/未通过”。
+				// status=failed 仅用于 agent 本身报错场景（如 SendCommand 失败）。
 
 				s.taskResultCallback(
 					taskID,

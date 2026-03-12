@@ -53,7 +53,7 @@
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="task_group_id" label="任务组ID" width="280">
+        <el-table-column prop="task_group_id" label="任务组ID" min-width="280">
           <template #default="{ row }">
             <el-link type="primary" @click="goToDetail(row.task_group_id)">
               {{ row.task_group_id.substring(0, 8) }}...
@@ -68,7 +68,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="task_count" label="任务数" width="80" />
-        <el-table-column label="进度" width="200">
+        <el-table-column label="进度" min-width="200">
           <template #default="{ row }">
             <div class="progress-info">
               <span class="success">{{ row.success_count }}</span> /
@@ -85,12 +85,12 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140">
+        <el-table-column label="操作" min-width="160">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="goToDetail(row.task_group_id)">
               详情
