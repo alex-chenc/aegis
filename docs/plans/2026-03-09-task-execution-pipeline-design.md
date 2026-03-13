@@ -6,7 +6,7 @@
 
 ## Overview
 
-Implement complete task execution pipeline for AI baseline check system. The pipeline orchestrates script generation (via LLM), task creation, agent dispatch (via gRPC), and result processing with self-healing capability.
+Implement complete task execution pipeline for AI aegis check system. The pipeline orchestrates script generation (via LLM), task creation, agent dispatch (via gRPC), and result processing with self-healing capability.
 
 ## Architecture
 

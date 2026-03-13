@@ -1,4 +1,4 @@
-module baseline-system
+module aegis-system
 
 go 1.25.0
 

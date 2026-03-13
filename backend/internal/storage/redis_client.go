@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"baseline-system/config"
-	"baseline-system/pkg/logger"
+	"aegis-system/config"
+	"aegis-system/pkg/logger"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"

@@ -1,7 +1,7 @@
 package service
 
 import (
-	"baseline-system/internal/llm"
+	"aegis-system/internal/llm"
 )
 
 // LLMService LLM 服务

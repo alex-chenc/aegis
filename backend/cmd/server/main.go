@@ -9,17 +9,17 @@ import (
 	"syscall"
 	"time"
 
-	"baseline-system/config"
-	"baseline-system/internal/api"
-	"baseline-system/internal/api/handler"
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/ipdetect"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/service"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/config"
+	"aegis-system/internal/api"
+	"aegis-system/internal/api/handler"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/ipdetect"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/service"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
-	_ "baseline-system/pkg/api/v1"
+	_ "aegis-system/pkg/api/v1"
 
 	"go.uber.org/zap"
 )

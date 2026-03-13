@@ -3,8 +3,8 @@ package handler
 import (
 	"net/http"
 
-	"baseline-system/internal/repository"
-	"baseline-system/internal/service"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

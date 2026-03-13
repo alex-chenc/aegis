@@ -1,6 +1,6 @@
 .PHONY: all build clean test
 
-BINARY_NAME=baseline-agent
+BINARY_NAME=aegis-agent
 
 all: build
 

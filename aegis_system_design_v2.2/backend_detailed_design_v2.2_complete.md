@@ -12,7 +12,7 @@
 | 2.13 | 2026-03-12 | Sisyphus | **任务重新下发与状态映射优化**。修复：RedispatchTask改为原地更新策略（保持task_id不变，更新脚本内容和版本，重置状态为pending）；新增TaskLogRepository.UpdateForRedispatch方法；修复gRPC状态映射逻辑（status始终为success，exit_code单独存储，由前端判断"通过/未通过"）。 |
 | 2.12 | 2026-03-12 | Sisyphus | **任务超时与删除API**。新增：任务超时检测机制（TaskService.StartTimeoutChecker，每30秒检查，超时5分钟标记为timeout）；新增DELETE /tasks/:id删除单个任务（DeleteSingleTask）；原DELETE /tasks/:id改为DELETE /tasks/group/:id删除任务组；ListTaskGroups查询支持timeout状态统计。 |
 | 2.11 | 2026-03-11 | Sisyphus | **脚本状态校验**。RunCheck/RunFix接口新增脚本状态校验逻辑，检查选中规则的check_script_status/fix_script_status是否为"generated"，未生成完成返回400错误和未生成数量。 |
-| 2.10 | 2026-03-11 | Sisyphus | **Bug修复与API增强**。修复：模板删除500错误（DeleteWithRules方法需按正确顺序删除关联表：self_healing_logs→task_logs→script_versions→baseline_rules）；规则删除500错误（Delete方法需删除关联的self_healing_logs、task_logs、script_versions）。新增：批量脚本生成API (POST /api/v1/templates/:id/generate-scripts)，支持并发数控制（默认2）。 |
+| 2.10 | 2026-03-11 | Sisyphus | **Bug修复与API增强**。修复：模板删除500错误（DeleteWithRules方法需按正确顺序删除关联表：self_healing_logs→task_logs→script_versions→aegis_rules）；规则删除500错误（Delete方法需删除关联的self_healing_logs、task_logs、script_versions）。新增：批量脚本生成API (POST /api/v1/templates/:id/generate-scripts)，支持并发数控制（默认2）。 |
 | 2.9 | 2026-03-11 | Sisyphus | **文件管理增强**。新增：数据库 templates 表添加 display_name（显示名称）、file_md5（文件MD5）字段；新增 MD5 检查 API (/api/v1/templates/check-md5)；文件名重复时自动追加随机后缀；删除模板时级联删除文件和 Redis 状态。 |
 | 2.7 | 2026-03-11 | Metis | **Bug 修复：规则去重逻辑**。修复 TemplateService 中 BatchCreate 直接插入规则导致重复的问题。新增 FindByTemplateIDAndTitles 方法在 RuleRepository 中查询已存在规则，保存前过滤重复规则，确保同一模板不会产生重复规则。 |
 | 2.6 | 2026-03-09 | Sisyphus | **LLM 超时优化**。超时时间从 60 秒优化为 120 秒，解决 PDF 解析超时问题。所有服务（TemplateService, ScriptGenerationService, SelfHealingService）使用配置值。添加获取完整 API Key 接口。 |
@@ -66,7 +66,7 @@ V1.6 版本的设计文档中，后端部分仅在通讯层文档中定义了 AP
 |   |   |-- db.go                    # 数据库连接池初始化
 |   |   |-- host_repo.go             # hosts 表 CRUD
 |   |   |-- template_repo.go         # templates 表 CRUD
-|   |   |-- rule_repo.go             # baseline_rules 表 CRUD
+|   |   |-- rule_repo.go             # aegis_rules 表 CRUD
 |   |   |-- task_log_repo.go         # task_logs 表 CRUD
 |   |   |-- config_repo.go           # llm_configs 表 CRUD
 |   |   |-- script_version_repo.go   # script_versions 表 CRUD
@@ -314,8 +314,8 @@ set -e
 
 SERVER_ADDR="{SERVER_IP}:{HTTP_PORT}"
 GRPC_ADDR="{SERVER_IP}:{GRPC_PORT}"
-INSTALL_DIR="/opt/baseline-agent"
-SERVICE_NAME="baseline-agent"
+INSTALL_DIR="/opt/aegis-agent"
+SERVICE_NAME="aegis-agent"
 
 # 检测系统架构
 ARCH=$(uname -m)
@@ -329,18 +329,18 @@ DOWNLOAD_URL="http://$SERVER_ADDR/api/v1/agent/download?os=linux&arch=$ARCH_SUFF
 
 echo "[INFO] 正在从 $SERVER_ADDR 下载 Agent..."
 mkdir -p $INSTALL_DIR
-curl -sSL -o $INSTALL_DIR/baseline-agent "$DOWNLOAD_URL"
-chmod +x $INSTALL_DIR/baseline-agent
+curl -sSL -o $INSTALL_DIR/aegis-agent "$DOWNLOAD_URL"
+chmod +x $INSTALL_DIR/aegis-agent
 
 echo "[INFO] 正在创建 systemd 服务..."
 cat > /etc/systemd/system/$SERVICE_NAME.service <<EOF
 [Unit]
-Description=Baseline Check Agent
+Description=Aegis Check Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/baseline-agent --server $GRPC_ADDR
+ExecStart=$INSTALL_DIR/aegis-agent --server $GRPC_ADDR
 Restart=always
 RestartSec=10
 
@@ -374,9 +374,9 @@ server:
 database:
   host: "postgres"
   port: 5432
-  user: "baseline_user"
+  user: "aegis_user"
   password: "a_strong_db_password"
-  dbname: "baseline_db"
+  dbname: "aegis_db"
   sslmode: "disable"
   max_open_conns: 25       # 最大打开连接数
   max_idle_conns: 10       # 最大空闲连接数
@@ -396,7 +396,7 @@ minio:
   secret_key: "a_third_strong_secret_password"
   use_ssl: false
   buckets:
-    templates: "baseline-templates"       # 存储上传的基线模板文件
+    templates: "aegis-templates"       # 存储上传的基线模板文件
     agent_artifacts: "agent-artifacts"    # 存储Agent二进制构建产物
     scripts: "generated-scripts"          # 存储LLM生成的脚本文件
 
@@ -637,8 +637,8 @@ func NewMinIOClient(cfg *config.MinIOConfig) (*minio.Client, error) {
 
 | Bucket 名称 | 存储内容 | 访问策略 | 对象命名规则 |
 |:---|:---|:---|:---|
-| `baseline-templates` | 用户上传的基线模板文件（PDF、Word、YAML、Excel） | 私有（仅后端服务可访问） | `{template_id}/{original_filename}` |
-| `agent-artifacts` | Agent 交叉编译后的二进制文件 | 私有（通过预签名 URL 提供下载） | `baseline-agent-{os}-{arch}` |
+| `aegis-templates` | 用户上传的基线模板文件（PDF、Word、YAML、Excel） | 私有（仅后端服务可访问） | `{template_id}/{original_filename}` |
+| `agent-artifacts` | Agent 交叉编译后的二进制文件 | 私有（通过预签名 URL 提供下载） | `aegis-agent-{os}-{arch}` |
 | `generated-scripts` | LLM 生成的检查脚本和修复脚本 | 私有（仅后端服务可访问） | `{rule_id}/{version}/{check\|fix}.sh` |
 
 ### 7.3 核心操作封装
@@ -728,7 +728,7 @@ func (v *LLMValidator) ValidateConfig(ctx context.Context, apiKey, baseURL strin
 
 **步骤一：接收与校验**。Gin Handler 接收 `multipart/form-data` 请求，提取上传的文件。首先进行前置校验：文件大小不超过 50MB；文件扩展名必须为 `.pdf`、`.docx`、`.yaml`、`.yml`、`.xlsx` 或 `.txt` 之一；通过读取文件头部的 Magic Bytes 验证文件的真实类型，防止伪造扩展名。
 
-**步骤二：存储到 MinIO**。校验通过后，生成一个新的 UUID 作为 `template_id`，将文件上传到 MinIO 的 `baseline-templates` Bucket 中，对象名为 `{template_id}/{original_filename}`。
+**步骤二：存储到 MinIO**。校验通过后，生成一个新的 UUID 作为 `template_id`，将文件上传到 MinIO 的 `aegis-templates` Bucket 中，对象名为 `{template_id}/{original_filename}`。
 
 **步骤三：创建数据库记录**。在 `templates` 表中插入一条新记录，状态设为 `parsing`，同时将 MinIO 对象名存入 `minio_object_name` 字段。
 
@@ -794,7 +794,7 @@ func NewParser(fileType string) (FileParser, error) {
 
 ```
 [任务队列] → [从MinIO下载文件] → [文件内容解析] → [文本预处理] → [构建LLM提示词]
-    → [调用LLM提取规则] → [解析LLM返回的JSON] → [批量写入baseline_rules表]
+    → [调用LLM提取规则] → [解析LLM返回的JSON] → [批量写入aegis_rules表]
     → [触发脚本生成] → [更新模板状态为completed]
 ```
 
@@ -878,7 +878,7 @@ type RuleExtraction struct {
 
 **步骤一**：开启数据库事务。
 
-**步骤二**：遍历校验通过的规则列表，逐条插入 `baseline_rules` 表。每条记录的 `template_id` 关联到当前正在处理的模板。
+**步骤二**：遍历校验通过的规则列表，逐条插入 `aegis_rules` 表。每条记录的 `template_id` 关联到当前正在处理的模板。
 
 **步骤三**：更新 `templates` 表的状态字段为 `completed`。
 
@@ -976,7 +976,7 @@ LLM 生成的脚本在存储和下发之前，必须经过安全性校验。校�
 
 ### 11.5 脚本版本管理
 
-每次 LLM 生成或修复脚本时，都会在 `script_versions` 表中创建一条新记录，保留完整的版本历史。同时，最新版本的脚本内容会更新到 `baseline_rules` 表的 `generated_check_script` 或 `generated_fix_script` 字段中，并上传到 MinIO 的 `generated-scripts` Bucket 中进行持久化存储。
+每次 LLM 生成或修复脚本时，都会在 `script_versions` 表中创建一条新记录，保留完整的版本历史。同时，最新版本的脚本内容会更新到 `aegis_rules` 表的 `generated_check_script` 或 `generated_fix_script` 字段中，并上传到 MinIO 的 `generated-scripts` Bucket 中进行持久化存储。
 
 ## 12. 自愈修复模块
 
@@ -1067,7 +1067,7 @@ LLM 生成的脚本在存储和下发之前，必须经过安全性校验。校�
 
 **步骤七：重新下发执行**。通过 gRPC Agent Manager 将修复后的脚本作为新的 `ServerCommand` 下发给目标 Agent。
 
-**步骤八：等待结果**。等待 Agent 返回新的 `CommandResult`。如果执行成功，更新自愈状态为 `healed`，更新 `baseline_rules` 表中的脚本为修复后的版本；如果仍然失败且重试次数未达上限（3 次），回到步骤三继续；如果达到重试上限，更新自愈状态为 `failed`，记录最终错误信息。
+**步骤八：等待结果**。等待 Agent 返回新的 `CommandResult`。如果执行成功，更新自愈状态为 `healed`，更新 `aegis_rules` 表中的脚本为修复后的版本；如果仍然失败且重试次数未达上限（3 次），回到步骤三继续；如果达到重试上限，更新自愈状态为 `failed`，记录最终错误信息。
 
 **步骤九：通知前端**。无论自愈成功还是失败，都通过 Redis 的 `task:logs:{task_id}` 列表追加日志行，前端通过轮询获取自愈过程的实时状态。日志格式示例：
 

@@ -3,10 +3,10 @@ package handler
 import (
 	"net/http"
 
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

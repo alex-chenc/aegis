@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent_comm.v1;
 
-option go_package = "baseline-system/pkg/api/v1;pb";
+option go_package = "aegis-system/pkg/api/v1;pb";
 
 // AssetInfo 资产信息
 message AssetInfo {

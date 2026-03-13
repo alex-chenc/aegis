@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/storage"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/storage"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,18 +44,18 @@ func (h *AgentHandler) GetInstallCommand(c *gin.Context) {
 
 func (h *AgentHandler) GetInstallScript(c *gin.Context) {
 	script := fmt.Sprintf(`#!/bin/bash
-# Baseline Agent 安装脚本
-# Agent 将安装在 /opt/baseline-agent/ 目录
-# 日志文件位于 /opt/baseline-agent/logs/agent.log
+# Aegis Agent 安装脚本
+# Agent 将安装在 /opt/aegis-agent/ 目录
+# 日志文件位于 /opt/aegis-agent/logs/agent.log
 
 set -e
 
 SERVER_ADDR="%s:%d"
 GRPC_ADDR="%s:%d"
-INSTALL_DIR="/opt/baseline-agent"
-LOG_DIR="/opt/baseline-agent/logs"
+INSTALL_DIR="/opt/aegis-agent"
+LOG_DIR="/opt/aegis-agent/logs"
 
-echo "=== Baseline Agent 安装脚本 ==="
+echo "=== Aegis Agent 安装脚本 ==="
 echo "安装目录：${INSTALL_DIR}"
 echo "日志目录：${LOG_DIR}"
 echo "服务器地址：${SERVER_ADDR}"
@@ -70,13 +70,13 @@ chmod 755 ${LOG_DIR}
 
 # 下载 Agent 二进制
 echo "[2/5] 下载 Agent 二进制..."
-curl -sSL "http://${SERVER_ADDR}/api/v1/agent/download?os=linux&arch=amd64" -o ${INSTALL_DIR}/baseline-agent
-chmod +x ${INSTALL_DIR}/baseline-agent
+curl -sSL "http://${SERVER_ADDR}/api/v1/agent/download?os=linux&arch=amd64" -o ${INSTALL_DIR}/aegis-agent
+chmod +x ${INSTALL_DIR}/aegis-agent
 
 # 创建配置文件
 echo "[3/5] 创建配置文件..."
-mkdir -p /etc/baseline-agent
-cat > /etc/baseline-agent/config.toml <<EOF
+mkdir -p /etc/aegis-agent
+cat > /etc/aegis-agent/config.toml <<EOF
 server_addr = "${GRPC_ADDR}"
 auth_token = "a_very_secret_agent_token"
 host_id = ""
@@ -84,14 +84,14 @@ EOF
 
 # 创建 systemd 服务
 echo "[4/5] 创建 systemd 服务..."
-cat > /etc/systemd/system/baseline-agent.service <<EOF
+cat > /etc/systemd/system/aegis-agent.service <<EOF
 [Unit]
-Description=Baseline Check Agent
+Description=Aegis Check Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/baseline-agent
+ExecStart=${INSTALL_DIR}/aegis-agent
 Restart=always
 RestartSec=10
 StandardOutput=append:${LOG_DIR}/agent.log
@@ -105,14 +105,14 @@ EOF
 # 启动服务
 echo "[5/5] 启动 Agent 服务..."
 systemctl daemon-reload
-systemctl enable baseline-agent
-systemctl start baseline-agent
-systemctl status baseline-agent --no-pager
+systemctl enable aegis-agent
+systemctl start aegis-agent
+systemctl status aegis-agent --no-pager
 
 echo ""
 echo "=== 安装完成 ==="
-echo "Agent 状态：systemctl status baseline-agent"
-echo "Agent 日志：journalctl -u baseline-agent -f"
+echo "Agent 状态：systemctl status aegis-agent"
+echo "Agent 日志：journalctl -u aegis-agent -f"
 echo "日志文件：${LOG_DIR}/agent.log"
 `, h.serverIP, h.httpPort, h.serverIP, h.grpcPort)
 
@@ -132,7 +132,7 @@ func (h *AgentHandler) DownloadAgent(c *gin.Context) {
 		return
 	}
 
-	objectName := fmt.Sprintf("baseline-agent-linux-%s", arch)
+	objectName := fmt.Sprintf("aegis-agent-linux-%s", arch)
 
 	reader, err := h.minio.DownloadFile("agent-artifacts", objectName)
 	if err != nil {

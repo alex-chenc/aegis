@@ -100,11 +100,11 @@ import (
 	"context"
 	"time"
 
-	"baseline-system/internal/grpc_server"  // ADD THIS
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/grpc_server"  // ADD THIS
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -217,12 +217,12 @@ import (
 	"fmt"  // ADD THIS
 	"time"
 
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/api/v1"  // ADD THIS (for pb)
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/api/v1"  // ADD THIS (for pb)
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -662,8 +662,8 @@ Update imports section:
 
 ```go
 import (
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/service"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/service"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -819,8 +819,8 @@ Update imports:
 
 ```go
 import (
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/service"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/service"
 	"net/http"
 	"strconv"  // ADD THIS
 

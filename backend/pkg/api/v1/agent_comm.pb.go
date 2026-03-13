@@ -629,7 +629,7 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\fAgentService\x12K\n" +
 	"\bRegister\x12\x1e.agent_comm.v1.RegisterRequest\x1a\x1f.agent_comm.v1.RegisterResponse\x12N\n" +
 	"\tHeartbeat\x12\x1f.agent_comm.v1.HeartbeatRequest\x1a .agent_comm.v1.HeartbeatResponse\x12R\n" +
-	"\x0eExecuteCommand\x12\x1d.agent_comm.v1.CommandRequest\x1a\x1d.agent_comm.v1.CommandRequest(\x010\x01B\x1fZ\x1dbaseline-system/pkg/api/v1;pbb\x06proto3"
+	"\x0eExecuteCommand\x12\x1d.agent_comm.v1.CommandRequest\x1a\x1d.agent_comm.v1.CommandRequest(\x010\x01B\x1cZ\x1aaegis-system/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_agent_comm_proto_rawDescOnce sync.Once

@@ -22,8 +22,8 @@ V1.6 版本的设计文档中，虽然在综合设计概览中提到了 Redis �
 
 | 容器名称 | 镜像 | 对外端口 | 职责 |
 |:---|:---|:---|:---|
-| `frontend` | `baseline-system/frontend:latest` | `80:80` | Nginx 托管前端静态资源，反向代理 API 请求到后端 |
-| `backend` | `baseline-system/backend:latest` | `8080:8080`, `9090:9090` | Go 后端服务，提供 HTTP API 和 gRPC 服务 |
+| `frontend` | `aegis-system/frontend:latest` | `80:80` | Nginx 托管前端静态资源，反向代理 API 请求到后端 |
+| `backend` | `aegis-system/backend:latest` | `8080:8080`, `9090:9090` | Go 后端服务，提供 HTTP API 和 gRPC 服务 |
 | `postgres` | `postgres:14-alpine` | `5432:5432` (可选，仅开发环境) | 关系型数据库，持久化所有业务数据 |
 | `redis` | `redis:7-alpine` | `6379:6379` (可选，仅开发环境) | 高速缓存，存储 Agent 状态和任务实时数据 |
 | `minio` | `minio/minio:latest` | `9000:9000`, `9001:9001` | 对象存储，存储模板文件、Agent 二进制和生成的脚本 |
@@ -51,8 +51,8 @@ services:
     container_name: baseline-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: baseline_db
-      POSTGRES_USER: baseline_user
+      POSTGRES_DB: aegis_db
+      POSTGRES_USER: aegis_user
       POSTGRES_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       # 性能调优参数（通过 command 传递）
@@ -92,9 +92,9 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U baseline_user -d baseline_db"]
+      test: ["CMD-SHELL", "pg_isready -U aegis_user -d aegis_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -128,7 +128,7 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-a_strong_redis_password}", "ping"]
       interval: 10s
@@ -151,7 +151,7 @@ services:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -169,7 +169,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set myminio http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY};
-      mc mb myminio/baseline-templates --ignore-existing;
+      mc mb myminio/aegis-templates --ignore-existing;
       mc mb myminio/agent-artifacts --ignore-existing;
       mc mb myminio/generated-scripts --ignore-existing;
       mc anonymous set download myminio/agent-artifacts;
@@ -180,7 +180,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
     networks:
-      - baseline-network
+      - aegis-network
 
   # ============================================================
   # 应用层
@@ -188,7 +188,7 @@ services:
 
   # Go 后端服务
   backend:
-    image: baseline-system/backend:latest
+    image: aegis-system/backend:latest
     container_name: baseline-backend
     restart: unless-stopped
     depends_on:
@@ -202,9 +202,9 @@ services:
       # 数据库配置
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
-      DATABASE_USER: baseline_user
+      DATABASE_USER: aegis_user
       DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
-      DATABASE_DBNAME: baseline_db
+      DATABASE_DBNAME: aegis_db
       DATABASE_SSLMODE: disable
       DATABASE_MAX_OPEN_CONNS: 25
       DATABASE_MAX_IDLE_CONNS: 10
@@ -235,7 +235,7 @@ services:
       - "8080:8080"
       - "9090:9090"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 15s
@@ -245,7 +245,7 @@ services:
 
   # Vue 前端 (Nginx)
   frontend:
-    image: baseline-system/frontend:latest
+    image: aegis-system/frontend:latest
     container_name: baseline-frontend
     restart: unless-stopped
     depends_on:
@@ -254,7 +254,7 @@ services:
     ports:
       - "80:80"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
       interval: 15s
@@ -266,7 +266,7 @@ services:
 # 网络配置
 # ============================================================
 networks:
-  baseline-network:
+  aegis-network:
     driver: bridge
     ipam:
       config:
@@ -371,7 +371,7 @@ PostgreSQL 的数据目录 `/var/lib/postgresql/data` 通过 Docker Named Volume
 
 ```bash
 # 每天凌晨 2:00 执行数据库备份
-0 2 * * * docker exec baseline-postgres pg_dump -U baseline_user -d baseline_db -F c -f /tmp/backup_$(date +\%Y\%m\%d).dump && docker cp baseline-postgres:/tmp/backup_$(date +\%Y\%m\%d).dump /opt/backups/
+0 2 * * * docker exec baseline-postgres pg_dump -U aegis_user -d aegis_db -F c -f /tmp/backup_$(date +\%Y\%m\%d).dump && docker cp baseline-postgres:/tmp/backup_$(date +\%Y\%m\%d).dump /opt/backups/
 ```
 
 **WAL 归档**：对于需要时间点恢复（PITR）的场景，可启用 WAL 归档功能，将 WAL 日志持续归档到外部存储。
@@ -409,7 +409,7 @@ MinIO 的 Bucket 初始化通过一个独立的一次性容器 `minio-init` 完�
 
 | Bucket | 访问策略 | 说明 |
 |:---|:---|:---|
-| `baseline-templates` | 私有 | 仅后端服务通过 SDK 访问，存储用户上传的基线模板文件 |
+| `aegis-templates` | 私有 | 仅后端服务通过 SDK 访问，存储用户上传的基线模板文件 |
 | `agent-artifacts` | 公开下载 | 允许匿名下载，Agent 安装脚本直接通过 URL 下载二进制文件 |
 | `generated-scripts` | 私有 | 仅后端服务通过 SDK 访问，存储 LLM 生成的脚本文件 |
 
@@ -494,7 +494,7 @@ server {
 
 ### 10.2 容器间通讯
 
-所有容器通过 Docker 自定义桥接网络 `baseline-network` 进行通讯。容器间使用服务名（如 `postgres`、`redis`、`minio`）作为主机名进行 DNS 解析，无需使用 IP 地址。
+所有容器通过 Docker 自定义桥接网络 `aegis-network` 进行通讯。容器间使用服务名（如 `postgres`、`redis`、`minio`）作为主机名进行 DNS 解析，无需使用 IP 地址。
 
 ## 11. 健康检查机制
 

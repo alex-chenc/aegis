@@ -36,7 +36,7 @@
 ## Agent日志系统
 
 ### 配置
-- 日志目录: /opt/baseline-agent/logs/
+- 日志目录: /opt/aegis-agent/logs/
 - 轮转: 100MB, 5备份, 30天
 - 格式: JSON + 控制台
 
@@ -47,7 +47,7 @@ cd backend && go test ./internal/service -v
 
 # Agent
 cd agent && go run ./cmd/agent
-tail -f /opt/baseline-agent/logs/agent.log
+tail -f /opt/aegis-agent/logs/agent.log
 
 # 前端
 cd frontend && npm run dev

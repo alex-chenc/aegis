@@ -25,7 +25,7 @@ V2.2 版本的数据库包含 7 张表，按业务领域可分为三组。
 |:---|:---|:---|:---|
 | 资产管理 | `hosts` | 存储 Agent 上报的主机核心身份信息 | V1.6 保留 |
 | 模板与规则 | `templates` | 存储用户上传的基线模板文件元数据 | V1.6 保留 |
-| 模板与规则 | `baseline_rules` | 存储 LLM 解析出的基线规则 | V1.6 保留 |
+| 模板与规则 | `aegis_rules` | 存储 LLM 解析出的基线规则 | V1.6 保留 |
 | 任务执行 | `task_logs` | 记录检查/修复任务的执行日志 | V1.6 更新 |
 | 系统配置 | `llm_configs` | 存储 LLM 服务的配置信息 | **V2.2 新增** |
 | 脚本管理 | `script_versions` | 记录 LLM 生成/修复脚本的版本历史 | **V2.2 新增** |
@@ -65,7 +65,7 @@ V2.2 版本的数据库包含 7 张表，按业务领域可分为三组。
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录的创建时间戳。 |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录的最后更新时间戳。 |
 
-### 4.3 `baseline_rules` (基线规则表) — V1.6 保留
+### 4.3 `aegis_rules` (基线规则表) — V1.6 保留
 
 本表的设计与 V1.6 完全一致，不做任何修改。
 
@@ -92,7 +92,7 @@ V2.2 版本的数据库包含 7 张表，按业务领域可分为三组。
 |:---|:---|:---|:---|
 | `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 记录的唯一标识符。**重要**：重新下发时保持此ID不变，实现原地更新。 |
 | `task_group_id` | `UUID` | `NOT NULL` | 批量任务组 ID，同一次下发的所有子任务共享此 ID。 |
-| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (baseline_rules.id)` | 关联的基线规则 ID。 |
+| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (aegis_rules.id)` | 关联的基线规则 ID。 |
 | `host_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (hosts.id)` | 任务执行的目标主机 ID。 |
 | `task_type` | `VARCHAR(20)` | `NOT NULL` | 任务类型：'CHECK' 或 'FIX'。 |
 | `status` | `VARCHAR(20)` | `NOT NULL` | 任务状态：'PENDING'、'RUNNING'、'SUCCESS'、'FAILED'、'TIMEOUT'、'HEALING'。**V2.2更新**：SUCCESS仅表示执行过程正常完成，不代表检查通过。**修复任务特殊处理**：exit_code!=0时status为FAILED以触发自愈。 |
@@ -169,7 +169,7 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 | 字段名 | 数据类型 | 约束 | 描述 |
 |:---|:---|:---|:---|
 | `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 记录的唯一标识符。 |
-| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (baseline_rules.id)` | 关联的基线规则 ID。 |
+| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (aegis_rules.id)` | 关联的基线规则 ID。 |
 | `script_type` | `VARCHAR(10)` | `NOT NULL` | 脚本类型：'CHECK' 或 'FIX'。 |
 | `version` | `INT` | `NOT NULL` | 版本号，从 1 开始递增。 |
 | `script_content` | `TEXT` | `NOT NULL` | 完整的脚本内容。 |
@@ -188,7 +188,7 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 |:---|:---|:---|:---|
 | `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 记录的唯一标识符。 |
 | `original_task_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (task_logs.id)` | 触发自愈的原始任务 ID。 |
-| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (baseline_rules.id)` | 关联的基线规则 ID。 |
+| `rule_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (aegis_rules.id)` | 关联的基线规则 ID。 |
 | `host_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (hosts.id)` | 目标主机 ID。 |
 | `script_type` | `VARCHAR(10)` | `NOT NULL` | 脚本类型：'CHECK' 或 'FIX'。 |
 | `trigger_error` | `TEXT` | `NOT NULL` | 触发自愈的原始错误信息（stderr 内容）。 |
@@ -236,8 +236,8 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 | `hosts` | `ip_address` | `BTREE` (UNIQUE) | 主键级唯一标识，高频查询。 |
 | `hosts` | `hostname` | `BTREE` | 支持按主机名进行搜索。 |
 | `hosts` | `last_heartbeat_at` | `BTREE` | 用于后台任务快速筛选离线主机。 |
-| `baseline_rules` | `template_id` | `BTREE` | 高频用于查询某个模板下的所有规则。 |
-| `baseline_rules` | `script_status` | `BTREE` | 用于脚本生成 Worker 筛选待生成的规则。 |
+| `aegis_rules` | `template_id` | `BTREE` | 高频用于查询某个模板下的所有规则。 |
+| `aegis_rules` | `script_status` | `BTREE` | 用于脚本生成 Worker 筛选待生成的规则。 |
 | `task_logs` | `task_group_id` | `BTREE` | 高频用于查询某次批量任务的所有子任务。 |
 | `task_logs` | `rule_id`, `host_id` | `BTREE` | 高频用于查询某个主机或某条规则的执行历史。 |
 | `task_logs` | `created_at` | `BTREE` | 支持按时间范围查询日志。 |
@@ -251,11 +251,11 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 
 各表之间的关系如下。
 
-`templates` 1:N `baseline_rules`：一个模板可以解析出多条基线规则。
+`templates` 1:N `aegis_rules`：一个模板可以解析出多条基线规则。
 
-`baseline_rules` 1:N `task_logs`：一条规则可以被多次执行。
+`aegis_rules` 1:N `task_logs`：一条规则可以被多次执行。
 
-`baseline_rules` 1:N `script_versions`：一条规则可以有多个版本的脚本。
+`aegis_rules` 1:N `script_versions`：一条规则可以有多个版本的脚本。
 
 `hosts` 1:N `task_logs`：一台主机可以执行多个任务。
 
@@ -345,9 +345,9 @@ CREATE TRIGGER update_templates_updated_at BEFORE UPDATE ON templates
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================
--- 4. 基线规则表 (baseline_rules)
+-- 4. 基线规则表 (aegis_rules)
 -- ============================================================
-CREATE TABLE baseline_rules (
+CREATE TABLE aegis_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     template_id UUID NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
@@ -361,9 +361,9 @@ CREATE TABLE baseline_rules (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_baseline_rules_template_id ON baseline_rules(template_id);
-CREATE INDEX idx_baseline_rules_script_status ON baseline_rules(script_status);
-CREATE TRIGGER update_baseline_rules_updated_at BEFORE UPDATE ON baseline_rules
+CREATE INDEX idx_aegis_rules_template_id ON aegis_rules(template_id);
+CREATE INDEX idx_aegis_rules_script_status ON aegis_rules(script_status);
+CREATE TRIGGER update_aegis_rules_updated_at BEFORE UPDATE ON aegis_rules
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================
@@ -371,7 +371,7 @@ CREATE TRIGGER update_baseline_rules_updated_at BEFORE UPDATE ON baseline_rules
 -- ============================================================
 CREATE TABLE script_versions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id) ON DELETE CASCADE,
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id) ON DELETE CASCADE,
     script_type VARCHAR(10) NOT NULL,
     version INT NOT NULL,
     script_content TEXT NOT NULL,
@@ -393,7 +393,7 @@ CREATE INDEX idx_script_versions_is_current ON script_versions(is_current);
 -- ============================================================
 CREATE TABLE self_healing_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id) ON DELETE CASCADE,
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id) ON DELETE CASCADE,
     host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     script_type VARCHAR(10) NOT NULL,
     trigger_error TEXT NOT NULL,
@@ -417,7 +417,7 @@ CREATE INDEX idx_self_healing_logs_status ON self_healing_logs(status);
 CREATE TABLE task_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_group_id UUID NOT NULL,
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id) ON DELETE CASCADE,
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id) ON DELETE CASCADE,
     host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     task_type VARCHAR(20) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
@@ -450,8 +450,8 @@ CREATE INDEX idx_self_healing_logs_original_task_id ON self_healing_logs(origina
 | 表名 | 保留策略 | 清理方式 |
 |:---|:---|:---|
 | `hosts` | 永久保留，除非主机被明确下线 | 手动删除 |
-| `templates` | 永久保留，除非用户手动删除 | 级联删除关联的 `baseline_rules` |
-| `baseline_rules` | 跟随模板生命周期 | 级联删除关联的 `script_versions` 和 `task_logs` |
+| `templates` | 永久保留，除非用户手动删除 | 级联删除关联的 `aegis_rules` |
+| `aegis_rules` | 跟随模板生命周期 | 级联删除关联的 `script_versions` 和 `task_logs` |
 | `task_logs` | 保留最近 90 天 | 定时任务清理：`DELETE FROM task_logs WHERE created_at < NOW() - INTERVAL '90 days'` |
 | `llm_configs` | 永久保留（含历史记录） | 无需清理 |
 | `script_versions` | 保留最近 180 天的非当前版本 | 定时任务清理：`DELETE FROM script_versions WHERE is_current = false AND created_at < NOW() - INTERVAL '180 days'` |

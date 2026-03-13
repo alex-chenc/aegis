@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"baseline-agent/internal/logger"
+	"aegis-agent/internal/logger"
 
 	"go.uber.org/zap"
 )
@@ -40,7 +40,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 		zap.String("task_id", taskID),
 		zap.Int32("timeout_seconds", timeoutSeconds))
 
-	tmpDir := filepath.Join("/tmp/baseline-agent", taskID)
+	tmpDir := filepath.Join("/tmp/aegis-agent", taskID)
 	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		logger.Error("Failed to create temp dir", 
 			zap.String("task_id", taskID),

@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/http"
 
-	"baseline-system/internal/repository"
-	"baseline-system/internal/service"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/service"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -202,7 +202,7 @@ func (h *TemplateHandler) DeleteTemplate(c *gin.Context) {
 	}
 
 	if template.MinioObjectName != "" {
-		if err := h.minioClient.DeleteFile("baseline-templates", template.MinioObjectName); err != nil {
+		if err := h.minioClient.DeleteFile("aegis-templates", template.MinioObjectName); err != nil {
 			logger.Warn("failed to delete file from minio", zap.Error(err), zap.String("object", template.MinioObjectName))
 		}
 	}

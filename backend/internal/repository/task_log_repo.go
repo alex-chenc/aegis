@@ -3,8 +3,8 @@ package repository
 import (
 	"time"
 
-	"baseline-system/internal/model"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/model"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -218,7 +218,7 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 
 	if params.Search != "" {
 		search := "%" + params.Search + "%"
-		query = query.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN baseline_rules br ON tl.rule_id = br.id WHERE br.title ILIKE ?)", search)
+		query = query.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN aegis_rules ar ON tl.rule_id = ar.id WHERE ar.title ILIKE ?)", search)
 	}
 
 	var summaries []TaskGroupSummary
@@ -262,7 +262,7 @@ func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64,
 
 	if params.Search != "" {
 		search := "%" + params.Search + "%"
-		subQuery = subQuery.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN baseline_rules br ON tl.rule_id = br.id WHERE br.title ILIKE ?)", search)
+		subQuery = subQuery.Where("task_group_id IN (SELECT DISTINCT task_group_id FROM task_logs tl JOIN aegis_rules ar ON tl.rule_id = ar.id WHERE ar.title ILIKE ?)", search)
 	}
 
 	var count int64

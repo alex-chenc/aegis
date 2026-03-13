@@ -12,11 +12,11 @@ services:
   # PostgreSQL 关系型数据库
   postgres:
     image: postgres:14-alpine
-    container_name: baseline-postgres
+    container_name: aegis-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: baseline_db
-      POSTGRES_USER: baseline_user
+      POSTGRES_DB: aegis_db
+      POSTGRES_USER: aegis_user
       POSTGRES_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     command:
@@ -55,9 +55,9 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U baseline_user -d baseline_db"]
+      test: ["CMD-SHELL", "pg_isready -U aegis_user -d aegis_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -66,7 +66,7 @@ services:
   # Redis 高速缓存
   redis:
     image: redis:7-alpine
-    container_name: baseline-redis
+    container_name: aegis-redis
     restart: unless-stopped
     command:
       - "redis-server"
@@ -91,7 +91,7 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-a_strong_redis_password}", "ping"]
       interval: 10s
@@ -102,7 +102,7 @@ services:
   # MinIO 对象存储
   minio:
     image: minio/minio:latest
-    container_name: baseline-minio
+    container_name: aegis-minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio_admin}
@@ -114,7 +114,7 @@ services:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -125,14 +125,14 @@ services:
   # MinIO 初始化容器（一次性运行，创建 Bucket）
   minio-init:
     image: minio/mc:latest
-    container_name: baseline-minio-init
+    container_name: aegis-minio-init
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       mc alias set myminio http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY};
-      mc mb myminio/baseline-templates --ignore-existing;
+      mc mb myminio/aegis-templates --ignore-existing;
       mc mb myminio/agent-artifacts --ignore-existing;
       mc mb myminio/generated-scripts --ignore-existing;
       mc anonymous set download myminio/agent-artifacts;
@@ -143,7 +143,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
     networks:
-      - baseline-network
+      - aegis-network
 
   # ============================================================
   # 应用层
@@ -151,8 +151,8 @@ services:
 
   # Go 后端服务
   backend:
-    image: baseline-system/backend:latest
-    container_name: baseline-backend
+    image: aegis-system/backend:latest
+    container_name: aegis-backend
     restart: unless-stopped
     # DNS 配置 - 解决外部 API 域名解析问题
     dns:
@@ -172,9 +172,9 @@ services:
       # 数据库配置
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
-      DATABASE_USER: baseline_user
+      DATABASE_USER: aegis_user
       DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
-      DATABASE_DBNAME: baseline_db
+      DATABASE_DBNAME: aegis_db
       DATABASE_SSLMODE: disable
       DATABASE_MAX_OPEN_CONNS: 25
       DATABASE_MAX_IDLE_CONNS: 10
@@ -205,7 +205,7 @@ services:
       - "8080:8080"
       - "19090:9090"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 15s
@@ -215,8 +215,8 @@ services:
 
   # Vue 前端 (Nginx)
   frontend:
-    image: baseline-system/frontend:latest
-    container_name: baseline-frontend
+    image: aegis-system/frontend:latest
+    container_name: aegis-frontend
     restart: unless-stopped
     depends_on:
       backend:
@@ -224,7 +224,7 @@ services:
     ports:
       - "8081:80"
     networks:
-      - baseline-network
+      - aegis-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
       interval: 15s
@@ -236,7 +236,7 @@ services:
 # 网络配置
 # ============================================================
 networks:
-  baseline-network:
+  aegis-network:
     driver: bridge
     ipam:
       config:

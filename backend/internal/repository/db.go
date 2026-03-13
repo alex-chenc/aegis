@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"baseline-system/config"
-	"baseline-system/pkg/logger"
+	"aegis-system/config"
+	"aegis-system/pkg/logger"
 
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"

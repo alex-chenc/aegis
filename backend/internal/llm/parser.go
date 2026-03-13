@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"baseline-system/internal/model"
+	"aegis-system/internal/model"
 
-	"baseline-system/pkg/logger"
+	"aegis-system/pkg/logger"
 
 	"go.uber.org/zap"
 )
@@ -18,8 +18,8 @@ type ExtractedRule struct {
 	FixContent   string `json:"fix_content"`
 }
 
-// ParseRules parses LLM response and extracts baseline rules
-func ParseRules(llmResponse string) ([]*model.BaselineRule, error) {
+// ParseRules parses LLM response and extracts aegis rules
+func ParseRules(llmResponse string) ([]*model.AegisRule, error) {
 	// Try to extract JSON array from response
 	jsonStr := extractJSON(llmResponse)
 	if jsonStr == "" {
@@ -38,10 +38,10 @@ func ParseRules(llmResponse string) ([]*model.BaselineRule, error) {
 		return nil, fmt.Errorf("failed to parse rules: %w", err)
 	}
 
-	// Convert to model.BaselineRule
-	rules := make([]*model.BaselineRule, len(extractedRules))
+	// Convert to model.AegisRule
+	rules := make([]*model.AegisRule, len(extractedRules))
 	for i, er := range extractedRules {
-		rules[i] = &model.BaselineRule{
+		rules[i] = &model.AegisRule{
 			Title:        strings.TrimSpace(er.Title),
 			CheckContent: strings.TrimSpace(er.CheckContent),
 			FixContent:   strings.TrimSpace(er.FixContent),
@@ -121,9 +121,9 @@ func ValidateRule(rule *ExtractedRule) error {
 }
 
 // ValidateRules deduplicates rules by title
-func ValidateRules(rules []*model.BaselineRule) []*model.BaselineRule {
+func ValidateRules(rules []*model.AegisRule) []*model.AegisRule {
 	seen := make(map[string]bool)
-	validated := make([]*model.BaselineRule, 0, len(rules))
+	validated := make([]*model.AegisRule, 0, len(rules))
 
 	for _, rule := range rules {
 		if rule.Title == "" {

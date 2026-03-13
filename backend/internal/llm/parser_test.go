@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"baseline-system/pkg/logger"
+	"aegis-system/pkg/logger"
 )
 
 func init() {

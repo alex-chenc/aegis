@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	pb "baseline-system/pkg/api/v1"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	pb "aegis-system/pkg/api/v1"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"

@@ -1,8 +1,8 @@
 package repository
 
 import (
-	"baseline-system/internal/model"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/model"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -17,7 +17,7 @@ func NewRuleRepository(db *gorm.DB) *RuleRepository {
 	return &RuleRepository{db: db}
 }
 
-func (r *RuleRepository) BatchCreate(rules []*model.BaselineRule) error {
+func (r *RuleRepository) BatchCreate(rules []*model.AegisRule) error {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -35,8 +35,8 @@ func (r *RuleRepository) BatchCreate(rules []*model.BaselineRule) error {
 	return nil
 }
 
-func (r *RuleRepository) FindByTemplateID(templateID uuid.UUID) ([]model.BaselineRule, error) {
-	var rules []model.BaselineRule
+func (r *RuleRepository) FindByTemplateID(templateID uuid.UUID) ([]model.AegisRule, error) {
+	var rules []model.AegisRule
 	result := r.db.Where("template_id = ?", templateID).Order("created_at").Find(&rules)
 	if result.Error != nil {
 		logger.Error("failed to find rules by template_id",
@@ -50,8 +50,8 @@ func (r *RuleRepository) FindByTemplateID(templateID uuid.UUID) ([]model.Baselin
 	return rules, nil
 }
 
-func (r *RuleRepository) FindByID(id uuid.UUID) (*model.BaselineRule, error) {
-	var rule model.BaselineRule
+func (r *RuleRepository) FindByID(id uuid.UUID) (*model.AegisRule, error) {
+	var rule model.AegisRule
 	result := r.db.First(&rule, "id = ?", id)
 	if result.Error != nil {
 		logger.Error("failed to find rule by id", zap.Error(result.Error), zap.String("id", id.String()))
@@ -73,7 +73,7 @@ func (r *RuleRepository) UpdateScript(ruleID uuid.UUID, scriptType, scriptConten
 		updates["fix_script_version"] = version
 	}
 
-	result := r.db.Model(&model.BaselineRule{}).Where("id = ?", ruleID).Updates(updates)
+	result := r.db.Model(&model.AegisRule{}).Where("id = ?", ruleID).Updates(updates)
 	if result.Error != nil {
 		logger.Error("failed to update rule script",
 			zap.Error(result.Error),
@@ -92,7 +92,7 @@ func (r *RuleRepository) UpdateScript(ruleID uuid.UUID, scriptType, scriptConten
 }
 
 func (r *RuleRepository) UpdateScriptStatus(ruleID uuid.UUID, status string) error {
-	result := r.db.Model(&model.BaselineRule{}).
+	result := r.db.Model(&model.AegisRule{}).
 		Where("id = ?", ruleID).
 		Update("script_status", status)
 
@@ -120,7 +120,7 @@ func (r *RuleRepository) UpdateScriptStatusByType(ruleID uuid.UUID, scriptType, 
 		updates["fix_script_status"] = status
 	}
 
-	result := r.db.Model(&model.BaselineRule{}).
+	result := r.db.Model(&model.AegisRule{}).
 		Where("id = ?", ruleID).
 		Updates(updates)
 
@@ -159,7 +159,7 @@ func (r *RuleRepository) UpdateScriptStatusWithError(ruleID uuid.UUID, scriptTyp
 		}
 	}
 
-	result := r.db.Model(&model.BaselineRule{}).
+	result := r.db.Model(&model.AegisRule{}).
 		Where("id = ?", ruleID).
 		Updates(updates)
 
@@ -238,7 +238,7 @@ func (r *RuleRepository) Delete(ruleID uuid.UUID) error {
 	}
 
 	// 再删除规则
-	result := r.db.Delete(&model.BaselineRule{}, "id = ?", ruleID)
+	result := r.db.Delete(&model.AegisRule{}, "id = ?", ruleID)
 	if result.Error != nil {
 		logger.Error("failed to delete rule",
 			zap.Error(result.Error),
@@ -261,7 +261,7 @@ func (r *RuleRepository) UpdateScriptContent(ruleID uuid.UUID, scriptType, scrip
 		updates["generated_fix_script"] = scriptContent
 	}
 
-	result := r.db.Model(&model.BaselineRule{}).Where("id = ?", ruleID).Updates(updates)
+	result := r.db.Model(&model.AegisRule{}).Where("id = ?", ruleID).Updates(updates)
 	if result.Error != nil {
 		logger.Error("failed to update rule script content",
 			zap.Error(result.Error),
@@ -285,7 +285,7 @@ func (r *RuleRepository) FindByTemplateIDAndTitles(templateID uuid.UUID, titles 
 		return make(map[string]bool), nil
 	}
 
-	var rules []model.BaselineRule
+	var rules []model.AegisRule
 	result := r.db.Where("template_id = ? AND title IN ?", templateID, titles).
 		Select("title").
 		Find(&rules)

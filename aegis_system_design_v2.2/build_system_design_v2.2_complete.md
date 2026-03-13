@@ -38,7 +38,7 @@ BINARY_NAME=backend
 GO_CMD=go
 
 # Docker 相关变量
-IMAGE_NAME=baseline-system/backend
+IMAGE_NAME=aegis-system/backend
 IMAGE_TAG?=latest
 
 all: build
@@ -72,7 +72,7 @@ docker:
 
 set -e
 
-IMAGE_NAME=${1:-"baseline-system/backend"}
+IMAGE_NAME=${1:-"aegis-system/backend"}
 IMAGE_TAG=${2:-"latest"}
 
 # 基础镜像
@@ -139,7 +139,7 @@ CMD ["./backend"]
 NPM_CMD=npm
 
 # Docker 相关变量
-IMAGE_NAME=baseline-system/frontend
+IMAGE_NAME=aegis-system/frontend
 IMAGE_TAG?=latest
 
 all: build
@@ -177,7 +177,7 @@ docker:
 
 set -e
 
-IMAGE_NAME=${1:-"baseline-system/frontend"}
+IMAGE_NAME=${1:-"aegis-system/frontend"}
 IMAGE_TAG=${2:-"latest"}
 
 # 基础镜像
@@ -235,7 +235,7 @@ CMD ["nginx", "-g", "daemon off;"]
 .PHONY: all build clean test upload
 
 # Go 相关变量
-BINARY_NAME=baseline-agent
+BINARY_NAME=aegis-agent
 
 # 交叉编译目标
 TARGETS=linux/amd64 linux/arm64
@@ -337,13 +337,13 @@ if [ -z "${DOWNLOAD_URL}" ]; then
 fi
 
 # 4. 下载 Agent 二进制文件
-AGENT_PATH="/usr/local/bin/baseline-agent"
+AGENT_PATH="/usr/local/bin/aegis-agent"
 echo "Downloading agent to ${AGENT_PATH}..."
 curl -L --progress-bar "${DOWNLOAD_URL}" -o "${AGENT_PATH}"
 chmod +x "${AGENT_PATH}"
 
 # 5. 创建配置文件
-CONFIG_DIR="/etc/baseline-agent"
+CONFIG_DIR="/etc/aegis-agent"
 CONFIG_PATH="${CONFIG_DIR}/config.toml"
 echo "Creating config file at ${CONFIG_PATH}..."
 mkdir -p "${CONFIG_DIR}"
@@ -359,11 +359,11 @@ HostID = ""
 EOF
 
 # 6. 创建 Systemd 服务
-SERVICE_PATH="/etc/systemd/system/baseline-agent.service"
+SERVICE_PATH="/etc/systemd/system/aegis-agent.service"
 echo "Creating systemd service at ${SERVICE_PATH}..."
 cat > "${SERVICE_PATH}" << EOF
 [Unit]
-Description=Baseline Check Agent
+Description=Aegis Check Agent
 After=network.target
 
 [Service]
@@ -381,8 +381,8 @@ EOF
 # 7. 启动服务
 echo "Starting agent service..."
 systemctl daemon-reload
-systemctl enable baseline-agent.service
-systemctl restart baseline-agent.service
+systemctl enable aegis-agent.service
+systemctl restart aegis-agent.service
 
 echo "Agent installed and started successfully."
 ```

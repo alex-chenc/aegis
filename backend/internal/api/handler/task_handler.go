@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"baseline-system/internal/grpc_server"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/service"
+	"aegis-system/internal/grpc_server"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/service"
 	"net/http"
 	"time"
 

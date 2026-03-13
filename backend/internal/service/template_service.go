@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"baseline-system/internal/fileparser"
-	"baseline-system/internal/llm"
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/fileparser"
+	"aegis-system/internal/llm"
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -99,7 +99,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 	s.updateParseStatus(task.TemplateID, "parsing", 20, "下载文件中...")
 
 	// 从 MinIO 下载文件
-	reader, err := s.minioClient.DownloadFile("baseline-templates", task.MinIOPath)
+	reader, err := s.minioClient.DownloadFile("aegis-templates", task.MinIOPath)
 	if err != nil {
 		logger.Error("failed to download file from MinIO",
 			zap.Error(err),
@@ -213,7 +213,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 	}
 
 	// 过滤出不存在的规则
-	newRules := make([]*model.BaselineRule, 0, len(rules))
+	newRules := make([]*model.AegisRule, 0, len(rules))
 	for _, rule := range rules {
 		if !existingTitles[rule.Title] {
 			newRules = append(newRules, rule)
@@ -336,7 +336,7 @@ func (s *TemplateService) UploadTemplate(ctx context.Context, filename string, r
 	minIOPath := fmt.Sprintf("%s/%s", templateID.String(), filename)
 	contentType := storage.GetContentType(filename)
 
-	_, err = s.minioClient.UploadFile("baseline-templates", minIOPath, reader, fileSize, contentType)
+	_, err = s.minioClient.UploadFile("aegis-templates", minIOPath, reader, fileSize, contentType)
 	if err != nil {
 		logger.Error("failed to upload file to MinIO",
 			zap.Error(err),

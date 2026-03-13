@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"baseline-system/config"
-	"baseline-system/pkg/logger"
+	"aegis-system/config"
+	"aegis-system/pkg/logger"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"

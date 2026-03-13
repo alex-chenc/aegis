@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-IMAGE_NAME=${1:-"baseline-system/backend"}
+IMAGE_NAME=${1:-"aegis-system/backend"}
 IMAGE_TAG=${2:-"latest"}
 BASE_IMAGE="golang:1.20-alpine"
 

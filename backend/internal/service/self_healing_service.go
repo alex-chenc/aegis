@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"baseline-system/internal/llm"
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/internal/storage"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/llm"
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/internal/storage"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"

@@ -4,7 +4,7 @@ import "fmt"
 
 // Prompt templates for LLM interactions
 
-// RuleExtractionPrompt extracts baseline rules from uploaded documents
+// RuleExtractionPrompt extracts aegis rules from uploaded documents
 const RuleExtractionPrompt = `你是一位资深的安全基线专家，擅长从技术文档中提取安全检查规则。
 
 请从以下文档内容中提取所有的安全基线检查项，并以 JSON 数组格式返回。每个检查项包含：

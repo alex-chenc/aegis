@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type BaselineRule struct {
+type AegisRule struct {
 	ID                   uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	TemplateID           uuid.UUID `gorm:"type:uuid;not null;index" json:"template_id"`
 	Title                string    `gorm:"type:varchar(255);not null" json:"title"`
@@ -25,6 +25,6 @@ type BaselineRule struct {
 	UpdatedAt            time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
-func (BaselineRule) TableName() string {
-	return "baseline_rules"
+func (AegisRule) TableName() string {
+	return "aegis_rules"
 }

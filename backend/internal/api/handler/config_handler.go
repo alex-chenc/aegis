@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"baseline-system/internal/llm"
-	"baseline-system/internal/model"
-	"baseline-system/internal/repository"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/llm"
+	"aegis-system/internal/model"
+	"aegis-system/internal/repository"
+	"aegis-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

@@ -1,4 +1,4 @@
--- 自动化基线检查与自愈系统 - 数据库初始化脚本
+-- 自动化基线检查与自愈系统 (Aegis) - 数据库初始化脚本
 -- 版本：V2.0
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_templates_status ON templates(status);
 CREATE INDEX IF NOT EXISTS idx_templates_created ON templates(created_at);
 CREATE INDEX IF NOT EXISTS idx_templates_md5 ON templates(file_md5);
 
-CREATE TABLE IF NOT EXISTS baseline_rules (
+CREATE TABLE IF NOT EXISTS aegis_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     template_id UUID NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
@@ -57,13 +57,13 @@ CREATE TABLE IF NOT EXISTS baseline_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rules_template ON baseline_rules(template_id);
-CREATE INDEX idx_rules_status ON baseline_rules(script_status);
+CREATE INDEX idx_rules_template ON aegis_rules(template_id);
+CREATE INDEX idx_rules_status ON aegis_rules(script_status);
 
 CREATE TABLE IF NOT EXISTS task_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_group_id UUID NOT NULL,
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id),
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
     host_id UUID NOT NULL REFERENCES hosts(id),
     task_type VARCHAR(20) NOT NULL,
     status VARCHAR(20) NOT NULL,
@@ -101,7 +101,7 @@ CREATE INDEX idx_llm_configs_active ON llm_configs(is_active);
 
 CREATE TABLE IF NOT EXISTS script_versions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id),
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
     script_type VARCHAR(10) NOT NULL,
     version INT NOT NULL,
     script_content TEXT NOT NULL,
@@ -120,7 +120,7 @@ CREATE INDEX idx_script_versions_current ON script_versions(is_current);
 CREATE TABLE IF NOT EXISTS self_healing_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     original_task_id UUID NOT NULL REFERENCES task_logs(id),
-    rule_id UUID NOT NULL REFERENCES baseline_rules(id),
+    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
     host_id UUID NOT NULL REFERENCES hosts(id),
     script_type VARCHAR(10) NOT NULL,
     status VARCHAR(20) NOT NULL,
@@ -153,8 +153,8 @@ CREATE TRIGGER update_templates_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_baseline_rules_updated_at
-    BEFORE UPDATE ON baseline_rules
+CREATE TRIGGER update_aegis_rules_updated_at
+    BEFORE UPDATE ON aegis_rules
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 

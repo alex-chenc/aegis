@@ -174,8 +174,8 @@ set -e
 
 SERVER_ADDR="203.0.113.10:8080"
 GRPC_ADDR="203.0.113.10:9090"
-INSTALL_DIR="/opt/baseline-agent"
-SERVICE_NAME="baseline-agent"
+INSTALL_DIR="/opt/aegis-agent"
+SERVICE_NAME="aegis-agent"
 
 # 检测系统架构
 ARCH=$(uname -m)
@@ -189,18 +189,18 @@ DOWNLOAD_URL="http://$SERVER_ADDR/api/v1/agent/download?os=linux&arch=$ARCH_SUFF
 
 echo "[INFO] 正在从 $SERVER_ADDR 下载 Agent..."
 mkdir -p $INSTALL_DIR
-curl -sSL -o $INSTALL_DIR/baseline-agent "$DOWNLOAD_URL"
-chmod +x $INSTALL_DIR/baseline-agent
+curl -sSL -o $INSTALL_DIR/aegis-agent "$DOWNLOAD_URL"
+chmod +x $INSTALL_DIR/aegis-agent
 
 echo "[INFO] 正在创建 systemd 服务..."
 cat > /etc/systemd/system/$SERVICE_NAME.service <<EOF
 [Unit]
-Description=Baseline Check Agent
+Description=Aegis Check Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/baseline-agent --server $GRPC_ADDR
+ExecStart=$INSTALL_DIR/aegis-agent --server $GRPC_ADDR
 Restart=always
 RestartSec=10
 
@@ -225,7 +225,7 @@ Query Parameters: `os` (string, required), `arch` (string, required)
 响应体 (200 OK):
 ```json
 {
-  "download_url": "http://minio:9000/agent-artifacts/baseline-agent-linux-amd64?X-Amz-Algorithm=..."
+  "download_url": "http://minio:9000/agent-artifacts/aegis-agent-linux-amd64?X-Amz-Algorithm=..."
 }
 ```
 

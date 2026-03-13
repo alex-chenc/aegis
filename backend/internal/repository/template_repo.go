@@ -1,8 +1,8 @@
 package repository
 
 import (
-	"baseline-system/internal/model"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/model"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -155,7 +155,7 @@ func (r *TemplateRepository) CountByName(name string) (int64, error) {
 func (r *TemplateRepository) DeleteWithRules(id uuid.UUID) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var ruleIDs []uuid.UUID
-		if err := tx.Model(&model.BaselineRule{}).Where("template_id = ?", id).Pluck("id", &ruleIDs).Error; err != nil {
+		if err := tx.Model(&model.AegisRule{}).Where("template_id = ?", id).Pluck("id", &ruleIDs).Error; err != nil {
 			return err
 		}
 
@@ -184,7 +184,7 @@ func (r *TemplateRepository) DeleteWithRules(id uuid.UUID) error {
 			}
 		}
 
-		if err := tx.Where("template_id = ?", id).Delete(&model.BaselineRule{}).Error; err != nil {
+		if err := tx.Where("template_id = ?", id).Delete(&model.AegisRule{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Delete(&model.Template{}, "id = ?", id).Error; err != nil {

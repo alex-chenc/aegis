@@ -4,7 +4,7 @@
 
 BINARY_NAME=backend
 GO_CMD=go
-IMAGE_NAME=baseline-system/backend
+IMAGE_NAME=aegis-system/backend
 IMAGE_TAG?=latest
 
 all: build

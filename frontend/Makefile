@@ -3,7 +3,7 @@
 .PHONY: all install build clean test docker
 
 NPM_CMD=npm
-IMAGE_NAME=baseline-system/frontend
+IMAGE_NAME=aegis-system/frontend
 IMAGE_TAG?=latest
 
 all: build

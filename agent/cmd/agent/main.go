@@ -5,19 +5,19 @@ import (
 	"os/signal"
 	"syscall"
 
-	"baseline-agent/internal/asset"
-	"baseline-agent/internal/client"
-	"baseline-agent/internal/config"
-	"baseline-agent/internal/executor"
-	"baseline-agent/internal/logger"
+	"aegis-agent/internal/asset"
+	"aegis-agent/internal/client"
+	"aegis-agent/internal/config"
+	"aegis-agent/internal/executor"
+	"aegis-agent/internal/logger"
 
-	_ "baseline-agent/pkg/api/v1"
+	_ "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
 )
 
 func main() {
-	if err := logger.Init("/opt/baseline-agent/logs"); err != nil {
+	if err := logger.Init("/opt/aegis-agent/logs"); err != nil {
 		os.Exit(1)
 	}
 	defer logger.Sync()

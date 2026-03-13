@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"baseline-system/internal/model"
+	"aegis-system/internal/model"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"

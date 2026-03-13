@@ -8,8 +8,8 @@ import (
 	"errors"
 	"io"
 
-	"baseline-system/internal/model"
-	"baseline-system/pkg/logger"
+	"aegis-system/internal/model"
+	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"

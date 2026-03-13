@@ -14,7 +14,7 @@ type Config struct {
 	HostID     string `toml:"HostID"`
 }
 
-const configPath = "/etc/baseline-agent/config.toml"
+const configPath = "/etc/aegis-agent/config.toml"
 
 // LoadConfig 加载配置文件，如果 HostID 为空则生成 UUID 并回写
 func LoadConfig() (*Config, error) {

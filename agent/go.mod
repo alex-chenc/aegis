@@ -1,4 +1,4 @@
-module baseline-agent
+module aegis-agent
 
 go 1.25.0
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-IMAGE_NAME=${1:-"baseline-system/frontend"}
+IMAGE_NAME=${1:-"aegis-system/frontend"}
 IMAGE_TAG=${2:-"latest"}
 BASE_IMAGE="node:18-alpine"
 

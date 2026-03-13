@@ -293,7 +293,7 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 1. **实现脚本生成 Worker**：从队列消费规则 ID → 构建检查脚本 Prompt → 调用 LLM → 安全性校验 → 存储脚本。
 2. **实现修复脚本生成**：同上流程，使用修复脚本 Prompt。
 3. **实现脚本安全性校验**：危险命令检测、Shebang 检查、网络外联检测、长度检查。
-4. **实现脚本版本管理**：创建版本记录、更新 baseline_rules 表、上传到 MinIO。
+4. **实现脚本版本管理**：创建版本记录、更新 aegis_rules 表、上传到 MinIO。
 
 **日志要求**：
 
@@ -412,7 +412,7 @@ GO类型项目使用 `pkg/logger` 封装的 zap 日志库，支持：
 **技能调用要求**：
 - **写代码前必须调用** `superpowers` skill
 
-1. **实现 `internal/config` 模块**: 加载 `/etc/baseline-agent/config.toml`，如果 `HostID` 为空则生成并回写。
+1. **实现 `internal/config` 模块**: 加载 `/etc/aegis-agent/config.toml`，如果 `HostID` 为空则生成并回写。
 2. **实现 `internal/asset` 模块**: 实现 `Collect()` 函数，采集 IP、主机名、系统类型。
 3. **实现 `internal/client` 模块**: 实现 gRPC 客户端，包含指数退避重连、发送 `AssetInfo` 进行注册、定时发送心跳、接收并分发 `ServerCommand`。
 4. **实现 `internal/executor` 模块**: 实现 `ExecuteCommand` 方法，包含创建临时脚本、超时控制、并发限制 (2 个)、日志捕获和结果回传。

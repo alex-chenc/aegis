@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"baseline-agent/internal/asset"
-	"baseline-agent/internal/config"
-	"baseline-agent/internal/executor"
-	"baseline-agent/internal/logger"
-	pb "baseline-agent/pkg/api/v1"
+	"aegis-agent/internal/asset"
+	"aegis-agent/internal/config"
+	"aegis-agent/internal/executor"
+	"aegis-agent/internal/logger"
+	pb "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"

@@ -54,7 +54,7 @@ Agent 的核心功能被拆分为三个独立的模块：
 ### 5.1 配置模块 (`internal/config`)
 
 *   **功能**: 负责加载和解析 Agent 的配置文件。
-*   **配置文件路径**: `/etc/baseline-agent/config.toml`
+*   **配置文件路径**: `/etc/aegis-agent/config.toml`
 *   **配置文件格式 (TOML)**:
     ```toml
     # 后端 gRPC 服务器地址
@@ -95,7 +95,7 @@ Agent 的核心功能被拆分为三个独立的模块：
 *   **功能**: 安全地执行后端下发的 Shell 脚本。
 *   **工作流程**:
     1.  **接收任务**: 从 gRPC 客户端模块接收 `ServerCommand` 指令。
-    2.  **创建脚本**: 在临时目录 (`/tmp/baseline-agent/`) 中创建一个唯一的子目录，并将脚本内容写入文件（例如 `script.sh`），赋予 `0700` 权限。
+    2.  **创建脚本**: 在临时目录 (`/tmp/aegis-agent/`) 中创建一个唯一的子目录，并将脚本内容写入文件（例如 `script.sh`），赋予 `0700` 权限。
     3.  **执行与捕获**: 使用 `os/exec` 启动 `bash script.sh` 子进程。通过 `io.Pipe` 实时捕获 `stdout` 和 `stderr` 的输出。
     4.  **超时控制**: 使用 `context.WithTimeout` 为每个脚本执行设置超时时间（从 `ServerCommand` 中获取）。
     5.  **结果回传**: 脚本执行结束后（正常结束、出错或超时），将最终状态（退出码、是否超时）和完整的 `stdout`, `stderr` 日志打包成 `CommandResult` 消息，通过 gRPC 客户端模块发送回后端。
@@ -107,9 +107,9 @@ Agent 的核心功能被拆分为三个独立的模块：
 
 *   **安装用户**: 必须由 **`root`** 用户执行安装脚本。
 *   **安装路径**:
-    *   二进制文件: `/usr/local/bin/baseline-agent`
-    *   配置文件: `/etc/baseline-agent/config.toml`
-    *   Systemd 服务文件: `/etc/systemd/system/baseline-agent.service`
+    *   二进制文件: `/usr/local/bin/aegis-agent`
+    *   配置文件: `/etc/aegis-agent/config.toml`
+    *   Systemd 服务文件: `/etc/systemd/system/aegis-agent.service`
 *   **一键安装**: 通过 `curl -sSL http://<Server_IP>/api/v1/agent/install.sh | sudo bash` 命令完成。安装脚本的具体内容见 `build_system_design_v1.6_complete.md`。
 *   **服务守护**: 通过 Systemd 实现开机自启和进程守护。
 

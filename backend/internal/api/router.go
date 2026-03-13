@@ -1,9 +1,9 @@
 package api
 
 import (
-	"baseline-system/internal/api/handler"
-	"baseline-system/internal/api/middleware"
-	"baseline-system/internal/grpc_server"
+	"aegis-system/internal/api/handler"
+	"aegis-system/internal/api/middleware"
+	"aegis-system/internal/grpc_server"
 
 	"github.com/gin-gonic/gin"
 )

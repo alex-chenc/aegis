@@ -229,7 +229,7 @@
    - `TestExecuteCommand_Success`：执行一个简单的 `echo "hello"` 脚本，应返回退出码 0，stdout 包含 `hello`，stderr 为空。
    - `TestExecuteCommand_ScriptFailure`：执行一个 `exit 1` 脚本，应返回退出码 1。
    - `TestExecuteCommand_Timeout`：执行一个 `sleep 100` 脚本，设置 1 秒超时，应在超时后返回超时错误，退出码为非 0。
-   - `TestExecuteCommand_CleansUpTempFiles`：执行任意脚本后，临时目录 `/tmp/baseline-agent/{taskID}/` 应被清理，不留下任何文件。
+   - `TestExecuteCommand_CleansUpTempFiles`：执行任意脚本后，临时目录 `/tmp/aegis-agent/{taskID}/` 应被清理，不留下任何文件。
    - `TestExecuteCommand_ConcurrencyLimit`：同时启动 5 个执行任务（并发限制为 2），应确保同一时刻最多只有 2 个脚本在执行（通过计数器验证）。
 
 ---
@@ -269,8 +269,8 @@
 BACKEND_HOST="${BACKEND_HOST:-localhost}"
 PG_HOST="${PG_HOST:-localhost}"
 PG_PORT="${PG_PORT:-5432}"
-PG_USER="${PG_USER:-baseline_user}"
-PG_DB="${PG_DB:-baseline_db}"
+PG_USER="${PG_USER:-aegis_user}"
+PG_DB="${PG_DB:-aegis_db}"
 REDIS_HOST="${REDIS_HOST:-localhost}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 MINIO_HOST="${MINIO_HOST:-localhost}"
@@ -337,9 +337,9 @@ BACKEND_GRPC_PORT="${BACKEND_GRPC_PORT:-9090}"
 
 脚本必须包含以下检查项：
 
-1. **Agent 二进制文件检查**：检查 `/usr/local/bin/baseline-agent` 是否存在且可执行。
-2. **Agent 配置文件检查**：检查 `/etc/baseline-agent/config.toml` 是否存在，并验证 `ServerAddr` 和 `HostID` 字段非空。
-3. **Systemd 服务状态检查**：使用 `systemctl is-active baseline-agent` 检查 Agent 服务是否处于 `active` 状态。
+1. **Agent 二进制文件检查**：检查 `/usr/local/bin/aegis-agent` 是否存在且可执行。
+2. **Agent 配置文件检查**：检查 `/etc/aegis-agent/config.toml` 是否存在，并验证 `ServerAddr` 和 `HostID` 字段非空。
+3. **Systemd 服务状态检查**：使用 `systemctl is-active aegis-agent` 检查 Agent 服务是否处于 `active` 状态。
 4. **gRPC 端口连通性检查**：使用 `nc -z` 检查后端 gRPC 端口是否可达。
 5. **Agent 日志检查**：读取 `/opt/baseline/logs/agent/agent.log` 的最后 20 行，检查是否包含 `已启动` 或 `connected` 等成功连接的关键字，检查是否包含 `Fatal` 或 `连接失败` 等错误关键字。
 6. **后端主机注册验证**：调用后端 `GET /api/v1/hosts` 接口，检查当前主机（通过 `hostname` 命令获取）是否出现在主机列表中，且在线状态为 `true`。

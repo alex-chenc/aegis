@@ -1,15 +1,15 @@
 # AGENTS.md - AI Coding Agent Guide
 
 > **Project Status**: Design/Specification Phase - No source code implemented yet.
-> This repository contains comprehensive design documents for an "Automated Baseline Check and Self-Healing System" (自动化基线检查与自愈系统).
+> This repository contains comprehensive design documents for an "Automated Aegis Check and Self-Healing System" (自动化基线检查与自愈系统).
 
 ## Project Overview
 
-A platform for automated baseline security checking and self-healing for server infrastructure. The system uses LLM (Large Language Model) intelligence to parse baseline documents and generate executable scripts, deployed through agents on target hosts.
+A platform for automated aegis security checking and self-healing for server infrastructure. The system uses LLM (Large Language Model) intelligence to parse aegis documents and generate executable scripts, deployed through agents on target hosts.
 
 **Core Features**:
-- Upload baseline documents (PDF, Word, YAML) → LLM parses into check/fix rules
-- Deploy agents on servers for automated baseline checking
+- Upload aegis documents (PDF, Word, YAML) → LLM parses into check/fix rules
+- Deploy agents on servers for automated aegis checking
 - Self-healing: LLM fixes failed scripts and retries automatically
 
 ---
@@ -142,7 +142,7 @@ make clean
 make build
 
 # Cross-compile for specific target
-GOOS=linux GOARCH=amd64 go build -o ./dist/baseline-agent-linux-amd64 ./cmd/agent
+GOOS=linux GOARCH=amd64 go build -o ./dist/aegis-agent-linux-amd64 ./cmd/agent
 
 # Run tests
 make test
@@ -175,8 +175,8 @@ import (
     "go.uber.org/zap"
     
     // Internal packages
-    "baseline-system/internal/model"
-    "baseline-system/internal/repository"
+    "aegis-system/internal/model"
+    "aegis-system/internal/repository"
 )
 ```
 
@@ -290,8 +290,8 @@ import type { Host } from '@/types'
 | Table | Purpose |
 |-------|---------|
 | `hosts` | Agent-managed host information |
-| `templates` | Uploaded baseline templates metadata |
-| `baseline_rules` | Parsed check/fix rules from templates |
+| `templates` | Uploaded aegis templates metadata |
+| `aegis_rules` | Parsed check/fix rules from templates |
 | `task_logs` | Task execution logs (check/fix) |
 | `llm_configs` | LLM service configuration |
 | `script_versions` | Script version history |
@@ -317,7 +317,7 @@ import type { Host } from '@/types'
 
 ## Design Documents Reference
 
-Located in `baseline_system_design_v2.1/`:
+Located in `aegis_system_design_v2.2/`:
 
 - `prd_design_v2.1_complete.md` - Product requirements
 - `backend_detailed_design_v2.1_complete.md` - Backend architecture
