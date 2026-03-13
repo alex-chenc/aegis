@@ -105,7 +105,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("下载文件失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("下载文件失败：%v", err))
 		return
 	}
 	defer reader.Close()
@@ -119,7 +119,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("不支持的文件类型：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("不支持的文件类型：%v", err))
 		return
 	}
 
@@ -129,7 +129,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("解析文件失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("解析文件失败：%v", err))
 		return
 	}
 
@@ -141,7 +141,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, "LLM配置未设置，请先在设置页面配置API Key")
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, "LLM配置未设置，请先在设置页面配置API Key")
 		return
 	}
 
@@ -151,7 +151,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, "API Key解密失败")
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, "API Key解密失败")
 		return
 	}
 
@@ -164,7 +164,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("LLM 调用失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("LLM 调用失败：%v", err))
 		return
 	}
 
@@ -177,7 +177,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("解析规则失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("解析规则失败：%v", err))
 		return
 	}
 
@@ -208,7 +208,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("检查已存在规则失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("检查已存在规则失败：%v", err))
 		return
 	}
 
@@ -234,7 +234,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 				zap.Error(err),
 				zap.String("template_id", task.TemplateID.String()),
 			)
-			s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("保存规则失败：%v", err))
+			s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("保存规则失败：%v", err))
 			return
 		}
 	}
@@ -245,7 +245,7 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 			zap.Error(err),
 			zap.String("template_id", task.TemplateID.String()),
 		)
-		s.updateParseStatus(task.TemplateID, "failed", 0, fmt.Sprintf("更新状态失败：%v", err))
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("更新状态失败：%v", err))
 		return
 	}
 
@@ -264,6 +264,17 @@ func (s *TemplateService) updateParseStatus(templateID uuid.UUID, status string,
 			zap.Error(err),
 			zap.String("template_id", templateID.String()),
 		)
+	}
+}
+
+func (s *TemplateService) updateParseStatusWithDB(templateID uuid.UUID, status string, progress int, message string) {
+	s.updateParseStatus(templateID, status, progress, message)
+
+	errMsg := message
+	if status == "failed" {
+		s.templateRepo.UpdateStatus(templateID, status, &errMsg, 0)
+	} else {
+		s.templateRepo.UpdateStatus(templateID, status, nil, 0)
 	}
 }
 

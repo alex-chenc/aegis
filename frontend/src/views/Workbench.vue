@@ -166,7 +166,17 @@
               
               <div v-else-if="tpl.status === 'failed'" class="failed-status">
                 <el-icon><WarningFilled /></el-icon>
-                <span>解析失败</span>
+                <div class="failed-content">
+                  <span class="failed-title">解析失败</span>
+                  <el-tooltip 
+                    v-if="tpl.error_message" 
+                    :content="tpl.error_message" 
+                    placement="top"
+                    :disabled="tpl.error_message.length <= 100"
+                  >
+                    <span class="failed-message">{{ truncate(tpl.error_message, 100) }}</span>
+                  </el-tooltip>
+                </div>
               </div>
             </div>
           </div>
@@ -1043,11 +1053,30 @@ onMounted(async () => {
 
 .failed-status {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 16px;
   color: #f56c6c;
   font-size: 13px;
+}
+
+.failed-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.failed-title {
+  font-weight: 500;
+}
+
+.failed-message {
+  color: #909399;
+  font-size: 12px;
+  word-break: break-all;
+  line-height: 1.5;
 }
 
 .file-pagination-wrapper {
