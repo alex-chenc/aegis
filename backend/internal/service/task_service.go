@@ -119,7 +119,7 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 
 			taskLog := &model.TaskLog{
 				TaskGroupID:   taskGroupID,
-				RuleID:        ruleID,
+				RuleID:        &ruleID,
 				HostID:        hostID,
 				TaskType:      taskType,
 				Status:        "pending",
@@ -154,7 +154,11 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 		return nil, fmt.Errorf("failed to find original task: %w", err)
 	}
 
-	rule, err := s.ruleRepo.FindByID(originalTask.RuleID)
+	if originalTask.RuleID == nil {
+		return nil, fmt.Errorf("task has no rule_id")
+	}
+
+	rule, err := s.ruleRepo.FindByID(*originalTask.RuleID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find rule: %w", err)
 	}
@@ -208,7 +212,11 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 		return nil, fmt.Errorf("failed to reload redispatched task: %w", err)
 	}
 
-	go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, updatedTask.RuleID, scriptContent, updatedTask.TaskType)
+	var ruleID uuid.UUID
+	if updatedTask.RuleID != nil {
+		ruleID = *updatedTask.RuleID
+	}
+	go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, ruleID, scriptContent, updatedTask.TaskType)
 
 	return updatedTask, nil
 }
@@ -308,7 +316,9 @@ func (s *TaskService) TriggerSelfHealing(taskID uuid.UUID) error {
 		return fmt.Errorf("script generation service not available")
 	}
 
-	go s.scriptGenService.GenerateFixScript(context.Background(), taskLog.RuleID)
+	if taskLog.RuleID != nil {
+		go s.scriptGenService.GenerateFixScript(context.Background(), *taskLog.RuleID)
+	}
 
 	return nil
 }

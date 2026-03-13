@@ -315,15 +315,20 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	ruleTitleCache := make(map[string]string)
 	hostnameCache := make(map[string]string)
 	for i, log := range logs {
-		ruleID := log.RuleID.String()
+		ruleID := ""
+		if log.RuleID != nil {
+			ruleID = log.RuleID.String()
+		}
 		hostID := log.HostID.String()
 
 		ruleTitle, ok := ruleTitleCache[ruleID]
 		if !ok {
 			ruleTitle = ruleID
-			rule, findErr := h.ruleRepo.FindByID(log.RuleID)
-			if findErr == nil {
-				ruleTitle = rule.Title
+			if log.RuleID != nil {
+				rule, findErr := h.ruleRepo.FindByID(*log.RuleID)
+				if findErr == nil {
+					ruleTitle = rule.Title
+				}
 			}
 			ruleTitleCache[ruleID] = ruleTitle
 		}
@@ -643,9 +648,14 @@ func (h *TaskHandlerWithHealing) TriggerSelfHealing(c *gin.Context) {
 		scriptContent = *taskLog.ScriptContent
 	}
 
+	var ruleID uuid.UUID
+	if taskLog.RuleID != nil {
+		ruleID = *taskLog.RuleID
+	}
+
 	healingTask := service.HealingTask{
 		OriginalTaskID: taskID,
-		RuleID:         taskLog.RuleID,
+		RuleID:         ruleID,
 		HostID:         taskLog.HostID,
 		ScriptType:     scriptType,
 		ScriptContent:  scriptContent,

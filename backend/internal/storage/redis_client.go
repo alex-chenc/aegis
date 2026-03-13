@@ -2,11 +2,13 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
 	"aegis-system/config"
+	"aegis-system/internal/model"
 	"aegis-system/pkg/logger"
 
 	"github.com/redis/go-redis/v9"
@@ -427,4 +429,209 @@ func (r *RedisClient) DeleteHealingStatus(taskID string) error {
 		zap.String("task_id", taskID),
 	)
 	return nil
+}
+
+// ============================================================================
+// Vulnerability Scan Status Cache
+// Key pattern: vulnerability:scan:session:{session_id}
+// Type: HASH
+// TTL: 2 hours
+// ============================================================================
+
+const ScanStatusTTL = 2 * time.Hour
+const ScanStatusKeyPrefix = "vulnerability:scan:session:"
+
+func scanStatusKey(scanID string) string {
+	return fmt.Sprintf("%s%s", ScanStatusKeyPrefix, scanID)
+}
+
+// SetScanStatus caches the vulnerability scan status
+func (r *RedisClient) SetScanStatus(scanID string, status *model.ScanStatus) error {
+	key := scanStatusKey(scanID)
+	data, err := json.Marshal(status)
+	if err != nil {
+		logger.Error("failed to marshal scan status",
+			zap.Error(err),
+			zap.String("scan_id", scanID),
+		)
+		return fmt.Errorf("failed to marshal scan status: %w", err)
+	}
+
+	err = r.client.HSet(r.ctx, key, "data", string(data)).Err()
+	if err != nil {
+		logger.Error("failed to set scan status",
+			zap.Error(err),
+			zap.String("scan_id", scanID),
+		)
+		return err
+	}
+
+	r.client.Expire(r.ctx, key, ScanStatusTTL)
+
+	logger.Debug("scan status cached",
+		zap.String("scan_id", scanID),
+		zap.String("status", status.Status),
+	)
+	return nil
+}
+
+// GetScanStatus retrieves the cached vulnerability scan status
+func (r *RedisClient) GetScanStatus(scanID string) (*model.ScanStatus, error) {
+	key := scanStatusKey(scanID)
+	result, err := r.client.HGet(r.ctx, key, "data").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		logger.Error("failed to get scan status",
+			zap.Error(err),
+			zap.String("scan_id", scanID),
+		)
+		return nil, err
+	}
+
+	var status model.ScanStatus
+	if err := json.Unmarshal([]byte(result), &status); err != nil {
+		logger.Error("failed to unmarshal scan status",
+			zap.Error(err),
+			zap.String("scan_id", scanID),
+		)
+		return nil, fmt.Errorf("failed to unmarshal scan status: %w", err)
+	}
+
+	return &status, nil
+}
+
+// DeleteScanStatus deletes the cached vulnerability scan status
+func (r *RedisClient) DeleteScanStatus(scanID string) error {
+	key := scanStatusKey(scanID)
+	err := r.client.Del(r.ctx, key).Err()
+	if err != nil {
+		logger.Error("failed to delete scan status",
+			zap.Error(err),
+			zap.String("scan_id", scanID),
+		)
+		return err
+	}
+	logger.Debug("scan status deleted", zap.String("scan_id", scanID))
+	return nil
+}
+
+// ============================================================================
+// Host Software (Packages) Cache
+// Key pattern: vulnerability:host:packages:{host_id}
+// Type: HASH
+// TTL: 10 minutes
+// ============================================================================
+
+const HostPackagesTTL = 10 * time.Minute
+const HostPackagesKeyPrefix = "vulnerability:host:packages:"
+
+func hostPackagesKey(hostID string) string {
+	return fmt.Sprintf("%s%s", HostPackagesKeyPrefix, hostID)
+}
+
+// SetHostPackages caches the software package list for a host
+func (r *RedisClient) SetHostPackages(hostID string, packages []model.SoftwareInfo) error {
+	key := hostPackagesKey(hostID)
+	data, err := json.Marshal(packages)
+	if err != nil {
+		logger.Error("failed to marshal host packages",
+			zap.Error(err),
+			zap.String("host_id", hostID),
+		)
+		return fmt.Errorf("failed to marshal host packages: %w", err)
+	}
+
+	err = r.client.HSet(r.ctx, key, "data", string(data)).Err()
+	if err != nil {
+		logger.Error("failed to set host packages",
+			zap.Error(err),
+			zap.String("host_id", hostID),
+		)
+		return err
+	}
+
+	r.client.Expire(r.ctx, key, HostPackagesTTL)
+
+	logger.Debug("host packages cached",
+		zap.String("host_id", hostID),
+		zap.Int("count", len(packages)),
+	)
+	return nil
+}
+
+// GetHostPackages retrieves the cached software package list for a host
+func (r *RedisClient) GetHostPackages(hostID string) ([]model.SoftwareInfo, error) {
+	key := hostPackagesKey(hostID)
+	result, err := r.client.HGet(r.ctx, key, "data").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		logger.Error("failed to get host packages",
+			zap.Error(err),
+			zap.String("host_id", hostID),
+		)
+		return nil, err
+	}
+
+	var packages []model.SoftwareInfo
+	if err := json.Unmarshal([]byte(result), &packages); err != nil {
+		logger.Error("failed to unmarshal host packages",
+			zap.Error(err),
+			zap.String("host_id", hostID),
+		)
+		return nil, fmt.Errorf("failed to unmarshal host packages: %w", err)
+	}
+
+	return packages, nil
+}
+
+// ============================================================================
+// CVE Detail Cache
+// Key pattern: vulnerability:cve:{cve_id}
+// Type: STRING
+// TTL: No expiration
+// ============================================================================
+
+const CVEDetailKeyPrefix = "vulnerability:cve:"
+
+func cveDetailKey(cveID string) string {
+	return fmt.Sprintf("%s%s", CVEDetailKeyPrefix, cveID)
+}
+
+// SetCVEDetail caches raw CVE detail bytes (no expiration)
+func (r *RedisClient) SetCVEDetail(cveID string, detail []byte) error {
+	key := cveDetailKey(cveID)
+	err := r.client.Set(r.ctx, key, detail, 0).Err()
+	if err != nil {
+		logger.Error("failed to set CVE detail",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+		)
+		return err
+	}
+	logger.Debug("CVE detail cached",
+		zap.String("cve_id", cveID),
+		zap.Int("bytes", len(detail)),
+	)
+	return nil
+}
+
+// GetCVEDetail retrieves the cached CVE detail bytes
+func (r *RedisClient) GetCVEDetail(cveID string) ([]byte, error) {
+	key := cveDetailKey(cveID)
+	result, err := r.client.Get(r.ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		logger.Error("failed to get CVE detail",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+		)
+		return nil, err
+	}
+	return result, nil
 }

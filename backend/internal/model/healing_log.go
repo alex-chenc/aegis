@@ -39,9 +39,10 @@ func (a *AttemptsDetail) Scan(value interface{}) error {
 type HealingLog struct {
 	ID                   uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	OriginalTaskID       uuid.UUID      `gorm:"type:uuid;not null;index" json:"original_task_id"`
-	RuleID               uuid.UUID      `gorm:"type:uuid;not null;index" json:"rule_id"`
+	RuleID               *uuid.UUID     `gorm:"type:uuid;index" json:"rule_id"`
 	HostID               uuid.UUID      `gorm:"type:uuid;not null;index" json:"host_id"`
-	ScriptType           string         `gorm:"type:varchar(10);not null" json:"script_type"`
+	VulnerabilityID      *uuid.UUID     `gorm:"type:uuid;index" json:"vulnerability_id"`
+	ScriptType           string         `gorm:"type:varchar(20);not null" json:"script_type"`
 	TriggerError         string         `gorm:"type:text;not null" json:"trigger_error"`
 	TriggerExitCode      int            `gorm:"not null" json:"trigger_exit_code"`
 	TotalAttempts        int            `gorm:"not null;default:0" json:"total_attempts"`

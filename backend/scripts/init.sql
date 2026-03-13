@@ -1,9 +1,25 @@
--- 自动化基线检查与自愈系统 (Aegis) - 数据库初始化脚本
--- 版本：V2.0
+-- ============================================================
+-- Aegis智能主机安全系统 - 数据库初始化脚本
+-- 版本: V3.0
+-- 说明: 包含完整的漏洞管理模块表结构
+-- ============================================================
 
+-- 启用扩展
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- 自动更新 updated_at 时间戳的触发器函数
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- 1. 主机资产表 (hosts)
+-- ============================================================
 CREATE TABLE IF NOT EXISTS hosts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ip_address VARCHAR(45) NOT NULL UNIQUE,
@@ -15,10 +31,46 @@ CREATE TABLE IF NOT EXISTS hosts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_hosts_ip ON hosts(ip_address);
-CREATE INDEX idx_hosts_hostname ON hosts(hostname);
-CREATE INDEX idx_hosts_last_heartbeat ON hosts(last_heartbeat_at);
+CREATE INDEX IF NOT EXISTS idx_hosts_ip ON hosts(ip_address);
+CREATE INDEX IF NOT EXISTS idx_hosts_hostname ON hosts(hostname);
+CREATE INDEX IF NOT EXISTS idx_hosts_last_heartbeat ON hosts(last_heartbeat_at);
 
+CREATE TRIGGER update_hosts_updated_at
+    BEFORE UPDATE ON hosts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 2. LLM配置表 (llm_configs)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS llm_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_key_encrypted TEXT NOT NULL,
+    api_key_masked VARCHAR(50) NOT NULL,
+    base_url VARCHAR(500) NOT NULL,
+    model_name VARCHAR(100) NOT NULL DEFAULT 'qwen-plus',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    last_test_status VARCHAR(20),
+    last_test_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_configs_active ON llm_configs(is_active);
+
+CREATE TRIGGER update_llm_configs_updated_at
+    BEFORE UPDATE ON llm_configs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- 插入默认配置
+INSERT INTO llm_configs (api_key_encrypted, api_key_masked, base_url, model_name, is_active)
+VALUES ('', '未配置', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', true)
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- 3. 模板元数据表 (templates)
+-- ============================================================
 CREATE TABLE IF NOT EXISTS templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
@@ -38,6 +90,14 @@ CREATE INDEX IF NOT EXISTS idx_templates_status ON templates(status);
 CREATE INDEX IF NOT EXISTS idx_templates_created ON templates(created_at);
 CREATE INDEX IF NOT EXISTS idx_templates_md5 ON templates(file_md5);
 
+CREATE TRIGGER update_templates_updated_at
+    BEFORE UPDATE ON templates
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 4. 基线规则表 (aegis_rules)
+-- ============================================================
 CREATE TABLE IF NOT EXISTS aegis_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     template_id UUID NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
@@ -57,108 +117,248 @@ CREATE TABLE IF NOT EXISTS aegis_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rules_template ON aegis_rules(template_id);
-CREATE INDEX idx_rules_status ON aegis_rules(script_status);
-
-CREATE TABLE IF NOT EXISTS task_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    task_group_id UUID NOT NULL,
-    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
-    host_id UUID NOT NULL REFERENCES hosts(id),
-    task_type VARCHAR(20) NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    script_content TEXT,
-    script_version INT,
-    stdout TEXT,
-    stderr TEXT,
-    exit_code INT,
-    healing_id UUID,
-    started_at TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_task_logs_group ON task_logs(task_group_id);
-CREATE INDEX idx_task_logs_rule ON task_logs(rule_id);
-CREATE INDEX idx_task_logs_host ON task_logs(host_id);
-CREATE INDEX idx_task_logs_status ON task_logs(status);
-CREATE INDEX idx_task_logs_created ON task_logs(created_at);
-
-CREATE TABLE IF NOT EXISTS llm_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    api_key_encrypted TEXT NOT NULL,
-    api_key_masked VARCHAR(50) NOT NULL,
-    base_url VARCHAR(500) NOT NULL,
-    model_name VARCHAR(100) NOT NULL DEFAULT 'qwen-plus',
-    is_active BOOLEAN NOT NULL DEFAULT true,
-    last_test_status VARCHAR(20),
-    last_test_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_llm_configs_active ON llm_configs(is_active);
-
-CREATE TABLE IF NOT EXISTS script_versions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
-    script_type VARCHAR(10) NOT NULL,
-    version INT NOT NULL,
-    script_content TEXT NOT NULL,
-    generation_source VARCHAR(20) NOT NULL,
-    llm_prompt_used TEXT,
-    llm_response_raw TEXT,
-    minio_object_name VARCHAR(255),
-    is_current BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_script_versions_rule ON script_versions(rule_id);
-CREATE INDEX idx_script_versions_type ON script_versions(script_type);
-CREATE INDEX idx_script_versions_current ON script_versions(is_current);
-
-CREATE TABLE IF NOT EXISTS self_healing_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    original_task_id UUID NOT NULL REFERENCES task_logs(id),
-    rule_id UUID NOT NULL REFERENCES aegis_rules(id),
-    host_id UUID NOT NULL REFERENCES hosts(id),
-    script_type VARCHAR(10) NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    total_attempts INT NOT NULL DEFAULT 0,
-    max_attempts INT NOT NULL DEFAULT 3,
-    trigger_error TEXT NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    finished_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_healing_logs_task ON self_healing_logs(original_task_id);
-CREATE INDEX idx_healing_logs_rule ON self_healing_logs(rule_id);
-CREATE INDEX idx_healing_logs_status ON self_healing_logs(status);
-
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER update_hosts_updated_at
-    BEFORE UPDATE ON hosts
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_templates_updated_at
-    BEFORE UPDATE ON templates
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+CREATE INDEX IF NOT EXISTS idx_rules_template ON aegis_rules(template_id);
+CREATE INDEX IF NOT EXISTS idx_rules_status ON aegis_rules(script_status);
 
 CREATE TRIGGER update_aegis_rules_updated_at
     BEFORE UPDATE ON aegis_rules
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_llm_configs_updated_at
-    BEFORE UPDATE ON llm_configs
+-- ============================================================
+-- 5. 脚本版本表 (script_versions) - V3.0更新
+-- ============================================================
+CREATE TABLE IF NOT EXISTS script_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id UUID REFERENCES aegis_rules(id) ON DELETE CASCADE,
+    vulnerability_id UUID,
+    script_type VARCHAR(20) NOT NULL,
+    version INT NOT NULL,
+    script_content TEXT NOT NULL,
+    generation_source VARCHAR(20) NOT NULL DEFAULT 'initial',
+    llm_prompt_used TEXT,
+    llm_response_raw TEXT,
+    minio_object_name VARCHAR(255),
+    os_type VARCHAR(50),
+    is_current BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_script_type CHECK (script_type IN ('CHECK', 'FIX', 'VULNERABILITY_FIX', 'POC')),
+    CONSTRAINT chk_generation_source CHECK (generation_source IN ('initial', 'self_healing', 'llm_generated', 'manual'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_script_versions_rule ON script_versions(rule_id);
+CREATE INDEX IF NOT EXISTS idx_script_versions_type ON script_versions(script_type);
+CREATE INDEX IF NOT EXISTS idx_script_versions_current ON script_versions(is_current);
+CREATE INDEX IF NOT EXISTS idx_script_versions_vulnerability ON script_versions(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_script_versions_os_type ON script_versions(os_type);
+
+-- ============================================================
+-- 6. 自愈日志表 (self_healing_logs) - V3.0更新
+-- ============================================================
+CREATE TABLE IF NOT EXISTS self_healing_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_task_id UUID,
+    rule_id UUID REFERENCES aegis_rules(id) ON DELETE CASCADE,
+    host_id UUID REFERENCES hosts(id) ON DELETE CASCADE,
+    vulnerability_id UUID,
+    script_type VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'healing',
+    total_attempts INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 3,
+    trigger_error TEXT NOT NULL,
+    trigger_exit_code INT NOT NULL DEFAULT 1,
+    attempts_detail JSONB,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_healing_script_type CHECK (script_type IN ('CHECK', 'FIX', 'VULNERABILITY_FIX', 'POC')),
+    CONSTRAINT chk_healing_status CHECK (status IN ('healing', 'healed', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_healing_logs_task ON self_healing_logs(original_task_id);
+CREATE INDEX IF NOT EXISTS idx_healing_logs_rule ON self_healing_logs(rule_id);
+CREATE INDEX IF NOT EXISTS idx_healing_logs_status ON self_healing_logs(status);
+CREATE INDEX IF NOT EXISTS idx_healing_logs_vulnerability ON self_healing_logs(vulnerability_id);
+
+-- ============================================================
+-- 7. 任务日志表 (task_logs) - V3.0更新
+-- ============================================================
+CREATE TABLE IF NOT EXISTS task_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_group_id UUID NOT NULL,
+    rule_id UUID REFERENCES aegis_rules(id) ON DELETE CASCADE,
+    host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    vulnerability_id UUID,
+    task_type VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    script_content TEXT,
+    script_version INT,
+    stdout TEXT,
+    stderr TEXT,
+    exit_code INT,
+    healing_id UUID REFERENCES self_healing_logs(id),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_task_type CHECK (task_type IN ('CHECK', 'FIX', 'VULNERABILITY_FIX', 'POC_VERIFY')),
+    CONSTRAINT chk_task_status CHECK (status IN ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'TIMEOUT', 'HEALING'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_logs_group ON task_logs(task_group_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_rule ON task_logs(rule_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_host ON task_logs(host_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_status ON task_logs(status);
+CREATE INDEX IF NOT EXISTS idx_task_logs_created ON task_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_logs_vulnerability ON task_logs(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_healing ON task_logs(healing_id);
+
+-- 添加 self_healing_logs 对 task_logs 的外键引用（延迟添加避免循环引用）
+ALTER TABLE self_healing_logs
+    ADD CONSTRAINT fk_healing_original_task
+    FOREIGN KEY (original_task_id) REFERENCES task_logs(id) ON DELETE CASCADE;
+
+-- ============================================================
+-- 8. 漏洞主表 (vulnerabilities) - V3.0新增
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vulnerabilities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cve_id VARCHAR(20) NOT NULL UNIQUE,
+    severity VARCHAR(20) NOT NULL,
+    cvss_score DECIMAL(3,1),
+    description TEXT NOT NULL,
+    affected_products JSONB,
+    solution TEXT,
+    ref_links JSONB,
+    cwe_id VARCHAR(50),
+    published_at TIMESTAMPTZ,
+    last_modified_at TIMESTAMPTZ,
+    source VARCHAR(50) NOT NULL DEFAULT 'llm_analysis',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_severity CHECK (severity IN ('Critical', 'High', 'Medium', 'Low')),
+    CONSTRAINT chk_cvss_score CHECK (cvss_score >= 0.0 AND cvss_score <= 10.0),
+    CONSTRAINT chk_vuln_source CHECK (source IN ('llm_analysis', 'nvd_import', 'manual'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cve_id ON vulnerabilities(cve_id);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_severity ON vulnerabilities(severity);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cvss_score ON vulnerabilities(cvss_score);
+
+CREATE TRIGGER update_vulnerabilities_updated_at
+    BEFORE UPDATE ON vulnerabilities
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 9. 主机漏洞关联表 (host_vulnerabilities) - V3.0新增
+-- ============================================================
+CREATE TABLE IF NOT EXISTS host_vulnerabilities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    vulnerability_id UUID NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+    affected_package VARCHAR(255) NOT NULL,
+    affected_version VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'detected',
+    discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    verified_at TIMESTAMPTZ,
+    fixed_at TIMESTAMPTZ,
+    poc_result VARCHAR(20),
+    fix_task_id UUID REFERENCES task_logs(id) ON DELETE SET NULL,
+    poc_task_id UUID REFERENCES task_logs(id) ON DELETE SET NULL,
+    scan_session_id UUID NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_hv_status CHECK (status IN ('detected', 'poc_verified', 'fixing', 'fixed', 'ignored', 'false_positive')),
+    CONSTRAINT chk_poc_result CHECK (poc_result IS NULL OR poc_result IN ('vulnerable', 'not_vulnerable', 'error')),
+    CONSTRAINT uq_host_vuln_package UNIQUE (host_id, vulnerability_id, affected_package, affected_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_host_id ON host_vulnerabilities(host_id);
+CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_vulnerability_id ON host_vulnerabilities(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_status ON host_vulnerabilities(status);
+CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_scan_session_id ON host_vulnerabilities(scan_session_id);
+
+CREATE TRIGGER update_host_vulns_updated_at
+    BEFORE UPDATE ON host_vulnerabilities
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 10. 主机软件清单缓存表 (installed_software) - V3.0新增
+-- ============================================================
+CREATE TABLE IF NOT EXISTS installed_software (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    package_name VARCHAR(255) NOT NULL,
+    package_version VARCHAR(100) NOT NULL,
+    package_manager VARCHAR(20) NOT NULL,
+    architecture VARCHAR(20),
+    scan_session_id UUID NOT NULL,
+    collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_package_manager CHECK (package_manager IN ('rpm', 'dpkg')),
+    CONSTRAINT uq_installed_software UNIQUE (host_id, package_name, package_version, scan_session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_installed_software_host_id ON installed_software(host_id);
+CREATE INDEX IF NOT EXISTS idx_installed_software_package_name ON installed_software(package_name);
+CREATE INDEX IF NOT EXISTS idx_installed_software_scan_session_id ON installed_software(scan_session_id);
+
+-- ============================================================
+-- 11. 漏洞修复脚本表 (vulnerability_fix_scripts) - V3.0新增
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vulnerability_fix_scripts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    vulnerability_id UUID NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+    os_type VARCHAR(50) NOT NULL,
+    script_content TEXT NOT NULL,
+    script_version INT NOT NULL DEFAULT 1,
+    generation_source VARCHAR(20) NOT NULL DEFAULT 'llm_generated',
+    llm_prompt_used TEXT,
+    success_rate DECIMAL(5,2),
+    execution_count INT NOT NULL DEFAULT 0,
+    success_count INT NOT NULL DEFAULT 0,
+    is_recommended BOOLEAN NOT NULL DEFAULT true,
+    is_current BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_fix_generation_source CHECK (generation_source IN ('llm_generated', 'manual', 'self_healing')),
+    CONSTRAINT uq_vuln_fix_script UNIQUE (vulnerability_id, os_type, script_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vulnerability_fix_scripts_vuln_os ON vulnerability_fix_scripts(vulnerability_id, os_type);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_fix_scripts_is_current ON vulnerability_fix_scripts(is_current);
+
+CREATE TRIGGER update_vulnerability_fix_scripts_updated_at
+    BEFORE UPDATE ON vulnerability_fix_scripts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 12. POC验证脚本表 (poc_scripts) - V3.0新增
+-- ============================================================
+CREATE TABLE IF NOT EXISTS poc_scripts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    vulnerability_id UUID NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+    os_type VARCHAR(50) NOT NULL,
+    script_content TEXT NOT NULL,
+    script_version INT NOT NULL DEFAULT 1,
+    generation_source VARCHAR(20) NOT NULL DEFAULT 'llm_generated',
+    llm_prompt_used TEXT,
+    safety_verified BOOLEAN NOT NULL DEFAULT false,
+    safety_notes TEXT,
+    is_current BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_poc_generation_source CHECK (generation_source IN ('llm_generated', 'manual')),
+    CONSTRAINT uq_poc_script UNIQUE (vulnerability_id, os_type, script_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_poc_scripts_vuln_os ON poc_scripts(vulnerability_id, os_type);
+CREATE INDEX IF NOT EXISTS idx_poc_scripts_is_current ON poc_scripts(is_current);
+
+CREATE TRIGGER update_poc_scripts_updated_at
+    BEFORE UPDATE ON poc_scripts
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();

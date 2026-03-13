@@ -122,7 +122,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 
 	healingLog := &model.HealingLog{
 		OriginalTaskID:  task.OriginalTaskID,
-		RuleID:          task.RuleID,
+		RuleID:          &task.RuleID,
 		HostID:          task.HostID,
 		ScriptType:      task.ScriptType,
 		TriggerError:    task.ErrorMessage,
@@ -228,7 +228,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		// 创建脚本版本记录
 		version := attempt // 自愈版本从 1 开始
 		scriptVersion := &model.ScriptVersion{
-			RuleID:           task.RuleID,
+			RuleID:           &task.RuleID,
 			ScriptType:       task.ScriptType,
 			Version:          version,
 			ScriptContent:    fixedScript,

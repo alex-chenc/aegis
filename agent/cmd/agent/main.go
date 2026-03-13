@@ -22,7 +22,7 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("Baseline Agent v2.2.0 starting...")
+	logger.Info("Aegis Agent v3.0.0 starting...")
 
 	cfg, err := config.LoadConfig()
 	if err != nil {

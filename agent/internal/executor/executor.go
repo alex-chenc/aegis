@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,9 +41,13 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 		zap.String("task_id", taskID),
 		zap.Int32("timeout_seconds", timeoutSeconds))
 
+	if strings.TrimSpace(scriptContent) == "#SOFTWARE_COLLECT#" {
+		return e.collectSoftwareList(ctx, taskID, timeoutSeconds)
+	}
+
 	tmpDir := filepath.Join("/tmp/aegis-agent", taskID)
 	if err := os.MkdirAll(tmpDir, 0700); err != nil {
-		logger.Error("Failed to create temp dir", 
+		logger.Error("Failed to create temp dir",
 			zap.String("task_id", taskID),
 			zap.Error(err))
 		return &ExecuteResult{ExitCode: 1, Stderr: fmt.Sprintf("failed to create temp dir: %v", err)}
@@ -51,7 +56,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 
 	scriptPath := filepath.Join(tmpDir, "script.sh")
 	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0700); err != nil {
-		logger.Error("Failed to write script", 
+		logger.Error("Failed to write script",
 			zap.String("task_id", taskID),
 			zap.Error(err))
 		return &ExecuteResult{ExitCode: 1, Stderr: fmt.Sprintf("failed to write script: %v", err)}
@@ -84,7 +89,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 
 	err := cmd.Start()
 	if err != nil {
-		logger.Error("Failed to start command", 
+		logger.Error("Failed to start command",
 			zap.String("task_id", taskID),
 			zap.Error(err))
 		return &ExecuteResult{ExitCode: 1, Stderr: fmt.Sprintf("failed to start: %v", err)}
@@ -119,4 +124,39 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 		zap.Bool("timed_out", result.TimedOut))
 
 	return result
+}
+
+func (e *Executor) collectSoftwareList(ctx context.Context, taskID string, timeoutSeconds int32) *ExecuteResult {
+	logger.Info("Collecting software list", zap.String("task_id", taskID))
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("dpkg-query"); err == nil {
+		cmd = exec.CommandContext(execCtx, "dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\n")
+	} else if _, err := exec.LookPath("rpm"); err == nil {
+		cmd = exec.CommandContext(execCtx, "rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}\t%{ARCH}\n")
+	} else {
+		return &ExecuteResult{ExitCode: 1, Stderr: "no supported package manager found (dpkg-query or rpm)"}
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		if execCtx.Err() == context.DeadlineExceeded {
+			logger.Warn("Software collection timed out", zap.String("task_id", taskID))
+			return &ExecuteResult{ExitCode: 1, Stderr: "[TIMEOUT]", TimedOut: true}
+		}
+		exitCode := 1
+		stderr := fmt.Sprintf("failed to collect software list: %v", err)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+			stderr = string(exitErr.Stderr)
+		}
+		logger.Error("Software collection failed", zap.String("task_id", taskID), zap.Error(err))
+		return &ExecuteResult{ExitCode: exitCode, Stderr: stderr}
+	}
+
+	logger.Info("Software collection completed", zap.String("task_id", taskID))
+	return &ExecuteResult{ExitCode: 0, Stdout: string(out)}
 }

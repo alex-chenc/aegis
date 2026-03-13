@@ -67,6 +67,24 @@ message CommandRequest {
   }
 }
 
+// SoftwareListRequest 软件列表采集请求
+message SoftwareListRequest {
+  // 可包含扫描参数
+}
+
+// SoftwareInfo 软件信息
+message SoftwareInfo {
+  string name = 1;
+  string version = 2;
+  string package_manager = 3; // "rpm" or "dpkg"
+  string architecture = 4;
+}
+
+// SoftwareListResponse 软件列表采集响应
+message SoftwareListResponse {
+  repeated SoftwareInfo software_list = 1;
+}
+
 // AgentService Agent服务
 service AgentService {
   // Register 注册Agent
@@ -75,4 +93,6 @@ service AgentService {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   // ExecuteCommand 执行命令(双向流)
   rpc ExecuteCommand(stream CommandRequest) returns (stream CommandRequest);
+  // CollectSoftwareList 采集软件列表
+  rpc CollectSoftwareList(SoftwareListRequest) returns (SoftwareListResponse);
 }

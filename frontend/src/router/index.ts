@@ -4,32 +4,53 @@ import Settings from '../views/Settings.vue'
 import Workbench from '../views/Workbench.vue'
 import TaskCenter from '../views/TaskCenter.vue'
 import TaskDetail from '../views/TaskDetail.vue'
+import Vulnerability from '../views/Vulnerability.vue'
 
 const routes = [
   {
     path: '/',
-    name: 'Workbench',
-    component: Workbench
+    redirect: '/hosts'
   },
   {
-    path: '/tasks',
-    name: 'TaskCenter',
-    component: TaskCenter
+    path: '/hosts',
+    name: 'Hosts',
+    component: Dashboard,
+    meta: { title: '主机列表' }
   },
   {
-    path: '/tasks/:id',
-    name: 'TaskDetail',
-    component: TaskDetail
+    path: '/baseline',
+    redirect: '/baseline/workbench',
+    meta: { title: '智能基线检查与修复' }
   },
   {
-    path: '/dashboard',
-    name: 'Dashboard',
-    component: Dashboard
+    path: '/baseline/workbench',
+    name: 'BaselineWorkbench',
+    component: Workbench,
+    meta: { title: '基线工作台' }
+  },
+  {
+    path: '/baseline/tasks',
+    name: 'BaselineTasks',
+    component: TaskCenter,
+    meta: { title: '基线任务中心' }
+  },
+  {
+    path: '/baseline/tasks/:id',
+    name: 'BaselineTaskDetail',
+    component: TaskDetail,
+    meta: { title: '任务详情' }
+  },
+  {
+    path: '/vulnerability',
+    name: 'Vulnerability',
+    component: Vulnerability,
+    meta: { title: '智能漏洞检查与修复' }
   },
   {
     path: '/settings',
     name: 'Settings',
-    component: Settings
+    component: Settings,
+    meta: { title: '系统配置' }
   }
 ]
 

@@ -16,7 +16,7 @@ type AssetInfo struct {
 	AgentVersion string `json:"agent_version"`
 }
 
-const AgentVersion = "v2.2.0"
+const AgentVersion = "v3.0.0"
 
 // Collect 采集主机资产信息
 func Collect() (*AssetInfo, error) {

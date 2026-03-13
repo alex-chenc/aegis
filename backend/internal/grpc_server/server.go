@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -400,4 +401,88 @@ func (s *GRPCServer) GetConnectedHostIDs() []uuid.UUID {
 		return true
 	})
 	return hostIDs
+}
+
+// CollectSoftwareList 向 Agent 发送软件清单采集请求并返回结果
+func (s *GRPCServer) CollectSoftwareList(ctx context.Context, hostIDStr string) ([]model.SoftwareInfo, error) {
+	hostID, err := uuid.Parse(hostIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid host_id: %w", err)
+	}
+
+	value, ok := s.agentConnections.Load(hostID)
+	if !ok {
+		return nil, fmt.Errorf("agent not connected")
+	}
+
+	conn := value.(*AgentConnection)
+
+	collectReq := &pb.CommandExecute{
+		TaskId:         uuid.New().String(),
+		HostId:         hostIDStr,
+		ScriptContent:  "#SOFTWARE_COLLECT#",
+		TimeoutSeconds: 60,
+	}
+
+	responseChan := make(chan *pb.CommandResult, 1)
+	collectKey := "collect:" + collectReq.TaskId
+
+	s.storeCollectCallback(collectKey, func(result *pb.CommandResult) {
+		responseChan <- result
+	})
+	defer s.removeCollectCallback(collectKey)
+
+	err = conn.Stream.Send(&pb.CommandRequest{
+		Request: &pb.CommandRequest_Execute{
+			Execute: collectReq,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to send collect request: %w", err)
+	}
+
+	select {
+	case result := <-responseChan:
+		if result.ExitCode != 0 {
+			return nil, fmt.Errorf("collect failed: %s", result.Stderr)
+		}
+		return s.parseSoftwareList(result.Stdout)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(60 * time.Second):
+		return nil, fmt.Errorf("collect timeout")
+	}
+}
+
+var collectCallbacks sync.Map
+
+func (s *GRPCServer) storeCollectCallback(key string, callback func(*pb.CommandResult)) {
+	collectCallbacks.Store(key, callback)
+}
+
+func (s *GRPCServer) removeCollectCallback(key string) {
+	collectCallbacks.Delete(key)
+}
+
+func (s *GRPCServer) parseSoftwareList(output string) ([]model.SoftwareInfo, error) {
+	var software []model.SoftwareInfo
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) >= 2 {
+			sw := model.SoftwareInfo{
+				Name:    strings.TrimSpace(parts[0]),
+				Version: strings.TrimSpace(parts[1]),
+			}
+			if len(parts) >= 3 {
+				sw.Version = strings.TrimSpace(parts[1]) + "-" + strings.TrimSpace(parts[2])
+			}
+			software = append(software, sw)
+		}
+	}
+	return software, nil
 }

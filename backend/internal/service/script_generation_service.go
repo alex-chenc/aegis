@@ -144,7 +144,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 	}
 
 	scriptVersion := &model.ScriptVersion{
-		RuleID:           task.RuleID,
+		RuleID:           &task.RuleID,
 		ScriptType:       task.ScriptType,
 		Version:          version,
 		ScriptContent:    script,

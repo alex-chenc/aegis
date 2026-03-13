@@ -17,6 +17,7 @@ type Router struct {
 	taskHandlerWithHealing *handler.TaskHandlerWithHealing
 	agentHandler           *handler.AgentHandler
 	ruleHandler            *handler.RuleHandler
+	vulnerabilityHandler   *handler.VulnerabilityHandler
 }
 
 func NewRouter(
@@ -27,6 +28,7 @@ func NewRouter(
 	taskHandlerWithHealing *handler.TaskHandlerWithHealing,
 	agentHandler *handler.AgentHandler,
 	ruleHandler *handler.RuleHandler,
+	vulnerabilityHandler *handler.VulnerabilityHandler,
 ) *Router {
 	return &Router{
 		configHandler:          configHandler,
@@ -36,6 +38,7 @@ func NewRouter(
 		taskHandlerWithHealing: taskHandlerWithHealing,
 		agentHandler:           agentHandler,
 		ruleHandler:            ruleHandler,
+		vulnerabilityHandler:   vulnerabilityHandler,
 	}
 }
 
@@ -119,6 +122,16 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			agent.GET("/install-command", r.agentHandler.GetInstallCommand)
 			agent.GET("/install.sh", r.agentHandler.GetInstallScript)
 			agent.GET("/download", r.agentHandler.DownloadAgent)
+		}
+
+		// 漏洞管理接口
+		vulnerability := v1.Group("/vulnerability")
+		{
+			vulnerability.POST("/scan", r.vulnerabilityHandler.StartScan)
+			vulnerability.GET("/scan/:id/status", r.vulnerabilityHandler.GetScanStatus)
+			vulnerability.GET("", r.vulnerabilityHandler.ListVulnerabilities)
+			vulnerability.POST("/:id/fix", r.vulnerabilityHandler.InitiateFix)
+			vulnerability.POST("/:id/poc", r.vulnerabilityHandler.InitiatePoc)
 		}
 	}
 }

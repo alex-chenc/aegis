@@ -80,12 +80,14 @@ func main() {
 	configRepo := repository.NewConfigRepository(db, "default-encryption-key")
 	scriptVersionRepo := repository.NewScriptVersionRepository(db)
 	healingLogRepo := repository.NewHealingLogRepository(db)
+	vulnRepo := repository.NewVulnerabilityRepo(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
 	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 2)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
+	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -120,6 +122,9 @@ func main() {
 	taskService.SetGRPCServer(grpcServer)
 	taskService.SetScriptGenService(scriptGenService)
 
+	vulnService.SetGRPCServer(grpcServer)
+	vulnService.SetTaskService(taskService)
+
 	// Initialize handlers
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient, grpcServer)
@@ -128,9 +133,10 @@ func main() {
 	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
+	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler)
 	router.Setup(grpcServer)
 
 	// Start HTTP server
