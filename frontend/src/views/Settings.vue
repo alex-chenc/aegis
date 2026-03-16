@@ -2,8 +2,23 @@
   <div class="settings">
     <el-card>
       <template #header>
-        <span>LLM 配置</span>
+        <div class="card-header">
+          <span>LLM 配置</span>
+          <el-tag type="info" size="small">仅通过页面配置，不读取配置文件</el-tag>
+        </div>
       </template>
+      
+      <el-alert
+        title="配置说明"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 20px"
+      >
+        <p>LLM 配置仅通过本页面进行设置，配置文件中的相关配置已禁用。</p>
+        <p>推荐使用 DeepSeek：Base URL 为 <code>https://api.deepseek.com/v1</code>，模型为 <code>deepseek-chat</code></p>
+        <p>或使用阿里云百炼：Base URL 为 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code></p>
+      </el-alert>
       
       <el-form :model="form" label-width="120px">
         <el-form-item label="API Key">
@@ -69,8 +84,8 @@ import type { InstallCommand } from '@/types'
 const configStore = useConfigStore()
 const form = ref({
   api_key: '',
-  base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  model_name: 'qwen-plus'
+  base_url: 'https://api.deepseek.com/v1',
+  model_name: 'deepseek-chat'
 })
 const installCommand = ref('')
 const installInfo = ref<InstallCommand | null>(null)

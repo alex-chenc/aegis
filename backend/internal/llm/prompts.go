@@ -116,19 +116,28 @@ const CVEAnalysisPrompt = `你是一位资深的网络安全专家，专门负�
 2. 版本精确匹配：确保版本号在受影响范围内
 3. 严重程度准确：Critical(9.0-10.0), High(7.0-8.9), Medium(4.0-6.9), Low(0.1-3.9)
 
-## 输出要求
-返回 JSON 数组，每个元素包含：
-- cve_id: CVE编号
-- severity: Critical/High/Medium/Low
-- cvss_score: 0.0-10.0
-- description: 漏洞描述（中文）
-- affected_package: 受影响软件包
-- affected_versions: 受影响版本范围
-- fix_version: 安全版本
-- attack_vector: Network/Local/Adjacent/Physical
-- references: 参考链接数组
+## 输出要求（严格遵守）
+你必须只返回一个 JSON 数组，不要包含任何其他文字、解释或说明。
 
-如果没有发现漏洞，返回空数组 []。`
+JSON 数组格式：
+[
+  {
+    "cve_id": "CVE-XXXX-XXXXX",
+    "severity": "Critical",
+    "cvss_score": 9.8,
+    "description": "漏洞描述",
+    "affected_package": "软件包名",
+    "affected_versions": "受影响版本范围",
+    "fix_version": "安全版本",
+    "attack_vector": "Network",
+    "references": ["https://..."]
+  }
+]
+
+## 重要规则
+- 如果发现漏洞，返回包含漏洞信息的 JSON 数组
+- 如果没有发现漏洞或软件列表为空，返回空数组：[]
+- 不要输出任何中文解释或说明，只输出 JSON`
 
 // VulnerabilityFixPrompt generates secure fix scripts for vulnerabilities
 const VulnerabilityFixPrompt = `你是一位资深的 DevOps 工程师，专门负责编写安全、可靠的服务器运维脚本。

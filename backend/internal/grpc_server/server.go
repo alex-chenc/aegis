@@ -2,6 +2,7 @@ package grpc_server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -278,8 +279,16 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				zap.String("task_id", result.TaskId),
 				zap.Stringer("host_id", hostID),
 				zap.Int32("exit_code", result.ExitCode),
+				zap.String("stdout", result.Stdout),
+				zap.String("stderr", result.Stderr),
 				zap.Bool("is_final", result.IsFinal),
 			)
+
+			if callback, ok := collectCallbacks.Load(result.TaskId); ok {
+				callback.(func(*pb.CommandResult))(result)
+				collectCallbacks.Delete(result.TaskId)
+				continue
+			}
 
 			if result.IsFinal && s.taskResultCallback != nil {
 				taskID, err := uuid.Parse(result.TaskId)
@@ -410,27 +419,36 @@ func (s *GRPCServer) CollectSoftwareList(ctx context.Context, hostIDStr string) 
 		return nil, fmt.Errorf("invalid host_id: %w", err)
 	}
 
+	logger.Info("collecting software list", zap.String("host_id", hostIDStr))
+
 	value, ok := s.agentConnections.Load(hostID)
 	if !ok {
+		logger.Error("agent not connected", zap.String("host_id", hostIDStr))
 		return nil, fmt.Errorf("agent not connected")
 	}
 
 	conn := value.(*AgentConnection)
+	logger.Info("agent connection found", zap.String("host_id", hostIDStr))
 
 	collectReq := &pb.CommandExecute{
 		TaskId:         uuid.New().String(),
 		HostId:         hostIDStr,
 		ScriptContent:  "#SOFTWARE_COLLECT#",
-		TimeoutSeconds: 60,
+		TimeoutSeconds: 120,
 	}
 
-	responseChan := make(chan *pb.CommandResult, 1)
-	collectKey := "collect:" + collectReq.TaskId
+	logger.Info("sending collect request", zap.String("task_id", collectReq.TaskId))
 
-	s.storeCollectCallback(collectKey, func(result *pb.CommandResult) {
+	responseChan := make(chan *pb.CommandResult, 1)
+
+	s.storeCollectCallback(collectReq.TaskId, func(result *pb.CommandResult) {
+		logger.Info("collect callback triggered",
+			zap.String("task_id", result.TaskId),
+			zap.String("stdout", result.Stdout),
+			zap.Int("lines", strings.Count(result.Stdout, "\n")))
 		responseChan <- result
 	})
-	defer s.removeCollectCallback(collectKey)
+	defer s.removeCollectCallback(collectReq.TaskId)
 
 	err = conn.Stream.Send(&pb.CommandRequest{
 		Request: &pb.CommandRequest_Execute{
@@ -449,7 +467,7 @@ func (s *GRPCServer) CollectSoftwareList(ctx context.Context, hostIDStr string) 
 		return s.parseSoftwareList(result.Stdout)
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(60 * time.Second):
+	case <-time.After(120 * time.Second):
 		return nil, fmt.Errorf("collect timeout")
 	}
 }
@@ -466,23 +484,31 @@ func (s *GRPCServer) removeCollectCallback(key string) {
 
 func (s *GRPCServer) parseSoftwareList(output string) ([]model.SoftwareInfo, error) {
 	var software []model.SoftwareInfo
+
 	lines := strings.Split(output, "\n")
-	for _, line := range lines {
+	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) >= 2 {
-			sw := model.SoftwareInfo{
-				Name:    strings.TrimSpace(parts[0]),
-				Version: strings.TrimSpace(parts[1]),
-			}
-			if len(parts) >= 3 {
-				sw.Version = strings.TrimSpace(parts[1]) + "-" + strings.TrimSpace(parts[2])
-			}
+
+		var sw model.SoftwareInfo
+		if err := json.Unmarshal([]byte(line), &sw); err != nil {
+			logger.Warn("failed to parse software JSON",
+				zap.Int("line", i+1),
+				zap.String("content", line),
+				zap.Error(err))
+			continue
+		}
+
+		if sw.Name != "" {
 			software = append(software, sw)
 		}
 	}
+
+	logger.Info("parsed software list",
+		zap.Int("total_lines", len(lines)),
+		zap.Int("parsed_count", len(software)))
+
 	return software, nil
 }

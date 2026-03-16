@@ -133,6 +133,8 @@ func (c *Client) sendHeartbeats() {
 }
 
 func (c *Client) run() {
+	c.heartbeatDone = make(chan struct{})
+
 	var err error
 	c.stream, err = c.client.ExecuteCommand(c.ctx)
 	if err != nil {

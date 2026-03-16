@@ -47,6 +47,12 @@ const routes = [
     meta: { title: '智能漏洞检查与修复' }
   },
   {
+    path: '/vulnerability/tasks',
+    name: 'VulnerabilityTasks',
+    component: TaskCenter,
+    meta: { title: '漏洞任务中心' }
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: Settings,

@@ -151,11 +151,11 @@ async function generateScript() {
     
     if (props.mode === 'fix') {
       const result = await api.generateFixScript(props.cve.cve_id, hosts, true)
-      script.value = result.script
+      script.value = result.script || ''
     } else {
       const hostId = hosts[0]
-      const result = await api.generatePocScript(props.cve.cve_id, hostId)
-      script.value = result.script
+      const result = await api.generatePocScript(props.cve.cve_id, hostId, true)
+      script.value = result.script || ''
     }
   } catch (err: any) {
     error.value = err.message || '脚本生成失败'
@@ -180,11 +180,11 @@ async function executeScript() {
     if (props.mode === 'fix') {
       result = await api.generateFixScript(props.cve.cve_id, hosts, false)
     } else {
-      result = await api.generatePocScript(props.cve.cve_id, hosts[0])
+      result = await api.generatePocScript(props.cve.cve_id, hosts[0], false)
     }
 
-    emit('execute', { taskId: result.task_id, hosts })
-    ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC验证任务已创建')
+    emit('execute', { taskId: result.task_id || '', hosts })
+    ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC 验证任务已创建')
     dialogVisible.value = false
   } catch (err: any) {
     error.value = err.message || '执行失败'

@@ -133,15 +133,27 @@ func (e *Executor) collectSoftwareList(ctx context.Context, taskID string, timeo
 	defer cancel()
 
 	var cmd *exec.Cmd
+	var shellCmd string
+
 	if _, err := exec.LookPath("dpkg-query"); err == nil {
-		cmd = exec.CommandContext(execCtx, "dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\n")
+		logger.Info("using dpkg-query for software collection", zap.String("task_id", taskID))
+		shellCmd = `dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' | awk -F'\t' '{printf "{\"name\":\"%s\",\"version\":\"%s\"}\n", $1, $2}'`
+		cmd = exec.CommandContext(execCtx, "bash", "-c", shellCmd)
 	} else if _, err := exec.LookPath("rpm"); err == nil {
-		cmd = exec.CommandContext(execCtx, "rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}\t%{ARCH}\n")
+		logger.Info("using rpm for software collection", zap.String("task_id", taskID))
+		shellCmd = `rpm -qa --qf '%{NAME}\t%{VERSION}\n' | awk -F'\t' '{printf "{\"name\":\"%s\",\"version\":\"%s\"}\n", $1, $2}'`
+		cmd = exec.CommandContext(execCtx, "bash", "-c", shellCmd)
 	} else {
+		logger.Error("no package manager found", zap.String("task_id", taskID))
 		return &ExecuteResult{ExitCode: 1, Stderr: "no supported package manager found (dpkg-query or rpm)"}
 	}
 
 	out, err := cmd.Output()
+	logger.Info("rpm/dpkg command completed",
+		zap.String("task_id", taskID),
+		zap.Error(err),
+		zap.Int("output_bytes", len(out)))
+
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
 			logger.Warn("Software collection timed out", zap.String("task_id", taskID))
@@ -157,6 +169,9 @@ func (e *Executor) collectSoftwareList(ctx context.Context, taskID string, timeo
 		return &ExecuteResult{ExitCode: exitCode, Stderr: stderr}
 	}
 
-	logger.Info("Software collection completed", zap.String("task_id", taskID))
-	return &ExecuteResult{ExitCode: 0, Stdout: string(out)}
+	logger.Info("Software collection completed",
+		zap.String("task_id", taskID),
+		zap.Int("packages", strings.Count(string(out), "\n")))
+
+	return &ExecuteResult{ExitCode: 0, Stdout: strings.TrimSpace(string(out))}
 }

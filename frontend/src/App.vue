@@ -33,10 +33,20 @@
           </el-menu-item>
         </el-sub-menu>
 
-        <el-menu-item index="/vulnerability">
-          <el-icon><Warning /></el-icon>
-          <span>智能漏洞检查与修复</span>
-        </el-menu-item>
+        <el-sub-menu index="vulnerability">
+          <template #title>
+            <el-icon><Warning /></el-icon>
+            <span>智能漏洞检查与修复</span>
+          </template>
+          <el-menu-item index="/vulnerability">
+            <el-icon><SetUp /></el-icon>
+            <span>漏洞工作台</span>
+          </el-menu-item>
+          <el-menu-item index="/vulnerability/tasks">
+            <el-icon><List /></el-icon>
+            <span>漏洞任务中心</span>
+          </el-menu-item>
+        </el-sub-menu>
 
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>

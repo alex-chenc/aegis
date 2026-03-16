@@ -32,10 +32,7 @@ minio:
     - generated-scripts
 
 llm:
-  api_key: ""
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  model_name: "qwen-plus"
-  timeout_seconds: 120
+  timeout_seconds: 300
   max_retries: 3
 
 agent:

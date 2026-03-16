@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus'
 
 const request = axios.create({
   baseURL: '/api/v1',
-  timeout: 60000
+  timeout: 300000  // 5 分钟，用于 LLM 脚本生成
 })
 
 request.interceptors.response.use(
