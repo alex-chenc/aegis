@@ -44,7 +44,22 @@
         </el-select>
       </div>
 
-      <div v-if="!script" class="script-actions">
+      <div v-if="generationStatus === 'generating'" class="generating-status">
+        <el-progress :percentage="100" :indeterminate="true" />
+        <p class="status-text">正在生成脚本，请稍候...</p>
+      </div>
+      
+      <div v-else-if="generationStatus === 'failed'" class="failed-status">
+        <el-alert type="error" :title="generationError" show-icon>
+          <template #footer>
+            <el-button type="primary" size="small" @click="retryGeneration">
+              重试
+            </el-button>
+          </template>
+        </el-alert>
+      </div>
+      
+      <div v-else-if="!script" class="script-actions">
         <el-button
           type="primary"
           :loading="generating"
@@ -101,11 +116,20 @@ interface AffectedHost {
   hostname: string
 }
 
+interface RestoreStatus {
+  scriptId: string | null
+  status: 'idle' | 'generating' | 'generated' | 'failed'
+  script?: string
+  error?: string
+  hostIds?: string[]
+}
+
 const props = defineProps<{
   visible: boolean
   mode: 'fix' | 'poc'
   cve: Vulnerability
   affectedHosts: AffectedHost[]
+  restoreStatus?: RestoreStatus
 }>()
 
 const emit = defineEmits<{
@@ -127,15 +151,69 @@ const script = ref('')
 const generating = ref(false)
 const executing = ref(false)
 const error = ref('')
+const generationStatus = ref<'idle' | 'generating' | 'generated' | 'failed'>('idle')
+const generationError = ref('')
+const GENERATION_TIMEOUT = 5 * 60 * 1000
 
 watch(() => props.visible, (val) => {
   if (val) {
     resetScript()
-    selectedHosts.value = props.mode === 'poc' && props.affectedHosts.length > 0 
-      ? [props.affectedHosts[0].id] 
-      : []
+    generationStatus.value = 'idle'
+    generationError.value = ''
+    
+    if (props.restoreStatus) {
+      generationStatus.value = props.restoreStatus.status
+      
+      if (props.restoreStatus.status === 'generated' && props.restoreStatus.script) {
+        script.value = props.restoreStatus.script
+      }
+      if (props.restoreStatus.status === 'failed') {
+        generationError.value = props.restoreStatus.error || '生成失败'
+      }
+      if (props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
+        selectedHosts.value = props.restoreStatus.hostIds
+      } else {
+        selectedHosts.value = props.mode === 'poc' && props.affectedHosts.length > 0 
+          ? [props.affectedHosts[0].id] 
+          : []
+      }
+      
+      if (props.restoreStatus.status === 'generating' && props.restoreStatus.scriptId) {
+        pollGenerationStatus(props.restoreStatus.scriptId, Date.now())
+      }
+    } else {
+      selectedHosts.value = props.mode === 'poc' && props.affectedHosts.length > 0 
+        ? [props.affectedHosts[0].id] 
+        : []
+    }
   }
 })
+
+async function pollGenerationStatus(scriptId: string, startTime: number) {
+  if (Date.now() - startTime > GENERATION_TIMEOUT) {
+    generationStatus.value = 'failed'
+    generationError.value = '脚本生成超时（超过5分钟），请重试'
+    return
+  }
+  
+  try {
+    const status = await api.getScriptStatus(scriptId, props.mode)
+    
+    if (status.status === 'generating') {
+      setTimeout(() => pollGenerationStatus(scriptId, startTime), 2000)
+    } else if (status.status === 'generated') {
+      script.value = status.script || ''
+      generationStatus.value = 'generated'
+      ElMessage.success('脚本生成完成')
+    } else {
+      generationStatus.value = 'failed'
+      generationError.value = status.error || '脚本生成失败'
+    }
+  } catch (err: any) {
+    generationStatus.value = 'failed'
+    generationError.value = err.message || '查询状态失败'
+  }
+}
 
 async function generateScript() {
   if (selectedHosts.value.length === 0) {
@@ -197,11 +275,19 @@ async function executeScript() {
 function resetScript() {
   script.value = ''
   error.value = ''
+  generationStatus.value = 'idle'
+  generationError.value = ''
 }
 
 function handleClose() {
   resetScript()
   selectedHosts.value = []
+}
+
+async function retryGeneration() {
+  generationStatus.value = 'idle'
+  generationError.value = ''
+  await generateScript()
 }
 </script>
 
@@ -248,5 +334,19 @@ function handleClose() {
 
 .error-alert {
   margin-top: 16px;
+}
+
+.generating-status {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.status-text {
+  margin-top: 12px;
+  color: #606266;
+}
+
+.failed-status {
+  padding: 10px 0;
 }
 </style>
