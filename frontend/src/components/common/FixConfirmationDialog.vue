@@ -97,6 +97,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SeverityTag from './SeverityTag.vue'
 import ScriptPreview from './ScriptPreview.vue'
@@ -154,6 +155,7 @@ const error = ref('')
 const generationStatus = ref<'idle' | 'generating' | 'generated' | 'failed'>('idle')
 const generationError = ref('')
 const GENERATION_TIMEOUT = 5 * 60 * 1000
+const router = useRouter()
 
 watch(() => props.visible, (val) => {
   if (val) {
@@ -264,6 +266,9 @@ async function executeScript() {
     emit('execute', { taskId: result.task_id || '', hosts })
     ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC 验证任务已创建')
     dialogVisible.value = false
+
+    // 跳转到任务中心
+    router.push('/vulnerability/tasks')
   } catch (err: any) {
     error.value = err.message || '执行失败'
     ElMessage.error(error.value)
