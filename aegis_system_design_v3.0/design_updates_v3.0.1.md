@@ -568,6 +568,314 @@ V3.0 漏洞管理模块已完整实现，包含以下核心功能：
 
 ---
 
-*文档版本：V3.0.1*
-*更新日期：2026-03-16*
+*文档版本：V3.0.2*
+*更新日期：2026-03-17*
+*更新人：Sisyphus*
+
+---
+
+## 13. V3.0.2 更新记录 (2026-03-17)
+
+### 13.1 关键 Bug 修复
+
+#### 13.1.1 状态值大小写不一致
+
+**问题描述**：
+数据库 `task_logs` 表的状态约束要求大写值 (`PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `TIMEOUT`)，但代码使用小写值 (`pending`, `running`, `success`, `failed`, `timeout`)，导致任务创建失败。
+
+**影响范围**：
+- `backend/internal/service/task_service.go` - 任务创建
+- `backend/internal/repository/task_log_repo.go` - SQL 查询
+- `backend/internal/api/handler/task_handler.go` - 状态比较
+- `backend/internal/grpc_server/server.go` - 结果处理
+
+**修复方案**：
+统一使用大写状态值：
+```go
+// 修复前
+Status: "pending"
+
+// 修复后
+Status: "PENDING"
+```
+
+**相关文件**：
+- `backend/internal/service/task_service.go`
+- `backend/internal/repository/task_log_repo.go`
+- `backend/internal/api/handler/task_handler.go`
+- `backend/internal/grpc_server/server.go`
+
+#### 13.1.2 任务类型大小写不一致
+
+**问题描述**：
+数据库约束要求任务类型大写 (`CHECK`, `FIX`, `VULNERABILITY_FIX`, `POC_VERIFY`)，但代码传递小写值。
+
+**修复方案**：
+```go
+// 修复前
+CreateAndDispatchTasks(..., "check")
+
+// 修复后
+CreateAndDispatchTasks(..., "CHECK")
+```
+
+#### 13.1.3 超时检测器无法检测到任务
+
+**问题描述**：
+`FindTimedOutTasks()` 检查 `started_at < cutoff`，但任务创建时 `started_at` 为 NULL，导致无法检测。
+
+**修复方案**：
+
+1. 任务创建时设置 `started_at`：
+```go
+taskLog := &model.TaskLog{
+    // ...
+    StartedAt: &now,  // 新增
+}
+```
+
+2. 超时检测使用 `COALESCE`：
+```go
+result := r.db.Where("status IN ? AND COALESCE(started_at, created_at) < ?", 
+    []string{"RUNNING", "PENDING"}, cutoff)
+```
+
+#### 13.1.4 漏洞扫描并发问题
+
+**问题描述**：
+多个扫描任务同时运行，导致扫描状态混乱，软件列表数据丢失。
+
+**根因分析**：
+- 用户点击扫描后刷新页面
+- `restoreScanStatus` 恢复轮询
+- 用户再次点击扫描
+- 两个扫描任务同时运行
+
+**修复方案**：
+
+1. 后端添加扫描锁：
+```go
+type VulnerabilityService struct {
+    // ...
+    scanInProgress bool
+    scanMutex      sync.Mutex
+}
+
+func (s *VulnerabilityService) StartScan(...) {
+    s.scanMutex.Lock()
+    if s.scanInProgress {
+        s.scanMutex.Unlock()
+        return nil, fmt.Errorf("scan already in progress")
+    }
+    s.scanInProgress = true
+    s.scanMutex.Unlock()
+    
+    defer func() {
+        s.scanMutex.Lock()
+        s.scanInProgress = false
+        s.scanMutex.Unlock()
+    }()
+    // ...
+}
+```
+
+2. 前端扫描状态持久化：
+```typescript
+// 使用 localStorage 持久化 scan_id
+function saveScanId(scanId: string) {
+    localStorage.setItem('vulnerability_scan_id', scanId)
+}
+
+// 页面加载时恢复扫描状态
+async function restoreScanStatus() {
+    const savedScanId = getSavedScanId()
+    if (!savedScanId) return false
+    // 恢复轮询...
+}
+```
+
+#### 13.1.5 Agent 离线问题 (host_id 不匹配)
+
+**问题描述**：
+Agent 显示离线，但实际连接正常。
+
+**根因分析**：
+| 位置 | host_id |
+|------|---------|
+| 数据库 | `0e08e429-75da-4cd8-acdd-63cecdaeab1b` |
+| Agent 连接 | `6b0501a2-86e6-4874-8ef9-69e564d1de3f` |
+
+`Upsert` 使用 IP 作为冲突列，更新其他字段但不更新 ID。`agentConnections` 存储新 ID，但 `IsAgentConnected` 使用数据库中的旧 ID 查询。
+
+**修复方案**：
+注册时先根据 IP 查找现有主机：
+```go
+existingHost, err := s.hostRepo.FindByIP(req.AssetInfo.IpAddress)
+if err == nil && existingHost != nil {
+    hostID = existingHost.ID  // 使用现有 ID
+} else {
+    // IP 不存在，使用新 ID
+}
+```
+
+新增 `FindByIP` 方法：
+```go
+func (r *HostRepository) FindByIP(ipAddress string) (*model.Host, error) {
+    var host model.Host
+    result := r.db.First(&host, "ip_address = ?", ipAddress)
+    if result.Error != nil {
+        return nil, result.Error
+    }
+    return &host, nil
+}
+```
+
+#### 13.1.6 前端任务中心路由问题
+
+**问题描述**：
+点击"查看任务"按钮后无法跳转到任务详情页。
+
+**根因分析**：
+`Workbench.vue` 中使用旧路由 `/tasks/:id`，但路由已改为 `/baseline/tasks/:id`。
+
+**修复方案**：
+```typescript
+// 修复前
+router.push(`/tasks/${result.task_group_id}`)
+
+// 修复后
+router.push(`/baseline/tasks/${result.task_group_id}`)
+```
+
+### 13.2 功能增强
+
+#### 13.2.1 任务列表超时计数
+
+**新增字段**：
+- `TaskGroupSummary.TimeoutCount`
+- `TaskGroupResponse.TimeoutCount`
+
+**前端显示**：
+```
+进度: 成功数 / 失败数 / 超时数 / 待执行数 / 执行中数
+```
+
+#### 13.2.2 扫描状态不存在时的处理
+
+**问题描述**：
+Redis 中没有扫描状态时，后端返回空指针导致 panic。
+
+**修复方案**：
+```go
+status, err := h.vulnService.GetScanStatus(scanID)
+if err != nil || status == nil {
+    c.JSON(http.StatusOK, gin.H{
+        "data": gin.H{
+            "status": "not_found",
+            "message": "扫描任务不存在或已过期",
+            // ...
+        },
+    })
+    return
+}
+```
+
+前端处理 `not_found` 状态：
+```typescript
+if (status.status === 'not_found') {
+    scanning.value = false
+    clearScanId()
+    return
+}
+```
+
+### 13.3 代码清理
+
+#### 13.3.1 移除未使用的 API 文件
+
+移除了 `frontend/src/api/task.ts`，统一使用 `@/api/tasks`。
+
+#### 13.3.2 Agent 日志 caller 修复
+
+**问题描述**：
+Agent 日志中 caller 显示 `logger/logger.go:64`，无法定位实际调用位置。
+
+**修复方案**：
+```go
+log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), ...)
+```
+
+### 13.4 部署相关
+
+#### 13.4.1 Agent 安装脚本问题
+
+**问题描述**：
+systemd 服务配置中 `StandardOutput=append:${LOG_DIR}/agent.log` 导致权限问题。
+
+**修复方案**：
+```ini
+[Service]
+StandardOutput=journal
+StandardError=journal
+```
+
+#### 13.4.2 Agent 配置文件问题
+
+**问题描述**：
+配置文件中 `ServerAddr` 为空导致连接失败。
+
+**修复方案**：
+```toml
+ServerAddr = '192.168.152.128:19090'
+AuthToken = 'a_very_secret_agent_token'
+HostID = ''
+```
+
+### 13.5 修复文件清单
+
+| 文件 | 修改类型 | 说明 |
+|------|---------|------|
+| `backend/internal/service/task_service.go` | 修复 | 状态值大写、started_at 初始化 |
+| `backend/internal/service/vulnerability_service.go` | 修复 | 扫描并发锁 |
+| `backend/internal/repository/task_log_repo.go` | 修复 | 状态值大写、超时检测、timeout_count |
+| `backend/internal/api/handler/task_handler.go` | 修复 | 状态值大写、timeout_count |
+| `backend/internal/api/handler/vulnerability_handler.go` | 修复 | 扫描状态不存在处理 |
+| `backend/internal/grpc_server/server.go` | 修复 | 状态值大写、Agent 注册逻辑 |
+| `backend/internal/repository/host_repo.go` | 新增 | FindByIP 方法 |
+| `frontend/src/api/tasks.ts` | 更新 | 类型定义、timeout_count |
+| `frontend/src/views/TaskCenter.vue` | 修复 | 路由、超时计数显示 |
+| `frontend/src/views/TaskDetail.vue` | 修复 | 动态路由、类型筛选 |
+| `frontend/src/views/Workbench.vue` | 修复 | 路由跳转 |
+| `frontend/src/views/Vulnerability.vue` | 修复 | 恢复扫描状态 |
+| `frontend/src/store/vulnerability.ts` | 增强 | 扫描状态持久化 |
+| `frontend/src/router/index.ts` | 修复 | 漏洞任务详情路由 |
+| `agent/internal/logger/logger.go` | 修复 | caller skip |
+| `agent/internal/executor/executor.go` | 无变化 | 已正确实现 |
+
+### 13.6 经验教训
+
+1. **数据库约束与代码一致性**：
+   - 数据库 CHECK 约束使用的值必须与代码中硬编码的值完全一致
+   - 建议使用常量定义状态值，避免分散在多处
+
+2. **NULL 值处理**：
+   - 查询条件中涉及可能为 NULL 的字段时，使用 `COALESCE` 提供默认值
+   - 初始化记录时，关键字段（如 `started_at`）应设置初始值
+
+3. **并发控制**：
+   - 长时间运行的任务（如漏洞扫描）必须有并发锁
+   - 前端状态持久化与后端锁机制配合使用
+
+4. **ID 一致性**：
+   - 使用业务唯一键（如 IP）查找现有记录时，应复用现有 ID
+   - 避免同一实体产生多个 ID 导致关联查询失败
+
+5. **路由重构影响**：
+   - 修改路由结构时，必须全局搜索所有硬编码的路由路径
+   - 使用路由常量或计算属性避免硬编码
+
+---
+
+*文档版本：V3.0.2*
+*更新日期：2026-03-17*
 *更新人：Sisyphus*
