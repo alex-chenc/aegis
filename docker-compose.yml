@@ -198,6 +198,8 @@ services:
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       AGENT_HEARTBEAT_TIMEOUT: 90
       AGENT_SCRIPT_TIMEOUT: 300
+      # 对外暴露的端口（用于 Agent 连接）
+      SERVER_EXTERNAL_GRPC_PORT: 19090
       # 自愈配置
       SELF_HEALING_MAX_RETRIES: 3
       SELF_HEALING_ENABLED: "true"

@@ -797,7 +797,7 @@ const executeCheck = async () => {
           type: 'success'
         }
       ).then(() => {
-        router.push(`/tasks/${result.task_group_id}`)
+        router.push(`/baseline/tasks/${result.task_group_id}`)
       }).catch(() => {})
     }
   } catch (e: any) {
@@ -827,7 +827,7 @@ const executeFix = async () => {
           type: 'success'
         }
       ).then(() => {
-        router.push(`/tasks/${result.task_group_id}`)
+        router.push(`/baseline/tasks/${result.task_group_id}`)
       }).catch(() => {})
     }
   } catch (e: any) {

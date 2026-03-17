@@ -118,7 +118,7 @@ func (h *TaskHandler) RunCheck(c *gin.Context) {
 		return
 	}
 
-	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "check")
+	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "CHECK")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -179,9 +179,9 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 			})
 			return
 		}
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix", groupID)
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX", groupID)
 	} else {
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "fix")
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX")
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -252,7 +252,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 
 	status := TaskGroupStatus{
 		TaskGroupID: taskGroupIDStr,
-		Status:      "pending",
+		Status:      "PENDING",
 		Total:       len(logs),
 	}
 
@@ -473,6 +473,7 @@ type TaskGroupResponse struct {
 	FailedCount  int     `json:"failed_count"`
 	PendingCount int     `json:"pending_count"`
 	RunningCount int     `json:"running_count"`
+	TimeoutCount int     `json:"timeout_count"`
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`
 }
@@ -541,6 +542,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 			FailedCount:  s.FailedCount,
 			PendingCount: s.PendingCount,
 			RunningCount: s.RunningCount,
+			TimeoutCount: s.TimeoutCount,
 			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
 		}
 		if s.FinishedAt != nil {
@@ -760,7 +762,7 @@ func (h *TaskHandler) DeleteTask(c *gin.Context) {
 	}
 
 	for _, log := range logs {
-		if log.Status == "running" || log.Status == "pending" {
+		if log.Status == "RUNNING" || log.Status == "PENDING" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "cannot delete running or pending tasks",
@@ -822,7 +824,7 @@ func (h *TaskHandler) DeleteSingleTask(c *gin.Context) {
 		return
 	}
 
-	if taskLog.Status == "running" || taskLog.Status == "pending" {
+	if taskLog.Status == "RUNNING" || taskLog.Status == "PENDING" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "cannot delete running or pending task",
@@ -892,7 +894,7 @@ func (h *TaskHandler) BatchDeleteTasks(c *gin.Context) {
 			continue
 		}
 		for _, log := range logs {
-			if log.Status != "running" && log.Status != "pending" {
+			if log.Status != "RUNNING" && log.Status != "PENDING" {
 				allTaskIDs = append(allTaskIDs, log.ID)
 			}
 		}

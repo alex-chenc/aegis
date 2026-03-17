@@ -54,7 +54,7 @@ func Init(logDir string) error {
 	)
 
 	core := zapcore.NewTee(fileCore, consoleCore)
-	log = zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+	log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return nil
 }

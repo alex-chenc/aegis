@@ -25,7 +25,7 @@
           <el-input 
             v-model="form.api_key" 
             :type="apiKeyVisible ? 'text' : 'password'" 
-            placeholder="请输入 API Key"
+            placeholder="请输入 API Key（如显示 **** 表示已保存，可直接输入新值）"
           >
             <template #suffix>
               <el-icon @click="toggleApiKeyVisibility" class="cursor-pointer">
@@ -95,6 +95,17 @@ const apiKeyVisible = ref(false)
 const originalApiKey = ref('')
 
 const saveConfig = async () => {
+  // 检查是否为 masked API Key
+  if (form.value.api_key.includes('****')) {
+    ElMessage.warning('请输入完整的 API Key（当前显示的是脱敏后的值）')
+    return
+  }
+
+  if (!form.value.api_key) {
+    ElMessage.warning('请输入 API Key')
+    return
+  }
+
   saving.value = true
   try {
     await configStore.saveLLMConfig(form.value.api_key, form.value.base_url, form.value.model_name)
@@ -108,9 +119,23 @@ const saveConfig = async () => {
 }
 
 const testConnection = async () => {
+  if (!form.value.api_key) {
+    ElMessage.warning('请输入 API Key')
+    return
+  }
+
   testing.value = true
   try {
-    await configStore.testConnection(form.value.api_key, form.value.base_url, form.value.model_name)
+    let apiKeyToUse = form.value.api_key
+    
+    // 如果是 masked key，从后端获取真正的 API Key
+    if (apiKeyToUse.includes('****')) {
+      const data = await getFullAPIKey()
+      apiKeyToUse = data.api_key
+      originalApiKey.value = apiKeyToUse  // 缓存真正的 key
+    }
+    
+    await configStore.testConnection(apiKeyToUse, form.value.base_url, form.value.model_name)
     ElMessage.success('连接测试成功')
   } catch (e: any) {
     ElMessage.error(e.message || '连接测试失败')

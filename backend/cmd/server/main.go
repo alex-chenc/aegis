@@ -101,10 +101,18 @@ func main() {
 
 	// Detect server IP
 	serverIP := ipdetect.DetectServerIP(cfg.Server.ExternalIP)
+
+	// Calculate external gRPC port (for Agent connection)
+	externalGRPCPort := cfg.Server.ExternalGRPCPort
+	if externalGRPCPort == 0 {
+		externalGRPCPort = cfg.Server.GRPCPort
+	}
+
 	logger.Info("server IP detected",
 		zap.String("ip", serverIP),
 		zap.String("http_port", fmt.Sprintf("%d", cfg.Server.HTTPPort)),
 		zap.String("grpc_port", fmt.Sprintf("%d", cfg.Server.GRPCPort)),
+		zap.String("external_grpc_port", fmt.Sprintf("%d", externalGRPCPort)),
 	)
 
 	// Initialize gRPC server
@@ -131,7 +139,7 @@ func main() {
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService, scriptGenService)
 	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, ruleRepo)
 	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
-	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
+	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService)
 

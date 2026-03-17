@@ -18,9 +18,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	HTTPPort   int    `mapstructure:"http_port"`
-	GRPCPort   int    `mapstructure:"grpc_port"`
-	ExternalIP string `mapstructure:"external_ip"`
+	HTTPPort         int    `mapstructure:"http_port"`
+	GRPCPort         int    `mapstructure:"grpc_port"`
+	ExternalIP       string `mapstructure:"external_ip"`
+	ExternalGRPCPort int    `mapstructure:"external_grpc_port"` // 对外暴露的 gRPC 端口，用于 Agent 连接
 }
 
 type DatabaseConfig struct {
@@ -137,6 +138,9 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if externalIP := getEnv("SERVER_EXTERNAL_IP"); externalIP != "" {
 		cfg.Server.ExternalIP = externalIP
+	}
+	if externalGRPCPort := getEnvInt("SERVER_EXTERNAL_GRPC_PORT"); externalGRPCPort != 0 {
+		cfg.Server.ExternalGRPCPort = externalGRPCPort
 	}
 	if llmAPIKey := getEnv("LLM_API_KEY"); llmAPIKey != "" {
 		cfg.LLM.APIKey = llmAPIKey

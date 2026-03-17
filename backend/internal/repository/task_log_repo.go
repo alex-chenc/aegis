@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"aegis-system/internal/model"
@@ -88,8 +89,6 @@ func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
 	return &log, nil
 }
 
-// UpdateForRedispatch 重新下发任务时更新原有任务记录（原地更新，保留原始ID）
-// 清空上次执行的输出，重置状态为pending，更新脚本内容和版本号
 func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int) error {
 	now := time.Now()
 	result := r.db.Model(&model.TaskLog{}).
@@ -97,7 +96,7 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 		Updates(map[string]interface{}{
 			"script_content": scriptContent,
 			"script_version": scriptVersion,
-			"status":         "pending",
+			"status":         "PENDING",
 			"stdout":         nil,
 			"stderr":         nil,
 			"exit_code":      nil,
@@ -106,14 +105,14 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 		})
 
 	if result.Error != nil {
-		logger.Error("重新下发任务更新失败",
+		logger.Error("failed to update task for redispatch",
 			zap.Error(result.Error),
 			zap.String("id", id.String()),
 		)
 		return result.Error
 	}
 
-	logger.Info("任务已更新为重新下发状态",
+	logger.Info("task updated for redispatch",
 		zap.String("id", id.String()),
 		zap.Int("script_version", scriptVersion),
 	)
@@ -149,6 +148,7 @@ type TaskGroupSummary struct {
 	FailedCount  int        `gorm:"column:failed_count" json:"failed_count"`
 	PendingCount int        `gorm:"column:pending_count" json:"pending_count"`
 	RunningCount int        `gorm:"column:running_count" json:"running_count"`
+	TimeoutCount int        `gorm:"column:timeout_count" json:"timeout_count"`
 	CreatedAt    time.Time  `gorm:"column:created_at" json:"created_at"`
 	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at"`
 }
@@ -174,19 +174,20 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			task_group_id,
 			COUNT(*) as task_count,
 			MAX(task_type) as task_type,
-			COALESCE(SUM(CASE WHEN task_type = 'check' THEN 1 ELSE 0 END), 0) as has_check,
-			COALESCE(SUM(CASE WHEN task_type = 'fix' THEN 1 ELSE 0 END), 0) as has_fix,
+			COALESCE(SUM(CASE WHEN task_type = 'check' OR task_type = 'CHECK' THEN 1 ELSE 0 END), 0) as has_check,
+			COALESCE(SUM(CASE WHEN task_type = 'fix' OR task_type = 'FIX' THEN 1 ELSE 0 END), 0) as has_fix,
 			CASE 
-				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
-				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
-				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
 			END as status,
-			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
-			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-			SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
-			SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_count,
+			SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed_count,
+			SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
+			SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) as running_count,
+			SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) as timeout_count,
 			MIN(created_at) as created_at,
 			MAX(finished_at) as finished_at
 		`).
@@ -195,17 +196,21 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 	if params.Status != "" {
 		query = query.Having(`
 			CASE 
-				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
-				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
-				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
 			END = ?
 		`, params.Status)
 	}
 
 	if params.TaskType != "" {
-		query = query.Where("task_type = ?", params.TaskType)
+		taskTypes := strings.Split(params.TaskType, ",")
+		for i, t := range taskTypes {
+			taskTypes[i] = strings.ToUpper(strings.TrimSpace(t))
+		}
+		query = query.Where("UPPER(task_type) IN ?", taskTypes)
 	}
 
 	if params.StartTime != nil {
@@ -239,17 +244,21 @@ func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64,
 	subQuery := r.db.Table("task_logs").
 		Select(`task_group_id,
 			CASE 
-				WHEN SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
-				WHEN SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
-				WHEN SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) > 0 THEN 'running'
-				WHEN SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
+				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
 				ELSE 'partial'
 			END as status
 		`).
 		Group("task_group_id")
 
 	if params.TaskType != "" {
-		subQuery = subQuery.Where("task_type = ?", params.TaskType)
+		taskTypes := strings.Split(params.TaskType, ",")
+		for i, t := range taskTypes {
+			taskTypes[i] = strings.ToUpper(strings.TrimSpace(t))
+		}
+		subQuery = subQuery.Where("UPPER(task_type) IN ?", taskTypes)
 	}
 
 	if params.StartTime != nil {
@@ -277,7 +286,7 @@ func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64,
 
 func (r *TaskLogRepository) FindRunningTasks() ([]model.TaskLog, error) {
 	var tasks []model.TaskLog
-	result := r.db.Where("status = ?", "running").Find(&tasks)
+	result := r.db.Where("status IN ?", []string{"RUNNING", "PENDING"}).Find(&tasks)
 	if result.Error != nil {
 		logger.Error("failed to find running tasks", zap.Error(result.Error))
 		return nil, result.Error
@@ -308,7 +317,8 @@ func (r *TaskLogRepository) DeleteByGroupID(groupID uuid.UUID) (int64, error) {
 func (r *TaskLogRepository) FindTimedOutTasks(timeout time.Duration) ([]model.TaskLog, error) {
 	var tasks []model.TaskLog
 	cutoff := time.Now().Add(-timeout)
-	result := r.db.Where("status IN ? AND started_at < ?", []string{"running", "pending"}, cutoff).
+	// 检查 started_at 或 created_at（如果 started_at 为 NULL）
+	result := r.db.Where("status IN ? AND COALESCE(started_at, created_at) < ?", []string{"RUNNING", "PENDING"}, cutoff).
 		Find(&tasks)
 	if result.Error != nil {
 		logger.Error("failed to find timed out tasks", zap.Error(result.Error))
@@ -325,7 +335,7 @@ func (r *TaskLogRepository) MarkAsTimedOut(taskIDs []uuid.UUID) (int64, error) {
 	result := r.db.Model(&model.TaskLog{}).
 		Where("id IN ?", taskIDs).
 		Updates(map[string]interface{}{
-			"status":      "timeout",
+			"status":      "TIMEOUT",
 			"finished_at": now,
 		})
 	if result.Error != nil {
@@ -344,7 +354,7 @@ func (r *TaskLogRepository) BatchDeleteByGroupIDs(groupIDs []uuid.UUID) (int64, 
 	var totalTasksInGroups int64
 	r.db.Model(&model.TaskLog{}).Where("task_group_id IN ?", groupIDs).Count(&totalTasksInGroups)
 
-	result := r.db.Where("task_group_id IN ? AND status IN ?", groupIDs, []string{"success", "failed"}).
+	result := r.db.Where("task_group_id IN ? AND status IN ?", groupIDs, []string{"SUCCESS", "FAILED", "TIMEOUT"}).
 		Delete(&model.TaskLog{})
 
 	if result.Error != nil {

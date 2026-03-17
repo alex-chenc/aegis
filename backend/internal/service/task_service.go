@@ -85,7 +85,7 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 		}
 
 		var scriptContent string
-		if taskType == "check" {
+		if taskType == "CHECK" {
 			if rule.GeneratedCheckScript != nil {
 				scriptContent = *rule.GeneratedCheckScript
 			}
@@ -101,7 +101,7 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 					zap.String("rule_id", ruleIDStr),
 					zap.String("task_type", taskType),
 				)
-				if taskType == "check" {
+				if taskType == "CHECK" {
 					go s.scriptGenService.GenerateCheckScript(context.Background(), ruleID)
 				} else {
 					go s.scriptGenService.GenerateFixScript(context.Background(), ruleID)
@@ -122,9 +122,10 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 				RuleID:        &ruleID,
 				HostID:        hostID,
 				TaskType:      taskType,
-				Status:        "pending",
+				Status:        "PENDING",
 				ScriptContent: &scriptContent,
 				CreatedAt:     now,
+				StartedAt:     &now,
 			}
 
 			if err := s.taskLogRepo.Create(taskLog); err != nil {
@@ -164,7 +165,7 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 	}
 
 	var scriptContent string
-	if originalTask.TaskType == "check" {
+	if originalTask.TaskType == "CHECK" {
 		if rule.GeneratedCheckScript != nil {
 			scriptContent = *rule.GeneratedCheckScript
 		}
@@ -183,7 +184,7 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 	}
 
 	newVersion := 0
-	if originalTask.TaskType == "check" {
+	if originalTask.TaskType == "CHECK" {
 		newVersion = rule.CheckScriptVersion
 	} else {
 		newVersion = rule.FixScriptVersion
@@ -247,11 +248,11 @@ func (s *TaskService) dispatchToAgent(ctx context.Context, taskID, hostID, ruleI
 			zap.Error(err),
 		)
 
-		s.ProcessTaskResult(taskID, "", err.Error(), -1, "failed")
+		s.ProcessTaskResult(taskID, "", err.Error(), -1, "FAILED")
 		return
 	}
 
-	s.ProcessTaskResult(taskID, "", "", 0, "running")
+	s.ProcessTaskResult(taskID, "", "", 0, "RUNNING")
 }
 
 func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string, exitCode int, status string) {
@@ -296,7 +297,7 @@ func (s *TaskService) CheckTimeoutTasks() {
 					zap.String("task_id", task.ID.String()),
 					zap.Duration("elapsed", elapsed),
 				)
-				s.ProcessTaskResult(task.ID, "", "任务执行超时（超过5分钟）", -1, "failed")
+				s.ProcessTaskResult(task.ID, "", "任务执行超时（超过5分钟）", -1, "TIMEOUT")
 			}
 		}
 	}
@@ -308,7 +309,7 @@ func (s *TaskService) TriggerSelfHealing(taskID uuid.UUID) error {
 		return fmt.Errorf("task not found: %w", err)
 	}
 
-	if taskLog.Status != "failed" {
+	if taskLog.Status != "FAILED" {
 		return fmt.Errorf("task is not in failed state")
 	}
 

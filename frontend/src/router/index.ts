@@ -53,6 +53,12 @@ const routes = [
     meta: { title: '漏洞任务中心' }
   },
   {
+    path: '/vulnerability/tasks/:id',
+    name: 'VulnerabilityTaskDetail',
+    component: TaskDetail,
+    meta: { title: '漏洞任务详情' }
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: Settings,

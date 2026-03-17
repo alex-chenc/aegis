@@ -148,7 +148,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		ScriptType:       task.ScriptType,
 		Version:          version,
 		ScriptContent:    script,
-		GenerationSource: "llm",
+		GenerationSource: "llm_generated",
 		IsCurrent:        true,
 	}
 

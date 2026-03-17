@@ -88,6 +88,15 @@ func (r *HostRepository) FindByID(id uuid.UUID) (*model.Host, error) {
 	return &host, nil
 }
 
+func (r *HostRepository) FindByIP(ipAddress string) (*model.Host, error) {
+	var host model.Host
+	result := r.db.First(&host, "ip_address = ?", ipAddress)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &host, nil
+}
+
 func (r *HostRepository) Count(query string) (int64, error) {
 	var count int64
 

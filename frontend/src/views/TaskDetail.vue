@@ -43,10 +43,12 @@
           <span>任务列表</span>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 13px; color: #666;">类型筛选：</span>
-            <el-select v-model="typeFilter" size="small" style="width: 100px;">
+            <el-select v-model="typeFilter" size="small" style="width: 120px;">
               <el-option label="全部" value="all" />
-              <el-option label="检测" value="check" />
-              <el-option label="修复" value="fix" />
+              <el-option v-if="!isVulnerabilityTask" label="检测" value="CHECK" />
+              <el-option v-if="!isVulnerabilityTask" label="修复" value="FIX" />
+              <el-option v-if="isVulnerabilityTask" label="POC验证" value="POC_VERIFY" />
+              <el-option v-if="isVulnerabilityTask" label="漏洞修复" value="VULNERABILITY_FIX" />
             </el-select>
           </div>
         </div>
@@ -63,18 +65,18 @@
             {{ getHostname(row.host_id) }}
           </template>
         </el-table-column>
-        <el-table-column prop="task_type" label="类型" width="80">
+        <el-table-column prop="task_type" label="类型" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.task_type === 'check' ? 'primary' : 'warning'" size="small">
-              {{ row.task_type === 'check' ? '检测' : '修复' }}
+            <el-tag :type="getTaskTypeTag(row.task_type)" size="small">
+              {{ getTaskTypeLabel(row.task_type) }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="140">
           <template #default="{ row }">
-            <el-tooltip 
-              v-if="row.displayState === '脚本修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'" 
-              :content="row.healingStatus?.last_error || row.stderr || '未知错误'" 
+            <el-tooltip
+              v-if="row.displayState === '脚本修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'"
+              :content="row.healingStatus?.last_error || row.stderr || '未知错误'"
               placement="top"
             >
               <el-tag :type="getStateTagType(row.displayState)" size="small">
@@ -88,10 +90,10 @@
         </el-table-column>
         <el-table-column label="脚本" width="100">
           <template #default="{ row }">
-            <el-button 
-              link 
-              type="primary" 
-              size="small" 
+            <el-button
+              link
+              type="primary"
+              size="small"
               @click="showScript(row, 'script')"
               :disabled="row.displayState === '脚本修复中'"
             >
@@ -115,49 +117,49 @@
         </el-table-column>
         <el-table-column label="操作" width="320">
           <template #default="{ row }">
-            <el-button 
+            <el-button
               v-if="canShowScriptRepair(row)"
-              link 
-              type="warning" 
-              size="small" 
+              link
+              type="warning"
+              size="small"
               @click="triggerScriptRepair(row)"
               :loading="repairingTask === row.id"
             >
               脚本修复
             </el-button>
-            <el-button 
+            <el-button
               v-if="canReExecute(row)"
-              link 
-              type="primary" 
-              size="small" 
+              link
+              type="primary"
+              size="small"
               @click="reExecute(row)"
               :loading="reexecutingTask === row.id"
             >
               重新下发
             </el-button>
-            <el-button 
+            <el-button
               v-if="canShowSuggestion(row)"
-              link 
-              type="info" 
-              size="small" 
+              link
+              type="info"
+              size="small"
               @click="openSuggestionDialog(row)"
             >
               修复建议
             </el-button>
-            <el-button 
-              v-if="row.displayState === '未通过'"
-              link 
-              type="success" 
-              size="small" 
+            <el-button
+              v-if="row.displayState === '未通过' && !isVulnerabilityTask"
+              link
+              type="success"
+              size="small"
               @click="runFix(row)"
               :loading="fixingTask === row.id"
             >
               修复
             </el-button>
-            <el-button 
-              link 
-              type="danger" 
-              size="small" 
+            <el-button
+              link
+              type="danger"
+              size="small"
               @click="deleteTask(row)"
               :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === '脚本修复中'"
             >
@@ -199,21 +201,23 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { 
-  getTaskLogs, 
-  getTaskStatus, 
-  triggerSelfHealing, 
+import {
+  getTaskLogs,
+  getTaskStatus,
+  triggerSelfHealing,
   getHealingStatus,
   redispatchTask,
   runFixInGroup,
   deleteTask as deleteTaskApi,
-  type TaskLog, 
+  normalizeType,
+  normalizeStatus,
+  type TaskLog,
   type TaskGroupStatus,
-  type HealingStatus 
+  type HealingStatus
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '检测超时' | '修复超时'
+type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败'
 
 const route = useRoute()
 const router = useRouter()
@@ -231,19 +235,24 @@ const currentScript = ref('')
 const reexecutingTask = ref<string | null>(null)
 const repairingTask = ref<string | null>(null)
 const fixingTask = ref<string | null>(null)
-const typeFilter = ref<'all' | 'check' | 'fix'>('all')
+const typeFilter = ref<string>('all')
 const suggestionDialogVisible = ref(false)
 const suggestionText = ref('')
 const selectedTask = ref<TaskLog | null>(null)
 const submittingSuggestion = ref(false)
 let pollTimer: number | null = null
 
+const isVulnerabilityTask = computed(() => route.path.startsWith('/vulnerability/tasks'))
+const taskCenterPath = computed(() =>
+  isVulnerabilityTask.value ? '/vulnerability/tasks' : '/baseline/tasks'
+)
+
 const tasksWithState = computed(() => {
   return tasks.value
-    .filter(task => typeFilter.value === 'all' || task.task_type === typeFilter.value)
+    .filter(task => typeFilter.value === 'all' || normalizeType(task.task_type) === typeFilter.value)
     .map(task => {
       const healingStatus = healingStatusMap.value[task.id]
-      const displayState = getDisplayState(task.task_type, task.status, task.exit_code, healingStatus)
+      const displayState = getDisplayState(normalizeType(task.task_type), normalizeStatus(task.status), task.exit_code, healingStatus)
       return {
         ...task,
         displayState,
@@ -252,49 +261,83 @@ const tasksWithState = computed(() => {
     })
 })
 
+function getTaskTypeTag(type: string): string {
+  const normalized = normalizeType(type)
+  switch (normalized) {
+    case 'CHECK': return 'primary'
+    case 'FIX': return 'warning'
+    case 'POC_VERIFY': return 'success'
+    case 'VULNERABILITY_FIX': return 'danger'
+    default: return 'info'
+  }
+}
+
+function getTaskTypeLabel(type: string): string {
+  const normalized = normalizeType(type)
+  switch (normalized) {
+    case 'CHECK': return '检测'
+    case 'FIX': return '修复'
+    case 'POC_VERIFY': return 'POC验证'
+    case 'VULNERABILITY_FIX': return '漏洞修复'
+    default: return type
+  }
+}
+
 function getDisplayState(taskType: string, taskStatus: string, exitCode: number | undefined, healingStatus?: HealingStatus): DisplayState {
-  const isFix = taskType === 'fix'
-  
+  const isFix = taskType === 'FIX' || taskType === 'VULNERABILITY_FIX'
+  const isPoc = taskType === 'POC_VERIFY'
+
   if (taskStatus === 'running' || taskStatus === 'pending') {
-    return isFix ? '修复中' : '检测中'
+    if (isPoc) return 'POC验证中'
+    if (isFix) return '修复中'
+    return '检测中'
   }
   if (taskStatus === 'timeout') {
-    return isFix ? '修复超时' : '检测超时'
+    if (isPoc) return '检测超时'
+    if (isFix) return '修复超时'
+    return '检测超时'
   }
   if (taskStatus === 'success') {
-    if (isFix) {
-      return '修复成功'
-    }
-    if (exitCode === 0) {
-      return '通过'
-    }
+    if (isPoc) return exitCode === 0 ? 'POC验证成功' : 'POC验证失败'
+    if (isFix) return '修复成功'
+    if (exitCode === 0) return '通过'
     return '未通过'
   }
   if (taskStatus === 'failed') {
     if (!healingStatus) {
-      return isFix ? '修复失败' : '检测失败'
+      if (isPoc) return 'POC验证失败'
+      if (isFix) return '修复失败'
+      return '检测失败'
     }
     if (healingStatus.status === 'healing') return '脚本修复中'
     if (healingStatus.status === 'healed') return '脚本修复成功'
     if (healingStatus.status === 'failed') return '脚本修复失败'
   }
-  return isFix ? '修复失败' : '检测失败'
+  if (isPoc) return 'POC验证失败'
+  if (isFix) return '修复失败'
+  return '检测失败'
 }
 
 function getStateTagType(state: DisplayState): string {
   switch (state) {
     case '检测中':
     case '修复中':
+    case 'POC验证中':
+    case '漏洞修复中':
     case '脚本修复中':
       return 'warning'
     case '通过':
     case '修复成功':
+    case 'POC验证成功':
+    case '漏洞修复成功':
     case '脚本修复成功':
       return 'success'
     case '未通过':
       return 'info'
     case '检测失败':
     case '修复失败':
+    case 'POC验证失败':
+    case '漏洞修复失败':
     case '脚本修复失败':
     case '检测超时':
     case '修复超时':
@@ -304,25 +347,30 @@ function getStateTagType(state: DisplayState): string {
 }
 
 function canShowScriptRepair(row: any): boolean {
-  if (row.task_type === 'check') {
-    return row.displayState === '检测失败' || row.displayState === '脚本修复失败'
+  const taskType = normalizeType(row.task_type)
+  if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
+    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '脚本修复失败'
   } else {
-    return row.displayState === '修复失败' || row.displayState === '脚本修复失败'
+    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '脚本修复失败'
   }
 }
 
 function canReExecute(row: any): boolean {
   return row.displayState === '未通过' ||
-         row.displayState === '检测失败' || 
-         row.displayState === '修复失败' || 
-         row.displayState === '脚本修复成功' || 
-         row.displayState === '检测超时' || 
+         row.displayState === '检测失败' ||
+         row.displayState === '修复失败' ||
+         row.displayState === 'POC验证失败' ||
+         row.displayState === '漏洞修复失败' ||
+         row.displayState === '脚本修复成功' ||
+         row.displayState === '检测超时' ||
          row.displayState === '修复超时'
 }
 
 function canShowSuggestion(row: any): boolean {
-  return row.displayState === '检测失败' || 
-         row.displayState === '修复失败' || 
+  return row.displayState === '检测失败' ||
+         row.displayState === '修复失败' ||
+         row.displayState === 'POC验证失败' ||
+         row.displayState === '漏洞修复失败' ||
          row.displayState === '脚本修复失败'
 }
 
@@ -470,7 +518,7 @@ const refresh = async () => {
   }
 }
 
-const goBack = () => router.push('/tasks')
+const goBack = () => router.push(taskCenterPath.value)
 
 const startPolling = () => {
   pollTimer = window.setInterval(async () => {

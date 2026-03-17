@@ -111,26 +111,31 @@ func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb
 		zap.String("ip", req.AssetInfo.IpAddress),
 	)
 
-	// 验证 Auth Token
-	// TODO: 从配置读取并验证
-
-	// 如果 host_id 为空，生成新的
 	var hostID uuid.UUID
 	var err error
 
-	if req.HostId == "" {
-		hostID = uuid.New()
+	existingHost, err := s.hostRepo.FindByIP(req.AssetInfo.IpAddress)
+	if err == nil && existingHost != nil {
+		hostID = existingHost.ID
+		logger.Info("found existing host by IP, using existing ID",
+			zap.String("host_id", hostID.String()),
+			zap.String("ip", req.AssetInfo.IpAddress),
+		)
 	} else {
-		hostID, err = uuid.Parse(req.HostId)
-		if err != nil {
-			logger.Error("invalid host_id format",
-				zap.Error(err),
-				zap.String("host_id", req.HostId),
-			)
-			return &pb.RegisterResponse{
-				Success: false,
-				Message: "invalid host_id format",
-			}, nil
+		if req.HostId == "" {
+			hostID = uuid.New()
+		} else {
+			hostID, err = uuid.Parse(req.HostId)
+			if err != nil {
+				logger.Error("invalid host_id format",
+					zap.Error(err),
+					zap.String("host_id", req.HostId),
+				)
+				return &pb.RegisterResponse{
+					Success: false,
+					Message: "invalid host_id format",
+				}, nil
+			}
 		}
 	}
 
@@ -300,15 +305,15 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 					continue
 				}
 
-				status := "success"
+				status := "SUCCESS"
 				// 对于检查任务：脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
 				// exit code 会单独存储，由前端基于 exit code 判断"通过/未通过"。
 				// 对于修复任务：exit code = 0 表示修复成功，exit code != 0 表示修复失败（需要触发自愈）。
 				// status=failed 仅用于需要触发自愈的场景（检查任务失败、修复任务失败）。
 				if s.taskLogRepo != nil {
 					taskLog, findErr := s.taskLogRepo.FindByID(taskID)
-					if findErr == nil && taskLog.TaskType == "fix" && result.ExitCode != 0 {
-						status = "failed"
+					if findErr == nil && taskLog.TaskType == "FIX" && result.ExitCode != 0 {
+						status = "FAILED"
 						logger.Info("fix task failed with non-zero exit code, marking as failed for self-healing",
 							zap.String("task_id", result.TaskId),
 							zap.Int32("exit_code", result.ExitCode),
@@ -370,7 +375,7 @@ func (s *GRPCServer) SendCommand(hostID uuid.UUID, execute *pb.CommandExecute) e
 				return err
 			}
 
-			logger.Debug("command sent to agent",
+			logger.Info("command sent to agent",
 				zap.Stringer("host_id", hostID),
 				zap.String("task_id", execute.TaskId),
 			)
