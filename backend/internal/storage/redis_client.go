@@ -635,3 +635,105 @@ func (r *RedisClient) GetCVEDetail(cveID string) ([]byte, error) {
 	}
 	return result, nil
 }
+
+// ============================================================================
+// Script Generation Status Cache
+// Key pattern: vuln:gen:{cve_id}:{mode}
+// Type: STRING (JSON)
+// TTL: 30 minutes
+// ============================================================================
+
+const GenerationKeyTTL = 30 * time.Minute
+const GenerationKeyPrefix = "vuln:gen:"
+
+func generationKey(cveID, mode string) string {
+	return fmt.Sprintf("%s%s:%s", GenerationKeyPrefix, cveID, mode)
+}
+
+// GenerationStatus represents the cached generation status
+type GenerationStatus struct {
+	ScriptID  string   `json:"script_id"`
+	Status    string   `json:"status"`
+	StartedAt string   `json:"started_at"`
+	HostIDs   []string `json:"host_ids"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// SetGenerationStatus caches the script generation status
+func (r *RedisClient) SetGenerationStatus(cveID, mode string, status *GenerationStatus) error {
+	key := generationKey(cveID, mode)
+	data, err := json.Marshal(status)
+	if err != nil {
+		logger.Error("failed to marshal generation status",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+			zap.String("mode", mode),
+		)
+		return fmt.Errorf("failed to marshal generation status: %w", err)
+	}
+
+	err = r.client.Set(r.ctx, key, data, GenerationKeyTTL).Err()
+	if err != nil {
+		logger.Error("failed to set generation status",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+			zap.String("mode", mode),
+		)
+		return err
+	}
+
+	logger.Debug("generation status cached",
+		zap.String("cve_id", cveID),
+		zap.String("mode", mode),
+		zap.String("status", status.Status),
+	)
+	return nil
+}
+
+// GetGenerationStatus retrieves the cached script generation status
+func (r *RedisClient) GetGenerationStatus(cveID, mode string) (*GenerationStatus, error) {
+	key := generationKey(cveID, mode)
+	data, err := r.client.Get(r.ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		logger.Error("failed to get generation status",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+			zap.String("mode", mode),
+		)
+		return nil, err
+	}
+
+	var status GenerationStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		logger.Error("failed to unmarshal generation status",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+			zap.String("mode", mode),
+		)
+		return nil, fmt.Errorf("failed to unmarshal generation status: %w", err)
+	}
+
+	return &status, nil
+}
+
+// DeleteGenerationStatus deletes the cached script generation status
+func (r *RedisClient) DeleteGenerationStatus(cveID, mode string) error {
+	key := generationKey(cveID, mode)
+	err := r.client.Del(r.ctx, key).Err()
+	if err != nil {
+		logger.Error("failed to delete generation status",
+			zap.Error(err),
+			zap.String("cve_id", cveID),
+			zap.String("mode", mode),
+		)
+		return err
+	}
+	logger.Debug("generation status deleted",
+		zap.String("cve_id", cveID),
+		zap.String("mode", mode),
+	)
+	return nil
+}
