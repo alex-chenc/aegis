@@ -362,3 +362,56 @@ CREATE TRIGGER update_poc_scripts_updated_at
     BEFORE UPDATE ON poc_scripts
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 13. 迁移: 为脚本表添加生成状态字段 (V3.1)
+-- ============================================================
+
+ALTER TABLE poc_scripts
+    ADD COLUMN IF NOT EXISTS generation_status VARCHAR(20) NOT NULL DEFAULT 'generated',
+    ADD COLUMN IF NOT EXISTS generation_started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS generation_error TEXT,
+    ADD COLUMN IF NOT EXISTS generation_error_detail TEXT,
+    ADD COLUMN IF NOT EXISTS requested_host_id UUID;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_poc_generation_status'
+          AND conrelid = 'poc_scripts'::regclass
+    ) THEN
+        ALTER TABLE poc_scripts
+            ADD CONSTRAINT chk_poc_generation_status
+            CHECK (generation_status IN ('generating', 'generated', 'failed'));
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_poc_scripts_generation_status
+    ON poc_scripts(generation_status);
+
+CREATE INDEX IF NOT EXISTS idx_poc_scripts_requested_host_id
+    ON poc_scripts(requested_host_id);
+
+ALTER TABLE vulnerability_fix_scripts
+    ADD COLUMN IF NOT EXISTS generation_status VARCHAR(20) NOT NULL DEFAULT 'generated',
+    ADD COLUMN IF NOT EXISTS generation_started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS generation_error TEXT,
+    ADD COLUMN IF NOT EXISTS generation_error_detail TEXT,
+    ADD COLUMN IF NOT EXISTS requested_host_ids JSONB;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_fix_script_generation_status'
+          AND conrelid = 'vulnerability_fix_scripts'::regclass
+    ) THEN
+        ALTER TABLE vulnerability_fix_scripts
+            ADD CONSTRAINT chk_fix_script_generation_status
+            CHECK (generation_status IN ('generating', 'generated', 'failed'));
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_vulnerability_fix_scripts_generation_status
+    ON vulnerability_fix_scripts(generation_status);
