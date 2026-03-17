@@ -132,6 +132,9 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			vulnerability.GET("", r.vulnerabilityHandler.ListVulnerabilities)
 			vulnerability.POST("/:id/fix", r.vulnerabilityHandler.InitiateFix)
 			vulnerability.POST("/:id/poc", r.vulnerabilityHandler.InitiatePoc)
+			vulnerability.GET("/:cve_id/generation-status", r.vulnerabilityHandler.GetGenerationStatus)
+			vulnerability.GET("/:cve_id/task-status", r.vulnerabilityHandler.GetCveTaskStatus)
+			vulnerability.GET("/scripts/:script_id/status", r.vulnerabilityHandler.GetScriptStatus)
 		}
 	}
 }
