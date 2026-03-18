@@ -398,7 +398,6 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 	response := TaskLogResponse{
 		ID:            log.ID.String(),
 		TaskGroupID:   log.TaskGroupID.String(),
-		RuleID:        log.RuleID.String(),
 		HostID:        log.HostID.String(),
 		TaskType:      log.TaskType,
 		Status:        log.Status,
@@ -406,6 +405,10 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 		Stdout:        log.Stdout,
 		Stderr:        log.Stderr,
 		ExitCode:      log.ExitCode,
+	}
+
+	if log.RuleID != nil {
+		response.RuleID = log.RuleID.String()
 	}
 
 	if log.StartedAt != nil {

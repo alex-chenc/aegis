@@ -45,7 +45,6 @@
       </div>
 
       <div v-if="generationStatus === 'generating'" class="generating-status">
-        <el-progress :percentage="100" :indeterminate="true" />
         <p class="status-text">正在生成脚本，请稍候...</p>
       </div>
       
@@ -59,7 +58,7 @@
         </el-alert>
       </div>
       
-      <div v-else-if="!script" class="script-actions">
+      <div v-else-if="!script || selectedHosts.length === 0" class="script-actions">
         <el-button
           type="primary"
           :loading="generating"
@@ -78,7 +77,12 @@
         
         <div class="action-buttons">
           <el-button @click="resetScript">重新生成</el-button>
-          <el-button type="primary" :loading="executing" @click="executeScript">
+          <el-button 
+            type="primary" 
+            :loading="executing" 
+            :disabled="selectedHosts.length === 0"
+            @click="executeScript"
+          >
             {{ mode === 'fix' ? '确认执行修复' : '开始验证' }}
           </el-button>
         </div>
