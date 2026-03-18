@@ -229,13 +229,20 @@ async function generateScript() {
   try {
     const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
     
+    let result
     if (props.mode === 'fix') {
-      const result = await api.generateFixScript(props.cve.cve_id, hosts, true)
-      script.value = result.script || ''
+      result = await api.generateFixScript(props.cve.cve_id, hosts, true)
     } else {
       const hostId = hosts[0]
-      const result = await api.generatePocScript(props.cve.cve_id, hostId, true)
-      script.value = result.script || ''
+      result = await api.generatePocScript(props.cve.cve_id, hostId, true)
+    }
+
+    if (result.status === 'generating' && result.script_id) {
+      generationStatus.value = 'generating'
+      pollGenerationStatus(result.script_id, Date.now())
+    } else if (result.script) {
+      script.value = result.script
+      generationStatus.value = 'generated'
     }
   } catch (err: any) {
     error.value = err.message || '脚本生成失败'
@@ -247,15 +254,20 @@ async function generateScript() {
 
 async function executeScript() {
   if (!script.value) {
-    ElMessage.warning('请先生成脚本')
+    ElMessage.warning('请先选择主机并生成脚本')
+    return
+  }
+
+  const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
+  
+  if (hosts.length === 0 || (props.mode === 'poc' && hosts.length === 0)) {
+    ElMessage.warning('请选择目标主机')
     return
   }
 
   executing.value = true
 
   try {
-    const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
-    
     let result
     if (props.mode === 'fix') {
       result = await api.generateFixScript(props.cve.cve_id, hosts, false)
@@ -266,9 +278,10 @@ async function executeScript() {
     emit('execute', { taskId: result.task_id || '', hosts })
     ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC 验证任务已创建')
     dialogVisible.value = false
-
-    // 跳转到任务中心
-    router.push('/vulnerability/tasks')
+    
+    setTimeout(() => {
+      router.push('/vulnerability/tasks')
+    }, 100)
   } catch (err: any) {
     error.value = err.message || '执行失败'
     ElMessage.error(error.value)
