@@ -166,9 +166,11 @@ watch(() => props.visible, (val) => {
     resetScript()
     generationStatus.value = 'idle'
     generationError.value = ''
+    selectedHosts.value = []
     
-    if (props.restoreStatus) {
+    if (props.restoreStatus && props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
       generationStatus.value = props.restoreStatus.status
+      selectedHosts.value = props.restoreStatus.hostIds
       
       if (props.restoreStatus.status === 'generated' && props.restoreStatus.script) {
         script.value = props.restoreStatus.script
@@ -176,21 +178,9 @@ watch(() => props.visible, (val) => {
       if (props.restoreStatus.status === 'failed') {
         generationError.value = props.restoreStatus.error || '生成失败'
       }
-      if (props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
-        selectedHosts.value = props.restoreStatus.hostIds
-      } else {
-        selectedHosts.value = props.mode === 'poc' && props.affectedHosts.length > 0 
-          ? [props.affectedHosts[0].id] 
-          : []
-      }
-      
       if (props.restoreStatus.status === 'generating' && props.restoreStatus.scriptId) {
         pollGenerationStatus(props.restoreStatus.scriptId, Date.now())
       }
-    } else {
-      selectedHosts.value = props.mode === 'poc' && props.affectedHosts.length > 0 
-        ? [props.affectedHosts[0].id] 
-        : []
     }
   }
 })
@@ -198,7 +188,7 @@ watch(() => props.visible, (val) => {
 async function pollGenerationStatus(scriptId: string, startTime: number) {
   if (Date.now() - startTime > GENERATION_TIMEOUT) {
     generationStatus.value = 'failed'
-    generationError.value = '脚本生成超时（超过5分钟），请重试'
+    generationError.value = '脚本生成超时（超过 5 分钟），请重试'
     return
   }
   
@@ -208,9 +198,14 @@ async function pollGenerationStatus(scriptId: string, startTime: number) {
     if (status.status === 'generating') {
       setTimeout(() => pollGenerationStatus(scriptId, startTime), 2000)
     } else if (status.status === 'generated') {
-      script.value = status.script || ''
-      generationStatus.value = 'generated'
-      ElMessage.success('脚本生成完成')
+      if (selectedHosts.value.length > 0) {
+        script.value = status.script || ''
+        generationStatus.value = 'generated'
+        ElMessage.success('脚本生成完成')
+      } else {
+        generationStatus.value = 'idle'
+        ElMessage.warning('请先选择目标主机')
+      }
     } else {
       generationStatus.value = 'failed'
       generationError.value = status.error || '脚本生成失败'
@@ -223,7 +218,7 @@ async function pollGenerationStatus(scriptId: string, startTime: number) {
 
 async function generateScript() {
   if (selectedHosts.value.length === 0) {
-    ElMessage.warning('请选择目标主机')
+    ElMessage.warning('请先选择目标主机')
     return
   }
 
@@ -244,7 +239,7 @@ async function generateScript() {
     if (result.status === 'generating' && result.script_id) {
       generationStatus.value = 'generating'
       pollGenerationStatus(result.script_id, Date.now())
-    } else if (result.script) {
+    } else if (result.script && selectedHosts.value.length > 0) {
       script.value = result.script
       generationStatus.value = 'generated'
     }
@@ -257,26 +252,27 @@ async function generateScript() {
 }
 
 async function executeScript() {
-  if (!script.value) {
-    ElMessage.warning('请先选择主机并生成脚本')
+  if (selectedHosts.value.length === 0) {
+    ElMessage.warning('请先选择目标主机')
     return
   }
-
-  const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
   
-  if (hosts.length === 0 || (props.mode === 'poc' && hosts.length === 0)) {
-    ElMessage.warning('请选择目标主机')
+  if (!script.value) {
+    ElMessage.warning('请先生成脚本')
     return
   }
 
   executing.value = true
 
   try {
+    const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
+    
     let result
     if (props.mode === 'fix') {
       result = await api.generateFixScript(props.cve.cve_id, hosts, false)
     } else {
-      result = await api.generatePocScript(props.cve.cve_id, hosts[0], false)
+      const hostId = hosts[0]
+      result = await api.generatePocScript(props.cve.cve_id, hostId, false)
     }
 
     emit('execute', { taskId: result.task_id || '', hosts })
