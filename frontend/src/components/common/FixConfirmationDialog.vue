@@ -286,11 +286,8 @@ async function executeScript() {
 
     emit('execute', { taskId: result.task_id || '', hosts })
     ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC 验证任务已创建')
-    
-    setTimeout(() => {
-      dialogVisible.value = false
-      window.location.href = '/vulnerability/tasks'
-    }, 300)
+    dialogVisible.value = false
+    window.location.href = '/vulnerability/tasks'
   } catch (err: any) {
     error.value = err.message || '执行失败'
     ElMessage.error(error.value)
