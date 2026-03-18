@@ -58,18 +58,34 @@
         </el-alert>
       </div>
       
-      <div v-else-if="!script || selectedHosts.length === 0" class="script-actions">
+<div v-else-if="!script || selectedHosts.length === 0" class="script-actions">
         <el-button
           type="primary"
           :loading="generating"
           :disabled="selectedHosts.length === 0"
           @click="generateScript"
         >
-          {{ mode === 'fix' ? '生成修复脚本' : '生成POC验证脚本' }}
+          {{ mode === 'fix' ? '生成修复脚本' : '生成 POC 验证脚本' }}
         </el-button>
         <p class="hint-text">
-          {{ mode === 'poc' ? 'POC验证用于确认漏洞是否存在，脚本经过安全设计，不会对系统造成破坏' : '修复脚本将尝试修复此漏洞，建议先进行POC验证确认漏洞存在' }}
+          {{ mode === 'poc' ? 'POC 验证用于确认漏洞是否存在，脚本经过安全设计，不会对系统造成破坏' : '修复脚本将尝试修复此漏洞，建议先进行 POC 验证确认漏洞存在' }}
         </p>
+      </div>
+
+      <div v-else-if="script && selectedHosts.length > 0" class="script-preview-section">
+        <ScriptPreview :script="script" :mode="mode" />
+        
+        <div class="action-buttons">
+          <el-button @click="resetScript">重新生成</el-button>
+          <el-button 
+            type="primary" 
+            :loading="executing" 
+            :disabled="selectedHosts.length === 0"
+            @click="executeScript"
+          >
+            {{ mode === 'fix' ? '确认执行修复' : '开始验证' }}
+          </el-button>
+        </div>
       </div>
 
       <div v-else class="script-preview-section">
