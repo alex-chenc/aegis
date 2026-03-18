@@ -116,7 +116,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SeverityTag from './SeverityTag.vue'
@@ -182,10 +182,11 @@ watch(() => props.visible, (val) => {
     resetScript()
     generationStatus.value = 'idle'
     generationError.value = ''
-    selectedHosts.value = []
     
     if (props.restoreStatus && props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
-      selectedHosts.value = props.restoreStatus.hostIds
+      // 直接设置数组内容，触发响应式更新
+      selectedHosts.value.splice(0, selectedHosts.value.length, ...props.restoreStatus.hostIds)
+      
       generationStatus.value = props.restoreStatus.status
       
       if (props.restoreStatus.status === 'generated' && props.restoreStatus.script) {
@@ -197,6 +198,9 @@ watch(() => props.visible, (val) => {
       if (props.restoreStatus.status === 'generating' && props.restoreStatus.scriptId) {
         pollGenerationStatus(props.restoreStatus.scriptId, Date.now())
       }
+    } else {
+      generationStatus.value = 'idle'
+      selectedHosts.value = []
     }
   }
 })
