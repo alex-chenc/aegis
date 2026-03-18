@@ -184,24 +184,11 @@ watch(() => props.visible, (val) => {
     generationError.value = ''
     selectedHosts.value = []
     
-    if (props.restoreStatus && props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
-      const validHostIds = props.restoreStatus.hostIds.filter(hostId => 
-        props.affectedHosts.some(h => h.id === hostId)
-      )
+    if (props.restoreStatus && props.restoreStatus.script) {
+      generationStatus.value = props.restoreStatus.status
       
-      if (validHostIds.length > 0) {
-        generationStatus.value = props.restoreStatus.status
-        selectedHosts.value = validHostIds
-        
-        if (props.restoreStatus.status === 'generated' && props.restoreStatus.script) {
-          script.value = props.restoreStatus.script
-        }
-        if (props.restoreStatus.status === 'failed') {
-          generationError.value = props.restoreStatus.error || '生成失败'
-        }
-        if (props.restoreStatus.status === 'generating' && props.restoreStatus.scriptId) {
-          pollGenerationStatus(props.restoreStatus.scriptId, Date.now())
-        }
+      if (props.restoreStatus.status === 'failed') {
+        generationError.value = props.restoreStatus.error || '生成失败'
       }
     }
   }
