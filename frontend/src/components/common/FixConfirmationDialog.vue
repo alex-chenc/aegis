@@ -289,7 +289,7 @@ async function executeScript() {
     
     setTimeout(() => {
       dialogVisible.value = false
-      router.push('/vulnerability/tasks')
+      window.location.href = '/vulnerability/tasks'
     }, 300)
   } catch (err: any) {
     error.value = err.message || '执行失败'
