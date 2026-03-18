@@ -44,16 +44,14 @@ export interface RunFixInGroupRequest {
 }
 
 export interface HealingStatus {
-  id: string
-  original_task_id: string
-  rule_id: string
-  script_type: string
-  status: 'healing' | 'healed' | 'failed'
+  task_id: string
+  status: 'healing' | 'healed' | 'failed' | 'timeout'
+  started_at?: string
   total_attempts: number
   max_attempts: number
-  final_script_version?: string
   last_error?: string
   user_suggestion?: string
+  script_type?: string
 }
 
 export interface TriggerHealingRequest {

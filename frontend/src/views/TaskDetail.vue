@@ -217,7 +217,7 @@ import {
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败'
+type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '脚本修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败'
 
 const route = useRoute()
 const router = useRouter()
@@ -312,6 +312,7 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
     if (healingStatus.status === 'healing') return '脚本修复中'
     if (healingStatus.status === 'healed') return '脚本修复成功'
     if (healingStatus.status === 'failed') return '脚本修复失败'
+    if (healingStatus.status === 'timeout') return '脚本修复超时'
   }
   if (isPoc) return 'POC验证失败'
   if (isFix) return '修复失败'
@@ -339,6 +340,7 @@ function getStateTagType(state: DisplayState): string {
     case 'POC验证失败':
     case '漏洞修复失败':
     case '脚本修复失败':
+    case '脚本修复超时':
     case '检测超时':
     case '修复超时':
       return 'danger'
@@ -349,9 +351,9 @@ function getStateTagType(state: DisplayState): string {
 function canShowScriptRepair(row: any): boolean {
   const taskType = normalizeType(row.task_type)
   if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
-    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '脚本修复失败'
+    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '脚本修复失败' || row.displayState === '脚本修复超时'
   } else {
-    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '脚本修复失败'
+    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '脚本修复失败' || row.displayState === '脚本修复超时'
   }
 }
 
@@ -414,10 +416,10 @@ const triggerScriptRepair = async (task: TaskLog) => {
   try {
     await triggerSelfHealing(task.id, '')
     ElMessage.success('脚本修复已触发，正在调用大模型进行修复...')
-    await fetchHealingStatuses()
+    // 获取单个任务的 healing status
+    await fetchSingleHealingStatus(task.id)
   } catch (e: any) {
     ElMessage.error(e.message || '脚本修复失败')
-  } finally {
     repairingTask.value = null
   }
 }
@@ -435,10 +437,11 @@ const submitSuggestion = async () => {
     await triggerSelfHealing(selectedTask.value.id, suggestionText.value)
     ElMessage.success('修复建议已提交，系统正在进行脚本修复')
     suggestionDialogVisible.value = false
-    await fetchHealingStatuses()
+    repairingTask.value = selectedTask.value.id
+    // 获取单个任务的 healing status
+    await fetchSingleHealingStatus(selectedTask.value.id)
   } catch (e: any) {
     ElMessage.error(e.message || '提交失败')
-  } finally {
     submittingSuggestion.value = false
   }
 }
@@ -492,16 +495,20 @@ const deleteTask = async (task: TaskLog) => {
   }
 }
 
-const fetchHealingStatuses = async () => {
-  const failedTasks = tasks.value.filter(t => t.status === 'failed')
-  const healingTasks = Object.values(healingStatusMap.value).filter(h => h.status === 'healing')
-  const taskIds = [...new Set([...failedTasks.map(t => t.id), ...healingTasks.map(h => h.original_task_id)])]
-  for (const taskId of taskIds) {
-    try {
-      const healingStatus = await getHealingStatus(taskId)
-      if (healingStatus) healingStatusMap.value[taskId] = healingStatus
-    } catch { }
-  }
+const fetchSingleHealingStatus = async (taskId: string) => {
+  try {
+    const healingStatus = await getHealingStatus(taskId)
+    if (healingStatus) {
+      healingStatusMap.value[taskId] = healingStatus
+      
+      // 如果修复完成（成功、失败或超时），清除 repairingTask
+      if (healingStatus.status === 'healed' || healingStatus.status === 'failed' || healingStatus.status === 'timeout') {
+        if (repairingTask.value === taskId) {
+          repairingTask.value = null
+        }
+      }
+    }
+  } catch { }
 }
 
 const refresh = async () => {
@@ -510,7 +517,19 @@ const refresh = async () => {
     const [logs, statusData] = await Promise.all([getTaskLogs(taskGroupId), getTaskStatus(taskGroupId)])
     tasks.value = logs
     status.value = statusData
-    await fetchHealingStatuses()
+    
+    // 直接使用后端返回的 healing_status，无需单独请求
+    for (const task of tasks.value) {
+      if (task.healing_status) {
+        healingStatusMap.value[task.id] = task.healing_status
+        
+        if (task.healing_status.status === 'healed' || task.healing_status.status === 'failed' || task.healing_status.status === 'timeout') {
+          if (repairingTask.value === task.id) {
+            repairingTask.value = null
+          }
+        }
+      }
+    }
   } catch (e: any) {
     ElMessage.error(e.message || '刷新失败')
   } finally {

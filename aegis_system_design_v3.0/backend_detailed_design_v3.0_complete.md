@@ -260,3 +260,61 @@ message SoftwareInfo {
    │ ←───200 OK (ScanStatus)                       │                                                  │
 
 ```
+
+## 10. 脚本修复状态持久化 (V3.0.3)
+
+### 10.1 Redis 状态存储
+
+脚本修复（Self-Healing）状态持久化到 Redis，确保页面刷新后状态不丢失。
+
+**Redis Key 结构**：
+```
+Key: healing:status:{task_id}
+TTL: 10 分钟（比 5 分钟超时长）
+```
+
+**数据结构**：
+```go
+type HealingStatus struct {
+    TaskID         string    `json:"task_id"`
+    Status         string    `json:"status"` // healing, healed, failed, timeout
+    StartedAt      time.Time `json:"started_at"`
+    UpdatedAt      time.Time `json:"updated_at"`
+    TotalAttempts  int       `json:"total_attempts"`
+    MaxAttempts    int       `json:"max_attempts"`
+    LastError      string    `json:"last_error,omitempty"`
+    UserSuggestion string    `json:"user_suggestion,omitempty"`
+    ScriptType     string    `json:"script_type"`
+}
+```
+
+### 10.2 超时检查器
+
+后端启动独立的 goroutine 每 30 秒扫描所有修复中的任务，检查是否超过 5 分钟：
+
+```go
+func (s *SelfHealingService) timeoutChecker(ctx context.Context) {
+    ticker := time.NewTicker(30 * time.Second)
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            // 扫描 healing:status:* 键
+            // 如果 status == "healing" && started_at > 5分钟
+            // 则更新为 timeout
+        }
+    }
+}
+```
+
+### 10.3 GetTaskLogs API 增强
+
+`GetTaskLogs` API 返回每个任务的 `healing_status`，前端无需单独请求：
+
+```go
+type TaskLogResponse struct {
+    // ... 现有字段
+    HealingStatus *HealingStatusResponse `json:"healing_status,omitempty"`
+}
+```

@@ -11,6 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
+func uuidPtr(id uuid.UUID) *uuid.UUID {
+	return &id
+}
+
 func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -41,7 +45,7 @@ func TestTaskLogRepository_UpdateForRedispatch(t *testing.T) {
 	task := &model.TaskLog{
 		ID:            uuid.New(),
 		TaskGroupID:   uuid.New(),
-		RuleID:        uuid.New(),
+		RuleID:        uuidPtr(uuid.New()),
 		HostID:        uuid.New(),
 		TaskType:      "fix",
 		Status:        "failed",

@@ -737,3 +737,99 @@ func (r *RedisClient) DeleteGenerationStatus(cveID, mode string) error {
 	)
 	return nil
 }
+
+// ============================================================================
+// Healing Status Management
+// Key pattern: healing:status:{task_id}
+// TTL: 10 minutes (longer than 5-minute timeout)
+// ============================================================================
+
+const HealingStatusTTL = 10 * time.Minute
+const HealingStatusKeyPrefix = "healing:status:"
+
+type HealingStatus struct {
+	TaskID         string    `json:"task_id"`
+	Status         string    `json:"status"` // healing, healed, failed, timeout
+	StartedAt      time.Time `json:"started_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	TotalAttempts  int       `json:"total_attempts"`
+	MaxAttempts    int       `json:"max_attempts"`
+	LastError      string    `json:"last_error,omitempty"`
+	UserSuggestion string    `json:"user_suggestion,omitempty"`
+	ScriptType     string    `json:"script_type"`
+}
+
+func healingStatusKey(taskID string) string {
+	return fmt.Sprintf("%s%s", HealingStatusKeyPrefix, taskID)
+}
+
+// SetHealingStatusStruct sets the healing status for a task
+func (r *RedisClient) SetHealingStatusStruct(status *HealingStatus) error {
+	key := healingStatusKey(status.TaskID)
+	status.UpdatedAt = time.Now()
+	data, err := json.Marshal(status)
+	if err != nil {
+		logger.Error("failed to marshal healing status",
+			zap.Error(err),
+			zap.String("task_id", status.TaskID),
+		)
+		return fmt.Errorf("failed to marshal healing status: %w", err)
+	}
+	err = r.client.Set(r.ctx, key, data, HealingStatusTTL).Err()
+	if err != nil {
+		logger.Error("failed to set healing status",
+			zap.Error(err),
+			zap.String("task_id", status.TaskID),
+		)
+		return err
+	}
+	logger.Debug("healing status set",
+		zap.String("task_id", status.TaskID),
+		zap.String("status", status.Status),
+	)
+	return nil
+}
+
+// GetHealingStatusStruct gets the healing status for a task
+func (r *RedisClient) GetHealingStatusStruct(taskID string) (*HealingStatus, error) {
+	key := healingStatusKey(taskID)
+	data, err := r.client.Get(r.ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		logger.Error("failed to get healing status",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return nil, err
+	}
+
+	var status HealingStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		logger.Error("failed to unmarshal healing status",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return nil, fmt.Errorf("failed to unmarshal healing status: %w", err)
+	}
+
+	return &status, nil
+}
+
+// DeleteHealingStatusStruct deletes the healing status for a task
+func (r *RedisClient) DeleteHealingStatusStruct(taskID string) error {
+	key := healingStatusKey(taskID)
+	err := r.client.Del(r.ctx, key).Err()
+	if err != nil {
+		logger.Error("failed to delete healing status",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return err
+	}
+	logger.Debug("healing status deleted",
+		zap.String("task_id", taskID),
+	)
+	return nil
+}

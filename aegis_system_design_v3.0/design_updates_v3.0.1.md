@@ -876,6 +876,179 @@ HostID = ''
 
 ---
 
-*文档版本：V3.0.2*
-*更新日期：2026-03-17*
+## 14. 脚本修复状态持久化 (V3.0.3)
+
+### 14.1 问题描述
+
+脚本修复（Self-Healing）触发后，用户刷新页面会导致修复状态丢失，无法看到"脚本修复中"状态。同时，如果 LLM 调用长时间无响应，缺乏超时机制导致状态卡死。
+
+### 14.2 解决方案
+
+#### 14.2.1 Redis 状态持久化
+
+**新增 Redis Key 结构**：
+```
+Key: healing:status:{task_id}
+TTL: 10 分钟（比 5 分钟超时长）
+```
+
+**HealingStatus 结构体**：
+```go
+type HealingStatus struct {
+    TaskID         string    `json:"task_id"`
+    Status         string    `json:"status"` // healing, healed, failed, timeout
+    StartedAt      time.Time `json:"started_at"`
+    UpdatedAt      time.Time `json:"updated_at"`
+    TotalAttempts  int       `json:"total_attempts"`
+    MaxAttempts    int       `json:"max_attempts"`
+    LastError      string    `json:"last_error,omitempty"`
+    UserSuggestion string    `json:"user_suggestion,omitempty"`
+    ScriptType     string    `json:"script_type"`
+}
+```
+
+**状态流转**：
+```
+触发修复 → healing (存入 Redis)
+    ↓
+LLM 调用中 → healing (total_attempts 更新)
+    ↓
+成功 → healed
+失败 → failed
+超时 → timeout (5 分钟无响应)
+```
+
+#### 14.2.2 5 分钟超时检查器
+
+```go
+const HealingTimeout = 5 * time.Minute
+
+func (s *SelfHealingService) timeoutChecker(ctx context.Context) {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            // 扫描所有 healing:status:* 键
+            iter := s.redisClient.Scan(ctx, 0, "healing:status:*", 0).Iterator()
+            for iter.Next(ctx) {
+                // 检查 started_at 是否超过 5 分钟
+                if status.Status == "healing" && 
+                   time.Since(status.StartedAt) > HealingTimeout {
+                    status.Status = "timeout"
+                    status.LastError = "修复超时（超过 5 分钟未返回结果）"
+                    s.redisClient.Set(ctx, key, status)
+                }
+            }
+        }
+    }
+}
+```
+
+#### 14.2.3 GetTaskLogs API 增强
+
+**响应结构更新**：
+```go
+type TaskLogResponse struct {
+    // ... 现有字段
+    HealingStatus *HealingStatusResponse `json:"healing_status,omitempty"`
+}
+
+type HealingStatusResponse struct {
+    Status        string `json:"status"`
+    TotalAttempts int    `json:"total_attempts"`
+    MaxAttempts   int    `json:"max_attempts"`
+    LastError     string `json:"last_error,omitempty"`
+}
+```
+
+**前端直接使用后端返回的 healing_status**：
+```typescript
+// 刷新时直接使用后端返回的数据，无需单独请求
+const refresh = async () => {
+    const logs = await getTaskLogs(taskGroupId)
+    tasks.value = logs
+    
+    for (const task of tasks.value) {
+        if (task.healing_status) {
+            healingStatusMap.value[task.id] = task.healing_status
+        }
+    }
+}
+```
+
+### 14.3 前端状态更新
+
+**新增状态**：
+```typescript
+type DisplayState = 
+    | '脚本修复中'
+    | '脚本修复成功'
+    | '脚本修复失败'
+    | '脚本修复超时'  // 新增
+```
+
+**状态显示规则**：
+```typescript
+function getDisplayState(task, healingStatus) {
+    if (task.status === 'failed') {
+        if (healingStatus?.status === 'healing') return '脚本修复中'
+        if (healingStatus?.status === 'healed') return '脚本修复成功'
+        if (healingStatus?.status === 'failed') return '脚本修复失败'
+        if (healingStatus?.status === 'timeout') return '脚本修复超时'
+    }
+}
+```
+
+### 14.4 修复文件清单
+
+| 文件 | 修改类型 | 说明 |
+|------|---------|------|
+| `backend/internal/storage/redis_client.go` | 新增 | HealingStatus 结构体、SetHealingStatusStruct、GetHealingStatusStruct |
+| `backend/internal/service/self_healing_service.go` | 增强 | Redis 依赖、状态持久化、超时检查器 |
+| `backend/internal/api/handler/task_handler.go` | 增强 | GetTaskLogs 返回 healing_status |
+| `backend/cmd/server/main.go` | 更新 | NewTaskHandler 参数更新 |
+| `frontend/src/api/tasks.ts` | 更新 | HealingStatus 接口定义 |
+| `frontend/src/views/TaskDetail.vue` | 增强 | 状态持久化、超时状态处理 |
+
+### 14.5 API 响应示例
+
+**GetTaskLogs 响应**：
+```json
+{
+  "code": 0,
+  "data": [{
+    "id": "edc605a1-6d65-4c1a-b3fd-b6d7dc8370a0",
+    "status": "FAILED",
+    "healing_status": {
+      "status": "healing",
+      "total_attempts": 1,
+      "max_attempts": 3
+    }
+  }]
+}
+```
+
+**GetHealingStatus 响应**：
+```json
+{
+  "code": 0,
+  "data": {
+    "task_id": "edc605a1-6d65-4c1a-b3fd-b6d7dc8370a0",
+    "status": "healing",
+    "started_at": "2026-03-18T10:41:12.816200396Z",
+    "total_attempts": 1,
+    "max_attempts": 3,
+    "last_error": ""
+  }
+}
+```
+
+---
+
+*文档版本：V3.0.3*
+*更新日期：2026-03-18*
 *更新人：Sisyphus*

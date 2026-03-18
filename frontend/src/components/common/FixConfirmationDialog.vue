@@ -34,6 +34,7 @@
           filterable
           placeholder="请选择主机"
           style="width: 100%"
+          @change="onHostSelectionChange"
         >
           <el-option
             v-for="host in affectedHosts"
@@ -44,8 +45,15 @@
         </el-select>
       </div>
 
-      <div v-if="generationStatus === 'generating'" class="generating-status">
-        <p class="status-text">正在生成脚本，请稍候...</p>
+      <!-- 查询主机脚本状态中的加载状态 -->
+      <div v-if="checkingScript" class="checking-status">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>查询脚本状态...</span>
+      </div>
+
+      <div v-else-if="generationStatus === 'generating'" class="generating-status">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>正在生成脚本，请稍候...</span>
       </div>
       
       <div v-else-if="generationStatus === 'failed'" class="failed-status">
@@ -58,11 +66,10 @@
         </el-alert>
       </div>
       
-<div v-else-if="!script || selectedHosts.length === 0" class="script-actions">
+      <div v-else-if="!script && selectedHosts.length > 0 && !checkingScript" class="script-actions">
         <el-button
           type="primary"
           :loading="generating"
-          :disabled="selectedHosts.length === 0"
           @click="generateScript"
         >
           {{ mode === 'fix' ? '生成修复脚本' : '生成 POC 验证脚本' }}
@@ -80,7 +87,6 @@
           <el-button 
             type="primary" 
             :loading="executing" 
-            :disabled="selectedHosts.length === 0"
             @click="executeScript"
           >
             {{ mode === 'fix' ? '确认执行修复' : '开始验证' }}
@@ -88,20 +94,8 @@
         </div>
       </div>
 
-      <div v-else class="script-preview-section">
-        <ScriptPreview :script="script" :mode="mode" />
-        
-        <div class="action-buttons">
-          <el-button @click="resetScript">重新生成</el-button>
-          <el-button 
-            type="primary" 
-            :loading="executing" 
-            :disabled="selectedHosts.length === 0"
-            @click="executeScript"
-          >
-            {{ mode === 'fix' ? '确认执行修复' : '开始验证' }}
-          </el-button>
-        </div>
+      <div v-else class="empty-state">
+        <el-empty :description="mode === 'fix' ? '请先选择需要修复的主机' : '请先选择需要验证的主机'" :image-size="100" />
       </div>
 
       <el-alert
@@ -116,9 +110,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import SeverityTag from './SeverityTag.vue'
 import ScriptPreview from './ScriptPreview.vue'
 import * as api from '@/api/vulnerability'
@@ -167,43 +161,90 @@ const dialogTitle = computed(() =>
   props.mode === 'fix' ? '一键修复' : 'POC验证'
 )
 
-const selectedHosts = ref<string[]>([])
+const selectedHosts = ref<string | string[]>([])
 const script = ref('')
 const generating = ref(false)
 const executing = ref(false)
 const error = ref('')
 const generationStatus = ref<'idle' | 'generating' | 'generated' | 'failed'>('idle')
 const generationError = ref('')
+const checkingScript = ref(false)
+const currentScriptId = ref<string | null>(null)
 const GENERATION_TIMEOUT = 5 * 60 * 1000
-const router = useRouter()
 
-watch(() => props.visible, (val) => {
+// 打开对话框时的初始化逻辑
+watch(() => props.visible, async (val) => {
   if (val) {
+    // 先重置状态
     resetScript()
-    generationStatus.value = 'idle'
-    generationError.value = ''
+    selectedHosts.value = props.mode === 'fix' ? [] : ''
     
-    if (props.restoreStatus && props.restoreStatus.hostIds && props.restoreStatus.hostIds.length > 0) {
-      // 直接设置数组内容，触发响应式更新
-      selectedHosts.value.splice(0, selectedHosts.value.length, ...props.restoreStatus.hostIds)
-      
-      generationStatus.value = props.restoreStatus.status
-      
-      if (props.restoreStatus.status === 'generated' && props.restoreStatus.script) {
-        script.value = props.restoreStatus.script
+    // 显示加载状态
+    checkingScript.value = true
+    
+    // 检查是否有正在生成中的脚本（需要恢复）
+    try {
+      const status = await api.getGenerationStatus(props.cve.cve_id, props.mode)
+      if (status.has_generation && status.status === 'generating' && status.script_id) {
+        // 正在生成中的脚本，自动恢复主机选择和状态
+        if (status.host_ids && status.host_ids.length > 0) {
+          // POC模式：单个主机（字符串），Fix模式：多个主机（数组）
+          selectedHosts.value = props.mode === 'fix' ? status.host_ids : status.host_ids[0]
+        }
+        generationStatus.value = 'generating'
+        currentScriptId.value = status.script_id
+        // 开始轮询
+        pollGenerationStatus(status.script_id, Date.now())
       }
-      if (props.restoreStatus.status === 'failed') {
-        generationError.value = props.restoreStatus.error || '生成失败'
-      }
-      if (props.restoreStatus.status === 'generating' && props.restoreStatus.scriptId) {
-        pollGenerationStatus(props.restoreStatus.scriptId, Date.now())
-      }
-    } else {
-      generationStatus.value = 'idle'
-      selectedHosts.value = []
+    } catch (err) {
+      console.error('Failed to check generation status:', err)
+    } finally {
+      checkingScript.value = false
     }
   }
 })
+
+// 用户选择主机后，查询该主机的脚本状态
+async function onHostSelectionChange() {
+  if (selectedHosts.value.length === 0) {
+    resetScript()
+    return
+  }
+
+  checkingScript.value = true
+  resetScript()
+
+  try {
+    const hosts = Array.isArray(selectedHosts.value) ? selectedHosts.value : [selectedHosts.value]
+    
+    let result
+    if (props.mode === 'fix') {
+      // 修复模式：查询是否有已生成的修复脚本
+      result = await api.generateFixScript(props.cve.cve_id, hosts, true)
+    } else {
+      // POC模式：查询该主机是否有已生成的脚本
+      const hostId = hosts[0]
+      result = await api.generatePocScript(props.cve.cve_id, hostId, true)
+    }
+
+    if (result.status === 'generating' && result.script_id) {
+      // 正在生成中
+      generationStatus.value = 'generating'
+      currentScriptId.value = result.script_id
+      pollGenerationStatus(result.script_id, Date.now())
+    } else if (result.script) {
+      // 已有脚本，直接显示
+      script.value = result.script
+      generationStatus.value = 'generated'
+    }
+    // 如果没有脚本也没有在生成中，保持 idle 状态，显示"生成脚本"按钮
+  } catch (err: any) {
+    console.error('Failed to check script status:', err)
+    // 查询失败也允许用户手动生成
+  } finally {
+    checkingScript.value = false
+  }
+}
 
 async function pollGenerationStatus(scriptId: string, startTime: number) {
   if (Date.now() - startTime > GENERATION_TIMEOUT) {
@@ -218,14 +259,9 @@ async function pollGenerationStatus(scriptId: string, startTime: number) {
     if (status.status === 'generating') {
       setTimeout(() => pollGenerationStatus(scriptId, startTime), 2000)
     } else if (status.status === 'generated') {
-      if (selectedHosts.value.length > 0) {
-        script.value = status.script || ''
-        generationStatus.value = 'generated'
-        ElMessage.success('脚本生成完成')
-      } else {
-        generationStatus.value = 'idle'
-        ElMessage.warning('请先选择目标主机')
-      }
+      script.value = status.script || ''
+      generationStatus.value = 'generated'
+      ElMessage.success('脚本生成完成')
     } else {
       generationStatus.value = 'failed'
       generationError.value = status.error || '脚本生成失败'
@@ -258,8 +294,9 @@ async function generateScript() {
 
     if (result.status === 'generating' && result.script_id) {
       generationStatus.value = 'generating'
+      currentScriptId.value = result.script_id
       pollGenerationStatus(result.script_id, Date.now())
-    } else if (result.script && selectedHosts.value.length > 0) {
+    } else if (result.script) {
       script.value = result.script
       generationStatus.value = 'generated'
     }
@@ -312,11 +349,12 @@ function resetScript() {
   error.value = ''
   generationStatus.value = 'idle'
   generationError.value = ''
+  currentScriptId.value = null
 }
 
 function handleClose() {
   resetScript()
-  selectedHosts.value = []
+  selectedHosts.value = props.mode === 'fix' ? [] : ''
 }
 
 async function retryGeneration() {
@@ -371,14 +409,14 @@ async function retryGeneration() {
   margin-top: 16px;
 }
 
-.generating-status {
-  text-align: center;
+.generating-status,
+.checking-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 20px 0;
-}
-
-.status-text {
-  margin-top: 12px;
-  color: #606266;
+  color: #409eff;
 }
 
 .failed-status {

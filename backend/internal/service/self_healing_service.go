@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -23,19 +24,21 @@ type SelfHealingService struct {
 	ruleRepo          *repository.RuleRepository
 	taskLogRepo       *repository.TaskLogRepository
 	minioClient       *storage.MinIOClient
+	redisClient       *storage.RedisClient
 	healingQueue      chan HealingTask
 	maxRetries        int
 }
 
 type HealingTask struct {
-	OriginalTaskID uuid.UUID
-	RuleID         uuid.UUID
-	HostID         uuid.UUID
-	ScriptType     string
-	ScriptContent  string
-	ErrorMessage   string
-	ExitCode       int
-	UserSuggestion string
+	OriginalTaskID  uuid.UUID
+	RuleID          *uuid.UUID
+	VulnerabilityID *uuid.UUID
+	HostID          uuid.UUID
+	ScriptType      string
+	ScriptContent   string
+	ErrorMessage    string
+	ExitCode        int
+	UserSuggestion  string
 }
 
 func NewSelfHealingService(
@@ -45,6 +48,7 @@ func NewSelfHealingService(
 	ruleRepo *repository.RuleRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	minioClient *storage.MinIOClient,
+	redisClient *storage.RedisClient,
 	llmTimeout int,
 	llmMaxRetries int,
 	maxRetries int,
@@ -56,18 +60,42 @@ func NewSelfHealingService(
 		ruleRepo:          ruleRepo,
 		taskLogRepo:       taskLogRepo,
 		minioClient:       minioClient,
+		redisClient:       redisClient,
 		healingQueue:      make(chan HealingTask, 100),
 		maxRetries:        maxRetries,
 	}
 }
 
 func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
+	ruleIDStr := ""
+	if task.RuleID != nil {
+		ruleIDStr = task.RuleID.String()
+	}
 	logger.Info("triggering self-healing",
 		zap.String("original_task_id", task.OriginalTaskID.String()),
-		zap.String("rule_id", task.RuleID.String()),
+		zap.String("rule_id", ruleIDStr),
 		zap.String("script_type", task.ScriptType),
 		zap.Int("exit_code", task.ExitCode),
 	)
+
+	// Store initial status in Redis
+	if s.redisClient != nil {
+		status := &storage.HealingStatus{
+			TaskID:         task.OriginalTaskID.String(),
+			Status:         "healing",
+			StartedAt:      time.Now(),
+			TotalAttempts:  0,
+			MaxAttempts:    s.maxRetries,
+			UserSuggestion: task.UserSuggestion,
+			ScriptType:     task.ScriptType,
+		}
+		if err := s.redisClient.SetHealingStatusStruct(status); err != nil {
+			logger.Error("failed to store healing status in Redis",
+				zap.Error(err),
+				zap.String("task_id", task.OriginalTaskID.String()),
+			)
+		}
+	}
 
 	select {
 	case s.healingQueue <- task:
@@ -92,6 +120,108 @@ func (s *SelfHealingService) StartWorkers(ctx context.Context) {
 	for i := 0; i < 3; i++ {
 		go s.healingWorker(ctx, i)
 	}
+
+	// Start timeout checker
+	go s.timeoutChecker(ctx)
+}
+
+func (s *SelfHealingService) updateHealingStatusInRedis(taskID string, status string, attempt int, lastError string) {
+	if s.redisClient == nil {
+		return
+	}
+
+	// Get existing status first to preserve started_at
+	existing, err := s.redisClient.GetHealingStatusStruct(taskID)
+	if err != nil {
+		logger.Error("failed to get existing healing status",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return
+	}
+
+	if existing == nil {
+		existing = &storage.HealingStatus{
+			TaskID:    taskID,
+			StartedAt: time.Now(),
+		}
+	}
+
+	existing.Status = status
+	existing.TotalAttempts = attempt
+	existing.LastError = lastError
+
+	if err := s.redisClient.SetHealingStatusStruct(existing); err != nil {
+		logger.Error("failed to update healing status in Redis",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+	}
+}
+
+func (s *SelfHealingService) GetHealingStatus(taskID string) *storage.HealingStatus {
+	if s.redisClient == nil {
+		return nil
+	}
+
+	status, err := s.redisClient.GetHealingStatusStruct(taskID)
+	if err != nil {
+		logger.Error("failed to get healing status from Redis",
+			zap.Error(err),
+			zap.String("task_id", taskID),
+		)
+		return nil
+	}
+
+	return status
+}
+
+const HealingTimeout = 5 * time.Minute
+
+func (s *SelfHealingService) timeoutChecker(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("healing timeout checker stopped")
+			return
+		case <-ticker.C:
+			if s.redisClient == nil {
+				continue
+			}
+			// Scan all healing status keys
+			iter := s.redisClient.Client().Scan(s.redisClient.Context(), 0, storage.HealingStatusKeyPrefix+"*", 0).Iterator()
+			for iter.Next(s.redisClient.Context()) {
+				key := iter.Val()
+				data, err := s.redisClient.Client().Get(s.redisClient.Context(), key).Bytes()
+				if err != nil {
+					continue
+				}
+
+				var status storage.HealingStatus
+				if err := jsonUnmarshal(data, &status); err != nil {
+					continue
+				}
+
+				// Check if timed out (status is "healing" and started more than 5 minutes ago)
+				if status.Status == "healing" && time.Since(status.StartedAt) > HealingTimeout {
+					logger.Warn("healing task timed out",
+						zap.String("task_id", status.TaskID),
+						zap.Duration("elapsed", time.Since(status.StartedAt)),
+					)
+					status.Status = "timeout"
+					status.LastError = "修复超时（超过 5 分钟未返回结果）"
+					s.redisClient.SetHealingStatusStruct(&status)
+				}
+			}
+		}
+	}
+}
+
+func jsonUnmarshal(data []byte, v interface{}) error {
+	return json.Unmarshal(data, v)
 }
 
 func (s *SelfHealingService) healingWorker(ctx context.Context, workerID int) {
@@ -113,16 +243,25 @@ func (s *SelfHealingService) healingWorker(ctx context.Context, workerID int) {
 }
 
 func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, task HealingTask) {
+	ruleIDStr := ""
+	if task.RuleID != nil {
+		ruleIDStr = task.RuleID.String()
+	}
+	vulnIDStr := ""
+	if task.VulnerabilityID != nil {
+		vulnIDStr = task.VulnerabilityID.String()
+	}
 	logger.Info("processing self-healing",
 		zap.Int("worker_id", workerID),
 		zap.String("original_task_id", task.OriginalTaskID.String()),
-		zap.String("rule_id", task.RuleID.String()),
+		zap.String("rule_id", ruleIDStr),
+		zap.String("vulnerability_id", vulnIDStr),
 		zap.String("user_suggestion", task.UserSuggestion),
 	)
 
 	healingLog := &model.HealingLog{
 		OriginalTaskID:  task.OriginalTaskID,
-		RuleID:          &task.RuleID,
+		RuleID:          task.RuleID,
 		HostID:          task.HostID,
 		ScriptType:      task.ScriptType,
 		TriggerError:    task.ErrorMessage,
@@ -174,7 +313,6 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Int("max_attempts", s.maxRetries),
 		)
 
-		// 更新尝试次数
 		healingLog.TotalAttempts = attempt
 		if err := s.healingLogRepo.IncrementAttempts(healingLog.ID); err != nil {
 			logger.Error("failed to increment healing attempts",
@@ -182,6 +320,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 				zap.Stringer("healing_id", healingLog.ID),
 			)
 		}
+
+		s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "healing", attempt, "")
 
 		// 构建自愈 Prompt
 		history := s.buildHealingHistory(healingLog.AttemptsDetail)
@@ -228,7 +368,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		// 创建脚本版本记录
 		version := attempt // 自愈版本从 1 开始
 		scriptVersion := &model.ScriptVersion{
-			RuleID:           &task.RuleID,
+			RuleID:           task.RuleID,
 			ScriptType:       task.ScriptType,
 			Version:          version,
 			ScriptContent:    fixedScript,
@@ -249,7 +389,13 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		scriptVersionID = scriptVersion.ID
 
 		// 上传修复后的脚本到 MinIO
-		minIOPath := fmt.Sprintf("healing/%s/%d/%s.sh", task.RuleID.String(), attempt, task.ScriptType)
+		identifier := "unknown"
+		if task.RuleID != nil {
+			identifier = task.RuleID.String()
+		} else if task.VulnerabilityID != nil {
+			identifier = task.VulnerabilityID.String()
+		}
+		minIOPath := fmt.Sprintf("healing/%s/%d/%s.sh", identifier, attempt, task.ScriptType)
 		_, err = s.minioClient.UploadFile("generated-scripts", minIOPath,
 			strings.NewReader(fixedScript), int64(len(fixedScript)), "application/x-sh")
 		if err != nil {
@@ -286,17 +432,19 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.String("script_version_id", scriptVersionID.String()),
 		)
 
-		// 更新规则的脚本
-		if err := s.updateRuleScript(task.RuleID, task.ScriptType, fixedScript); err != nil {
-			logger.Error("failed to update rule script",
-				zap.Error(err),
-				zap.Stringer("rule_id", task.RuleID),
-			)
-		} else {
-			logger.Info("rule script updated after healing",
-				zap.Stringer("rule_id", task.RuleID),
-				zap.String("script_type", task.ScriptType),
-			)
+		// 更新规则的脚本（仅对基线任务）
+		if task.RuleID != nil {
+			if err := s.updateRuleScript(*task.RuleID, task.ScriptType, fixedScript); err != nil {
+				logger.Error("failed to update rule script",
+					zap.Error(err),
+					zap.Stringer("rule_id", task.RuleID),
+				)
+			} else {
+				logger.Info("rule script updated after healing",
+					zap.Stringer("rule_id", task.RuleID),
+					zap.String("script_type", task.ScriptType),
+				)
+			}
 		}
 
 		// 成功修复，标记为完成
@@ -312,6 +460,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Int("total_attempts", attempt),
 			zap.String("script_version_id", scriptVersionID.String()),
 		)
+
+		s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "healed", attempt, "")
 
 		return
 	}
@@ -342,6 +492,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		zap.Int("total_attempts", healingLog.TotalAttempts),
 		zap.String("last_error", lastError),
 	)
+
+	s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "failed", healingLog.TotalAttempts, lastError)
 }
 
 func (s *SelfHealingService) buildHealingHistory(attempts model.AttemptsDetail) string {

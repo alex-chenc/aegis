@@ -337,6 +337,74 @@ const effect = computed(() => (props.severity === 'Critical' || props.severity =
    │                          │                              │ ←──{script}────────── │
    │                          │  └─预览脚本<──────────────────┤                         │
    │                          │                              │                         │
-   │                          │  └─确认执行─────────────────→│ ...                     │
-   │                                                      │                         │
+│                          │  └─确认执行─────────────────→│ ...                     │
+│                                                      │                         │
+```
+
+## 11. 脚本修复状态持久化 (V3.0.3)
+
+### 11.1 问题描述
+
+脚本修复触发后，用户刷新页面会导致状态丢失，无法看到"脚本修复中"状态。
+
+### 11.2 解决方案
+
+**后端返回 healing_status**：`GetTaskLogs` API 直接返回每个任务的修复状态，前端无需单独请求。
+
+**前端状态管理**：
+```typescript
+// refresh 时直接使用后端返回的 healing_status
+const refresh = async () => {
+    const logs = await getTaskLogs(taskGroupId)
+    tasks.value = logs
+    
+    for (const task of tasks.value) {
+        if (task.healing_status) {
+            healingStatusMap.value[task.id] = task.healing_status
+        }
+    }
+}
+```
+
+### 11.3 状态显示
+
+**DisplayState 类型**：
+```typescript
+type DisplayState = 
+    | '脚本修复中'
+    | '脚本修复成功'
+    | '脚本修复失败'
+    | '脚本修复超时'  // 5 分钟无响应
+```
+
+**状态映射**：
+```typescript
+function getDisplayState(task, healingStatus) {
+    if (task.status === 'failed') {
+        if (healingStatus?.status === 'healing') return '脚本修复中'
+        if (healingStatus?.status === 'healed') return '脚本修复成功'
+        if (healingStatus?.status === 'failed') return '脚本修复失败'
+        if (healingStatus?.status === 'timeout') return '脚本修复超时'
+    }
+}
+```
+
+### 11.4 API 接口定义
+
+```typescript
+export interface HealingStatus {
+  task_id: string
+  status: 'healing' | 'healed' | 'failed' | 'timeout'
+  started_at?: string
+  total_attempts: number
+  max_attempts: number
+  last_error?: string
+  user_suggestion?: string
+  script_type?: string
+}
+
+export interface TaskLog {
+  // ... 现有字段
+  healing_status?: HealingStatus
+}
 ```
