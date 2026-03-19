@@ -1,21 +1,27 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, reactive } from 'vue'
 import { mount } from '@vue/test-utils'
 import FixConfirmationDialog from './FixConfirmationDialog.vue'
 
-const pushMock = vi.fn()
+const hostStoreState = reactive({
+  hosts: [
+    { id: 'host-all-1', ip_address: '10.0.0.1', hostname: 'all-1', os_type: 'linux' },
+    { id: 'host-all-2', ip_address: '10.0.0.2', hostname: 'all-2', os_type: 'linux' }
+  ]
+})
 
-vi.mock('vue-router', () => ({
-  useRouter: () => ({
-    push: pushMock
+const fetchHostsMock = vi.fn().mockResolvedValue(undefined)
+
+vi.mock('@/store/hosts', () => ({
+  useHostStore: () => ({
+    hosts: hostStoreState.hosts,
+    fetchHosts: fetchHostsMock
   })
 }))
 
 vi.mock('@/api/vulnerability', () => ({
-  generateFixScript: vi.fn(),
-  generatePocScript: vi.fn(),
-  getScriptStatus: vi.fn()
+  getGenerationStatus: vi.fn().mockResolvedValue({ has_generation: false })
 }))
 
 vi.mock('element-plus', () => ({
@@ -34,9 +40,8 @@ const ElDialogStub = defineComponent({
       default: false
     }
   },
-  emits: ['update:modelValue', 'closed'],
   setup(props, { slots }) {
-    return () => (props.modelValue ? h('div', { class: 'el-dialog-stub' }, slots.default?.()) : null)
+    return () => (props.modelValue ? h('div', { class: 'dialog' }, slots.default?.()) : null)
   }
 })
 
@@ -48,41 +53,54 @@ const ElSelectStub = defineComponent({
       default: () => []
     }
   },
-  emits: ['update:modelValue'],
   setup(_, { slots }) {
-    return () => h('div', { class: 'el-select-stub' }, slots.default?.())
+    return () => h('div', { class: 'select' }, slots.default?.())
   }
 })
 
-const ElButtonStub = defineComponent({
-  name: 'ElButtonStub',
+const ElOptionStub = defineComponent({
+  name: 'ElOptionStub',
   props: {
-    disabled: {
-      type: Boolean,
-      default: false
+    value: {
+      type: String,
+      required: true
+    },
+    label: {
+      type: String,
+      required: true
     }
   },
-  setup(props, { slots }) {
-    return () => h('button', { disabled: props.disabled }, slots.default?.())
+  setup(props) {
+    return () => h('div', { class: 'host-option', 'data-value': props.value }, props.label)
+  }
+})
+
+const HostScriptStatusListStub = defineComponent({
+  name: 'HostScriptStatusList',
+  props: {
+    selectedHosts: {
+      type: Array,
+      default: () => []
+    }
+  },
+  setup(props) {
+    return () => h('div', { class: 'host-script-status-list-stub' }, String(props.selectedHosts.length))
   }
 })
 
 const baseProps = {
-  visible: false,
-  mode: 'fix' as const,
+  visible: true,
+  mode: 'poc' as const,
   cve: {
     id: 'vul-1',
     cve_id: 'CVE-2024-0001',
     severity: 'High' as const,
     cvss_score: 8.8,
-    description: 'test'
+    description: 'test',
+    source: 'llm_analysis'
   },
   affectedHosts: [
-    {
-      id: 'host-1',
-      ip_address: '127.0.0.1',
-      hostname: 'test-host'
-    }
+    { id: 'host-aff-1', ip_address: '192.168.1.1', hostname: 'aff-1', os_type: 'linux' }
   ]
 }
 
@@ -99,59 +117,73 @@ function mountDialog(extraProps?: Record<string, unknown>) {
         'el-descriptions-item': true,
         'el-link': true,
         'el-select': ElSelectStub,
-        'el-option': true,
+        'el-option': ElOptionStub,
         'el-alert': true,
-        'el-button': ElButtonStub,
+        'el-empty': true,
+        'el-button': true,
         SeverityTag: true,
-        ScriptPreview: true
+        HostScriptStatusList: HostScriptStatusListStub
       }
     }
   })
 }
 
-describe('FixConfirmationDialog button visibility', () => {
+describe('FixConfirmationDialog source hosts and multiselect', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('shows Generate Script button when script is empty and hosts are selected', async () => {
+  it('uses affected hosts for scanned cve source', async () => {
     const wrapper = mountDialog({
-      restoreStatus: {
-        scriptId: null,
-        status: 'idle',
-        hostIds: ['host-1']
+      cve: {
+        ...baseProps.cve,
+        source: 'llm_analysis'
       }
     })
 
-    await wrapper.setProps({ visible: true })
     await nextTick()
 
-    expect(wrapper.text()).toContain('生成修复脚本')
+    const options = wrapper.findAll('.host-option')
+    expect(options).toHaveLength(1)
+    expect(options[0].text()).toContain('192.168.1.1')
   })
 
-  it('does not show Generate Script button when script is empty and no hosts are selected', async () => {
-    const wrapper = mountDialog()
-
-    await wrapper.setProps({ visible: true })
-    await nextTick()
-
-    expect(wrapper.text()).not.toContain('生成修复脚本')
-    expect(wrapper.text()).not.toContain('确认执行修复')
-  })
-
-  it('shows Execute button when script exists and hosts are selected', async () => {
+  it('uses all hosts for custom cve source', async () => {
     const wrapper = mountDialog({
-      restoreStatus: {
-        scriptId: 'script-1',
-        status: 'generated',
-        script: 'echo test',
-        hostIds: ['host-1']
+      cve: {
+        ...baseProps.cve,
+        source: 'custom_query'
       }
     })
 
-    await wrapper.setProps({ visible: true })
     await nextTick()
 
-    expect(wrapper.text()).toContain('确认执行修复')
+    const options = wrapper.findAll('.host-option')
+    expect(options).toHaveLength(2)
+    expect(wrapper.text()).toContain('10.0.0.1')
+    expect(wrapper.text()).toContain('10.0.0.2')
+  })
+
+  it('enables multiple selection for both poc and fix modes', async () => {
+    const pocWrapper = mountDialog({ mode: 'poc' })
+    const fixWrapper = mountDialog({ mode: 'fix' })
+
+    await nextTick()
+
+    const pocSelect = pocWrapper.findComponent(ElSelectStub)
+    const fixSelect = fixWrapper.findComponent(ElSelectStub)
+
+    expect(pocSelect.attributes('multiple')).toBeDefined()
+    expect(fixSelect.attributes('multiple')).toBeDefined()
+  })
+
+  it('renders host script status list after selecting hosts', async () => {
+    const wrapper = mountDialog({ mode: 'poc' })
+    await nextTick()
+
+    await (wrapper.vm as any).onHostSelectionChange(['host-aff-1'])
+    await nextTick()
+
+    expect(wrapper.find('.host-script-status-list-stub').exists()).toBe(true)
   })
 })

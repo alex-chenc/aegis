@@ -1,4 +1,4 @@
-# AI Baseline Check System
+# Aegis Intelligent Host Security System
 
 [中文](README.md) | English
 
@@ -6,56 +6,66 @@
 
 ## Overview
 
-AI Baseline Check System is a server baseline automation management platform for DevOps and security engineers. The system combines LLM intelligent parsing capabilities with Agent automation execution to achieve a complete closed loop from baseline documents to automated checks and remediation.
-
-Solving the last mile of security operations.
+Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology to achieve dynamic audit management of host configurations and vulnerabilities. Through continuous AI noise reduction and automated judgment, it builds a closed loop from precise protection to automated response. We are committed to creating a minimalist, intelligent server baseline automation management platform for DevOps and security engineers through the forward-looking technology of "model against model".
 
 ## Core Features
 
 ### Intelligent Document Parsing
 
-| Feature | Description |
-| :------ | :---------- |
-| **Multi-format Support** | Support PDF, Word, YAML, Excel, TXT baseline documents |
-| **LLM Auto Parsing** | Automatically extract check rules and remediation methods after document upload |
-| **MD5 Deduplication** | Automatically detect duplicate files to avoid repeated parsing |
-| **Real-time Progress** | Polling display of parsing progress and status |
+| Feature                  | Description                                                                     |
+| :----------------------- | :------------------------------------------------------------------------------ |
+| **Multi-format Support** | Support PDF, Word, YAML, Excel, TXT baseline documents                          |
+| **LLM Auto Parsing**     | Automatically extract check rules and remediation methods after document upload |
+| **MD5 Deduplication**    | Automatically detect duplicate files to avoid repeated parsing                  |
+| **Real-time Progress**   | Polling display of parsing progress and status                                  |
 
 ### Automatic Script Generation
 
-| Feature | Description |
-| :------ | :---------- |
-| **One-click Generation** | Batch generate check scripts and fix scripts |
-| **Online Editing** | Support online viewing and editing of script content |
-| **Version Management** | Keep script version history for traceability |
-| **Security Validation** | Automatically detect dangerous commands to ensure safety |
+| Feature                  | Description                                              |
+| :----------------------- | :------------------------------------------------------- |
+| **One-click Generation** | Batch generate check scripts and fix scripts             |
+| **Online Editing**       | Support online viewing and editing of script content     |
+| **Version Management**   | Keep script version history for traceability             |
+| **Security Validation**  | Automatically detect dangerous commands to ensure safety |
 
 ### Task Execution Management
 
-| Feature | Description |
-| :------ | :---------- |
-| **Batch Execution** | Select multiple rules and hosts for batch task dispatch |
-| **Real-time Status** | Real-time view of task execution status, progress, output logs |
-| **Type Labels** | Task group type column shows "Check" and "Fix" labels at a glance |
-| **Filter & Sort** | Support filtering tasks by status and type |
+| Feature              | Description                                                       |
+| :------------------- | :---------------------------------------------------------------- |
+| **Batch Execution**  | Select multiple rules and hosts for batch task dispatch           |
+| **Real-time Status** | Real-time view of task execution status, progress, output logs    |
+| **Type Labels**      | Task group type column shows "Check" and "Fix" labels at a glance |
+| **Filter & Sort**    | Support filtering tasks by status and type                        |
 
 ### Intelligent Self-healing
 
-| Feature | Description |
-| :------ | :---------- |
-| **Auto Trigger** | Automatically trigger LLM self-healing process when check/fix fails |
-| **Error Analysis** | LLM analyzes error causes and generates fixed scripts |
-| **Auto Retry** | Up to 3 retries, automatically execute fixed scripts |
+| Feature             | Description                                                               |
+| :------------------ | :------------------------------------------------------------------------ |
+| **Auto Trigger**    | Automatically trigger LLM self-healing process when check/fix fails       |
+| **Error Analysis**  | LLM analyzes error causes and generates fixed scripts                     |
+| **Auto Retry**      | Up to 3 retries, automatically execute fixed scripts                      |
 | **Status Tracking** | Real-time display of "Script healing", "Script healed" and other statuses |
 
 ### Enhanced Task Details
 
-| Feature | Description |
-| :------ | :---------- |
-| **Re-dispatch** | Failed tasks support re-dispatching checks to verify remediation |
-| **One-click Fix** | Failed tasks support one-click creation of fix tasks |
-| **Type Filter** | Task detail page supports filtering by type (check/fix) |
-| **Fix Suggestions** | Display fix suggestions generated by LLM |
+| Feature             | Description                                                      |
+| :------------------ | :--------------------------------------------------------------- |
+| **Re-dispatch**     | Failed tasks support re-dispatching checks to verify remediation |
+| **One-click Fix**   | Failed tasks support one-click creation of fix tasks             |
+| **Type Filter**     | Task detail page supports filtering by type (check/fix)          |
+| **Fix Suggestions** | Display fix suggestions generated by LLM                         |
+
+### Intelligent Vulnerability Check & Fix (V3.0 New)
+
+| Feature                | Description                                                                            |
+| :--------------------- | :------------------------------------------------------------------------------------- |
+| **One-click Scan**     | Collect host software inventory, LLM analyzes and identifies known CVE vulnerabilities |
+| **Vulnerability List** | Sorted by discovery time, support severity filtering and search                        |
+| **Custom CVE**         | Manually input CVE ID, query details via LLM and save to database                      |
+| **POC Verification**   | Generate safe verification scripts to confirm vulnerability existence                  |
+| **One-click Fix**      | Generate targeted fix scripts, batch execute remediation tasks                         |
+| **Status Tracking**    | Real-time display of script generation and execution progress                          |
+
 
 ## Quick Start
 
@@ -120,20 +130,15 @@ Get the Agent installation command from "System Configuration" page and execute 
 curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
 ```
 
-### Usage Flow
-
-```
-Upload baseline document → LLM parse rules → Generate/edit scripts → Select hosts → Execute check/fix → View results
-```
 
 ## Port Reference
 
-| Service | Port |
-| :------ | :--- |
-| Frontend | 8081 |
+| Service          | Port |
+| :--------------- | :--- |
+| Frontend         | 8081 |
 | Backend HTTP API | 8080 |
-| Backend gRPC | 9090 |
-| PostgreSQL | 5432 |
-| Redis | 6379 |
-| MinIO API | 9000 |
-| MinIO Console | 9001 |
+| Backend gRPC     | 9090 |
+| PostgreSQL       | 5432 |
+| Redis            | 6379 |
+| MinIO API        | 9000 |
+| MinIO Console    | 9001 |

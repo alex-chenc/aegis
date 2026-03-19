@@ -81,6 +81,8 @@ func main() {
 	scriptVersionRepo := repository.NewScriptVersionRepository(db)
 	healingLogRepo := repository.NewHealingLogRepository(db)
 	vulnRepo := repository.NewVulnerabilityRepo(db)
+	customCVEQueryRepo := repository.NewCustomCVEQueryRepository(db)
+	hostVulnerabilityScriptRepo := repository.NewHostVulnerabilityScriptRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -88,6 +90,8 @@ func main() {
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, nil)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
 	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,6 +136,7 @@ func main() {
 
 	vulnService.SetGRPCServer(grpcServer)
 	vulnService.SetTaskService(taskService)
+	hostVulnerabilityScriptService.SetGRPCServer(grpcServer)
 
 	// Initialize handlers
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
@@ -141,7 +146,7 @@ func main() {
 	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, grpcServer, selfHealingService, ruleRepo)
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
-	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService)
+	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler)

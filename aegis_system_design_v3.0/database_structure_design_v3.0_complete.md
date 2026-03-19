@@ -1,9 +1,9 @@
 # 数据库设计文档 - V3.0 完整版
 
-**版本**: 3.0
+**版本**: 3.0.1
 **状态**: 定稿
 **作者**: 安全产品团队
-**日期**: 2026-03-13
+**日期**: 2026-03-19
 
 ---
 
@@ -11,6 +11,7 @@
 
 | 版本 | 日期 | 作者 | 修订说明 |
 |:---|:---|:---|:---|
+| 3.0.1 | 2026-03-19 | 安全产品团队 | **新增自定义CVE功能**。新增2张表：`custom_cve_queries`（自定义CVE查询状态表）、`host_vulnerability_scripts`（主机漏洞脚本状态表）；`vulnerabilities`表`source`字段新增`custom_query`枚举值。 |
 | 3.0 | 2026-03-13 | 安全产品团队 | **新增漏洞管理模块**。在V2.2基础上新增5张表：`vulnerabilities`（漏洞主表）、`host_vulnerabilities`（主机漏洞关联表）、`installed_software`（主机软件清单缓存表）、`vulnerability_fix_scripts`（漏洞修复脚本表）、`poc_scripts`（POC验证脚本表），支持智能漏洞检查与修复功能。 |
 | 2.2 | 2026-03-12 | Sisyphus | 任务管理与超时机制增强。 |
 | 2.0 | 2026-03-05 | Manus AI | 全面更新，新增LLM配置、脚本版本、自愈日志三张表。 |
@@ -20,13 +21,13 @@
 
 ## 2. 概述
 
-本文档为Aegis智能主机安全系统提供PostgreSQL数据库的完整数据模型设计。V3.0版本在V2.2的7张表基础上，新增5张表以支持**智能漏洞检查与修复**核心功能。新模块支持从软件清单采集、CVE漏洞发现、主机关联、POC验证到修复执行的完整安全运营闭环。
+本文档为Aegis智能主机安全系统提供PostgreSQL数据库的完整数据模型设计。V3.0.1版本在V3.0的12张表基础上，新增2张表以支持**自定义CVE查询与多主机脚本管理**功能。
 
 ---
 
 ## 3. 数据库表结构总览
 
-V3.0版本的数据库包含**12张表**，按业务领域可分为四组。
+V3.0.1版本的数据库包含**14张表**，按业务领域可分为五组。
 
 | 业务领域 | 表名 | 描述 | 版本 |
 |:---|:---|:---|:---|
@@ -37,11 +38,13 @@ V3.0版本的数据库包含**12张表**，按业务领域可分为四组。
 | 系统配置 | `llm_configs` | 存储LLM服务的配置信息 | V2.2新增 |
 | 脚本管理 | `script_versions` | 记录LLM生成/修复脚本的版本历史 | V2.2新增 |
 | 自愈管理 | `self_healing_logs` | 记录自愈修复流程的详细日志 | V2.2新增 |
-| **漏洞管理** | `vulnerabilities` | 存储CVE漏洞主数据 | **V3.0新增** |
-| **漏洞管理** | `host_vulnerabilities` | 关联主机与漏洞的映射表 | **V3.0新增** |
-| **漏洞管理** | `installed_software` | 缓存主机软件清单（每次扫描更新） | **V3.0新增** |
-| **漏洞管理** | `vulnerability_fix_scripts` | 存储漏洞修复脚本（按CVE和OS） | **V3.0新增** |
-| **漏洞管理** | `poc_scripts` | 存储POC验证脚本（按CVE和OS） | **V3.0新增** |
+| 漏洞管理 | `vulnerabilities` | 存储CVE漏洞主数据 | V3.0新增 |
+| 漏洞管理 | `host_vulnerabilities` | 关联主机与漏洞的映射表 | V3.0新增 |
+| 漏洞管理 | `installed_software` | 缓存主机软件清单（每次扫描更新） | V3.0新增 |
+| 漏洞管理 | `vulnerability_fix_scripts` | 存储漏洞修复脚本（按CVE和OS） | V3.0新增 |
+| 漏洞管理 | `poc_scripts` | 存储POC验证脚本（按CVE和OS） | V3.0新增 |
+| **自定义CVE** | `custom_cve_queries` | 存储用户自定义CVE查询任务状态 | **V3.0.1新增** |
+| **自定义CVE** | `host_vulnerability_scripts` | 存储各主机的脚本生成和执行状态 | **V3.0.1新增** |
 
 ---
 
@@ -289,7 +292,79 @@ fi
 
 ---
 
-## 5. 索引策略
+## 5. V3.0.1新增表结构
+
+### 5.1 `custom_cve_queries` (自定义CVE查询状态表) — V3.0.1新增
+
+存储用户发起的自定义CVE查询任务，实现查询状态追踪和互斥控制。
+
+| 字段名 | 数据类型 | 约束 | 描述 |
+|:---|:---|:---|:---|
+| `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 查询任务的唯一标识符。 |
+| `cve_id` | `VARCHAR(20)` | `NOT NULL` | 用户输入的CVE编号，如 'CVE-2021-44228'。 |
+| `status` | `VARCHAR(20)` | `NOT NULL`, `DEFAULT 'querying'` | 查询状态：'querying'（查询中）、'success'（成功）、'failed'（失败）。 |
+| `result_vulnerability_id` | `UUID` | `NULL`, `FOREIGN KEY (vulnerabilities.id)` | 查询成功后关联的漏洞记录ID。 |
+| `error_message` | `TEXT` | `NULL` | 查询失败时的错误消息。 |
+| `error_detail` | `TEXT` | `NULL` | 查询失败时的详细错误信息。 |
+| `started_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 查询开始时间。 |
+| `completed_at` | `TIMESTAMPTZ` | `NULL` | 查询完成时间（成功或失败）。 |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录创建时间。 |
+
+**唯一约束**：`(1) WHERE status = 'querying'` - 使用部分唯一索引实现查询互斥，同一时间只允许一条querying状态的记录。
+
+**索引**：
+- `idx_custom_cve_queries_status` - 按状态查询
+- `idx_custom_cve_queries_cve_id` - 按CVE编号查询
+- `idx_custom_cve_queries_single_querying` - 查询互斥约束
+
+**状态流转**：
+```
+querying ──► success（CVE入库）
+         └──► failed（CVE不存在/超时/错误）
+```
+
+### 5.2 `host_vulnerability_scripts` (主机漏洞脚本状态表) — V3.0.1新增
+
+存储每个CVE针对每个主机的脚本生成和执行状态，支持多主机独立状态追踪。
+
+| 字段名 | 数据类型 | 约束 | 描述 |
+|:---|:---|:---|:---|
+| `id` | `UUID` | `PRIMARY KEY`, `DEFAULT gen_random_uuid()` | 脚本记录的唯一标识符。 |
+| `cve_id` | `VARCHAR(20)` | `NOT NULL` | CVE编号。 |
+| `host_id` | `UUID` | `NOT NULL`, `FOREIGN KEY (hosts.id)` | 主机ID。 |
+| `script_type` | `VARCHAR(20)` | `NOT NULL` | 脚本类型：'poc'（POC验证脚本）、'fix'（修复脚本）。 |
+| `os_type` | `VARCHAR(50)` | `NOT NULL` | 目标主机的操作系统类型，用于脚本适配。 |
+| `script_content` | `TEXT` | `NULL` | 生成的脚本内容。 |
+| `script_version` | `INT` | `NOT NULL`, `DEFAULT 1` | 脚本版本号，支持版本管理。 |
+| `generation_status` | `VARCHAR(20)` | `NOT NULL`, `DEFAULT 'pending'` | 生成状态：'pending'（待生成）、'generating'（生成中）、'generated'（已生成）、'failed'（失败）。 |
+| `generation_started_at` | `TIMESTAMPTZ` | `NULL` | 脚本生成开始时间。 |
+| `generation_completed_at` | `TIMESTAMPTZ` | `NULL` | 脚本生成完成时间。 |
+| `generation_error` | `TEXT` | `NULL` | 生成失败的错误消息。 |
+| `generation_error_detail` | `TEXT` | `NULL` | 生成失败的详细错误信息。 |
+| `execution_status` | `VARCHAR(20)` | `NULL` | 执行状态：'pending'（待执行）、'running'（执行中）、'success'（成功）、'failed'（失败）、'timeout'（超时）。 |
+| `execution_task_id` | `UUID` | `NULL`, `FOREIGN KEY (task_logs.id)` | 关联的任务记录ID。 |
+| `execution_started_at` | `TIMESTAMPTZ` | `NULL` | 脚本执行开始时间。 |
+| `execution_completed_at` | `TIMESTAMPTZ` | `NULL` | 脚本执行完成时间。 |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录创建时间。 |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL`, `DEFAULT NOW()` | 记录最后更新时间。 |
+
+**唯一约束**：`(cve_id, host_id, script_type)` - 同一CVE+主机+脚本类型只能有一条记录。
+
+**索引**：
+- `idx_host_vuln_scripts_cve_id` - 按CVE查询所有主机脚本
+- `idx_host_vuln_scripts_host_id` - 按主机查询所有CVE脚本
+- `idx_host_vuln_scripts_generation_status` - 按生成状态查询
+- `idx_host_vuln_scripts_execution_status` - 按执行状态查询
+
+**生成状态流转**：
+```
+pending ──► generating ──► generated
+                       └──► failed
+```
+
+---
+
+## 6. 索引策略
 
 在V2.2索引基础上，为新增的漏洞管理表补充索引以优化查询性能。
 
@@ -311,10 +386,17 @@ fi
 | `vulnerability_fix_scripts` | `is_current` | `BTREE` | 快速查找当前使用的脚本版本。 |
 | `poc_scripts` | `vulnerability_id, os_type` | `BTREE` | 查询特定漏洞和操作系统的POC脚本。 |
 | `poc_scripts` | `is_current` | `BTREE` | 快速查找当前使用的脚本版本。 |
+| `custom_cve_queries` | `status` | `BTREE` | 查询当前进行中的查询任务。 |
+| `custom_cve_queries` | `cve_id` | `BTREE` | 按CVE编号查询查询记录。 |
+| `custom_cve_queries` | `(1) WHERE status='querying'` | `BTREE` (UNIQUE) | 查询互斥约束，同一时间只允许一个querying状态。 |
+| `host_vulnerability_scripts` | `cve_id` | `BTREE` | 查询CVE的所有主机脚本状态。 |
+| `host_vulnerability_scripts` | `host_id` | `BTREE` | 查询主机的所有CVE脚本状态。 |
+| `host_vulnerability_scripts` | `generation_status` | `BTREE` | 按生成状态筛选脚本。 |
+| `host_vulnerability_scripts` | `cve_id, host_id, script_type` | `BTREE` (UNIQUE) | 唯一约束索引，防止同一CVE主机脚本类型重复。 |
 
 ---
 
-## 6. ER关系图（Mermaid格式）
+## 7. ER关系图（Mermaid格式）
 
 ```mermaid
 erDiagram
@@ -465,9 +547,42 @@ erDiagram
         TIMESTAMPTZ finished_at
         TIMESTAMPTZ created_at
     }
+    
+    custom_cve_queries {
+        UUID id PK
+        VARCHAR cve_id
+        VARCHAR status
+        UUID result_vulnerability_id FK
+        TEXT error_message
+        TEXT error_detail
+        TIMESTAMPTZ started_at
+        TIMESTAMPTZ completed_at
+        TIMESTAMPTZ created_at
+    }
+    
+    host_vulnerability_scripts {
+        UUID id PK
+        VARCHAR cve_id
+        UUID host_id FK
+        VARCHAR script_type
+        VARCHAR os_type
+        TEXT script_content
+        INT script_version
+        VARCHAR generation_status
+        TIMESTAMPTZ generation_started_at
+        TIMESTAMPTZ generation_completed_at
+        TEXT generation_error
+        TEXT generation_error_detail
+        VARCHAR execution_status
+        UUID execution_task_id FK
+        TIMESTAMPTZ execution_started_at
+        TIMESTAMPTZ execution_completed_at
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
 ```
 
-### 6.1 关系说明
+### 7.1 关系说明
 
 **漏洞管理模块（V3.0新增）**：
 
@@ -477,6 +592,12 @@ erDiagram
 - `vulnerabilities` 1:N `vulnerability_fix_scripts`：一个CVE可以有多个修复脚本（针对不同操作系统）
 - `vulnerabilities` 1:N `poc_scripts`：一个CVE可以有多个POC验证脚本（针对不同操作系统）
 - `host_vulnerabilities` N:1 `task_logs`：漏洞实例可以关联修复任务和POC验证任务
+
+**自定义CVE模块（V3.0.1新增）**：
+
+- `custom_cve_queries` N:1 `vulnerabilities`：查询成功后关联漏洞记录
+- `host_vulnerability_scripts` N:1 `hosts`：脚本关联到目标主机
+- `host_vulnerability_scripts` N:1 `task_logs`：脚本执行关联任务记录
 
 **基线检查模块（保留）**：
 
@@ -794,6 +915,59 @@ CREATE INDEX idx_poc_scripts_is_current ON poc_scripts(is_current);
 CREATE TRIGGER update_poc_scripts_updated_at BEFORE UPDATE ON poc_scripts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- ============================================================
+-- 13. 自定义CVE查询状态表 (custom_cve_queries) - V3.0.1新增
+-- ============================================================
+CREATE TABLE custom_cve_queries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cve_id VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'querying',
+    result_vulnerability_id UUID REFERENCES vulnerabilities(id),
+    error_message TEXT,
+    error_detail TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_custom_cve_query_status CHECK (status IN ('querying', 'success', 'failed'))
+);
+CREATE INDEX idx_custom_cve_queries_status ON custom_cve_queries(status);
+CREATE INDEX idx_custom_cve_queries_cve_id ON custom_cve_queries(cve_id);
+-- 查询互斥约束：同一时间只允许一条querying状态的记录
+CREATE UNIQUE INDEX idx_custom_cve_queries_single_querying ON custom_cve_queries ((1)) WHERE status = 'querying';
+
+-- ============================================================
+-- 14. 主机漏洞脚本状态表 (host_vulnerability_scripts) - V3.0.1新增
+-- ============================================================
+CREATE TABLE host_vulnerability_scripts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cve_id VARCHAR(20) NOT NULL,
+    host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    script_type VARCHAR(20) NOT NULL,
+    os_type VARCHAR(50) NOT NULL,
+    script_content TEXT,
+    script_version INT NOT NULL DEFAULT 1,
+    generation_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    generation_started_at TIMESTAMPTZ,
+    generation_completed_at TIMESTAMPTZ,
+    generation_error TEXT,
+    generation_error_detail TEXT,
+    execution_status VARCHAR(20),
+    execution_task_id UUID REFERENCES task_logs(id) ON DELETE SET NULL,
+    execution_started_at TIMESTAMPTZ,
+    execution_completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_script_type CHECK (script_type IN ('poc', 'fix')),
+    CONSTRAINT chk_generation_status CHECK (generation_status IN ('pending', 'generating', 'generated', 'failed')),
+    CONSTRAINT chk_execution_status CHECK (execution_status IS NULL OR execution_status IN ('pending', 'running', 'success', 'failed', 'timeout')),
+    CONSTRAINT uq_host_vuln_scripts_unique UNIQUE (cve_id, host_id, script_type)
+);
+CREATE INDEX idx_host_vuln_scripts_cve_id ON host_vulnerability_scripts(cve_id);
+CREATE INDEX idx_host_vuln_scripts_host_id ON host_vulnerability_scripts(host_id);
+CREATE INDEX idx_host_vuln_scripts_generation_status ON host_vulnerability_scripts(generation_status);
+CREATE TRIGGER update_host_vuln_scripts_updated_at BEFORE UPDATE ON host_vulnerability_scripts
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 -- 为 host_vulnerabilities 添加对 task_logs 的外键引用
 -- （延迟添加以避免建表顺序问题）
 ALTER TABLE host_vulnerabilities
@@ -820,6 +994,8 @@ ALTER TABLE host_vulnerabilities
 | `installed_software` | **V3.0新增**：保留最近30天的扫描数据 | 定时任务清理：`DELETE FROM installed_software WHERE collected_at < NOW() - INTERVAL '30 days'` |
 | `vulnerability_fix_scripts` | **V3.0新增**：保留最近180天的非当前版本 | 定时任务清理：`DELETE FROM vulnerability_fix_scripts WHERE is_current = false AND created_at < NOW() - INTERVAL '180 days'` |
 | `poc_scripts` | **V3.0新增**：保留最近180天的非当前版本 | 定时任务清理：`DELETE FROM poc_scripts WHERE is_current = false AND created_at < NOW() - INTERVAL '180 days'` |
+| `custom_cve_queries` | **V3.0.1新增**：保留最近30天的查询记录 | 定时任务清理：`DELETE FROM custom_cve_queries WHERE created_at < NOW() - INTERVAL '30 days'` |
+| `host_vulnerability_scripts` | **V3.0.1新增**：跟随关联的CVE生命周期 | 级联删除：当关联的CVE被删除时自动清理 |
 
 ---
 
@@ -1085,4 +1261,4 @@ ORDER BY software_count DESC;
 
 **文档结束**
 
-*本文档为Aegis智能主机安全系统的数据库设计文档，版本3.0。如有疑问，请联系产品团队。*
+*本文档为Aegis智能主机安全系统的数据库设计文档，版本3.0.1。如有疑问，请联系产品团队。*
