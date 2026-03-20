@@ -579,6 +579,863 @@ func (*CommandRequest_Execute) isCommandRequest_Request() {}
 
 func (*CommandRequest_Result) isCommandRequest_Request() {}
 
+// SoftwareListRequest 软件列表采集请求
+type SoftwareListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SoftwareListRequest) Reset() {
+	*x = SoftwareListRequest{}
+	mi := &file_agent_comm_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SoftwareListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SoftwareListRequest) ProtoMessage() {}
+
+func (x *SoftwareListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SoftwareListRequest.ProtoReflect.Descriptor instead.
+func (*SoftwareListRequest) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{8}
+}
+
+// SoftwareInfo 软件信息
+type SoftwareInfo struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Name           string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version        string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	PackageManager string                 `protobuf:"bytes,3,opt,name=package_manager,json=packageManager,proto3" json:"package_manager,omitempty"` // "rpm" or "dpkg"
+	Architecture   string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SoftwareInfo) Reset() {
+	*x = SoftwareInfo{}
+	mi := &file_agent_comm_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SoftwareInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SoftwareInfo) ProtoMessage() {}
+
+func (x *SoftwareInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SoftwareInfo.ProtoReflect.Descriptor instead.
+func (*SoftwareInfo) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SoftwareInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetPackageManager() string {
+	if x != nil {
+		return x.PackageManager
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetArchitecture() string {
+	if x != nil {
+		return x.Architecture
+	}
+	return ""
+}
+
+// SoftwareListResponse 软件列表采集响应
+type SoftwareListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SoftwareList  []*SoftwareInfo        `protobuf:"bytes,1,rep,name=software_list,json=softwareList,proto3" json:"software_list,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SoftwareListResponse) Reset() {
+	*x = SoftwareListResponse{}
+	mi := &file_agent_comm_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SoftwareListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SoftwareListResponse) ProtoMessage() {}
+
+func (x *SoftwareListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SoftwareListResponse.ProtoReflect.Descriptor instead.
+func (*SoftwareListResponse) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SoftwareListResponse) GetSoftwareList() []*SoftwareInfo {
+	if x != nil {
+		return x.SoftwareList
+	}
+	return nil
+}
+
+// RuntimeEvent 运行时事件
+type RuntimeEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	HostId        string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	EventType     string                 `protobuf:"bytes,5,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // process_exec, file_access, network_connect, privilege_change
+	ProcessName   string                 `protobuf:"bytes,6,opt,name=process_name,json=processName,proto3" json:"process_name,omitempty"`
+	Pid           int32                  `protobuf:"varint,7,opt,name=pid,proto3" json:"pid,omitempty"`
+	Ppid          int32                  `protobuf:"varint,8,opt,name=ppid,proto3" json:"ppid,omitempty"`
+	Uid           int32                  `protobuf:"varint,9,opt,name=uid,proto3" json:"uid,omitempty"`
+	CommandLine   string                 `protobuf:"bytes,10,opt,name=command_line,json=commandLine,proto3" json:"command_line,omitempty"`
+	FilePath      string                 `protobuf:"bytes,11,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	RemoteAddr    string                 `protobuf:"bytes,12,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
+	MatchedRuleId string                 `protobuf:"bytes,13,opt,name=matched_rule_id,json=matchedRuleId,proto3" json:"matched_rule_id,omitempty"`
+	MitreId       string                 `protobuf:"bytes,14,opt,name=mitre_id,json=mitreId,proto3" json:"mitre_id,omitempty"`
+	Severity      string                 `protobuf:"bytes,15,opt,name=severity,proto3" json:"severity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeEvent) Reset() {
+	*x = RuntimeEvent{}
+	mi := &file_agent_comm_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeEvent) ProtoMessage() {}
+
+func (x *RuntimeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeEvent.ProtoReflect.Descriptor instead.
+func (*RuntimeEvent) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RuntimeEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *RuntimeEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetProcessName() string {
+	if x != nil {
+		return x.ProcessName
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetPid() int32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *RuntimeEvent) GetPpid() int32 {
+	if x != nil {
+		return x.Ppid
+	}
+	return 0
+}
+
+func (x *RuntimeEvent) GetUid() int32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *RuntimeEvent) GetCommandLine() string {
+	if x != nil {
+		return x.CommandLine
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetRemoteAddr() string {
+	if x != nil {
+		return x.RemoteAddr
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetMatchedRuleId() string {
+	if x != nil {
+		return x.MatchedRuleId
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetMitreId() string {
+	if x != nil {
+		return x.MitreId
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+// ReportEventRequest 事件上报请求
+type ReportEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Events        []*RuntimeEvent        `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEventRequest) Reset() {
+	*x = ReportEventRequest{}
+	mi := &file_agent_comm_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEventRequest) ProtoMessage() {}
+
+func (x *ReportEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEventRequest.ProtoReflect.Descriptor instead.
+func (*ReportEventRequest) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ReportEventRequest) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *ReportEventRequest) GetEvents() []*RuntimeEvent {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+// ReportEventResponse 事件上报响应
+type ReportEventResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ReceivedCount int32                  `protobuf:"varint,2,opt,name=received_count,json=receivedCount,proto3" json:"received_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEventResponse) Reset() {
+	*x = ReportEventResponse{}
+	mi := &file_agent_comm_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEventResponse) ProtoMessage() {}
+
+func (x *ReportEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEventResponse.ProtoReflect.Descriptor instead.
+func (*ReportEventResponse) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ReportEventResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ReportEventResponse) GetReceivedCount() int32 {
+	if x != nil {
+		return x.ReceivedCount
+	}
+	return 0
+}
+
+// ToolRequest 工具调用请求
+type ToolRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CallId        string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	HostId        string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Tool          string                 `protobuf:"bytes,3,opt,name=tool,proto3" json:"tool,omitempty"`                               // get_process_tree, get_network_connections, etc.
+	ParamsJson    string                 `protobuf:"bytes,4,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"` // JSON格式参数
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolRequest) Reset() {
+	*x = ToolRequest{}
+	mi := &file_agent_comm_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolRequest) ProtoMessage() {}
+
+func (x *ToolRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolRequest.ProtoReflect.Descriptor instead.
+func (*ToolRequest) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ToolRequest) GetCallId() string {
+	if x != nil {
+		return x.CallId
+	}
+	return ""
+}
+
+func (x *ToolRequest) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *ToolRequest) GetTool() string {
+	if x != nil {
+		return x.Tool
+	}
+	return ""
+}
+
+func (x *ToolRequest) GetParamsJson() string {
+	if x != nil {
+		return x.ParamsJson
+	}
+	return ""
+}
+
+// ToolResponse 工具调用响应
+type ToolResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CallId        string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	ResultJson    string                 `protobuf:"bytes,3,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // JSON格式结果
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolResponse) Reset() {
+	*x = ToolResponse{}
+	mi := &file_agent_comm_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolResponse) ProtoMessage() {}
+
+func (x *ToolResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolResponse.ProtoReflect.Descriptor instead.
+func (*ToolResponse) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ToolResponse) GetCallId() string {
+	if x != nil {
+		return x.CallId
+	}
+	return ""
+}
+
+func (x *ToolResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ToolResponse) GetResultJson() string {
+	if x != nil {
+		return x.ResultJson
+	}
+	return ""
+}
+
+func (x *ToolResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// RuleUpdate 规则更新
+type RuleUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`   // add, update, delete
+	Content       string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"` // YAML格式Sigma规则
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuleUpdate) Reset() {
+	*x = RuleUpdate{}
+	mi := &file_agent_comm_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleUpdate) ProtoMessage() {}
+
+func (x *RuleUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleUpdate.ProtoReflect.Descriptor instead.
+func (*RuleUpdate) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RuleUpdate) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *RuleUpdate) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *RuleUpdate) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+// RuleUpdateRequest 规则更新请求
+type RuleUpdateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"` // full_sync, incremental
+	Rules         []*RuleUpdate          `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuleUpdateRequest) Reset() {
+	*x = RuleUpdateRequest{}
+	mi := &file_agent_comm_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleUpdateRequest) ProtoMessage() {}
+
+func (x *RuleUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleUpdateRequest.ProtoReflect.Descriptor instead.
+func (*RuleUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RuleUpdateRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *RuleUpdateRequest) GetRules() []*RuleUpdate {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+// RuleUpdateResponse 规则更新响应
+type RuleUpdateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	LoadedCount   int32                  `protobuf:"varint,2,opt,name=loaded_count,json=loadedCount,proto3" json:"loaded_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuleUpdateResponse) Reset() {
+	*x = RuleUpdateResponse{}
+	mi := &file_agent_comm_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleUpdateResponse) ProtoMessage() {}
+
+func (x *RuleUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleUpdateResponse.ProtoReflect.Descriptor instead.
+func (*RuleUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *RuleUpdateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RuleUpdateResponse) GetLoadedCount() int32 {
+	if x != nil {
+		return x.LoadedCount
+	}
+	return 0
+}
+
+// BlockCommand 阻断指令
+type BlockCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	HostId        string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Action        string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"` // kill_process
+	Target        string                 `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"` // PID
+	Reason        string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlockCommand) Reset() {
+	*x = BlockCommand{}
+	mi := &file_agent_comm_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlockCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockCommand) ProtoMessage() {}
+
+func (x *BlockCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockCommand.ProtoReflect.Descriptor instead.
+func (*BlockCommand) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *BlockCommand) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *BlockCommand) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *BlockCommand) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *BlockCommand) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *BlockCommand) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// BlockResponse 阻断响应
+type BlockResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlockResponse) Reset() {
+	*x = BlockResponse{}
+	mi := &file_agent_comm_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockResponse) ProtoMessage() {}
+
+func (x *BlockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockResponse.ProtoReflect.Descriptor instead.
+func (*BlockResponse) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *BlockResponse) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *BlockResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *BlockResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_agent_comm_proto protoreflect.FileDescriptor
 
 const file_agent_comm_proto_rawDesc = "" +
@@ -625,11 +1482,84 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\x0eCommandRequest\x129\n" +
 	"\aexecute\x18\x01 \x01(\v2\x1d.agent_comm.v1.CommandExecuteH\x00R\aexecute\x126\n" +
 	"\x06result\x18\x02 \x01(\v2\x1c.agent_comm.v1.CommandResultH\x00R\x06resultB\t\n" +
-	"\arequest2\xff\x01\n" +
+	"\arequest\"\x15\n" +
+	"\x13SoftwareListRequest\"\x89\x01\n" +
+	"\fSoftwareInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12'\n" +
+	"\x0fpackage_manager\x18\x03 \x01(\tR\x0epackageManager\x12\"\n" +
+	"\farchitecture\x18\x04 \x01(\tR\farchitecture\"X\n" +
+	"\x14SoftwareListResponse\x12@\n" +
+	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\xb6\x03\n" +
+	"\fRuntimeEvent\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x1a\n" +
+	"\bhostname\x18\x03 \x01(\tR\bhostname\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x05 \x01(\tR\teventType\x12!\n" +
+	"\fprocess_name\x18\x06 \x01(\tR\vprocessName\x12\x10\n" +
+	"\x03pid\x18\a \x01(\x05R\x03pid\x12\x12\n" +
+	"\x04ppid\x18\b \x01(\x05R\x04ppid\x12\x10\n" +
+	"\x03uid\x18\t \x01(\x05R\x03uid\x12!\n" +
+	"\fcommand_line\x18\n" +
+	" \x01(\tR\vcommandLine\x12\x1b\n" +
+	"\tfile_path\x18\v \x01(\tR\bfilePath\x12\x1f\n" +
+	"\vremote_addr\x18\f \x01(\tR\n" +
+	"remoteAddr\x12&\n" +
+	"\x0fmatched_rule_id\x18\r \x01(\tR\rmatchedRuleId\x12\x19\n" +
+	"\bmitre_id\x18\x0e \x01(\tR\amitreId\x12\x1a\n" +
+	"\bseverity\x18\x0f \x01(\tR\bseverity\"b\n" +
+	"\x12ReportEventRequest\x12\x17\n" +
+	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x123\n" +
+	"\x06events\x18\x02 \x03(\v2\x1b.agent_comm.v1.RuntimeEventR\x06events\"V\n" +
+	"\x13ReportEventResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12%\n" +
+	"\x0ereceived_count\x18\x02 \x01(\x05R\rreceivedCount\"t\n" +
+	"\vToolRequest\x12\x17\n" +
+	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x12\n" +
+	"\x04tool\x18\x03 \x01(\tR\x04tool\x12\x1f\n" +
+	"\vparams_json\x18\x04 \x01(\tR\n" +
+	"paramsJson\"x\n" +
+	"\fToolResponse\x12\x17\n" +
+	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x1f\n" +
+	"\vresult_json\x18\x03 \x01(\tR\n" +
+	"resultJson\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"W\n" +
+	"\n" +
+	"RuleUpdate\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\"\\\n" +
+	"\x11RuleUpdateRequest\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12/\n" +
+	"\x05rules\x18\x02 \x03(\v2\x19.agent_comm.v1.RuleUpdateR\x05rules\"Q\n" +
+	"\x12RuleUpdateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12!\n" +
+	"\floaded_count\x18\x02 \x01(\x05R\vloadedCount\"\x8e\x01\n" +
+	"\fBlockCommand\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12\x16\n" +
+	"\x06target\x18\x04 \x01(\tR\x06target\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\"^\n" +
+	"\rBlockResponse\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error2\xa3\x05\n" +
 	"\fAgentService\x12K\n" +
 	"\bRegister\x12\x1e.agent_comm.v1.RegisterRequest\x1a\x1f.agent_comm.v1.RegisterResponse\x12N\n" +
 	"\tHeartbeat\x12\x1f.agent_comm.v1.HeartbeatRequest\x1a .agent_comm.v1.HeartbeatResponse\x12R\n" +
-	"\x0eExecuteCommand\x12\x1d.agent_comm.v1.CommandRequest\x1a\x1d.agent_comm.v1.CommandRequest(\x010\x01B\x1cZ\x1aaegis-system/pkg/api/v1;pbb\x06proto3"
+	"\x0eExecuteCommand\x12\x1d.agent_comm.v1.CommandRequest\x1a\x1d.agent_comm.v1.CommandRequest(\x010\x01\x12^\n" +
+	"\x13CollectSoftwareList\x12\".agent_comm.v1.SoftwareListRequest\x1a#.agent_comm.v1.SoftwareListResponse\x12T\n" +
+	"\vReportEvent\x12!.agent_comm.v1.ReportEventRequest\x1a\".agent_comm.v1.ReportEventResponse\x12F\n" +
+	"\vExecuteTool\x12\x1a.agent_comm.v1.ToolRequest\x1a\x1b.agent_comm.v1.ToolResponse\x12R\n" +
+	"\vUpdateRules\x12 .agent_comm.v1.RuleUpdateRequest\x1a!.agent_comm.v1.RuleUpdateResponse\x12P\n" +
+	"\x13ExecuteBlockCommand\x12\x1b.agent_comm.v1.BlockCommand\x1a\x1c.agent_comm.v1.BlockResponseB\x1cZ\x1aaegis-system/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_agent_comm_proto_rawDescOnce sync.Once
@@ -643,32 +1573,58 @@ func file_agent_comm_proto_rawDescGZIP() []byte {
 	return file_agent_comm_proto_rawDescData
 }
 
-var file_agent_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_agent_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_agent_comm_proto_goTypes = []any{
-	(*AssetInfo)(nil),         // 0: agent_comm.v1.AssetInfo
-	(*RegisterRequest)(nil),   // 1: agent_comm.v1.RegisterRequest
-	(*RegisterResponse)(nil),  // 2: agent_comm.v1.RegisterResponse
-	(*HeartbeatRequest)(nil),  // 3: agent_comm.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil), // 4: agent_comm.v1.HeartbeatResponse
-	(*CommandExecute)(nil),    // 5: agent_comm.v1.CommandExecute
-	(*CommandResult)(nil),     // 6: agent_comm.v1.CommandResult
-	(*CommandRequest)(nil),    // 7: agent_comm.v1.CommandRequest
+	(*AssetInfo)(nil),            // 0: agent_comm.v1.AssetInfo
+	(*RegisterRequest)(nil),      // 1: agent_comm.v1.RegisterRequest
+	(*RegisterResponse)(nil),     // 2: agent_comm.v1.RegisterResponse
+	(*HeartbeatRequest)(nil),     // 3: agent_comm.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),    // 4: agent_comm.v1.HeartbeatResponse
+	(*CommandExecute)(nil),       // 5: agent_comm.v1.CommandExecute
+	(*CommandResult)(nil),        // 6: agent_comm.v1.CommandResult
+	(*CommandRequest)(nil),       // 7: agent_comm.v1.CommandRequest
+	(*SoftwareListRequest)(nil),  // 8: agent_comm.v1.SoftwareListRequest
+	(*SoftwareInfo)(nil),         // 9: agent_comm.v1.SoftwareInfo
+	(*SoftwareListResponse)(nil), // 10: agent_comm.v1.SoftwareListResponse
+	(*RuntimeEvent)(nil),         // 11: agent_comm.v1.RuntimeEvent
+	(*ReportEventRequest)(nil),   // 12: agent_comm.v1.ReportEventRequest
+	(*ReportEventResponse)(nil),  // 13: agent_comm.v1.ReportEventResponse
+	(*ToolRequest)(nil),          // 14: agent_comm.v1.ToolRequest
+	(*ToolResponse)(nil),         // 15: agent_comm.v1.ToolResponse
+	(*RuleUpdate)(nil),           // 16: agent_comm.v1.RuleUpdate
+	(*RuleUpdateRequest)(nil),    // 17: agent_comm.v1.RuleUpdateRequest
+	(*RuleUpdateResponse)(nil),   // 18: agent_comm.v1.RuleUpdateResponse
+	(*BlockCommand)(nil),         // 19: agent_comm.v1.BlockCommand
+	(*BlockResponse)(nil),        // 20: agent_comm.v1.BlockResponse
 }
 var file_agent_comm_proto_depIdxs = []int32{
-	0, // 0: agent_comm.v1.RegisterRequest.asset_info:type_name -> agent_comm.v1.AssetInfo
-	5, // 1: agent_comm.v1.CommandRequest.execute:type_name -> agent_comm.v1.CommandExecute
-	6, // 2: agent_comm.v1.CommandRequest.result:type_name -> agent_comm.v1.CommandResult
-	1, // 3: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
-	3, // 4: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
-	7, // 5: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
-	2, // 6: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
-	4, // 7: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
-	7, // 8: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	0,  // 0: agent_comm.v1.RegisterRequest.asset_info:type_name -> agent_comm.v1.AssetInfo
+	5,  // 1: agent_comm.v1.CommandRequest.execute:type_name -> agent_comm.v1.CommandExecute
+	6,  // 2: agent_comm.v1.CommandRequest.result:type_name -> agent_comm.v1.CommandResult
+	9,  // 3: agent_comm.v1.SoftwareListResponse.software_list:type_name -> agent_comm.v1.SoftwareInfo
+	11, // 4: agent_comm.v1.ReportEventRequest.events:type_name -> agent_comm.v1.RuntimeEvent
+	16, // 5: agent_comm.v1.RuleUpdateRequest.rules:type_name -> agent_comm.v1.RuleUpdate
+	1,  // 6: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
+	3,  // 7: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
+	7,  // 8: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
+	8,  // 9: agent_comm.v1.AgentService.CollectSoftwareList:input_type -> agent_comm.v1.SoftwareListRequest
+	12, // 10: agent_comm.v1.AgentService.ReportEvent:input_type -> agent_comm.v1.ReportEventRequest
+	14, // 11: agent_comm.v1.AgentService.ExecuteTool:input_type -> agent_comm.v1.ToolRequest
+	17, // 12: agent_comm.v1.AgentService.UpdateRules:input_type -> agent_comm.v1.RuleUpdateRequest
+	19, // 13: agent_comm.v1.AgentService.ExecuteBlockCommand:input_type -> agent_comm.v1.BlockCommand
+	2,  // 14: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
+	4,  // 15: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
+	7,  // 16: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
+	10, // 17: agent_comm.v1.AgentService.CollectSoftwareList:output_type -> agent_comm.v1.SoftwareListResponse
+	13, // 18: agent_comm.v1.AgentService.ReportEvent:output_type -> agent_comm.v1.ReportEventResponse
+	15, // 19: agent_comm.v1.AgentService.ExecuteTool:output_type -> agent_comm.v1.ToolResponse
+	18, // 20: agent_comm.v1.AgentService.UpdateRules:output_type -> agent_comm.v1.RuleUpdateResponse
+	20, // 21: agent_comm.v1.AgentService.ExecuteBlockCommand:output_type -> agent_comm.v1.BlockResponse
+	14, // [14:22] is the sub-list for method output_type
+	6,  // [6:14] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_agent_comm_proto_init() }
@@ -686,7 +1642,7 @@ func file_agent_comm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_comm_proto_rawDesc), len(file_agent_comm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

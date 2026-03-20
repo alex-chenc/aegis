@@ -19,9 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Register_FullMethodName       = "/agent_comm.v1.AgentService/Register"
-	AgentService_Heartbeat_FullMethodName      = "/agent_comm.v1.AgentService/Heartbeat"
-	AgentService_ExecuteCommand_FullMethodName = "/agent_comm.v1.AgentService/ExecuteCommand"
+	AgentService_Register_FullMethodName            = "/agent_comm.v1.AgentService/Register"
+	AgentService_Heartbeat_FullMethodName           = "/agent_comm.v1.AgentService/Heartbeat"
+	AgentService_ExecuteCommand_FullMethodName      = "/agent_comm.v1.AgentService/ExecuteCommand"
+	AgentService_CollectSoftwareList_FullMethodName = "/agent_comm.v1.AgentService/CollectSoftwareList"
+	AgentService_ReportEvent_FullMethodName         = "/agent_comm.v1.AgentService/ReportEvent"
+	AgentService_ExecuteTool_FullMethodName         = "/agent_comm.v1.AgentService/ExecuteTool"
+	AgentService_UpdateRules_FullMethodName         = "/agent_comm.v1.AgentService/UpdateRules"
+	AgentService_ExecuteBlockCommand_FullMethodName = "/agent_comm.v1.AgentService/ExecuteBlockCommand"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -36,6 +41,16 @@ type AgentServiceClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// ExecuteCommand 执行命令(双向流)
 	ExecuteCommand(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandRequest, CommandRequest], error)
+	// CollectSoftwareList 采集软件列表
+	CollectSoftwareList(ctx context.Context, in *SoftwareListRequest, opts ...grpc.CallOption) (*SoftwareListResponse, error)
+	// ReportEvent 运行时事件上报
+	ReportEvent(ctx context.Context, in *ReportEventRequest, opts ...grpc.CallOption) (*ReportEventResponse, error)
+	// ExecuteTool 工具调用
+	ExecuteTool(ctx context.Context, in *ToolRequest, opts ...grpc.CallOption) (*ToolResponse, error)
+	// UpdateRules 规则更新
+	UpdateRules(ctx context.Context, in *RuleUpdateRequest, opts ...grpc.CallOption) (*RuleUpdateResponse, error)
+	// ExecuteBlockCommand 执行阻断指令
+	ExecuteBlockCommand(ctx context.Context, in *BlockCommand, opts ...grpc.CallOption) (*BlockResponse, error)
 }
 
 type agentServiceClient struct {
@@ -79,6 +94,56 @@ func (c *agentServiceClient) ExecuteCommand(ctx context.Context, opts ...grpc.Ca
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteCommandClient = grpc.BidiStreamingClient[CommandRequest, CommandRequest]
 
+func (c *agentServiceClient) CollectSoftwareList(ctx context.Context, in *SoftwareListRequest, opts ...grpc.CallOption) (*SoftwareListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SoftwareListResponse)
+	err := c.cc.Invoke(ctx, AgentService_CollectSoftwareList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ReportEvent(ctx context.Context, in *ReportEventRequest, opts ...grpc.CallOption) (*ReportEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportEventResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReportEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ExecuteTool(ctx context.Context, in *ToolRequest, opts ...grpc.CallOption) (*ToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ToolResponse)
+	err := c.cc.Invoke(ctx, AgentService_ExecuteTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) UpdateRules(ctx context.Context, in *RuleUpdateRequest, opts ...grpc.CallOption) (*RuleUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuleUpdateResponse)
+	err := c.cc.Invoke(ctx, AgentService_UpdateRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ExecuteBlockCommand(ctx context.Context, in *BlockCommand, opts ...grpc.CallOption) (*BlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BlockResponse)
+	err := c.cc.Invoke(ctx, AgentService_ExecuteBlockCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -91,6 +156,16 @@ type AgentServiceServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// ExecuteCommand 执行命令(双向流)
 	ExecuteCommand(grpc.BidiStreamingServer[CommandRequest, CommandRequest]) error
+	// CollectSoftwareList 采集软件列表
+	CollectSoftwareList(context.Context, *SoftwareListRequest) (*SoftwareListResponse, error)
+	// ReportEvent 运行时事件上报
+	ReportEvent(context.Context, *ReportEventRequest) (*ReportEventResponse, error)
+	// ExecuteTool 工具调用
+	ExecuteTool(context.Context, *ToolRequest) (*ToolResponse, error)
+	// UpdateRules 规则更新
+	UpdateRules(context.Context, *RuleUpdateRequest) (*RuleUpdateResponse, error)
+	// ExecuteBlockCommand 执行阻断指令
+	ExecuteBlockCommand(context.Context, *BlockCommand) (*BlockResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -109,6 +184,21 @@ func (UnimplementedAgentServiceServer) Heartbeat(context.Context, *HeartbeatRequ
 }
 func (UnimplementedAgentServiceServer) ExecuteCommand(grpc.BidiStreamingServer[CommandRequest, CommandRequest]) error {
 	return status.Error(codes.Unimplemented, "method ExecuteCommand not implemented")
+}
+func (UnimplementedAgentServiceServer) CollectSoftwareList(context.Context, *SoftwareListRequest) (*SoftwareListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CollectSoftwareList not implemented")
+}
+func (UnimplementedAgentServiceServer) ReportEvent(context.Context, *ReportEventRequest) (*ReportEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportEvent not implemented")
+}
+func (UnimplementedAgentServiceServer) ExecuteTool(context.Context, *ToolRequest) (*ToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteTool not implemented")
+}
+func (UnimplementedAgentServiceServer) UpdateRules(context.Context, *RuleUpdateRequest) (*RuleUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateRules not implemented")
+}
+func (UnimplementedAgentServiceServer) ExecuteBlockCommand(context.Context, *BlockCommand) (*BlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteBlockCommand not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -174,6 +264,96 @@ func _AgentService_ExecuteCommand_Handler(srv interface{}, stream grpc.ServerStr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ExecuteCommandServer = grpc.BidiStreamingServer[CommandRequest, CommandRequest]
 
+func _AgentService_CollectSoftwareList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SoftwareListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).CollectSoftwareList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_CollectSoftwareList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).CollectSoftwareList(ctx, req.(*SoftwareListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ReportEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReportEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReportEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReportEvent(ctx, req.(*ReportEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ExecuteTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ExecuteTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ExecuteTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ExecuteTool(ctx, req.(*ToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_UpdateRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RuleUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).UpdateRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_UpdateRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).UpdateRules(ctx, req.(*RuleUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ExecuteBlockCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BlockCommand)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ExecuteBlockCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ExecuteBlockCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ExecuteBlockCommand(ctx, req.(*BlockCommand))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -188,6 +368,26 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _AgentService_Heartbeat_Handler,
+		},
+		{
+			MethodName: "CollectSoftwareList",
+			Handler:    _AgentService_CollectSoftwareList_Handler,
+		},
+		{
+			MethodName: "ReportEvent",
+			Handler:    _AgentService_ReportEvent_Handler,
+		},
+		{
+			MethodName: "ExecuteTool",
+			Handler:    _AgentService_ExecuteTool_Handler,
+		},
+		{
+			MethodName: "UpdateRules",
+			Handler:    _AgentService_UpdateRules_Handler,
+		},
+		{
+			MethodName: "ExecuteBlockCommand",
+			Handler:    _AgentService_ExecuteBlockCommand_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

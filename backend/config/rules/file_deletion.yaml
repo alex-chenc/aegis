@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1070.004
+description: Detects T1070.004 - file deletion
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - rm.*-rf
+    - rm.*-f
+    - shred
+    - srm
+falsepositives:
+- unknown
+id: t1070_004_file_deletion
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1070.004
+title: File Deletion

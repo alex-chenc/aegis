@@ -43,3 +43,8 @@ agent:
 self_healing:
   max_retries: 3
   enabled: true
+
+kafka:
+  brokers:
+    - kafka:9092
+  group_id: aegis-backend-consumer

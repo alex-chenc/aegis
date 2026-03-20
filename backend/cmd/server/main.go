@@ -14,6 +14,7 @@ import (
 	"aegis-system/internal/api/handler"
 	"aegis-system/internal/grpc_server"
 	"aegis-system/internal/ipdetect"
+	"aegis-system/internal/queue"
 	"aegis-system/internal/repository"
 	"aegis-system/internal/service"
 	"aegis-system/internal/storage"
@@ -83,6 +84,11 @@ func main() {
 	vulnRepo := repository.NewVulnerabilityRepo(db)
 	customCVEQueryRepo := repository.NewCustomCVEQueryRepository(db)
 	hostVulnerabilityScriptRepo := repository.NewHostVulnerabilityScriptRepository(db)
+	alertRepo := repository.NewAlertRepository(db)
+	blockRepo := repository.NewBlockRepository(db)
+	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
+	sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
+	toolCallRepo := repository.NewToolCallRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -92,6 +98,24 @@ func main() {
 	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo)
+	sigmaRuleService := service.NewSigmaRuleService(sigmaRuleRepo)
+
+	// V5.0 Runtime Detection Services
+	kafkaProducer := queue.NewKafkaProducer(cfg.Kafka.Brokers, logger.Logger)
+	wsService := service.NewWebSocketService()
+	llmAnalysisService := service.NewLLMAnalysisService(nil) // LLM client to be configured
+	_ = service.NewBlockService(blockRepo)
+	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
+	runtimePipeline := service.NewRuntimePipelineService(
+		cfg.Kafka.Brokers,
+		cfg.Kafka.GroupID,
+		llmAnalysisService,
+		alertService,
+		wsService,
+	)
+	ruleLoader := service.NewRuleLoader(sigmaRuleRepo)
+	websocketHandler := handler.NewWebSocketHandler(wsService)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -100,6 +124,13 @@ func main() {
 	templateService.StartWorkers(ctx)
 	scriptGenService.StartWorkers(ctx)
 	selfHealingService.StartWorkers(ctx)
+
+	// Start V5.0 runtime pipeline
+	go func() {
+		if err := runtimePipeline.Start(ctx); err != nil {
+			logger.Error("runtime pipeline stopped", zap.Error(err))
+		}
+	}()
 
 	logger.Info("background workers started")
 
@@ -147,9 +178,10 @@ func main() {
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
+	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)
 	router.Setup(grpcServer)
 
 	// Start HTTP server
@@ -170,6 +202,11 @@ func main() {
 		zap.String("server_ip", serverIP),
 	)
 
+	// Load detection rules on startup
+	if err := ruleLoader.LoadFromDirectory(ctx, "config/rules"); err != nil {
+		logger.Warn("failed to load rules from directory", zap.Error(err))
+	}
+
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -180,6 +217,9 @@ func main() {
 	// Graceful shutdown
 	cancel()
 	time.Sleep(2 * time.Second)
+
+	kafkaProducer.Close()
+	runtimePipeline.Close()
 
 	logger.Info("server stopped")
 }

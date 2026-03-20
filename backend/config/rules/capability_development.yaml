@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1587
+description: Detects T1587 - capability development
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - gcc.*-o
+    - g\+\+.*-o
+    - make
+    - python.*-m.*py_compile
+falsepositives:
+- unknown
+id: t1587_capability_development
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1587
+title: Capability Development

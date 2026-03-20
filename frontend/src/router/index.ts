@@ -5,6 +5,10 @@ import Workbench from '../views/Workbench.vue'
 import TaskCenter from '../views/TaskCenter.vue'
 import TaskDetail from '../views/TaskDetail.vue'
 import Vulnerability from '../views/Vulnerability.vue'
+import DetectionOverview from '../views/detection/Overview.vue'
+import DetectionAlerts from '../views/detection/Alerts.vue'
+import DetectionPolicies from '../views/detection/Policies.vue'
+import DetectionRules from '../views/detection/Rules.vue'
 
 const routes = [
   {
@@ -57,6 +61,30 @@ const routes = [
     name: 'VulnerabilityTaskDetail',
     component: TaskDetail,
     meta: { title: '漏洞任务详情' }
+  },
+  {
+    path: '/detection/overview',
+    name: 'DetectionOverview',
+    component: DetectionOverview,
+    meta: { title: '安全概览' }
+  },
+  {
+    path: '/detection/alerts',
+    name: 'DetectionAlerts',
+    component: DetectionAlerts,
+    meta: { title: '告警列表' }
+  },
+  {
+    path: '/detection/policies',
+    name: 'DetectionPolicies',
+    component: DetectionPolicies,
+    meta: { title: '阻断策略' }
+  },
+  {
+    path: '/detection/rules',
+    name: 'DetectionRules',
+    component: DetectionRules,
+    meta: { title: '规则管理' }
   },
   {
     path: '/settings',

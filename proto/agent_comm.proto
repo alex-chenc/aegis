@@ -85,6 +85,90 @@ message SoftwareListResponse {
   repeated SoftwareInfo software_list = 1;
 }
 
+// === V5.0 新增消息 ===
+
+// RuntimeEvent 运行时事件
+message RuntimeEvent {
+  string event_id = 1;
+  string host_id = 2;
+  string hostname = 3;
+  int64 timestamp = 4;
+  string event_type = 5;      // process_exec, file_access, network_connect, privilege_change
+  string process_name = 6;
+  int32 pid = 7;
+  int32 ppid = 8;
+  int32 uid = 9;
+  string command_line = 10;
+  string file_path = 11;
+  string remote_addr = 12;
+  string matched_rule_id = 13;
+  string mitre_id = 14;
+  string severity = 15;
+}
+
+// ReportEventRequest 事件上报请求
+message ReportEventRequest {
+  string host_id = 1;
+  repeated RuntimeEvent events = 2;
+}
+
+// ReportEventResponse 事件上报响应
+message ReportEventResponse {
+  bool success = 1;
+  int32 received_count = 2;
+}
+
+// ToolRequest 工具调用请求
+message ToolRequest {
+  string call_id = 1;
+  string host_id = 2;
+  string tool = 3;             // get_process_tree, get_network_connections, etc.
+  string params_json = 4;      // JSON格式参数
+}
+
+// ToolResponse 工具调用响应
+message ToolResponse {
+  string call_id = 1;
+  bool success = 2;
+  string result_json = 3;      // JSON格式结果
+  string error = 4;
+}
+
+// RuleUpdate 规则更新
+message RuleUpdate {
+  string rule_id = 1;
+  string action = 2;           // add, update, delete
+  string content = 3;          // YAML格式Sigma规则
+}
+
+// RuleUpdateRequest 规则更新请求
+message RuleUpdateRequest {
+  string action = 1;           // full_sync, incremental
+  repeated RuleUpdate rules = 2;
+}
+
+// RuleUpdateResponse 规则更新响应
+message RuleUpdateResponse {
+  bool success = 1;
+  int32 loaded_count = 2;
+}
+
+// BlockCommand 阻断指令
+message BlockCommand {
+  string command_id = 1;
+  string host_id = 2;
+  string action = 3;           // kill_process
+  string target = 4;           // PID
+  string reason = 5;
+}
+
+// BlockResponse 阻断响应
+message BlockResponse {
+  string command_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
 // AgentService Agent服务
 service AgentService {
   // Register 注册Agent
@@ -95,4 +179,13 @@ service AgentService {
   rpc ExecuteCommand(stream CommandRequest) returns (stream CommandRequest);
   // CollectSoftwareList 采集软件列表
   rpc CollectSoftwareList(SoftwareListRequest) returns (SoftwareListResponse);
+
+  // ReportEvent 运行时事件上报
+  rpc ReportEvent(ReportEventRequest) returns (ReportEventResponse);
+  // ExecuteTool 工具调用
+  rpc ExecuteTool(ToolRequest) returns (ToolResponse);
+  // UpdateRules 规则更新
+  rpc UpdateRules(RuleUpdateRequest) returns (RuleUpdateResponse);
+  // ExecuteBlockCommand 执行阻断指令
+  rpc ExecuteBlockCommand(BlockCommand) returns (BlockResponse);
 }

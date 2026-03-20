@@ -9,9 +9,12 @@ import (
 
 // Config Agent 配置结构
 type Config struct {
-	ServerAddr string `toml:"ServerAddr"`
-	AuthToken  string `toml:"AuthToken"`
-	HostID     string `toml:"HostID"`
+	ServerAddr      string `toml:"ServerAddr"`
+	AuthToken       string `toml:"AuthToken"`
+	HostID          string `toml:"HostID"`
+	EventBufferSize int    `toml:"EventBufferSize"`
+	RuleDir         string `toml:"RuleDir"`
+	QuarantineDir   string `toml:"QuarantineDir"`
 }
 
 const configPath = "/etc/aegis-agent/config.toml"
@@ -28,9 +31,30 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	updated := false
+
 	// 如果 HostID 为空，生成新的 UUID 并回写
 	if cfg.HostID == "" {
 		cfg.HostID = uuid.New().String()
+		updated = true
+	}
+
+	if cfg.EventBufferSize == 0 {
+		cfg.EventBufferSize = 10000
+		updated = true
+	}
+
+	if cfg.RuleDir == "" {
+		cfg.RuleDir = "/etc/aegis-agent/rules"
+		updated = true
+	}
+
+	if cfg.QuarantineDir == "" {
+		cfg.QuarantineDir = "/var/quarantine"
+		updated = true
+	}
+
+	if updated {
 		if err := saveConfig(&cfg); err != nil {
 			return nil, err
 		}

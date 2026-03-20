@@ -1,0 +1,22 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1490
+description: Detects T1490 - inhibit recovery
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - vssadmin.*delete
+    - wmic.*shadowcopy
+    - bcdedit.*recoveryenabled.*no
+falsepositives:
+- unknown
+id: t1490_inhibit_recovery
+level: critical
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1490
+title: Inhibit Recovery

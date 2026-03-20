@@ -18,6 +18,8 @@ type Router struct {
 	agentHandler           *handler.AgentHandler
 	ruleHandler            *handler.RuleHandler
 	vulnerabilityHandler   *handler.VulnerabilityHandler
+	detectionHandler       *handler.DetectionHandler
+	websocketHandler       *handler.WebSocketHandler
 }
 
 func NewRouter(
@@ -29,6 +31,8 @@ func NewRouter(
 	agentHandler *handler.AgentHandler,
 	ruleHandler *handler.RuleHandler,
 	vulnerabilityHandler *handler.VulnerabilityHandler,
+	detectionHandler *handler.DetectionHandler,
+	websocketHandler *handler.WebSocketHandler,
 ) *Router {
 	return &Router{
 		configHandler:          configHandler,
@@ -39,6 +43,8 @@ func NewRouter(
 		agentHandler:           agentHandler,
 		ruleHandler:            ruleHandler,
 		vulnerabilityHandler:   vulnerabilityHandler,
+		detectionHandler:       detectionHandler,
+		websocketHandler:       websocketHandler,
 	}
 }
 
@@ -142,6 +148,30 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			vulnerability.GET("/:cve_id/generation-status", r.vulnerabilityHandler.GetGenerationStatus)
 			vulnerability.GET("/:cve_id/task-status", r.vulnerabilityHandler.GetCveTaskStatus)
 			vulnerability.GET("/scripts/:script_id/status", r.vulnerabilityHandler.GetScriptStatus)
+		}
+
+		detection := v1.Group("/detection")
+		{
+			detection.GET("/alerts", r.detectionHandler.ListAlerts)
+			detection.GET("/alerts/:id", r.detectionHandler.GetAlert)
+			detection.POST("/alerts/:id/resolve", r.detectionHandler.ResolveAlert)
+			detection.POST("/alerts/:id/block", r.detectionHandler.BlockAlert)
+
+			detection.GET("/blocks", r.detectionHandler.ListBlockRecords)
+
+			detection.GET("/block-policies", r.detectionHandler.ListBlockPolicies)
+			detection.PUT("/block-policies/:mitre_id", r.detectionHandler.UpdateBlockPolicy)
+
+			detection.GET("/rules", r.detectionHandler.ListRules)
+			detection.GET("/rules/:id", r.detectionHandler.GetRule)
+			detection.PUT("/rules/:id/status", r.detectionHandler.UpdateRuleStatus)
+
+			detection.GET("/tool-calls", r.detectionHandler.ListToolCalls)
+
+			detection.GET("/statistics/threats", r.detectionHandler.GetThreatStatistics)
+			detection.GET("/statistics/alert-trend", r.detectionHandler.GetAlertTrend)
+
+			detection.GET("/runtime/ws", r.websocketHandler.HandleConnection)
 		}
 	}
 }

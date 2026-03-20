@@ -48,6 +48,29 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <el-sub-menu index="detection">
+          <template #title>
+            <el-icon><DataAnalysis /></el-icon>
+            <span>智能异常检测</span>
+          </template>
+          <el-menu-item index="/detection/overview">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>安全概览</span>
+          </el-menu-item>
+          <el-menu-item index="/detection/alerts">
+            <el-icon><Bell /></el-icon>
+            <span>告警列表</span>
+          </el-menu-item>
+          <el-menu-item index="/detection/policies">
+            <el-icon><Operation /></el-icon>
+            <span>阻断策略</span>
+          </el-menu-item>
+          <el-menu-item index="/detection/rules">
+            <el-icon><Tickets /></el-icon>
+            <span>规则管理</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统配置</span>
@@ -85,7 +108,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

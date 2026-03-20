@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1059.001
+description: Detects T1059.001 - powershell detection
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - powershell.*-enc
+    - powershell.*-e
+    - powershell.*bypass
+    - powershell.*hidden
+falsepositives:
+- unknown
+id: t1059_001_powershell_detection
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1059.001
+title: Powershell Detection

@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1548.001
+description: Detects T1548.001 - setuid detection
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - chmod.*u\+s
+    - chmod.*g\+s
+    - chmod.*4755
+    - chmod.*2755
+falsepositives:
+- unknown
+id: t1548_001_setuid_detection
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1548.001
+title: Setuid Detection

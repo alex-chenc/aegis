@@ -15,6 +15,7 @@ type Config struct {
 	LLM         LLMConfig         `mapstructure:"llm"`
 	Agent       AgentConfig       `mapstructure:"agent"`
 	SelfHealing SelfHealingConfig `mapstructure:"self_healing"`
+	Kafka       KafkaConfig       `mapstructure:"kafka"`
 }
 
 type ServerConfig struct {
@@ -69,6 +70,11 @@ type AgentConfig struct {
 type SelfHealingConfig struct {
 	MaxRetries int  `mapstructure:"max_retries"`
 	Enabled    bool `mapstructure:"enabled"`
+}
+
+type KafkaConfig struct {
+	Brokers []string `mapstructure:"brokers"`
+	GroupID string   `mapstructure:"group_id"`
 }
 
 var globalConfig *Config
@@ -147,6 +153,12 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if authToken := getEnv("AGENT_AUTH_TOKEN"); authToken != "" {
 		cfg.Agent.AuthToken = authToken
+	}
+	if kafkaBrokers := getEnv("KAFKA_BROKERS"); kafkaBrokers != "" {
+		cfg.Kafka.Brokers = []string{kafkaBrokers}
+	}
+	if kafkaGroupID := getEnv("KAFKA_GROUP_ID"); kafkaGroupID != "" {
+		cfg.Kafka.GroupID = kafkaGroupID
 	}
 }
 

@@ -1,0 +1,22 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1041
+description: Detects T1041 - c2 exfiltration
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - curl.*-X.*POST
+    - wget.*--post
+    - curl.*-d
+falsepositives:
+- unknown
+id: t1041_c2_exfiltration
+level: critical
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1041
+title: C2 Exfiltration

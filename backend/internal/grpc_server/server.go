@@ -36,6 +36,7 @@ type GRPCServer struct {
 type AgentConnection struct {
 	HostID uuid.UUID
 	Stream pb.AgentService_ExecuteCommandServer
+	Client pb.AgentServiceClient
 	Ctx    context.Context
 	Cancel context.CancelFunc
 	Inbox  chan *pb.CommandExecute
@@ -266,6 +267,7 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				connection = &AgentConnection{
 					HostID: hostID,
 					Stream: stream,
+					Client: nil,
 					Ctx:    ctx,
 					Cancel: cancel,
 					Inbox:  inbox,
@@ -335,6 +337,123 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 			}
 		}
 	}
+}
+
+func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest) (*pb.ReportEventResponse, error) {
+	logger.Info("events received",
+		zap.String("host_id", req.HostId),
+		zap.Int("event_count", len(req.Events)),
+	)
+
+	return &pb.ReportEventResponse{
+		Success:       true,
+		ReceivedCount: int32(len(req.Events)),
+	}, nil
+}
+
+func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
+	logger.Info("tool call received",
+		zap.String("call_id", req.CallId),
+		zap.String("host_id", req.HostId),
+		zap.String("tool", req.Tool),
+	)
+
+	hostID, err := uuid.Parse(req.HostId)
+	if err != nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   "invalid host id",
+		}, nil
+	}
+
+	conn, ok := s.agentConnections.Load(hostID)
+	if !ok {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   "agent not connected",
+		}, nil
+	}
+
+	agentConn := conn.(*AgentConnection)
+	if agentConn.Client == nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   "agent callback client not available",
+		}, nil
+	}
+
+	resp, callErr := agentConn.Client.ExecuteTool(ctx, req)
+	if callErr != nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   callErr.Error(),
+		}, nil
+	}
+
+	return resp, nil
+}
+
+func (s *GRPCServer) UpdateRules(ctx context.Context, req *pb.RuleUpdateRequest) (*pb.RuleUpdateResponse, error) {
+	logger.Info("rules update",
+		zap.String("action", req.Action),
+		zap.Int("rule_count", len(req.Rules)),
+	)
+
+	_ = ctx
+	return &pb.RuleUpdateResponse{
+		Success:     true,
+		LoadedCount: int32(len(req.Rules)),
+	}, nil
+}
+
+func (s *GRPCServer) ExecuteBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (*pb.BlockResponse, error) {
+	logger.Info("block command",
+		zap.String("command_id", cmd.CommandId),
+		zap.String("host_id", cmd.HostId),
+		zap.String("action", cmd.Action),
+	)
+
+	hostID, err := uuid.Parse(cmd.HostId)
+	if err != nil {
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   false,
+			Error:     "invalid host id",
+		}, nil
+	}
+
+	conn, ok := s.agentConnections.Load(hostID)
+	if !ok {
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   false,
+			Error:     "agent not connected",
+		}, nil
+	}
+
+	agentConn := conn.(*AgentConnection)
+	if agentConn.Client == nil {
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   false,
+			Error:     "agent callback client not available",
+		}, nil
+	}
+
+	resp, callErr := agentConn.Client.ExecuteBlockCommand(ctx, cmd)
+	if callErr != nil {
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   false,
+			Error:     callErr.Error(),
+		}, nil
+	}
+
+	return resp, nil
 }
 
 // SendCommand 向指定 Agent 发送命令，支持重试等待连接建立
@@ -421,8 +540,11 @@ func (s *GRPCServer) GetConnectedHostIDs() []uuid.UUID {
 	return hostIDs
 }
 
-// CollectSoftwareList 向 Agent 发送软件清单采集请求并返回结果
-func (s *GRPCServer) CollectSoftwareList(ctx context.Context, hostIDStr string) ([]model.SoftwareInfo, error) {
+func (s *GRPCServer) CollectSoftwareList(ctx context.Context, req *pb.SoftwareListRequest) (*pb.SoftwareListResponse, error) {
+	return nil, fmt.Errorf("collect software list over unary RPC is not supported")
+}
+
+func (s *GRPCServer) CollectSoftwareListForHost(ctx context.Context, hostIDStr string) ([]model.SoftwareInfo, error) {
 	hostID, err := uuid.Parse(hostIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid host_id: %w", err)

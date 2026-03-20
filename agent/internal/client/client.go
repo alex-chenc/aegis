@@ -2,12 +2,17 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"aegis-agent/internal/asset"
+	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/config"
 	"aegis-agent/internal/executor"
 	"aegis-agent/internal/logger"
+	"aegis-agent/internal/sigma"
+	"aegis-agent/internal/tools"
 	pb "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
@@ -20,6 +25,9 @@ type Client struct {
 	authToken     string
 	hostID        string
 	executor      *executor.Executor
+	toolManager   *tools.ToolManager
+	ruleLoader    *sigma.Loader
+	blocker       *blocker.Blocker
 	conn          *grpc.ClientConn
 	client        pb.AgentServiceClient
 	stream        pb.AgentService_ExecuteCommandClient
@@ -28,12 +36,15 @@ type Client struct {
 	heartbeatDone chan struct{}
 }
 
-func NewClient(cfg *config.Config, exec *executor.Executor) *Client {
+func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.ToolManager, ruleLoader *sigma.Loader, blockerInst *blocker.Blocker) *Client {
 	return &Client{
 		serverAddr:    cfg.ServerAddr,
 		authToken:     cfg.AuthToken,
 		hostID:        cfg.HostID,
 		executor:      exec,
+		toolManager:   toolManager,
+		ruleLoader:    ruleLoader,
+		blocker:       blockerInst,
 		heartbeatDone: make(chan struct{}),
 	}
 }
@@ -240,4 +251,104 @@ func toProtoAsset(a *asset.AssetInfo) *pb.AssetInfo {
 		Arch:         a.Arch,
 		AgentVersion: a.AgentVersion,
 	}
+}
+
+func (c *Client) ReportEvents(events []*pb.RuntimeEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	resp, err := c.client.ReportEvent(c.ctx, &pb.ReportEventRequest{
+		HostId: c.hostID,
+		Events: events,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to report events: %w", err)
+	}
+
+	if resp.Success {
+		logger.Debug("Events reported", zap.Int("sent", len(events)), zap.Int32("received", resp.ReceivedCount))
+	}
+
+	return nil
+}
+
+func (c *Client) HandleToolCall(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
+	_ = ctx
+	logger.Info("Tool call received", zap.String("call_id", req.CallId), zap.String("tool", req.Tool))
+
+	var params map[string]interface{}
+	if err := json.Unmarshal([]byte(req.ParamsJson), &params); err != nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   fmt.Sprintf("failed to parse params: %v", err),
+		}, nil
+	}
+
+	result, err := c.toolManager.Execute(req.Tool, params)
+	if err != nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return &pb.ToolResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   fmt.Sprintf("failed to marshal tool result: %v", err),
+		}, nil
+	}
+
+	return &pb.ToolResponse{
+		CallId:     req.CallId,
+		Success:    true,
+		ResultJson: string(resultJSON),
+	}, nil
+}
+
+func (c *Client) HandleRuleUpdate(ctx context.Context, req *pb.RuleUpdateRequest) (*pb.RuleUpdateResponse, error) {
+	_ = ctx
+	logger.Info("Rule update received", zap.String("action", req.Action), zap.Int("rule_count", len(req.Rules)))
+
+	var loaded int32
+	for _, rule := range req.Rules {
+		if err := c.ruleLoader.ApplyUpdate(rule.Action, rule.RuleId, []byte(rule.Content)); err != nil {
+			logger.Error("Failed to apply rule update", zap.String("rule_id", rule.RuleId), zap.Error(err))
+			continue
+		}
+		loaded++
+
+		if err := c.ruleLoader.SaveRuleToDisk(rule.RuleId, []byte(rule.Content)); err != nil {
+			logger.Error("Failed to save rule to disk", zap.Error(err))
+		}
+	}
+
+	return &pb.RuleUpdateResponse{
+		Success:     true,
+		LoadedCount: loaded,
+	}, nil
+}
+
+func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (*pb.BlockResponse, error) {
+	_ = ctx
+	logger.Info("Block command received", zap.String("command_id", cmd.CommandId), zap.String("action", cmd.Action), zap.String("target", cmd.Target))
+
+	err := c.blocker.Execute(cmd.Action, cmd.Target)
+	if err != nil {
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   false,
+			Error:     err.Error(),
+		}, nil
+	}
+
+	return &pb.BlockResponse{
+		CommandId: cmd.CommandId,
+		Success:   true,
+	}, nil
 }

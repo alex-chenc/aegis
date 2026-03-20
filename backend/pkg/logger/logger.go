@@ -117,3 +117,7 @@ func Fatal(msg string, fields ...zap.Field) {
 func With(fields ...zap.Field) *zap.Logger {
 	return Logger.With(fields...)
 }
+
+func Get() *zap.Logger {
+	return Logger
+}

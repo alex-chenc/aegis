@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1110
+description: Detects T1110 - brute force
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - hydra
+    - medusa
+    - ncrack
+    - patator
+falsepositives:
+- unknown
+id: t1110_brute_force
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1110
+title: Brute Force

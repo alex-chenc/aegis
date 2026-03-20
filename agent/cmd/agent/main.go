@@ -6,10 +6,15 @@ import (
 	"syscall"
 
 	"aegis-agent/internal/asset"
+	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/client"
 	"aegis-agent/internal/config"
+	"aegis-agent/internal/ebpf"
 	"aegis-agent/internal/executor"
 	"aegis-agent/internal/logger"
+	"aegis-agent/internal/monitor"
+	"aegis-agent/internal/sigma"
+	"aegis-agent/internal/tools"
 
 	_ "aegis-agent/pkg/api/v1"
 
@@ -46,7 +51,28 @@ func main() {
 	exec := executor.NewExecutor(2)
 	logger.Info("Executor created", zap.Int("max_concurrency", 2))
 
-	c := client.NewClient(cfg, exec)
+	ruleLoader := sigma.NewLoader(cfg.RuleDir)
+	blockerInst := blocker.NewBlocker(cfg.QuarantineDir)
+	toolManager := tools.NewToolManager()
+	metrics := monitor.NewMetrics()
+	logger.Info("V5 modules initialized",
+		zap.String("rule_dir", cfg.RuleDir),
+		zap.String("quarantine_dir", cfg.QuarantineDir),
+		zap.Int("event_buffer_size", cfg.EventBufferSize),
+	)
+
+	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
+
+	collector := ebpf.NewCollector(cfg.HostID, cfg.EventBufferSize)
+	if err := collector.Start(); err != nil {
+		logger.Fatal("Failed to start event collector", zap.Error(err))
+	}
+	logger.Info("Event collector started")
+
+	pipeline := ebpf.NewPipeline(collector, ruleLoader, c, cfg.HostID, metrics)
+	pipelineDone := make(chan struct{})
+	go pipeline.Run(pipelineDone)
+	logger.Info("Event pipeline started")
 
 	go func() {
 		if err := c.Run(); err != nil {
@@ -60,6 +86,8 @@ func main() {
 	<-sigChan
 
 	logger.Info("Shutting down...")
+	close(pipelineDone)
+	collector.Stop()
 	c.Close()
 	logger.Info("Agent stopped")
 }

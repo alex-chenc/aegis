@@ -1,0 +1,22 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1222.002
+description: Detects T1222.002 - file permission modification
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - chmod.*777
+    - chmod.*755.*(/etc|/usr|/bin)
+    - chown.*root.*(/etc|/usr|/bin)
+falsepositives:
+- unknown
+id: t1222_002_file_permission_modification
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1222.002
+title: File Permission Modification

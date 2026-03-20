@@ -1,0 +1,24 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1070.002
+description: Detects T1070.002 - log clearing
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - rm.*/var/log
+    - shred.*/var/log
+    - echo.*>/var/log
+    - truncate.*/var/log
+    - journalctl.*--vacuum
+falsepositives:
+- unknown
+id: t1070_002_log_clearing
+level: critical
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1070.002
+title: Log Clearing

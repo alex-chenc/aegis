@@ -144,3 +144,4 @@ curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
 | MinIO Console | 9001 |
 
 
+## 纯AI设计，开发，测试项目

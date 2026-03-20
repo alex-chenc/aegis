@@ -8,6 +8,7 @@ COPY backend .
 
 RUN mkdir -p config
 COPY config/config.yaml config/
+COPY config/rules/ config/rules/
 
 EXPOSE 8080
 EXPOSE 9090

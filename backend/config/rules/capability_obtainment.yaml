@@ -1,0 +1,23 @@
+aegis:
+  block_action: kill_process
+  mitre_id: T1588
+description: Detects T1588 - capability obtainment
+detection:
+  condition: selection
+  selection:
+    CommandLine|re:
+    - wget.*\.sh
+    - curl.*\.sh
+    - wget.*\.py
+    - curl.*\.py
+falsepositives:
+- unknown
+id: t1588_capability_obtainment
+level: high
+logsource:
+  category: process_creation
+  product: linux
+status: active
+tags:
+- attack.t1588
+title: Capability Obtainment
