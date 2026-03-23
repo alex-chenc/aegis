@@ -51,14 +51,14 @@ func (l *Loader) LoadAll() error {
 		category   string
 		mapName    string
 	}{
-		{"execve", "sched/sched_process_exec", "sched", "exec_events"},
-		{"fork", "sched/sched_process_fork", "sched", "fork_events"},
-		{"exit", "sched/sched_process_exit", "sched", "exit_events"},
-		{"openat", "syscalls/sys_enter_openat", "syscalls", "file_events"},
-		{"connect", "syscalls/sys_enter_connect", "syscalls", "conn_events"},
-		{"setuid", "syscalls/sys_enter_setuid", "syscalls", "priv_events"},
-		{"setgid", "syscalls/sys_enter_setgid", "syscalls", "priv_events"},
-		{"capset", "syscalls/sys_enter_capset", "syscalls", "cap_events"},
+		{"execve", "sys_enter_execve", "syscalls", "exec_events"},
+		{"fork", "sched_process_fork", "sched", "fork_events"},
+		{"exit", "sched_process_exit", "sched", "exit_events"},
+		{"openat", "sys_enter_openat", "syscalls", "file_events"},
+		{"connect", "sys_enter_connect", "syscalls", "conn_events"},
+		{"setuid", "sys_enter_setuid", "syscalls", "priv_events"},
+		{"setgid", "sys_enter_setgid", "syscalls", "priv_events"},
+		{"capset", "sys_enter_capset", "syscalls", "cap_events"},
 	}
 
 	for _, prog := range programs {
@@ -74,11 +74,30 @@ func (l *Loader) LoadAll() error {
 }
 
 func (l *Loader) loadProgram(name, tracepoint, category, mapName string) error {
-	// Load BPF object from filesystem
-	objPath := filepath.Join("internal/ebpf/bpf/obj", name+".bpf.o")
-	spec, err := ebpf.LoadCollectionSpec(objPath)
+	// Get the directory of the executable to find BPF objects
+	execPath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to load spec for %s: %w", name, err)
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
+
+	// Try multiple paths for BPF objects
+	objPaths := []string{
+		filepath.Join(execDir, "bpf", name+".bpf.o"),
+		filepath.Join(execDir, "..", "internal", "ebpf", "bpf", "obj", name+".bpf.o"),
+		filepath.Join("internal/ebpf/bpf/obj", name+".bpf.o"),
+	}
+
+	var spec *ebpf.CollectionSpec
+	for _, objPath := range objPaths {
+		spec, err = ebpf.LoadCollectionSpec(objPath)
+		if err == nil {
+			break
+		}
+	}
+
+	if spec == nil {
+		return fmt.Errorf("failed to load spec for %s: tried paths %v, last error: %w", name, objPaths, err)
 	}
 
 	// Load collection
@@ -114,6 +133,7 @@ func (l *Loader) loadProgram(name, tracepoint, category, mapName string) error {
 }
 
 func (l *Loader) readEvents(name string, rd *ringbuf.Reader) {
+	logger.Info("Ring buffer reader started", zap.String("program", name))
 	for {
 		select {
 		case <-l.done:
@@ -121,6 +141,7 @@ func (l *Loader) readEvents(name string, rd *ringbuf.Reader) {
 		default:
 		}
 
+		logger.Debug("Waiting for ringbuffer event", zap.String("program", name))
 		record, err := rd.Read()
 		if err != nil {
 			if err == ringbuf.ErrClosed {
@@ -132,6 +153,9 @@ func (l *Loader) readEvents(name string, rd *ringbuf.Reader) {
 			continue
 		}
 
+		logger.Debug("Ringbuffer event received",
+			zap.String("program", name),
+			zap.Int("size", len(record.RawSample)))
 		l.processEvent(name, record.RawSample)
 	}
 }
