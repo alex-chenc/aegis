@@ -104,7 +104,7 @@ func main() {
 	// V5.0 Runtime Detection Services
 	kafkaProducer := queue.NewKafkaProducer(cfg.Kafka.Brokers, logger.Logger)
 	wsService := service.NewWebSocketService()
-	llmAnalysisService := service.NewLLMAnalysisService(nil) // LLM client to be configured
+	llmAnalysisService := service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	_ = service.NewBlockService(blockRepo)
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
 	runtimePipeline := service.NewRuntimePipelineService(

@@ -6,6 +6,7 @@ import (
 
 	"aegis-system/internal/llm"
 	"aegis-system/internal/pipeline"
+	"aegis-system/internal/repository"
 	"aegis-system/pkg/logger"
 
 	"go.uber.org/zap"
@@ -13,26 +14,54 @@ import (
 
 // LLMAnalysisService handles LLM calls for security event analysis
 type LLMAnalysisService struct {
-	client *llm.LLMClient
-	logger *zap.Logger
+	configRepo    *repository.ConfigRepository
+	llmTimeout    int
+	llmMaxRetries int
+	logger        *zap.Logger
 }
 
 // NewLLMAnalysisService creates a new LLM analysis service
-func NewLLMAnalysisService(client *llm.LLMClient) *LLMAnalysisService {
+func NewLLMAnalysisService(configRepo *repository.ConfigRepository, llmTimeout, llmMaxRetries int) *LLMAnalysisService {
 	return &LLMAnalysisService{
-		client: client,
-		logger: logger.Logger,
+		configRepo:    configRepo,
+		llmTimeout:    llmTimeout,
+		llmMaxRetries: llmMaxRetries,
+		logger:        logger.Logger,
 	}
+}
+
+// getLLMClient creates an LLM client from the active config
+func (s *LLMAnalysisService) getLLMClient() (*llm.LLMClient, error) {
+	if s.configRepo == nil {
+		return nil, fmt.Errorf("config repository not initialized")
+	}
+
+	config, err := s.configRepo.GetActive()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM config: %w", err)
+	}
+
+	apiKey, err := s.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt API key: %w", err)
+	}
+
+	return llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, s.llmTimeout, s.llmMaxRetries), nil
 }
 
 // Analyze performs LLM analysis on a host window with tool call loop
 func (s *LLMAnalysisService) Analyze(ctx context.Context, window *pipeline.HostWindow) (*pipeline.LLMAnalysisOutput, error) {
+	client, err := s.getLLMClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LLM client: %w", err)
+	}
+
 	prompt, err := pipeline.BuildAnalysisPrompt(window)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
 	}
 
-	response, err := s.client.ChatCompletion(ctx, "", prompt, 0.7)
+	response, err := client.ChatCompletion(ctx, "", prompt, 0.7)
 	if err != nil {
 		return nil, fmt.Errorf("LLM call failed: %w", err)
 	}
@@ -58,7 +87,7 @@ func (s *LLMAnalysisService) Analyze(ctx context.Context, window *pipeline.HostW
 
 		prompt = pipeline.BuildToolResultPrompt(prompt, call.Tool, result)
 
-		response, err = s.client.ChatCompletion(ctx, "", prompt, 0.7)
+		response, err = client.ChatCompletion(ctx, "", prompt, 0.7)
 		if err != nil {
 			return nil, fmt.Errorf("LLM call failed: %w", err)
 		}
