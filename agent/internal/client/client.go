@@ -168,6 +168,7 @@ func (c *Client) run() {
 	logger.Info("Command stream established, starting heartbeat...")
 
 	go c.sendHeartbeats()
+	go c.requestRuleSync()
 
 	logger.Info("Waiting for commands...")
 
@@ -234,6 +235,37 @@ func (c *Client) cleanup() {
 	if c.conn != nil {
 		c.conn.Close()
 	}
+}
+
+func (c *Client) requestRuleSync() {
+	time.Sleep(3 * time.Second)
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	logger.Info("requesting rule sync from server...")
+
+	resp, err := c.client.UpdateRules(ctx, &pb.RuleUpdateRequest{Action: "full_sync"})
+	if err != nil {
+		logger.Warn("failed to request rule sync", zap.Error(err))
+		return
+	}
+
+	if len(resp.Rules) == 0 {
+		return
+	}
+
+	for _, rule := range resp.Rules {
+		if err := c.ruleLoader.ApplyUpdate(rule.Action, rule.RuleId, []byte(rule.Content)); err != nil {
+			logger.Error("failed to apply rule", zap.String("rule_id", rule.RuleId), zap.Error(err))
+			continue
+		}
+		if err := c.ruleLoader.SaveRuleToDisk(rule.RuleId, []byte(rule.Content)); err != nil {
+			logger.Error("failed to save rule", zap.String("rule_id", rule.RuleId), zap.Error(err))
+		}
+	}
+
+	logger.Info("rules synced from server", zap.Int("count", len(resp.Rules)))
 }
 
 func (c *Client) Close() {

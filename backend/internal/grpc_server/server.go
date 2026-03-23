@@ -425,12 +425,44 @@ func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.
 }
 
 func (s *GRPCServer) UpdateRules(ctx context.Context, req *pb.RuleUpdateRequest) (*pb.RuleUpdateResponse, error) {
-	logger.Info("rules update",
+	logger.Info("rules update request",
 		zap.String("action", req.Action),
-		zap.Int("rule_count", len(req.Rules)),
-	)
+		zap.Int("rule_count", len(req.Rules)))
 
-	_ = ctx
+	if req.Action == "full_sync" && len(req.Rules) == 0 {
+		if s.sigmaRuleRepo == nil {
+			return &pb.RuleUpdateResponse{Success: false, LoadedCount: 0}, nil
+		}
+
+		rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+		if err != nil {
+			logger.Error("failed to get rules for sync", zap.Error(err))
+			return &pb.RuleUpdateResponse{Success: false, LoadedCount: 0}, nil
+		}
+
+		updates := make([]*pb.RuleUpdate, 0, len(rules))
+		for _, rule := range rules {
+			updates = append(updates, &pb.RuleUpdate{
+				RuleId:  rule.RuleID,
+				Action:  "add",
+				Content: rule.Content,
+			})
+		}
+
+		logger.Info("returning rules for sync", zap.Int("count", len(updates)))
+
+		return &pb.RuleUpdateResponse{
+			Success:     true,
+			LoadedCount: int32(len(updates)),
+			Rules:       updates,
+		}, nil
+	}
+
+	if len(req.Rules) > 0 {
+		logger.Info("acknowledging incremental rule updates, not processing (use detection API for rule management)",
+			zap.Int("count", len(req.Rules)))
+	}
+
 	return &pb.RuleUpdateResponse{
 		Success:     true,
 		LoadedCount: int32(len(req.Rules)),

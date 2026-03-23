@@ -151,6 +151,7 @@ message RuleUpdateRequest {
 message RuleUpdateResponse {
   bool success = 1;
   int32 loaded_count = 2;
+  repeated RuleUpdate rules = 3;
 }
 
 // BlockCommand 阻断指令
