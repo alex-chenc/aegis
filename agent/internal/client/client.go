@@ -266,6 +266,13 @@ func (c *Client) requestRuleSync() {
 	}
 
 	logger.Info("rules synced from server", zap.Int("count", len(resp.Rules)))
+
+	// Reload rules from disk
+	if err := c.ruleLoader.LoadFromDisk(); err != nil {
+		logger.Warn("Failed to reload rules after sync", zap.Error(err))
+	} else {
+		logger.Info("Rules reloaded after sync", zap.Int("count", c.ruleLoader.RuleCount()))
+	}
 }
 
 func (c *Client) Close() {

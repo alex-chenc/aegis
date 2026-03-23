@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"bytes"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
@@ -36,4 +37,25 @@ func ParseRule(content []byte) (*Rule, error) {
 		return nil, fmt.Errorf("sigma rule missing id field")
 	}
 	return &rule, nil
+}
+
+// ParseRules parses multiple Sigma rules from YAML content (separated by ---)
+func ParseRules(content []byte) ([]Rule, error) {
+	var rules []Rule
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+
+	for {
+		var rule Rule
+		if err := decoder.Decode(&rule); err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, fmt.Errorf("failed to parse sigma rule: %w", err)
+		}
+		if rule.ID != "" {
+			rules = append(rules, rule)
+		}
+	}
+
+	return rules, nil
 }

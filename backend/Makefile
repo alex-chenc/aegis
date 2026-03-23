@@ -1,26 +1,14 @@
-# backend/Makefile
+.PHONY: build test clean install
 
-.PHONY: all build clean test docker
-
-BINARY_NAME=backend
-GO_CMD=go
-IMAGE_NAME=aegis-system/backend
-IMAGE_TAG?=latest
-
-all: build
-
+# 静态编译，禁用CGO
 build:
-	@echo "Building Go binary..."
-	$(GO_CMD) build -o $(BINARY_NAME) ./cmd/server/main.go
-
-clean:
-	@echo "Cleaning..."
-	$(GO_CMD) clean
-	rm -f $(BINARY_NAME)
+	CGO_ENABLED=0 GOOS=linux go build -o backend ./cmd/server/main.go
 
 test:
-	@echo "Running tests..."
-	$(GO_CMD) test ./...
+	go test ./...
 
-docker:
-	@./build.sh $(IMAGE_NAME) $(IMAGE_TAG)
+clean:
+	rm -f backend
+
+install:
+	@echo "Backend binary built successfully"

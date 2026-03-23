@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -11,7 +12,13 @@ type CompiledRule struct {
 	MitreID   string
 	Severity  string
 	Logsource Logsource
-	Matchers  map[string][]string
+	Matchers  map[string][]PatternMatcher
+}
+
+type PatternMatcher struct {
+	Pattern string
+	IsRegex bool
+	Regex   *regexp.Regexp
 }
 
 func CompileRule(rule *Rule) *CompiledRule {
@@ -21,7 +28,7 @@ func CompileRule(rule *Rule) *CompiledRule {
 		MitreID:   extractMitreID(rule.Tags),
 		Severity:  rule.Level,
 		Logsource: rule.Logsource,
-		Matchers:  make(map[string][]string),
+		Matchers:  make(map[string][]PatternMatcher),
 	}
 
 	for key, val := range rule.Detection.Selections {
@@ -30,22 +37,49 @@ func CompileRule(rule *Rule) *CompiledRule {
 		}
 		if m, ok := val.(map[string]interface{}); ok {
 			for field, values := range m {
+				fieldKey := normalizeFieldName(field)
+				isRegex := strings.Contains(field, "|re")
+
 				if list, ok := values.([]interface{}); ok {
 					for _, v := range list {
 						if s, ok := v.(string); ok {
-							fieldKey := strings.ToLower(field)
-							cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], s)
+							pm := compilePattern(s, isRegex)
+							cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
 						}
 					}
 				} else if s, ok := values.(string); ok {
-					fieldKey := strings.ToLower(field)
-					cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], s)
+					pm := compilePattern(s, isRegex)
+					cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
 				}
 			}
 		}
 	}
 
 	return cr
+}
+
+func compilePattern(pattern string, isRegex bool) PatternMatcher {
+	pm := PatternMatcher{
+		Pattern: pattern,
+		IsRegex: isRegex,
+	}
+
+	if isRegex {
+		re, err := regexp.Compile(pattern)
+		if err == nil {
+			pm.Regex = re
+		}
+	}
+
+	return pm
+}
+
+func normalizeFieldName(field string) string {
+	// Strip Sigma modifiers like |re, |contains, etc.
+	if idx := strings.Index(field, "|"); idx != -1 {
+		field = field[:idx]
+	}
+	return strings.ToLower(field)
 }
 
 func (cr *CompiledRule) Match(event map[string]interface{}) bool {
@@ -57,9 +91,15 @@ func (cr *CompiledRule) Match(event map[string]interface{}) bool {
 		if eventVal == "" {
 			continue
 		}
-		for _, pattern := range patterns {
-			if strings.Contains(eventVal, strings.ToLower(pattern)) {
-				return true
+		for _, pm := range patterns {
+			if pm.IsRegex && pm.Regex != nil {
+				if pm.Regex.MatchString(eventVal) {
+					return true
+				}
+			} else {
+				if strings.Contains(eventVal, strings.ToLower(pm.Pattern)) {
+					return true
+				}
 			}
 		}
 	}

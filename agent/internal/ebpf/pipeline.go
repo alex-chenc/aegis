@@ -81,6 +81,11 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 	p.metrics.IncrEvents()
 	eventMap := p.buildEventMap(event)
 
+	logger.Info("Event captured",
+		zap.String("type", event.EventType),
+		zap.String("cmd", event.CommandLine),
+		zap.Int("pid", event.PID))
+
 	matches := p.ruleLoader.MatchAll(eventMap)
 	if len(matches) == 0 {
 		return batch
@@ -88,6 +93,11 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 
 	for _, match := range matches {
 		p.metrics.IncrMatched()
+		logger.Info("Rule matched",
+			zap.String("rule_id", match.ID),
+			zap.String("title", match.Title),
+			zap.String("mitre_id", match.MitreID),
+			zap.String("severity", match.Severity))
 		batch = append(batch, p.buildRuntimeEvent(event, match))
 	}
 

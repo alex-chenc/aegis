@@ -52,6 +52,12 @@ func main() {
 	logger.Info("Executor created", zap.Int("max_concurrency", 2))
 
 	ruleLoader := sigma.NewLoader(cfg.RuleDir)
+	logger.Info("Creating rule loader", zap.String("rule_dir", cfg.RuleDir))
+	// Load rules from disk for local operation
+	if err := ruleLoader.LoadFromDisk(); err != nil {
+	logger.Info("Loading rules from disk...")
+		logger.Warn("Failed to load rules from disk", zap.Error(err))
+	}
 	blockerInst := blocker.NewBlocker(cfg.QuarantineDir)
 	toolManager := tools.NewToolManager()
 	metrics := monitor.NewMetrics()

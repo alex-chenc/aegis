@@ -1,9 +1,9 @@
 package sigma
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"fmt"
 	"sync"
 
 	"aegis-agent/internal/logger"
@@ -47,12 +47,14 @@ func (l *Loader) ApplyUpdate(action, ruleID string, content []byte) error {
 
 	switch action {
 	case "add", "update":
-		rule, err := ParseRule(content)
+		rules, err := ParseRules(content)
 		if err != nil {
 			return err
 		}
-		l.rules[ruleID] = rule
-		logger.Info("Sigma rule updated", zap.String("rule_id", ruleID), zap.String("action", action))
+		for _, rule := range rules {
+			l.rules[rule.ID] = &rule
+			logger.Info("Sigma rule added", zap.String("rule_id", rule.ID))
+		}
 	case "delete":
 		delete(l.rules, ruleID)
 		logger.Info("Sigma rule deleted", zap.String("rule_id", ruleID))
@@ -82,5 +84,55 @@ func (l *Loader) SaveRuleToDisk(ruleID string, content []byte) error {
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		return fmt.Errorf("failed to save rule to disk: %w", err)
 	}
+	return nil
+}
+
+// LoadFromDisk loads all rules from the local rule directory
+func (l *Loader) LoadFromDisk() error {
+	if l.ruleDir == "" {
+		return fmt.Errorf("rule directory not set")
+	}
+
+	entries, err := os.ReadDir(l.ruleDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Warn("Rule directory does not exist", zap.String("dir", l.ruleDir))
+			return nil
+		}
+		return fmt.Errorf("failed to read rule directory: %w", err)
+	}
+
+	var rules []Rule
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+
+		path := filepath.Join(l.ruleDir, entry.Name())
+		content, err := os.ReadFile(path)
+		if err != nil {
+			logger.Warn("Failed to read rule file", zap.String("file", path), zap.Error(err))
+			continue
+		}
+
+		parsed_rules, err := ParseRules(content)
+		if err != nil {
+			logger.Warn("Failed to parse rule file", zap.String("file", path), zap.Error(err))
+			continue
+		}
+		for _, r := range parsed_rules {
+			rules = append(rules, r)
+		}
+	}
+
+	if len(rules) > 0 {
+		return l.LoadAll(rules)
+	}
+
+	logger.Info("No rules found on disk")
 	return nil
 }

@@ -430,11 +430,14 @@ func (s *GRPCServer) UpdateRules(ctx context.Context, req *pb.RuleUpdateRequest)
 		zap.Int("rule_count", len(req.Rules)))
 
 	if req.Action == "full_sync" && len(req.Rules) == 0 {
+		logger.Info("processing full_sync request")
 		if s.sigmaRuleRepo == nil {
+			logger.Warn("sigmaRuleRepo is nil, cannot return rules")
 			return &pb.RuleUpdateResponse{Success: false, LoadedCount: 0}, nil
 		}
 
 		rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+			logger.Info("querying active rules from database")
 		if err != nil {
 			logger.Error("failed to get rules for sync", zap.Error(err))
 			return &pb.RuleUpdateResponse{Success: false, LoadedCount: 0}, nil
@@ -730,12 +733,14 @@ func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 	}
 
 	if s.sigmaRuleRepo == nil {
+			logger.Warn("sigmaRuleRepo is nil, cannot return rules")
 		logger.Warn("sigma rule repo not initialized")
 		return
 	}
 
 	// Get all active/experimental rules
 	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+			logger.Info("querying active rules from database")
 	if err != nil {
 		logger.Error("failed to get rules for push", zap.Error(err))
 		return
@@ -760,6 +765,12 @@ func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 	agentConn, ok := conn.(*AgentConnection)
 	if !ok {
 		logger.Error("failed to cast connection to AgentConnection",
+			zap.String("host_id", hostID.String()))
+		return
+	}
+
+	if agentConn.Client == nil {
+		logger.Warn("agent client not initialized, cannot push rules",
 			zap.String("host_id", hostID.String()))
 		return
 	}
