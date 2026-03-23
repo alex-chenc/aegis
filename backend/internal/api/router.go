@@ -162,9 +162,13 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			detection.GET("/block-policies", r.detectionHandler.ListBlockPolicies)
 			detection.PUT("/block-policies/:mitre_id", r.detectionHandler.UpdateBlockPolicy)
 
-			detection.GET("/rules", r.detectionHandler.ListRules)
-			detection.GET("/rules/:id", r.detectionHandler.GetRule)
-			detection.PUT("/rules/:id/status", r.detectionHandler.UpdateRuleStatus)
+			detectionRules := detection.Group("/rules")
+			{
+				detectionRules.POST("/import", r.detectionHandler.ImportRules)
+				detectionRules.GET("", r.detectionHandler.ListRules)
+				detectionRules.GET("/:id", r.detectionHandler.GetRule)
+				detectionRules.PUT("/:id/status", r.detectionHandler.UpdateRuleStatus)
+			}
 
 			detection.GET("/tool-calls", r.detectionHandler.ListToolCalls)
 

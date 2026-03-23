@@ -1,15 +1,21 @@
 package handler
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"aegis-system/internal/model"
 	"aegis-system/internal/repository"
 	"aegis-system/internal/service"
 	"aegis-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 type DetectionHandler struct {
@@ -252,4 +258,118 @@ func (h *DetectionHandler) GetAlertTrend(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": trend})
+}
+
+func (h *DetectionHandler) ImportRules(c *gin.Context) {
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file uploaded"})
+		return
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	rules := make([]model.SigmaRule, 0)
+
+	for {
+		var rawRule struct {
+			Title       string                 `yaml:"title"`
+			ID          string                 `yaml:"id"`
+			Status      string                 `yaml:"status"`
+			Description string                 `yaml:"description"`
+			Level       string                 `yaml:"level"`
+			Tags        []string               `yaml:"tags"`
+			Logsource   map[string]interface{} `yaml:"logsource"`
+			Detection   map[string]interface{} `yaml:"detection"`
+		}
+
+		if err := decoder.Decode(&rawRule); err == io.EOF {
+			break
+		} else if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to parse yaml: %v", err)})
+			return
+		}
+
+		if rawRule.ID == "" {
+			if rawRule.Title == "" && rawRule.Description == "" && rawRule.Level == "" && len(rawRule.Tags) == 0 {
+				continue
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "rule missing id field"})
+			return
+		}
+
+		mitreID := ""
+		for _, tag := range rawRule.Tags {
+			if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
+				rawMitre := strings.TrimPrefix(tag, "attack.")
+				rawMitre = strings.TrimPrefix(rawMitre, "t")
+				rawMitre = strings.TrimPrefix(rawMitre, "T")
+				mitreID = "T" + rawMitre
+				break
+			}
+		}
+
+		// Marshal the complete rule back to YAML to preserve structure
+		ruleContent := map[string]interface{}{
+			"title":       rawRule.Title,
+			"id":          rawRule.ID,
+			"status":      rawRule.Status,
+			"description": rawRule.Description,
+			"level":       rawRule.Level,
+			"tags":        rawRule.Tags,
+		}
+		if rawRule.Logsource != nil {
+			ruleContent["logsource"] = rawRule.Logsource
+		}
+		if rawRule.Detection != nil {
+			ruleContent["detection"] = rawRule.Detection
+		}
+
+		ruleYaml, err := yaml.Marshal(ruleContent)
+		if err != nil {
+			logger.Warn("failed to marshal rule yaml", zap.Error(err))
+			ruleYaml = []byte{}
+		}
+
+		rule := model.SigmaRule{
+			RuleID:      rawRule.ID,
+			Title:       rawRule.Title,
+			Description: rawRule.Description,
+			Content:     string(ruleYaml),
+			Status:      "experimental",
+			MitreID:     mitreID,
+			Severity:    rawRule.Level,
+			GeneratedBy: "import",
+			Version:     "1.0",
+		}
+		rules = append(rules, rule)
+	}
+
+	if len(rules) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no valid rules found in file"})
+		return
+	}
+
+	imported := 0
+	for _, rule := range rules {
+		r := rule
+		if err := h.sigmaRuleRepo.Create(&r); err != nil {
+			logger.Error("failed to create rule",
+				zap.String("rule_id", rule.RuleID),
+				zap.Error(err))
+			continue
+		}
+		imported++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total":    len(rules),
+		"imported": imported,
+	})
 }
