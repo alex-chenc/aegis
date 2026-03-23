@@ -28,6 +28,7 @@ type GRPCServer struct {
 	server             *grpc.Server
 	hostRepo           *repository.HostRepository
 	taskLogRepo        *repository.TaskLogRepository
+	sigmaRuleRepo      *repository.SigmaRuleRepository
 	redisClient        *storage.RedisClient
 	kafkaProducer      *queue.KafkaProducer
 	agentConnections   sync.Map
@@ -55,6 +56,10 @@ func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.Red
 
 func (s *GRPCServer) SetTaskLogRepo(taskLogRepo *repository.TaskLogRepository) {
 	s.taskLogRepo = taskLogRepo
+}
+
+func (s *GRPCServer) SetSigmaRuleRepo(repo *repository.SigmaRuleRepository) {
+	s.sigmaRuleRepo = repo
 }
 
 func (s *GRPCServer) SetTaskResultCallback(callback TaskResultCallback) {
@@ -178,6 +183,8 @@ func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb
 		zap.String("ip", req.AssetInfo.IpAddress),
 		zap.String("hostname", req.AssetInfo.Hostname),
 	)
+
+	go s.pushRulesToAgent(hostID)
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -662,4 +669,85 @@ func (s *GRPCServer) parseSoftwareList(output string) ([]model.SoftwareInfo, err
 		zap.Int("parsed_count", len(software)))
 
 	return software, nil
+}
+
+func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
+	// Retry loop to wait for bidirectional stream establishment
+	maxRetries := 5
+	retryDelay := 1 * time.Second
+
+	var conn interface{}
+	var ok bool
+
+	for i := 0; i < maxRetries; i++ {
+		conn, ok = s.agentConnections.Load(hostID)
+		if ok {
+			break
+		}
+		logger.Debug("waiting for agent connection",
+			zap.String("host_id", hostID.String()),
+			zap.Int("attempt", i+1),
+			zap.Int("max_retries", maxRetries))
+		time.Sleep(retryDelay)
+	}
+
+	if !ok {
+		logger.Warn("agent connection not ready for rule push after retries",
+			zap.String("host_id", hostID.String()))
+		return
+	}
+
+	if s.sigmaRuleRepo == nil {
+		logger.Warn("sigma rule repo not initialized")
+		return
+	}
+
+	// Get all active/experimental rules
+	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+	if err != nil {
+		logger.Error("failed to get rules for push", zap.Error(err))
+		return
+	}
+
+	if len(rules) == 0 {
+		logger.Info("no active rules to push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	// Build update request
+	updates := make([]*pb.RuleUpdate, 0, len(rules))
+	for _, rule := range rules {
+		updates = append(updates, &pb.RuleUpdate{
+			RuleId:  rule.RuleID,
+			Action:  "add",
+			Content: rule.Content,
+		})
+	}
+
+	// Send to Agent with safe type assertion
+	agentConn, ok := conn.(*AgentConnection)
+	if !ok {
+		logger.Error("failed to cast connection to AgentConnection",
+			zap.String("host_id", hostID.String()))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := agentConn.Client.UpdateRules(ctx, &pb.RuleUpdateRequest{
+		Action: "full_sync",
+		Rules:  updates,
+	})
+
+	if err != nil {
+		logger.Error("failed to push rules to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
+	} else {
+		logger.Info("rules pushed to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Int("rule_count", len(rules)),
+			zap.Int32("loaded_count", resp.LoadedCount))
+	}
 }
