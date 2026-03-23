@@ -161,6 +161,7 @@ func main() {
 	// Set gRPC server on task service for command dispatch
 	grpcServer.SetTaskLogRepo(taskLogRepo)
 	grpcServer.SetTaskResultCallback(taskService.ProcessTaskResult)
+	grpcServer.SetSigmaRuleRepo(sigmaRuleRepo)
 
 	taskService.SetGRPCServer(grpcServer)
 	taskService.SetScriptGenService(scriptGenService)
