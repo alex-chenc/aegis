@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aegis-system/internal/model"
+	"aegis-system/internal/queue"
 	"aegis-system/internal/repository"
 	"aegis-system/internal/storage"
 	pb "aegis-system/pkg/api/v1"
@@ -28,6 +29,7 @@ type GRPCServer struct {
 	hostRepo           *repository.HostRepository
 	taskLogRepo        *repository.TaskLogRepository
 	redisClient        *storage.RedisClient
+	kafkaProducer      *queue.KafkaProducer
 	agentConnections   sync.Map
 	port               int
 	taskResultCallback TaskResultCallback
@@ -42,11 +44,12 @@ type AgentConnection struct {
 	Inbox  chan *pb.CommandExecute
 }
 
-func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, port int) *GRPCServer {
+func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, kafkaProducer *queue.KafkaProducer, port int) *GRPCServer {
 	return &GRPCServer{
-		hostRepo:    hostRepo,
-		redisClient: redisClient,
-		port:        port,
+		hostRepo:      hostRepo,
+		redisClient:   redisClient,
+		kafkaProducer: kafkaProducer,
+		port:          port,
 	}
 }
 
@@ -344,6 +347,23 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		zap.String("host_id", req.HostId),
 		zap.Int("event_count", len(req.Events)),
 	)
+
+	if s.kafkaProducer == nil {
+		logger.Warn("kafka producer not initialized, events will not be processed")
+		return &pb.ReportEventResponse{
+			Success:       true,
+			ReceivedCount: int32(len(req.Events)),
+		}, nil
+	}
+
+	for _, event := range req.Events {
+		if err := s.kafkaProducer.SendRawEvent(ctx, req.HostId, event); err != nil {
+			logger.Error("failed to send event to kafka",
+				zap.String("event_id", event.EventId),
+				zap.Error(err),
+			)
+		}
+	}
 
 	return &pb.ReportEventResponse{
 		Success:       true,

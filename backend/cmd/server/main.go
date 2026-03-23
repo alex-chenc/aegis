@@ -151,7 +151,7 @@ func main() {
 	)
 
 	// Initialize gRPC server
-	grpcServer := grpc_server.NewGRPCServer(hostRepo, redisClient, cfg.Server.GRPCPort)
+	grpcServer := grpc_server.NewGRPCServer(hostRepo, redisClient, kafkaProducer, cfg.Server.GRPCPort)
 	if err := grpcServer.Start(); err != nil {
 		logger.Fatal("failed to start gRPC server", zap.Error(err))
 	}
