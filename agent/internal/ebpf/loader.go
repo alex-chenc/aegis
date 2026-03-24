@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -185,18 +186,42 @@ func (l *Loader) processExecEvent(data []byte) {
 		return
 	}
 
+	filename := bytesToString(e.Filename[:])
+	args := bytesToString(e.Args[:])
+	cmdLine := filename + " " + args
+	comm := bytesToString(e.Comm[:])
+
+	// If eBPF failed to read cmdline (empty), try /proc
+	emptyCmd := (cmdLine == " " || cmdLine == "" || filename == "")
+	if emptyCmd {
+		procPath := fmt.Sprintf("/proc/%d/cmdline", e.Pid)
+		if procCmdline, err := os.ReadFile(procPath); err == nil {
+			cmdLine = string(bytes.ReplaceAll(procCmdline, []byte{0}, []byte(" ")))
+			cmdLine = strings.TrimSpace(cmdLine)
+			logger.Info("Read cmdline from /proc",
+				zap.Int("pid", int(e.Pid)),
+				zap.String("comm", comm),
+				zap.String("cmdline", cmdLine))
+		} else {
+			logger.Info("Failed to read /proc cmdline",
+				zap.Int("pid", int(e.Pid)),
+				zap.String("comm", comm),
+				zap.Error(err))
+		}
+	}
+
 	event := Event{
 		EventID:     l.nextEventID(),
 		HostID:      l.hostID,
 		Hostname:    l.hostname,
 		Timestamp:   time.Now().UnixMilli(),
 		EventType:   "process_exec",
-		ProcessName: bytesToString(e.Comm[:]),
+		ProcessName: comm,
 		PID:         int(e.Pid),
 		PPID:        int(e.Ppid),
 		UID:         int(e.Uid),
-		CommandLine: bytesToString(e.Filename[:]) + " " + bytesToString(e.Args[:]),
-		FilePath:    bytesToString(e.Filename[:]),
+		CommandLine: cmdLine,
+		FilePath:    filename,
 	}
 
 	l.sendEvent(event)

@@ -8,13 +8,13 @@ import (
 
 // RuntimeEvent represents a security event from Agent
 type RuntimeEvent struct {
-	EventType     string    `json:"event_type"`
-	PID           int       `json:"pid"`
-	CommandLine   string    `json:"command_line"`
-	MatchedRuleID string    `json:"matched_rule_id"`
-	MitreID       string    `json:"mitre_id"`
-	Severity      string    `json:"severity"`
-	Timestamp     time.Time `json:"timestamp"`
+	EventType     string `json:"event_type"`
+	PID           int    `json:"pid"`
+	CommandLine   string `json:"command_line"`
+	MatchedRuleID string `json:"matched_rule_id"`
+	MitreID       string `json:"mitre_id"`
+	Severity      string `json:"severity"`
+	Timestamp     int64  `json:"timestamp"` // Unix millisecond timestamp from agent
 }
 
 // HostWindow holds events for a single host within a time window

@@ -10,7 +10,7 @@ type Alert struct {
 	ID            uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	AlertID       string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"alert_id"`
 	HostID        uuid.UUID `gorm:"type:uuid;not null;index" json:"host_id"`
-	PID           int       `gorm:"not null" json:"pid"`
+	PID           int       `gorm:"column:pid;not null" json:"pid"`
 	MitreID       string    `gorm:"type:varchar(20);not null;index" json:"mitre_id"`
 	MitreName     string    `gorm:"type:varchar(100)" json:"mitre_name"`
 	Severity      string    `gorm:"type:varchar(20);not null;default:'medium'" json:"severity"`

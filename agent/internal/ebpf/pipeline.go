@@ -105,15 +105,23 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 }
 
 func (p *Pipeline) buildEventMap(event Event) map[string]any {
+	cmdLine := event.CommandLine
+	if cmdLine == "" || cmdLine == " " {
+		cmdLine = event.ProcessName
+	}
+	if event.FilePath != "" && cmdLine == event.ProcessName {
+		cmdLine = event.FilePath + " " + cmdLine
+	}
+
 	eventMap := map[string]any{
 		"event_type":   event.EventType,
 		"pid":          event.PID,
 		"ppid":         event.PPID,
 		"uid":          event.UID,
 		"process_name": event.ProcessName,
-		"commandline":  event.CommandLine,
-		"image":        event.CommandLine,
-		"exe":          event.CommandLine,
+		"commandline":  cmdLine,
+		"image":        cmdLine,
+		"exe":          cmdLine,
 		"comm":         event.ProcessName,
 		"file_path":    event.FilePath,
 		"remote_addr":  event.RemoteAddr,
