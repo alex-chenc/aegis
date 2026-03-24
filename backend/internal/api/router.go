@@ -162,6 +162,11 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			detection.GET("/block-policies", r.detectionHandler.ListBlockPolicies)
 			detection.PUT("/block-policies/:mitre_id", r.detectionHandler.UpdateBlockPolicy)
 
+			detection.GET("/attack-matrix", r.detectionHandler.GetAttackMatrix)
+
+			detection.POST("/llm/aggregate", r.detectionHandler.StartLLMAggregation)
+			detection.GET("/llm/aggregate/:id", r.detectionHandler.GetLLMAggregationStatus)
+
 			detectionRules := detection.Group("/rules")
 			{
 				detectionRules.POST("/import", r.detectionHandler.ImportRules)

@@ -16,12 +16,18 @@ type LLMAnalysisOutput struct {
 
 // AlertPayload represents an alert from LLM analysis
 type AlertPayload struct {
-	MitreID     string `json:"mitre_id"`
-	Severity    string `json:"severity"`
-	PID         int    `json:"pid"`
-	Description string `json:"description"`
-	BlockAction string `json:"block_action"`
-	BlockTarget string `json:"block_target"`
+	RuleID           string `json:"rule_id"`
+	RuleTitle        string `json:"rule_title"`
+	MitreID          string `json:"mitre_id"`
+	MitreName        string `json:"mitre_name"`
+	Severity         string `json:"severity"`
+	PID              int    `json:"pid"`
+	Description      string `json:"description"`
+	LLMSummary       string `json:"llm_summary"`
+	DisposalStrategy string `json:"disposal_strategy"`
+	BlockAction      string `json:"block_action"`
+	BlockTarget      string `json:"block_target"`
+	JudgmentSource   string `json:"judgment_source"`
 }
 
 // ToolCallPayload represents a tool call request from LLM

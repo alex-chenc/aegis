@@ -12,6 +12,17 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	StatusPending  = "pending"
+	StatusResolved = "resolved"
+	BlockPending   = "pending"
+	BlockBlocking  = "blocking"
+	BlockSuccess   = "success"
+	BlockFailed    = "failed"
+	JudgmentSystem = "system"
+	JudgmentAI     = "ai"
+)
+
 type AlertService struct {
 	alertRepo       *repository.AlertRepository
 	blockPolicyRepo *repository.BlockPolicyRepository
@@ -30,8 +41,8 @@ func NewAlertService(
 	}
 }
 
-func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, mitreID, mitreName, severity, description string) (*model.Alert, error) {
-	dedupeKey := fmt.Sprintf("%s:%d:%s", hostID.String(), pid, mitreID)
+func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, ruleID, ruleTitle, mitreID, mitreName, severity, description string) (*model.Alert, error) {
+	dedupeKey := fmt.Sprintf("%s:%d:%s", hostID.String(), pid, ruleID)
 
 	existing, err := s.alertRepo.FindByDedupeKey(dedupeKey)
 	if err == nil && existing != nil {
@@ -44,16 +55,19 @@ func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, mitreID, mitreN
 	}
 
 	alert := &model.Alert{
-		AlertID:     "ALT-" + uuid.New().String()[:8],
-		HostID:      hostID,
-		PID:         pid,
-		MitreID:     mitreID,
-		MitreName:   mitreName,
-		Severity:    severity,
-		Description: description,
-		DedupeKey:   dedupeKey,
-		HitCount:    1,
-		Status:      "active",
+		AlertID:        "ALT-" + uuid.New().String()[:8],
+		HostID:         hostID,
+		PID:            pid,
+		MitreID:        mitreID,
+		MitreName:      mitreName,
+		Severity:       severity,
+		Description:    description,
+		DedupeKey:      dedupeKey,
+		HitCount:       1,
+		Status:         StatusPending,
+		JudgmentSource: JudgmentSystem,
+		RuleID:         ruleID,
+		RuleTitle:      ruleTitle,
 	}
 
 	if err := s.alertRepo.Create(alert); err != nil {
@@ -63,6 +77,7 @@ func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, mitreID, mitreN
 	logger.Info("alert created",
 		zap.String("alert_id", alert.AlertID),
 		zap.String("mitre_id", mitreID),
+		zap.String("rule_id", ruleID),
 		zap.Int("pid", pid),
 	)
 
@@ -82,6 +97,8 @@ func (s *AlertService) CheckAndAutoBlock(alert *model.Alert) error {
 	)
 
 	alert.AutoBlocked = true
+	blockStatus := BlockBlocking
+	alert.BlockStatus = &blockStatus
 	if err := s.alertRepo.Update(alert); err != nil {
 		return err
 	}
@@ -90,21 +107,27 @@ func (s *AlertService) CheckAndAutoBlock(alert *model.Alert) error {
 		BlockID:  "BLK-" + uuid.New().String()[:8],
 		AlertID:  &alert.ID,
 		HostID:   alert.HostID,
-		Action:   "kill_process",
+		Action:   policy.Action,
 		Target:   fmt.Sprintf("%d", alert.PID),
-		IssuedBy: "llm",
+		IssuedBy: "auto",
 	}
 
 	return s.blockRepo.Create(record)
 }
 
-func (s *AlertService) ManualBlock(alertID string) (*model.BlockRecord, error) {
+func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockRecord, error) {
 	alert, err := s.alertRepo.FindByID(alertID)
 	if err != nil {
 		return nil, err
 	}
 
+	if action == "" {
+		action = "kill_process"
+	}
+
 	alert.ManualBlocked = true
+	blockStatus := BlockBlocking
+	alert.BlockStatus = &blockStatus
 	if err := s.alertRepo.Update(alert); err != nil {
 		return nil, err
 	}
@@ -113,7 +136,7 @@ func (s *AlertService) ManualBlock(alertID string) (*model.BlockRecord, error) {
 		BlockID:  "BLK-" + uuid.New().String()[:8],
 		AlertID:  &alert.ID,
 		HostID:   alert.HostID,
-		Action:   "kill_process",
+		Action:   action,
 		Target:   fmt.Sprintf("%d", alert.PID),
 		IssuedBy: "manual",
 	}
@@ -123,4 +146,16 @@ func (s *AlertService) ManualBlock(alertID string) (*model.BlockRecord, error) {
 	}
 
 	return record, nil
+}
+
+func (s *AlertService) Resolve(alertID string) error {
+	return s.alertRepo.Resolve(alertID)
+}
+
+func (s *AlertService) UpdateBlockStatus(alertID string, status string, message string) error {
+	return s.alertRepo.UpdateBlockStatus(alertID, status, message)
+}
+
+func (s *AlertService) MarkAIJudged(alertID string, disposalStrategy string) error {
+	return s.alertRepo.MarkAIJudged(alertID, disposalStrategy)
 }

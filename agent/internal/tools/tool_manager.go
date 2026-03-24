@@ -38,6 +38,18 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			return nil, fmt.Errorf("invalid file_path parameter")
 		}
 		return m.GetFileInfo(filePath)
+	case "read_file_content":
+		filePath, ok := params["file_path"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid file_path parameter")
+		}
+		maxSize := int64(1024 * 1024)
+		if ms, ok := params["max_size"]; ok {
+			if msInt, err := toInt64(ms); err == nil {
+				maxSize = msInt
+			}
+		}
+		return m.ReadFileContent(filePath, maxSize)
 	case "get_user_info":
 		username, ok := params["username"].(string)
 		if !ok {
@@ -52,6 +64,21 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 		return m.ExecuteCommand(command)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", tool)
+	}
+}
+
+func toInt64(value interface{}) (int64, error) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), nil
+	case int:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	default:
+		return 0, fmt.Errorf("invalid numeric parameter")
 	}
 }
 

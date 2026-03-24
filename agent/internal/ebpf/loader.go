@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +43,7 @@ func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
 	}, nil
 }
 
-// LoadAll loads all eBPF programs
+// LoadAll loads eBPF programs for process events only (exec/fork/exit)
 func (l *Loader) LoadAll() error {
 	programs := []struct {
 		name       string
@@ -55,11 +54,6 @@ func (l *Loader) LoadAll() error {
 		{"execve", "sys_enter_execve", "syscalls", "exec_events"},
 		{"fork", "sched_process_fork", "sched", "fork_events"},
 		{"exit", "sched_process_exit", "sched", "exit_events"},
-		{"openat", "sys_enter_openat", "syscalls", "file_events"},
-		{"connect", "sys_enter_connect", "syscalls", "conn_events"},
-		{"setuid", "sys_enter_setuid", "syscalls", "priv_events"},
-		{"setgid", "sys_enter_setgid", "syscalls", "priv_events"},
-		{"capset", "sys_enter_capset", "syscalls", "cap_events"},
 	}
 
 	for _, prog := range programs {
@@ -169,14 +163,6 @@ func (l *Loader) processEvent(name string, data []byte) {
 		l.processForkEvent(data)
 	case "exit":
 		l.processExitEvent(data)
-	case "openat":
-		l.processFileEvent(data)
-	case "connect":
-		l.processConnEvent(data)
-	case "setuid", "setgid":
-		l.processPrivEvent(name, data)
-	case "capset":
-		l.processCapEvent(data)
 	}
 }
 
@@ -265,99 +251,6 @@ func (l *Loader) processExitEvent(data []byte) {
 		PID:         int(e.Pid),
 		UID:         int(e.Uid),
 		CommandLine: fmt.Sprintf("exit code %d", e.ExitCode),
-	}
-
-	l.sendEvent(event)
-}
-
-func (l *Loader) processFileEvent(data []byte) {
-	var e FileEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
-		return
-	}
-
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "file_access",
-		ProcessName: bytesToString(e.Comm[:]),
-		PID:         int(e.Pid),
-		UID:         int(e.Uid),
-		FilePath:    bytesToString(e.Filename[:]),
-		CommandLine: fmt.Sprintf("flags=%d", e.Flags),
-	}
-
-	l.sendEvent(event)
-}
-
-func (l *Loader) processConnEvent(data []byte) {
-	var e ConnEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
-		return
-	}
-
-	daddr := net.IP(e.Daddr[:])
-
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "network_connect",
-		ProcessName: bytesToString(e.Comm[:]),
-		PID:         int(e.Pid),
-		UID:         int(e.Uid),
-		RemoteAddr:  fmt.Sprintf("%s:%d", daddr.String(), e.Dport),
-		CommandLine: fmt.Sprintf("connect to %s:%d", daddr.String(), e.Dport),
-	}
-
-	l.sendEvent(event)
-}
-
-func (l *Loader) processPrivEvent(name string, data []byte) {
-	var e PrivEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
-		return
-	}
-
-	syscallName := bytesToString(e.Syscall[:])
-	if syscallName == "" {
-		syscallName = name
-	}
-
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "privilege_change",
-		ProcessName: bytesToString(e.Comm[:]),
-		PID:         int(e.Pid),
-		UID:         int(e.Uid),
-		CommandLine: fmt.Sprintf("%s target_uid=%d", syscallName, e.TargetUID),
-	}
-
-	l.sendEvent(event)
-}
-
-func (l *Loader) processCapEvent(data []byte) {
-	var e CapEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
-		return
-	}
-
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "privilege_change",
-		ProcessName: bytesToString(e.Comm[:]),
-		PID:         int(e.Pid),
-		UID:         int(e.Uid),
-		CommandLine: fmt.Sprintf("capset effective=%x permitted=%x", e.CapEffective, e.CapPermitted),
 	}
 
 	l.sendEvent(event)

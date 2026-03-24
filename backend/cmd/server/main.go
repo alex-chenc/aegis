@@ -89,6 +89,7 @@ func main() {
 	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 	sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
 	toolCallRepo := repository.NewToolCallRepository(db)
+	llmAggregationRepo := repository.NewLLMAggregationRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -179,7 +180,7 @@ func main() {
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
-	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService)
+	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, configRepo)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)

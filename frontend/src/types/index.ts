@@ -64,15 +64,22 @@ export interface Alert {
   host_id: string
   hostname?: string
   pid: number
+  rule_id?: string
+  rule_title?: string
   mitre_id: string
   mitre_name?: string
-  severity: 'Critical' | 'High' | 'Medium' | 'Low'
+  severity: 'critical' | 'high' | 'medium' | 'low'
   description?: string
   llm_summary?: string
+  llm_disposal_strategy?: string
   hit_count: number
   auto_blocked: boolean
   manual_blocked: boolean
-  status: 'active' | 'resolved'
+  auto_dispose: boolean
+  status: 'pending' | 'resolved'
+  judgment_source: 'system' | 'ai'
+  block_status?: 'pending' | 'blocking' | 'success' | 'failed'
+  block_message?: string
   first_seen_at: string
   last_seen_at: string
   created_at: string
@@ -84,6 +91,7 @@ export interface BlockPolicy {
   mitre_name?: string
   enabled: boolean
   auto_block: boolean
+  auto_dispose: boolean
   action: string
   updated_at: string
 }
@@ -126,4 +134,68 @@ export interface BlockRecord {
   message?: string
   issued_by: string
   created_at: string
+}
+
+export interface AttackTechnique {
+  id: string
+  name: string
+  alert_count: number
+}
+
+export interface AttackTactic {
+  id: string
+  name: string
+  techniques: AttackTechnique[]
+}
+
+export interface AttackMatrix {
+  tactics: AttackTactic[]
+}
+
+export const SeverityLabels: Record<string, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危'
+}
+
+export const AlertStatusLabels: Record<string, string> = {
+  pending: '待处置',
+  resolved: '已处置'
+}
+
+export const BlockStatusLabels: Record<string, string> = {
+  pending: '待阻断',
+  blocking: '阻断中',
+  success: '阻断成功',
+  failed: '阻断失败'
+}
+
+export const JudgmentSourceLabels: Record<string, string> = {
+  system: '系统判定',
+  ai: 'AI判定'
+}
+
+export const RuleStatusLabels: Record<string, string> = {
+  pending: '待审核',
+  experimental: '实验性',
+  active: '已激活',
+  disabled: '已禁用'
+}
+
+export interface LLMAggregation {
+  id: string
+  aggregation_id: string
+  start_time: string
+  end_time: string
+  host_ids: string[]
+  event_count: number
+  alert_count: number
+  ai_judged_count: number
+  auto_dispose_count: number
+  llm_response?: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  error?: string
+  created_at: string
+  completed_at?: string
 }

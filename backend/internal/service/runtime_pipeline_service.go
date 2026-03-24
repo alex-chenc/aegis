@@ -135,8 +135,10 @@ func (s *RuntimePipelineService) onWindowFlush(window *pipeline.HostWindow) {
 		createdAlert, err := s.alertService.UpsertByDedupe(
 			hostUUID,
 			alert.PID,
+			alert.RuleID,
+			alert.RuleTitle,
 			alert.MitreID,
-			"", // mitre_name - will be filled by LLM
+			alert.MitreName,
 			alert.Severity,
 			alert.Description,
 		)

@@ -1,5 +1,5 @@
 import request from './index'
-import type { Alert, BlockPolicy, SigmaRule, BlockRecord, ThreatStatistics, AlertTrendPoint } from '@/types'
+import type { Alert, BlockPolicy, SigmaRule, BlockRecord, ThreatStatistics, AlertTrendPoint, AttackMatrix, LLMAggregation } from '@/types'
 
 export function getAlerts(params: any): Promise<{ data: Alert[]; total: number }> {
   return request.get('/detection/alerts', { params })
@@ -13,8 +13,8 @@ export function resolveAlert(alertId: string): Promise<void> {
   return request.post(`/detection/alerts/${alertId}/resolve`)
 }
 
-export function blockAlert(alertId: string): Promise<BlockRecord> {
-  return request.post(`/detection/alerts/${alertId}/block`)
+export function blockAlert(alertId: string, action?: string): Promise<BlockRecord> {
+  return request.post(`/detection/alerts/${alertId}/block`, { action: action || 'kill_process' })
 }
 
 export function getBlockPolicies(): Promise<BlockPolicy[]> {
@@ -43,4 +43,21 @@ export function getThreatStatistics(): Promise<ThreatStatistics> {
 
 export function getAlertTrend(hours: number = 24): Promise<AlertTrendPoint[]> {
   return request.get('/detection/statistics/alert-trend', { params: { hours } })
+}
+
+export function getAttackMatrix(): Promise<AttackMatrix> {
+  return request.get('/detection/attack-matrix')
+}
+
+export function startLLMAggregation(startTime: string, endTime: string, hostIds?: string[], autoDispose?: boolean): Promise<LLMAggregation> {
+  return request.post('/detection/llm/aggregate', {
+    start_time: startTime,
+    end_time: endTime,
+    host_ids: hostIds || [],
+    auto_dispose: autoDispose || false
+  })
+}
+
+export function getLLMAggregationStatus(aggregationId: string): Promise<LLMAggregation> {
+  return request.get(`/detection/llm/aggregate/${aggregationId}`)
 }

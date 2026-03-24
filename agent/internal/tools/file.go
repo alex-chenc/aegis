@@ -3,10 +3,13 @@ package tools
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -21,6 +24,26 @@ type FileInfo struct {
 	MD5         string `json:"md5"`
 	IsSUID      bool   `json:"is_suid"`
 	IsSGID      bool   `json:"is_sgid"`
+}
+
+type FileContent struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	ReadSize  int64  `json:"read_size"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+}
+
+var sensitivePaths = []string{
+	"/etc/shadow",
+	"/etc/gshadow",
+	"/etc/ssh",
+	"/root/.ssh",
+	"/var/lib/postgresql",
+	"/var/lib/mysql",
+	"/var/lib/redis",
+	"/var/lib/mongodb",
+	"/home",
 }
 
 func (m *ToolManager) GetFileInfo(filePath string) (*FileInfo, error) {
@@ -52,6 +75,62 @@ func (m *ToolManager) GetFileInfo(filePath string) (*FileInfo, error) {
 		IsSUID:      mode&os.ModeSetuid != 0,
 		IsSGID:      mode&os.ModeSetgid != 0,
 	}, nil
+}
+
+func (m *ToolManager) ReadFileContent(filePath string, maxSize int64) (*FileContent, error) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if isSensitivePath(absPath) {
+		return nil, errors.New("access denied: sensitive path")
+	}
+
+	stat, err := os.Stat(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if stat.IsDir() {
+		return nil, errors.New("cannot read directory")
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	readSize := stat.Size()
+	truncated := false
+	if readSize > maxSize {
+		readSize = maxSize
+		truncated = true
+	}
+
+	buf := make([]byte, readSize)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	return &FileContent{
+		Path:      filePath,
+		Size:      stat.Size(),
+		ReadSize:  int64(n),
+		Content:   string(buf[:n]),
+		Truncated: truncated,
+	}, nil
+}
+
+func isSensitivePath(path string) bool {
+	for _, sp := range sensitivePaths {
+		if strings.HasPrefix(path, sp) {
+			return true
+		}
+	}
+	return false
 }
 
 func fileMD5(path string) string {

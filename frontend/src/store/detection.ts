@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import * as api from '@/api/detection'
-import type { Alert, BlockPolicy, SigmaRule, ThreatStatistics, AlertTrendPoint } from '@/types'
+import type { Alert, BlockPolicy, SigmaRule, ThreatStatistics, AlertTrendPoint, AttackMatrix } from '@/types'
 
 export const useDetectionStore = defineStore('detection', {
   state: () => ({
@@ -13,7 +13,8 @@ export const useDetectionStore = defineStore('detection', {
     ruleTotal: 0,
     ruleLoading: false,
     threatStats: null as ThreatStatistics | null,
-    alertTrend: [] as AlertTrendPoint[]
+    alertTrend: [] as AlertTrendPoint[],
+    attackMatrix: null as AttackMatrix | null
   }),
   actions: {
     async fetchAlerts(params: any = {}) {
@@ -40,6 +41,8 @@ export const useDetectionStore = defineStore('detection', {
       if (p) {
         if (data.enabled !== undefined) p.enabled = data.enabled
         if (data.auto_block !== undefined) p.auto_block = data.auto_block
+        if (data.auto_dispose !== undefined) p.auto_dispose = data.auto_dispose
+        if (data.action !== undefined) p.action = data.action
       }
     },
     async fetchRules(params: any = {}) {
@@ -62,6 +65,9 @@ export const useDetectionStore = defineStore('detection', {
     },
     async fetchAlertTrend(hours: number = 24) {
       this.alertTrend = await api.getAlertTrend(hours)
+    },
+    async fetchAttackMatrix() {
+      this.attackMatrix = await api.getAttackMatrix()
     }
   }
 })
