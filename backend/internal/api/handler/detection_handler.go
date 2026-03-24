@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -631,9 +632,45 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 			agg.LLMResponse = fmt.Sprintf("LLM调用失败: %s", err.Error())
 		} else {
 			agg.LLMResponse = llmResponse
-			for _, alert := range alerts {
-				aiJudgedCount++
-				h.alertRepo.MarkAIJudged(alert.AlertID, "AI已分析")
+
+			// 清理LLM响应中的markdown标记
+			cleanResponse := llmResponse
+			if strings.Contains(cleanResponse, "```json") {
+				cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
+				cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
+				cleanResponse = strings.TrimSpace(cleanResponse)
+			}
+
+			var result struct {
+				Alerts []struct {
+					AlertID        string `json:"alert_id"`
+					IsThreat       bool   `json:"is_threat"`
+					LLMSummary     string `json:"llm_summary"`
+					Recommendation string `json:"recommendation"`
+				} `json:"alerts"`
+			}
+
+			if err := json.Unmarshal([]byte(cleanResponse), &result); err == nil {
+				for _, alertResult := range result.Alerts {
+					llmSummary := alertResult.LLMSummary
+					if alertResult.Recommendation != "" {
+						llmSummary += "\n\n处置建议：\n- " + alertResult.Recommendation
+					}
+
+					if alertResult.IsThreat {
+						aiJudgedCount++
+						h.alertRepo.MarkAIJudged(alertResult.AlertID, llmSummary)
+					} else {
+						fpSummary := fmt.Sprintf("AI判定为误报：%s", alertResult.LLMSummary)
+						h.alertRepo.UpdateLLMSummary(alertResult.AlertID, fpSummary)
+					}
+				}
+			} else {
+				logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
+				for _, alert := range alerts {
+					aiJudgedCount++
+					h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+				}
 			}
 		}
 	}
@@ -679,24 +716,28 @@ func (h *DetectionHandler) callLLMForAlerts(ctx context.Context, alerts []model.
 		if i >= 10 {
 			break
 		}
-		alertSummaries = append(alertSummaries, fmt.Sprintf("- [%s] %s (PID: %d, 主机: %s)",
-			a.Severity, a.Description, a.PID, a.Hostname))
+		alertSummaries = append(alertSummaries, fmt.Sprintf("告警ID: %s | MITRE: %s | 严重程度: %s\n描述: %s\n主机: %s | PID: %d",
+			a.AlertID, a.MitreID, a.Severity, a.Description, a.Hostname, a.PID))
 	}
 
-	prompt := fmt.Sprintf(`你是安全分析师。请分析以下%d条待处理告警，判断哪些是真实威胁，哪些可能是误报。
+	prompt := fmt.Sprintf(`你是安全分析师。请分析以下%d条待处理告警，为每条告警判断是否为真实威胁，并生成独立的摘要和处置建议。
 
 告警列表：
 %s
 
-请用JSON格式返回分析结果：
+请用JSON格式返回分析结果，为每条告警提供独立分析：
 {
-  "summary": "整体分析摘要",
-  "threats": ["告警ID列表，如ALT-xxx"],
-  "false_positives": ["误报ID列表"],
-  "recommendations": ["处理建议"]
+  "alerts": [
+    {
+      "alert_id": "告警ID",
+      "is_threat": true/false,
+      "llm_summary": "针对这条告警的安全分析摘要",
+      "recommendation": "针对这条告警的具体处置建议"
+    }
+  ]
 }
 
-只返回JSON，不要其他内容。`, len(alerts), strings.Join(alertSummaries, "\n"))
+每条告警的摘要和处置建议必须是独立的，不要混在一起。只返回JSON，不要其他内容。`, len(alerts), strings.Join(alertSummaries, "\n\n"))
 
 	response, err := client.ChatCompletion(ctx, "", prompt, 0.7)
 	if err != nil {

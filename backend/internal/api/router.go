@@ -127,6 +127,7 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 		{
 			agent.GET("/install-command", r.agentHandler.GetInstallCommand)
 			agent.GET("/install.sh", r.agentHandler.GetInstallScript)
+			agent.GET("/uninstall.sh", r.agentHandler.GetUninstallScript)
 			agent.GET("/download", r.agentHandler.DownloadAgent)
 		}
 

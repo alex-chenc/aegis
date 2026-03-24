@@ -20,10 +20,10 @@ func Init(logDir string) error {
 
 	lumberjackLogger := &lumberjack.Logger{
 		Filename:   logPath,
-		MaxSize:    100,
-		MaxBackups: 5,
-		MaxAge:     30,
-		Compress:   true,
+		MaxSize:    10,   // 单个日志文件最大10MB
+		MaxBackups: 5,    // 保留5个备份
+		MaxAge:     7,    // 保留7天
+		Compress:   true, // 压缩旧日志
 	}
 
 	encoderConfig := zapcore.EncoderConfig{

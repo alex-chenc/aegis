@@ -1,8 +1,6 @@
 package repository
 
 import (
-	"fmt"
-
 	"aegis-system/internal/model"
 
 	"gorm.io/gorm"
@@ -133,20 +131,31 @@ func (r *AlertRepository) GetTodayCount() (int64, error) {
 
 func (r *AlertRepository) GetAffectedHostCount() (int64, error) {
 	var count int64
-	err := r.db.Model(&model.Alert{}).Where("status = ?", "active").Distinct("host_id").Count(&count).Error
+	err := r.db.Model(&model.Alert{}).Where("status = ?", "pending").Distinct("host_id").Count(&count).Error
 	return count, err
 }
 
 func (r *AlertRepository) GetTrend(hours int) ([]map[string]interface{}, error) {
 	var results []map[string]interface{}
-	interval := fmt.Sprintf("%d hours", hours)
 	err := r.db.Raw(`
-		SELECT date_trunc('hour', created_at) as time_bucket, count(*) as count
-		FROM alerts
-		WHERE created_at >= NOW() - CAST(? AS interval)
-		GROUP BY time_bucket
+		SELECT 
+			time_bucket as time_bucket,
+			COALESCE(alert_counts.count, 0) as count
+		FROM (
+			SELECT generate_series(
+				date_trunc('hour', NOW() - make_interval(hours := ?)),
+				date_trunc('hour', NOW()),
+				interval '1 hour'
+			) as time_bucket
+		) hours
+		LEFT JOIN (
+			SELECT date_trunc('hour', created_at) as alert_hour, count(*) as count
+			FROM alerts
+			WHERE created_at >= NOW() - make_interval(hours := ?)
+			GROUP BY alert_hour
+		) alert_counts ON hours.time_bucket = alert_counts.alert_hour
 		ORDER BY time_bucket
-	`, interval).Scan(&results).Error
+	`, hours, hours).Scan(&results).Error
 	return results, err
 }
 
@@ -166,13 +175,13 @@ func (r *AlertRepository) UpdateBlockStatus(alertID string, status string, messa
 		Updates(updates).Error
 }
 
-func (r *AlertRepository) MarkAIJudged(alertID string, disposalStrategy string) error {
+func (r *AlertRepository) MarkAIJudged(alertID string, llmSummary string) error {
 	updates := map[string]interface{}{
 		"judgment_source": "ai",
 		"updated_at":      gorm.Expr("NOW()"),
 	}
-	if disposalStrategy != "" {
-		updates["llm_disposal_strategy"] = disposalStrategy
+	if llmSummary != "" {
+		updates["llm_summary"] = llmSummary
 	}
 	return r.db.Model(&model.Alert{}).
 		Where("alert_id = ?", alertID).
@@ -201,4 +210,13 @@ func (r *AlertRepository) GetCountByMitreID(mitreID string) (int64, error) {
 	var count int64
 	err := r.db.Model(&model.Alert{}).Where("mitre_id = ? OR mitre_id LIKE ?", mitreID, mitreID+".%").Count(&count).Error
 	return count, err
+}
+
+func (r *AlertRepository) UpdateLLMSummary(alertID string, summary string) error {
+	return r.db.Model(&model.Alert{}).
+		Where("alert_id = ?", alertID).
+		Updates(map[string]interface{}{
+			"llm_summary": summary,
+			"updated_at":  gorm.Expr("NOW()"),
+		}).Error
 }
