@@ -114,10 +114,13 @@ chmod +x ${INSTALL_DIR}/aegis-agent
 # 创建配置文件
 echo "[3/6] 创建配置文件..."
 cat > ${INSTALL_DIR}/config/config.toml <<EOF
-server_addr = "${GRPC_ADDR}"
-auth_token = "a_very_secret_agent_token"
-host_id = ""
+ServerAddr = "${GRPC_ADDR}"
+AuthToken = "a_very_secret_agent_token"
+HostID = ""
 EOF
+# 同时创建 /etc/aegis-agent/config.toml 以兼容 agent 代码
+mkdir -p /etc/aegis-agent
+cp ${INSTALL_DIR}/config/config.toml /etc/aegis-agent/config.toml
 
 # 创建卸载脚本
 echo "[4/6] 创建卸载脚本..."
@@ -202,25 +205,26 @@ func (h *AgentHandler) DownloadAgent(c *gin.Context) {
 		return
 	}
 
-	objectName := fmt.Sprintf("aegis-agent-linux-%s", arch)
+	// Download the tar.gz package which contains binary and BPF files
+	objectName := "aegis-agent.tar.gz"
 
 	reader, err := h.minio.DownloadFile("agent-artifacts", objectName)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
-			"message": fmt.Sprintf("agent binary not found: %v", err),
+			"message": fmt.Sprintf("agent package not found: %v", err),
 		})
 		return
 	}
 	defer reader.Close()
 
-	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Type", "application/gzip")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", objectName))
 	c.Header("Content-Transfer-Encoding", "binary")
 
 	_, err = io.Copy(c.Writer, reader)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error streaming agent binary: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error streaming agent package: %v\n", err)
 	}
 }
 

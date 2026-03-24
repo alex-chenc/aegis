@@ -4,11 +4,11 @@ WORKDIR /root/
 
 RUN apk add --no-cache ca-certificates
 
-COPY backend .
+COPY backend/backend .
 
 RUN mkdir -p config
-COPY config/config.yaml config/
-COPY config/rules/ config/rules/
+COPY backend/config/config.yaml config/
+COPY backend/config/rules/ config/rules/
 
 EXPOSE 8080
 EXPOSE 9090

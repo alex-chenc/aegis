@@ -105,16 +105,9 @@ func main() {
 	// V5.0 Runtime Detection Services
 	kafkaProducer := queue.NewKafkaProducer(cfg.Kafka.Brokers, logger.Logger)
 	wsService := service.NewWebSocketService()
-	llmAnalysisService := service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	_ = service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	_ = service.NewBlockService(blockRepo)
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
-	runtimePipeline := service.NewRuntimePipelineService(
-		cfg.Kafka.Brokers,
-		cfg.Kafka.GroupID,
-		llmAnalysisService,
-		alertService,
-		wsService,
-	)
 	ruleLoader := service.NewRuleLoader(sigmaRuleRepo)
 	websocketHandler := handler.NewWebSocketHandler(wsService)
 
@@ -125,13 +118,6 @@ func main() {
 	templateService.StartWorkers(ctx)
 	scriptGenService.StartWorkers(ctx)
 	selfHealingService.StartWorkers(ctx)
-
-	// Start V5.0 runtime pipeline
-	go func() {
-		if err := runtimePipeline.Start(ctx); err != nil {
-			logger.Error("runtime pipeline stopped", zap.Error(err))
-		}
-	}()
 
 	logger.Info("background workers started")
 
@@ -221,7 +207,6 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	kafkaProducer.Close()
-	runtimePipeline.Close()
 
 	logger.Info("server stopped")
 }

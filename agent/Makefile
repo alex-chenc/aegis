@@ -1,4 +1,4 @@
-.PHONY: all build clean test bpf
+.PHONY: all build clean test bpf package
 
 BINARY_NAME=aegis-agent
 BPF_DIR=internal/ebpf/bpf
@@ -7,7 +7,7 @@ BPF_OBJ_DIR=internal/ebpf/bpf/obj
 # BPF programs
 BPF_PROGRAMS=execve fork exit openat connect setuid setgid capset
 
-all: bpf build
+all: bpf build package
 
 # Build BPF objects
 bpf: $(BPF_OBJ_DIR)
@@ -34,6 +34,14 @@ build:
 	@echo "Building agent..."
 	GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
 	GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
+
+# Package agent with BPF files
+package:
+	@echo "Packaging agent..."
+	@mkdir -p dist/bpf
+	@cp $(BPF_OBJ_DIR)/*.bpf.o dist/bpf/
+	cd dist && tar -czf $(BINARY_NAME).tar.gz $(BINARY_NAME)-linux-amd64 bpf/*.bpf.o
+	@echo "Package created: dist/$(BINARY_NAME).tar.gz"
 
 clean:
 	rm -rf dist

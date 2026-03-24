@@ -20,10 +20,10 @@ func Init(logDir string) error {
 
 	lumberjackLogger := &lumberjack.Logger{
 		Filename:   logPath,
-		MaxSize:    10,   // 单个日志文件最大10MB
-		MaxBackups: 5,    // 保留5个备份
-		MaxAge:     7,    // 保留7天
-		Compress:   true, // 压缩旧日志
+		MaxSize:    10,
+		MaxBackups: 5,
+		MaxAge:     7,
+		Compress:   true,
 	}
 
 	encoderConfig := zapcore.EncoderConfig{
@@ -47,14 +47,7 @@ func Init(logDir string) error {
 		zapcore.InfoLevel,
 	)
 
-	consoleCore := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(encoderConfig),
-		zapcore.AddSync(os.Stdout),
-		zapcore.InfoLevel,
-	)
-
-	core := zapcore.NewTee(fileCore, consoleCore)
-	log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
+	log = zap.New(fileCore, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return nil
 }
