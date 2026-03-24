@@ -26,6 +26,8 @@ agent/dist/*
 agent/*.exe
 agent/*.test
 agent/*.out
+agent/vendor/
+agent/agent
 
 docker-compose.override.yml
 
