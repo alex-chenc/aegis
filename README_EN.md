@@ -66,6 +66,17 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 | **One-click Fix**      | Generate targeted fix scripts, batch execute remediation tasks                         |
 | **Status Tracking**    | Real-time display of script generation and execution progress                          |
 
+### Real-time Threat Detection & Response (V5.0 New)
+
+| Feature                  | Description                                                                       |
+| :----------------------- | :-------------------------------------------------------------------------------- |
+| **eBPF Event Collection**| Real-time collection of process execution, network connections via eBPF           |
+| **Sigma Rule Matching**  | Built-in Sigma rule library for initial filtering on Agent side                   |
+| **Alert Deduplication**  | Auto deduplication by host+pid+mitre_id to reduce alert noise                     |
+| **Manual AI Noise Reduction** | User selects time range and manually triggers LLM analysis for alert validity |
+| **Auto Blocking**        | Support configuring auto-block switch by MITRE ATT&CK policy                      |
+| **Real-time Push**       | WebSocket real-time push alerts to frontend                                       |
+
 
 ## Quick Start
 

@@ -9,28 +9,27 @@
 
 ## 1. 概述
 
-V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 Sigma 初筛）、按主机进行 2 分钟聚合、调用 LLM 进行降噪与研判、根据阻断策略执行自动/手动阻断、推送告警到前端，并管理规则生命周期。
+V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 Sigma 初筛）、存储告警信息、提供页面手动触发的 AI 降噪功能、根据阻断策略执行自动/手动阻断、推送告警到前端，并管理规则生命周期。
 
 **核心结论（已确认）**：
 
-1. 事件按主机聚合，窗口固定 2 分钟。  
-2. 原始事件不落库，仅在窗口内内存/Kafka 中转。  
-3. 告警去重按 `host_id + pid + mitre_id`，命中后只增加次数。  
-4. 阻断动作默认为 `kill_process`，是否自动执行由页面开关决定。  
-5. 规则来源于 LLM（可由人工对话驱动生成），24 小时人工未审核则自动下发为 experimental。  
-6. LLM 可调用 Agent 工具（最多 10 次/研判）。
+1. 事件由 Agent 通过 gRPC 直接上报，不经过 Kafka。  
+2. 告警去重按 `host_id + pid + mitre_id`，命中后只增加次数。  
+3. 阻断动作默认为 `kill_process`，是否自动执行由页面开关决定。  
+4. 规则来源于 LLM（可由人工对话驱动生成），24 小时人工未审核则自动下发为 experimental。  
+5. LLM 降噪分析由页面手动触发，不再自动定时调用。
 
 ### 1.1 实现状态
 
 | 功能 | 状态 | 说明 |
 |:---|:---|:---|
-| Kafka事件消费 | ✅ 已实现 | raw-events topic |
-| 主机窗口聚合 | ✅ 已实现 | 2分钟固定窗口 |
-| LLM分析服务 | ✅ 已实现 | 动态获取LLM配置 |
+| gRPC事件接收 | ✅ 已实现 | Agent直接上报 |
 | 告警去重 | ✅ 已实现 | dedupe_key |
 | 告警存储 | ✅ 已实现 | PostgreSQL |
 | WebSocket推送 | ✅ 已实现 | 实时告警推送 |
 | 规则下发 | ✅ 已实现 | gRPC UpdateRules |
+| 手动AI降噪 | ✅ 已实现 | 页面触发LLM分析 |
+| ~~定时LLM分析~~ | ❌ 已移除 | 改为手动触发 |
 
 ### 1.2 已修复问题
 
@@ -39,6 +38,7 @@ V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 
 | LLMAnalysisService初始化失败 | 传入nil客户端 | 使用configRepo动态获取配置 |
 | RuntimeEvent时间戳解析失败 | time.Time vs int64 | 改为int64 Unix毫秒 |
 | Alert PID列名不匹配 | GORM映射p_id vs pid | 添加column:pid标签 |
+| 定时LLM调用消耗token | 每10秒自动分析 | 移除自动分析，改为手动触发 |
 
 ---
 
@@ -49,20 +49,20 @@ V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 
 |-- /internal
 |   |-- /api
 |   |   |-- /handler
-|   |   |   |-- runtime_handler.go           # 运行时事件、告警、阻断、规则
+|   |   |   |-- detection_handler.go        # 告警、阻断、规则、AI降噪
 |   |-- /service
-|   |   |-- runtime_pipeline_service.go      # 2分钟聚合 + LLM分析主流程
-|   |   |-- llm_analysis_service.go          # LLM调用、工具调用回路
-|   |   |-- alert_service.go                 # 告警去重、状态流转、推送
+|   |   |-- alert_service.go                # 告警去重、状态流转、推送
 |   |   |-- block_service.go                 # 自动/手动阻断
 |   |   |-- rule_service.go                  # 规则生命周期、下发
 |   |   |-- websocket_service.go             # 实时推送
+|   |   |-- llm_analysis_service.go          # LLM调用服务（手动触发）
 |   |-- /repository
 |   |   |-- alert_repo.go
 |   |   |-- block_repo.go
 |   |   |-- block_policy_repo.go
 |   |   |-- sigma_rule_repo.go
 |   |   |-- tool_call_repo.go
+|   |   |-- llm_aggregation_repo.go          # AI降噪记录
 |   |-- /model
 |   |   |-- alert.go
 |   |   |-- block_record.go
@@ -70,13 +70,7 @@ V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 
 |   |   |-- sigma_rule.go
 |   |   |-- sigma_rule_version.go
 |   |   |-- tool_call.go
-|   |-- /queue
-|   |   |-- kafka_consumer.go
-|   |   |-- kafka_producer.go
-|   |-- /pipeline
-|   |   |-- host_window_aggregator.go
-|   |   |-- llm_prompt_builder.go
-|   |   |-- llm_response_parser.go
+|   |   |-- llm_aggregation.go
 |-- /pkg/api/v1
 |   |-- agent_comm.proto                      # Agent工具调用/阻断/规则下发扩展
 ```
@@ -90,63 +84,106 @@ V5.0 后端负责 AI 运行时检测闭环：接收 Agent 上报事件（已由 
 ```text
 Agent命中Sigma规则后上报事件
     ↓
-Kafka Topic: raw-events
+gRPC ReportEvent 接收事件
     ↓
-RuntimePipelineConsumer 消费
+生成告警（去重判断）
+    ├─ 已存在: hit_count + 1, 更新 last_seen_at
+    └─ 不存在: 创建新告警
     ↓
-按 host_id 进入 2分钟窗口聚合
+存储告警到数据库
     ↓
-窗口到期 -> 调用 LLM 分析
+WebSocket 推送告警到页面
     ↓
-LLM需要补充信息？
-    ├─ 是：调用 Agent 工具（最多10次）-> 带工具结果重试分析
-    └─ 否：直接输出告警/阻断/规则调整
+用户在页面查看告警
     ↓
-告警去重（host_id + pid + mitre_id）
+用户手动触发 AI 降噪（可选）
     ↓
-检查阻断策略 auto_block
-    ├─ true: 自动下发 kill_process
-    └─ false: 只告警，等待用户手动下发阻断
+POST /api/v1/detection/llm/aggregate
     ↓
-WebSocket 推送结果到页面
+LLM 分析指定时间范围的告警
     ↓
-丢弃窗口原始事件（不入库）
+返回分析结果（威胁判断、处置建议）
+    ↓
+用户决定是否执行阻断
 ```
 
-### 3.2 聚合策略
+### 3.2 AI 降噪流程（手动触发）
 
-- 窗口长度：2 分钟（固定）
-- 维度：每个主机独立窗口（`host_id`）
-- 窗口结束即触发分析
-- 原始事件只在窗口内保留
+用户在告警页面选择时间范围后手动触发：
+
+```text
+用户选择时间范围（最长24小时）
+    ↓
+POST /api/v1/detection/llm/aggregate
+    {
+        "start_time": "2026-03-24T10:00:00Z",
+        "end_time": "2026-03-24T12:00:00Z",
+        "host_ids": ["host-1", "host-2"],  // 可选
+        "auto_dispose": false               // 是否自动处置
+    }
+    ↓
+查询 pending 状态告警
+    ↓
+调用 LLM 分析
+    ↓
+解析 LLM 返回结果
+    ├─ is_threat: 是否为真实威胁
+    ├─ llm_summary: 分析摘要
+    └─ recommendation: 处置建议
+    ↓
+更新告警的 LLM 分析结果
+    ↓
+返回分析结果给页面
+```
+
+### 3.3 聚合策略
+
+**已移除自动聚合**，改为：
+- 事件实时上报并生成告警
+- 用户按需手动触发 AI 降噪分析
+- 支持按时间范围（最长24小时）聚合分析
 
 ---
 
-## 4. Kafka 设计
+## 4. 数据传输设计
 
-### 4.1 Topic 定义
+### 4.1 gRPC 接口
 
-| Topic | 用途 | 备注 |
+Agent 通过 gRPC 直接与后端通信，不再使用 Kafka：
+
+| 接口 | 用途 | 备注 |
 |:---|:---|:---|
-| `raw-events` | Agent上报事件 | 主输入队列 |
-| `analysis-results` | LLM分析结果 | 可选审计用途 |
-| `block-commands` | 阻断指令 | 后端发往Agent |
-| `rule-updates` | 规则下发事件 | 全量/增量下发 |
-| `tool-calls` | 工具调用链路日志 | 审计/排障 |
+| `Register` | Agent注册 | 首次连接 |
+| `Heartbeat` | 心跳保活 | 30秒间隔 |
+| `ExecuteCommand` | 双向流命令 | 接收任务/返回结果 |
+| `ReportEvent` | 上报运行时事件 | Agent命中规则后上报 |
+| `UpdateRules` | 规则下发 | 全量/增量 |
 
-### 4.2 分区策略
+### 4.2 WebSocket 推送
 
-- `raw-events` 按 `host_id` 分区，保证单主机事件顺序。
-- `block-commands` 按 `host_id` 分区，保证阻断顺序。
+| 消息类型 | 用途 |
+|:---|:---|
+| `alert` | 新告警通知 |
+| `block_status` | 阻断执行结果 |
+| `rule_update` | 规则变更通知 |
 
 ---
 
-## 5. LLM 分析与工具调用
+## 5. LLM 分析（手动触发）
 
-### 5.1 LLM 输入数据
+### 5.1 触发方式
 
-LLM 输入为**某主机 2 分钟聚合事件集**，每条事件包含：
+LLM 分析由用户在页面手动触发，不再自动定时调用：
 
+- **入口**: `POST /api/v1/detection/llm/aggregate`
+- **限制**: 时间范围最长 24 小时
+- **状态**: 可通过 `GET /api/v1/detection/llm/aggregate/:id` 查询进度
+
+### 5.2 LLM 输入数据
+
+LLM 输入为指定时间范围内的 `pending` 状态告警列表：
+
+- `alert_id`
 - `event_type`
 - `pid`
 - `command_line`
@@ -155,41 +192,31 @@ LLM 输入为**某主机 2 分钟聚合事件集**，每条事件包含：
 - `severity`
 - `timestamp`
 
-### 5.2 LLM 输出结构（约定）
+### 5.3 LLM 输出结构
 
 ```json
 {
   "alerts": [
     {
-      "mitre_id": "T1059.004",
-      "severity": "critical",
-      "pid": 12345,
-      "description": "检测到反弹shell行为",
-      "block_action": "kill_process",
-      "block_target": "12345"
-    }
-  ],
-  "tool_calls": [
-    {
-      "tool": "get_process_tree",
-      "params": {"pid": 12345},
-      "reason": "确认父子进程链"
-    }
-  ],
-  "rule_adjustments": [
-    {
-      "rule_id": "reverse_shell_t1059_004",
-      "action": "tighten",
-      "reason": "降低误报"
+      "alert_id": "alert-xxx",
+      "is_threat": true,
+      "llm_summary": "检测到可疑的反弹shell行为...",
+      "recommendation": "建议立即终止进程并检查网络连接"
     }
   ]
 }
 ```
 
-### 5.3 工具调用限制
+### 5.4 成本优化
 
-- 单次研判最多 10 次工具调用。
-- 超过 10 次直接终止工具回路并输出当前最佳结论。
+相比自动定时分析，手动触发具有以下优势：
+
+| 对比项 | 自动定时 | 手动触发 |
+|:---|:---|:---|
+| LLM调用频率 | 每10秒检查 | 按需调用 |
+| Token消耗 | 高（持续消耗） | 低（按需消耗） |
+| 分析精度 | 固定窗口 | 用户选择范围 |
+| 可控性 | 低 | 高 |
 
 ---
 
@@ -256,35 +283,41 @@ LLM 输入为**某主机 2 分钟聚合事件集**，每条事件包含：
 
 ### 9.1 告警
 
-- `GET /api/v1/alerts`
-- `GET /api/v1/alerts/:id`
-- `POST /api/v1/alerts/:id/resolve`
-- `POST /api/v1/alerts/:id/block`  （手动阻断）
+- `GET /api/v1/detection/alerts` - 获取告警列表
+- `GET /api/v1/detection/alerts/:id` - 获取告警详情
+- `POST /api/v1/detection/alerts/:id/resolve` - 标记告警已处理
+- `POST /api/v1/detection/alerts/:id/block` - 手动阻断
 
 ### 9.2 阻断策略
 
-- `GET /api/v1/block-policies`
-- `PUT /api/v1/block-policies/:mitre_id`  （更新 auto_block 开关）
+- `GET /api/v1/detection/block-policies` - 获取阻断策略列表
+- `PUT /api/v1/detection/block-policies/:mitre_id` - 更新 auto_block 开关
 
 ### 9.3 规则
 
-- `GET /api/v1/rules`
-- `GET /api/v1/rules/:id`
-- `PUT /api/v1/rules/:id/status`
+- `POST /api/v1/detection/rules/import` - 导入规则
+- `GET /api/v1/detection/rules` - 获取规则列表
+- `GET /api/v1/detection/rules/:id` - 获取规则详情
+- `PUT /api/v1/detection/rules/:id/status` - 更新规则状态
 
 ### 9.4 工具调用审计
 
-- `GET /api/v1/tool-calls`
-- `GET /api/v1/tool-calls/:id`
+- `GET /api/v1/detection/tool-calls` - 获取工具调用列表
 
-### 9.5 WebSocket
+### 9.5 AI 降噪（手动触发）
 
-- `GET /api/v1/runtime/ws`
+- `POST /api/v1/detection/llm/aggregate` - 启动 AI 降噪分析
+- `GET /api/v1/detection/llm/aggregate/:id` - 查询分析状态和结果
+- `GET /api/v1/detection/llm/aggregate/current` - 获取当前分析任务
+
+### 9.6 WebSocket
+
+- `GET /api/v1/detection/runtime/ws` - 实时告警推送
 
 推送消息类型：
-- `alert`
-- `block_status`
-- `rule_update`
+- `alert` - 新告警
+- `block_status` - 阻断结果
+- `rule_update` - 规则更新
 
 ---
 
@@ -358,16 +391,34 @@ LLM 输入为**某主机 2 分钟聚合事件集**，每条事件包含：
 
 ## 11. 关键实现伪代码
 
-### 11.1 聚合与分析调度
+### 11.1 AI 降噪（手动触发）
 
 ```go
-func (s *RuntimePipelineService) Tick() {
-    batches := s.aggregator.FlushReady(2 * time.Minute) // host_id -> []events
-    for hostID, events := range batches {
-        result := s.llm.Analyze(hostID, events)
-        s.executor.Apply(result)
-        // 原始events直接丢弃
+func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
+    var body struct {
+        StartTime   string   `json:"start_time" binding:"required"`
+        EndTime     string   `json:"end_time" binding:"required"`
+        HostIDs     []string `json:"host_ids"`
+        AutoDispose bool     `json:"auto_dispose"`
     }
+    
+    // 验证时间范围（最长24小时）
+    if endTime.Sub(startTime) > 24*time.Hour {
+        return Error("time range exceeds maximum of 24 hours")
+    }
+    
+    // 查询 pending 状态告警
+    alerts := h.alertRepo.List(status: "pending")
+    
+    // 调用 LLM 分析
+    result := h.callLLMForAlerts(ctx, alerts)
+    
+    // 更新告警的 LLM 分析结果
+    for _, alertResult := range result.Alerts {
+        h.alertRepo.UpdateLLMSummary(alertResult.AlertID, alertResult.LLMSummary)
+    }
+    
+    return Success(result)
 }
 ```
 
@@ -415,12 +466,22 @@ func (e *DecisionExecutor) HandleAlert(a Alert) {
 
 ## 13. 本版范围（MVP）
 
-- ✅ Kafka + 2分钟主机窗口聚合  
-- ✅ LLM 分析 + 最多 10 次工具调用  
+- ✅ gRPC 事件接收与告警生成  
 - ✅ 告警去重（host_id + pid + mitre_id）  
+- ✅ 手动触发 AI 降噪分析  
 - ✅ 自动阻断开关 + 手动阻断入口  
 - ✅ 规则 pending/experimental/active 流转  
 - ✅ 规则全量/增量下发
+- ❌ ~~定时 LLM 分析~~（已移除，改为手动触发）
+
+---
+
+## 14. 变更记录
+
+| 日期 | 版本 | 变更内容 |
+|:---|:---|:---|
+| 2026-03-24 | 5.0.1 | 移除定时 LLM 分析，改为页面手动触发 AI 降噪 |
+| 2026-03-20 | 5.0 | 初始版本 |
 
 ---
 
