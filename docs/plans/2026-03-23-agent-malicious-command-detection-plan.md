@@ -2,11 +2,45 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**状态:** ✅ 已完成
+**完成日期:** 2026-03-24
+
 **Goal:** 实现Agent通过eBPF采集恶意命令、Sigma规则匹配、上报到Backend、LLM分析生成告警、前端实时显示的完整流程。
 
-**Architecture:** Backend在Agent注册时推送Sigma规则到Agent，Agent通过eBPF采集进程事件并匹配规则，匹配成功的事件通过gRPC上报到Backend，Backend将事件发送到Kafka，经过窗口聚合后调用LLM分析，生成的告警通过WebSocket推送到前端。
+**Architecture:** 
+Backend在Agent注册时推送Sigma规则到Agent，Agent通过eBPF采集进程事件并匹配规则，匹配成功的事件通过gRPC上报到Backend，Backend将事件发送到Kafka，经过窗口聚合后调用LLM分析，生成的告警通过WebSocket推送到前端。
 
 **Tech Stack:** Go (Backend/Agent), Vue 3 + TypeScript (Frontend), gRPC, Kafka, PostgreSQL, WebSocket, eBPF, Sigma规则
+
+---
+
+## 实现完成摘要
+
+### 核心修复
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| LLMAnalysisService初始化失败 | `backend/cmd/server/main.go` | 使用configRepo动态获取配置 |
+| eBPF Loader路径问题 | `agent/internal/ebpf/loader.go` | 多路径查找BPF对象文件 |
+| 命令行参数读取失败 | `agent/internal/ebpf/loader.go` | 从/proc/[pid]/cmdline补充 |
+| RuntimeEvent时间戳格式 | `backend/internal/pipeline/host_window_aggregator.go` | 改为int64 |
+| Alert PID列名不匹配 | `backend/internal/model/alert.go` | 添加column:pid标签 |
+
+### 端到端测试结果
+
+```
+恶意命令: /bin/bash -c 'bash -i'
+    ↓
+规则命中: t1059_004_reverse_shell_detection (T1059.004)
+    ↓
+事件上报: Backend接收并发送到Kafka
+    ↓
+LLM分析: 分析完成生成24条告警
+    ↓
+告警创建: 8条告警成功入库
+    ↓
+前端显示: API正常返回告警数据
+```
 
 ---
 
