@@ -168,7 +168,6 @@ func (c *Client) run() {
 	logger.Info("Command stream established, starting heartbeat...")
 
 	go c.sendHeartbeats()
-	go c.requestRuleSync()
 
 	logger.Info("Waiting for commands...")
 
@@ -191,7 +190,50 @@ func (c *Client) run() {
 					zap.Int32("timeout", execute.TimeoutSeconds))
 				go c.handleCommand(execute)
 			}
+
+			if ruleUpdate := req.GetRuleUpdate(); ruleUpdate != nil {
+				logger.Info("Received rule update via stream",
+					zap.String("action", ruleUpdate.Action),
+					zap.Int("rule_count", len(ruleUpdate.Rules)))
+				c.applyRuleUpdate(ruleUpdate)
+			}
+
+			if block := req.GetBlock(); block != nil {
+				logger.Info("Received block command via stream",
+					zap.String("command_id", block.CommandId),
+					zap.String("action", block.Action),
+					zap.String("target", block.Target))
+				c.handleBlockCommand(block)
+			}
 		}
+	}
+}
+
+func (c *Client) handleBlockCommand(cmd *pb.BlockCommand) {
+	err := c.blocker.Execute(cmd.Action, cmd.Target)
+	if err != nil {
+		logger.Error("Block command failed",
+			zap.String("command_id", cmd.CommandId),
+			zap.Error(err))
+	} else {
+		logger.Info("Block command executed",
+			zap.String("command_id", cmd.CommandId),
+			zap.String("action", cmd.Action))
+	}
+}
+
+func (c *Client) applyRuleUpdate(req *pb.RuleUpdateRequest) {
+	for _, rule := range req.Rules {
+		if err := c.ruleLoader.ApplyUpdate(rule.Action, rule.RuleId, []byte(rule.Content)); err != nil {
+			logger.Error("Failed to apply rule update", zap.String("rule_id", rule.RuleId), zap.Error(err))
+			continue
+		}
+		if rule.Action != "delete" && rule.Content != "" {
+			if err := c.ruleLoader.SaveRuleToDisk(rule.RuleId, []byte(rule.Content)); err != nil {
+				logger.Error("Failed to save rule to disk", zap.String("rule_id", rule.RuleId), zap.Error(err))
+			}
+		}
+		logger.Info("Rule updated", zap.String("rule_id", rule.RuleId), zap.String("action", rule.Action))
 	}
 }
 

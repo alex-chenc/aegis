@@ -18,13 +18,6 @@ type ForkEvent struct {
 	ChildComm  [16]byte
 }
 
-type ExitEvent struct {
-	Pid      uint32
-	Uid      uint32
-	ExitCode int32
-	Comm     [16]byte
-}
-
 func bytesToString(b []byte) string {
 	n := 0
 	for n < len(b) && b[n] != 0 {

@@ -16,6 +16,7 @@ import (
 	"aegis-system/internal/ipdetect"
 	"aegis-system/internal/queue"
 	"aegis-system/internal/repository"
+	"aegis-system/internal/seed"
 	"aegis-system/internal/service"
 	"aegis-system/internal/storage"
 	"aegis-system/pkg/logger"
@@ -90,6 +91,7 @@ func main() {
 	sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
 	toolCallRepo := repository.NewToolCallRepository(db)
 	llmAggregationRepo := repository.NewLLMAggregationRepository(db)
+	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -106,7 +108,7 @@ func main() {
 	kafkaProducer := queue.NewKafkaProducer(cfg.Kafka.Brokers, logger.Logger)
 	wsService := service.NewWebSocketService()
 	_ = service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
-	_ = service.NewBlockService(blockRepo)
+	_ = service.NewBlockService(blockRepo, alertRepo)
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
 	ruleLoader := service.NewRuleLoader(sigmaRuleRepo)
 	websocketHandler := handler.NewWebSocketHandler(wsService)
@@ -149,7 +151,10 @@ func main() {
 	grpcServer.SetTaskLogRepo(taskLogRepo)
 	grpcServer.SetTaskResultCallback(taskService.ProcessTaskResult)
 	grpcServer.SetSigmaRuleRepo(sigmaRuleRepo)
+	grpcServer.SetAlertRepo(alertRepo, websocketHandler)
 
+	alertService.SetGRPCServer(grpcServer)
+	sigmaRuleService.SetGRPCServer(grpcServer)
 	taskService.SetGRPCServer(grpcServer)
 	taskService.SetScriptGenService(scriptGenService)
 
@@ -166,7 +171,7 @@ func main() {
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
-	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, configRepo)
+	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, runtimeEventRepo, configRepo, grpcServer)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)
@@ -194,6 +199,9 @@ func main() {
 	if err := ruleLoader.LoadFromDirectory(ctx, "config/rules"); err != nil {
 		logger.Warn("failed to load rules from directory", zap.Error(err))
 	}
+
+	// Seed default block policies
+	seed.SeedBlockPolicies(db)
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)

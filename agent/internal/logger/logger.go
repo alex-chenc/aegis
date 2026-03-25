@@ -11,7 +11,7 @@ import (
 
 var log *zap.Logger
 
-func Init(logDir string) error {
+func Init(logDir string, level string) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
@@ -41,10 +41,22 @@ func Init(logDir string) error {
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 
+	var logLevel zapcore.Level
+	switch level {
+	case "debug":
+		logLevel = zapcore.DebugLevel
+	case "warn":
+		logLevel = zapcore.WarnLevel
+	case "error":
+		logLevel = zapcore.ErrorLevel
+	default:
+		logLevel = zapcore.InfoLevel
+	}
+
 	fileCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderConfig),
 		zapcore.AddSync(lumberjackLogger),
-		zapcore.InfoLevel,
+		logLevel,
 	)
 
 	log = zap.New(fileCore, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))

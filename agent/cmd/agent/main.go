@@ -22,17 +22,19 @@ import (
 )
 
 func main() {
-	if err := logger.Init("/opt/aegis-agent/logs"); err != nil {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		os.Exit(1)
+	}
+
+	if err := logger.Init("/opt/aegis-agent/logs", cfg.LogLevel); err != nil {
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
-	logger.Info("Aegis Agent v3.0.0 starting...")
+	logger.Info("Aegis Agent v3.0.0 starting...",
+		zap.String("log_level", cfg.LogLevel))
 
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		logger.Fatal("Failed to load config", zap.Error(err))
-	}
 	logger.Info("Config loaded",
 		zap.String("server_addr", cfg.ServerAddr),
 		zap.String("host_id", cfg.HostID),
@@ -55,7 +57,7 @@ func main() {
 	logger.Info("Creating rule loader", zap.String("rule_dir", cfg.RuleDir))
 	// Load rules from disk for local operation
 	if err := ruleLoader.LoadFromDisk(); err != nil {
-	logger.Info("Loading rules from disk...")
+		logger.Info("Loading rules from disk...")
 		logger.Warn("Failed to load rules from disk", zap.Error(err))
 	}
 	blockerInst := blocker.NewBlocker(cfg.QuarantineDir)

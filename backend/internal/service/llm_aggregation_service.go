@@ -172,7 +172,17 @@ func (s *LLMAggregationService) createAlertFromPayload(payload pipeline.AlertPay
 
 	judgmentSource := payload.JudgmentSource
 	if judgmentSource == "" {
-		judgmentSource = JudgmentSystem
+		judgmentSource = JudgmentAI
+	}
+
+	description := payload.Description
+	if description == "" {
+		description = fmt.Sprintf("AI检测到潜在威胁行为，MITRE技术: %s", payload.MitreID)
+	}
+
+	llmSummary := payload.LLMSummary
+	if llmSummary == "" {
+		llmSummary = fmt.Sprintf("AI降噪判定: %s级别威胁", payload.Severity)
 	}
 
 	alert := &model.Alert{
@@ -184,8 +194,8 @@ func (s *LLMAggregationService) createAlertFromPayload(payload pipeline.AlertPay
 		MitreID:             payload.MitreID,
 		MitreName:           payload.MitreName,
 		Severity:            payload.Severity,
-		Description:         payload.Description,
-		LLMSummary:          payload.LLMSummary,
+		Description:         description,
+		LLMSummary:          llmSummary,
 		LLMDisposalStrategy: payload.DisposalStrategy,
 		JudgmentSource:      judgmentSource,
 		Status:              StatusPending,

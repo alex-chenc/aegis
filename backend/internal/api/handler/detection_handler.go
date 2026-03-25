@@ -11,13 +11,16 @@ import (
 	"strings"
 	"time"
 
+	"aegis-system/internal/grpc_server"
 	"aegis-system/internal/llm"
 	"aegis-system/internal/model"
 	"aegis-system/internal/repository"
 	"aegis-system/internal/service"
+	pb "aegis-system/pkg/api/v1"
 	"aegis-system/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -31,7 +34,9 @@ type DetectionHandler struct {
 	alertService       *service.AlertService
 	sigmaRuleService   *service.SigmaRuleService
 	llmAggregationRepo *repository.LLMAggregationRepository
+	runtimeEventRepo   *repository.RuntimeEventRepository
 	configRepo         *repository.ConfigRepository
+	grpcServer         *grpc_server.GRPCServer
 }
 
 func NewDetectionHandler(
@@ -43,7 +48,9 @@ func NewDetectionHandler(
 	alertService *service.AlertService,
 	sigmaRuleService *service.SigmaRuleService,
 	llmAggregationRepo *repository.LLMAggregationRepository,
+	runtimeEventRepo *repository.RuntimeEventRepository,
 	configRepo *repository.ConfigRepository,
+	grpcServer *grpc_server.GRPCServer,
 ) *DetectionHandler {
 	return &DetectionHandler{
 		alertRepo:          alertRepo,
@@ -54,7 +61,9 @@ func NewDetectionHandler(
 		alertService:       alertService,
 		sigmaRuleService:   sigmaRuleService,
 		llmAggregationRepo: llmAggregationRepo,
+		runtimeEventRepo:   runtimeEventRepo,
 		configRepo:         configRepo,
+		grpcServer:         grpcServer,
 	}
 }
 
@@ -102,6 +111,58 @@ func (h *DetectionHandler) GetAlert(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": alert})
 }
 
+func (h *DetectionHandler) GetProcessTree(c *gin.Context) {
+	alertID := c.Param("id")
+	alert, err := h.alertRepo.FindByID(alertID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "alert not found"})
+		return
+	}
+
+	if alert.ProcessTree != "" {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"process_tree": alert.ProcessTree}})
+		return
+	}
+
+	if h.grpcServer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "process tree service unavailable"})
+		return
+	}
+
+	hostID := alert.HostID
+	if !h.grpcServer.IsAgentConnected(hostID) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "agent not connected"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	params := fmt.Sprintf(`{"pid": %d}`, alert.PID)
+	toolResp, err := h.grpcServer.ExecuteTool(ctx, &pb.ToolRequest{
+		CallId:     uuid.New().String(),
+		HostId:     hostID.String(),
+		Tool:       "get_process_tree",
+		ParamsJson: params,
+	})
+
+	if err != nil || !toolResp.Success {
+		errMsg := "failed to get process tree"
+		if toolResp != nil && toolResp.Error != "" {
+			errMsg = toolResp.Error
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": errMsg})
+		return
+	}
+
+	alert.ProcessTree = toolResp.ResultJson
+	if err := h.alertRepo.Update(alert); err != nil {
+		logger.Warn("failed to save process tree", zap.Error(err))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"process_tree": toolResp.ResultJson}})
+}
+
 func (h *DetectionHandler) ResolveAlert(c *gin.Context) {
 	if err := h.alertRepo.Resolve(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
@@ -128,14 +189,57 @@ func (h *DetectionHandler) BlockAlert(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": record})
 }
 
+func (h *DetectionHandler) DeleteAlerts(c *gin.Context) {
+	var body struct {
+		AlertIDs []string `json:"alert_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "alert_ids is required"})
+		return
+	}
+
+	if len(body.AlertIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "no alerts selected"})
+		return
+	}
+
+	if err := h.alertRepo.DeleteByIDs(body.AlertIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"deleted_count": len(body.AlertIDs)}})
+}
+
 func (h *DetectionHandler) ListBlockPolicies(c *gin.Context) {
-	policies, err := h.blockPolicyRepo.List()
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	query := c.Query("query")
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	policies, total, err := h.blockPolicyRepo.ListPaginated(page, pageSize, query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "internal error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": policies})
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"data":       policies,
+			"total":      total,
+			"page":       page,
+			"page_size":  pageSize,
+			"total_page": (int(total) + pageSize - 1) / pageSize,
+		},
+	})
 }
 
 func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
@@ -605,9 +709,9 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 		return
 	}
 
-	alerts, _, err := h.alertRepo.List(1, 100, map[string]interface{}{
-		"status": "pending",
-	})
+	startTs := startTime.UnixMilli()
+	endTs := endTime.UnixMilli()
+	events, err := h.runtimeEventRepo.FindUnaggregated(startTs, endTs, body.HostIDs)
 	if err != nil {
 		h.llmAggregationRepo.UpdateStatus(agg.ID, "failed", err.Error())
 		c.JSON(http.StatusOK, gin.H{
@@ -622,61 +726,73 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 		return
 	}
 
+	agg.EventCount = len(events)
+	h.llmAggregationRepo.Update(agg)
+
 	aiJudgedCount := 0
 	autoDisposeCount := 0
 
-	if len(alerts) > 0 {
-		llmResponse, err := h.callLLMForAlerts(c.Request.Context(), alerts)
+	if len(events) > 0 {
+		alerts, _, err := h.alertRepo.List(1, 1000, map[string]interface{}{
+			"status": "pending",
+		})
 		if err != nil {
-			logger.Error("LLM call failed", zap.Error(err))
-			agg.LLMResponse = fmt.Sprintf("LLM调用失败: %s", err.Error())
-		} else {
-			agg.LLMResponse = llmResponse
+			logger.Error("Failed to get alerts for LLM", zap.Error(err))
+		}
 
-			// 清理LLM响应中的markdown标记
-			cleanResponse := llmResponse
-			if strings.Contains(cleanResponse, "```json") {
-				cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
-				cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
-				cleanResponse = strings.TrimSpace(cleanResponse)
-			}
-
-			var result struct {
-				Alerts []struct {
-					AlertID        string `json:"alert_id"`
-					IsThreat       bool   `json:"is_threat"`
-					LLMSummary     string `json:"llm_summary"`
-					Recommendation string `json:"recommendation"`
-				} `json:"alerts"`
-			}
-
-			if err := json.Unmarshal([]byte(cleanResponse), &result); err == nil {
-				for _, alertResult := range result.Alerts {
-					llmSummary := alertResult.LLMSummary
-					if alertResult.Recommendation != "" {
-						llmSummary += "\n\n处置建议：\n- " + alertResult.Recommendation
-					}
-
-					if alertResult.IsThreat {
-						aiJudgedCount++
-						h.alertRepo.MarkAIJudged(alertResult.AlertID, llmSummary)
-					} else {
-						fpSummary := fmt.Sprintf("AI判定为误报：%s", alertResult.LLMSummary)
-						h.alertRepo.UpdateLLMSummary(alertResult.AlertID, fpSummary)
-					}
-				}
+		llmResponse := ""
+		if len(alerts) > 0 {
+			llmResponse, err = h.callLLMForAlerts(c.Request.Context(), alerts)
+			if err != nil {
+				logger.Error("LLM call failed", zap.Error(err))
+				agg.LLMResponse = fmt.Sprintf("LLM调用失败: %s", err.Error())
 			} else {
-				logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
-				for _, alert := range alerts {
-					aiJudgedCount++
-					h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+				agg.LLMResponse = llmResponse
+
+				cleanResponse := llmResponse
+				if strings.Contains(cleanResponse, "```json") {
+					cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
+					cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
+					cleanResponse = strings.TrimSpace(cleanResponse)
+				}
+
+				var result struct {
+					Alerts []struct {
+						AlertID        string `json:"alert_id"`
+						IsThreat       bool   `json:"is_threat"`
+						LLMSummary     string `json:"llm_summary"`
+						Recommendation string `json:"recommendation"`
+					} `json:"alerts"`
+				}
+
+				if err := json.Unmarshal([]byte(cleanResponse), &result); err == nil {
+					for _, alertResult := range result.Alerts {
+						llmSummary := alertResult.LLMSummary
+						if alertResult.Recommendation != "" {
+							llmSummary += "\n\n处置建议：\n- " + alertResult.Recommendation
+						}
+
+						if alertResult.IsThreat {
+							aiJudgedCount++
+							h.alertRepo.MarkAIJudged(alertResult.AlertID, llmSummary)
+						} else {
+							fpSummary := fmt.Sprintf("AI判定为误报：%s", alertResult.LLMSummary)
+							h.alertRepo.UpdateLLMSummary(alertResult.AlertID, fpSummary)
+						}
+					}
+				} else {
+					logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
+					for _, alert := range alerts {
+						aiJudgedCount++
+						h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+					}
 				}
 			}
 		}
 	}
 
-	agg.EventCount = len(alerts)
-	agg.AlertCount = len(alerts)
+	agg.EventCount = len(events)
+	agg.AlertCount = len(events)
 	agg.AIJudgedCount = aiJudgedCount
 	agg.AutoDisposeCount = autoDisposeCount
 	agg.Status = "completed"

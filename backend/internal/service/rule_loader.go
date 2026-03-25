@@ -91,17 +91,21 @@ func (l *RuleLoader) LoadFromFile(ctx context.Context, filePath string) error {
 	// Check if already exists
 	existing, err := l.ruleRepo.FindByID(rule.ID)
 	if err == nil && existing != nil {
-		l.logger.Debug("rule already exists, skipping", zap.String("rule_id", rule.ID))
+		l.logger.Debug("rule already exists, skipping", zap.String("rule_id", rule.ID), zap.String("status", existing.Status))
 		return nil
 	}
 
-	// Create rule record
+	yamlStatus := rule.Status
+	if yamlStatus == "" {
+		yamlStatus = "active"
+	}
+
 	sigmaRule := &model.SigmaRule{
 		RuleID:      rule.ID,
 		Title:       rule.Title,
 		Description: rule.Description,
 		Content:     string(data),
-		Status:      "active",
+		Status:      yamlStatus,
 		MitreID:     extractMitreID(rule.Tags),
 		Severity:    rule.Level,
 		GeneratedBy: "manual",
@@ -115,6 +119,7 @@ func (l *RuleLoader) LoadFromFile(ctx context.Context, filePath string) error {
 	l.logger.Info("rule loaded",
 		zap.String("rule_id", rule.ID),
 		zap.String("title", rule.Title),
+		zap.String("status", yamlStatus),
 	)
 
 	return nil

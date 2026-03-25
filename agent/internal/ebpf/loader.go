@@ -43,7 +43,7 @@ func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
 	}, nil
 }
 
-// LoadAll loads eBPF programs for process events only (exec/fork/exit)
+// LoadAll loads eBPF programs for process events (exec/fork).
 func (l *Loader) LoadAll() error {
 	programs := []struct {
 		name       string
@@ -53,7 +53,6 @@ func (l *Loader) LoadAll() error {
 	}{
 		{"execve", "sys_enter_execve", "syscalls", "exec_events"},
 		{"fork", "sched_process_fork", "sched", "fork_events"},
-		{"exit", "sched_process_exit", "sched", "exit_events"},
 	}
 
 	for _, prog := range programs {
@@ -161,8 +160,6 @@ func (l *Loader) processEvent(name string, data []byte) {
 		l.processExecEvent(data)
 	case "fork":
 		l.processForkEvent(data)
-	case "exit":
-		l.processExitEvent(data)
 	}
 }
 
@@ -230,27 +227,6 @@ func (l *Loader) processForkEvent(data []byte) {
 		PPID:        int(e.ParentPid),
 		UID:         int(e.Uid),
 		CommandLine: fmt.Sprintf("fork from %s", bytesToString(e.ParentComm[:])),
-	}
-
-	l.sendEvent(event)
-}
-
-func (l *Loader) processExitEvent(data []byte) {
-	var e ExitEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
-		return
-	}
-
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "process_exit",
-		ProcessName: bytesToString(e.Comm[:]),
-		PID:         int(e.Pid),
-		UID:         int(e.Uid),
-		CommandLine: fmt.Sprintf("exit code %d", e.ExitCode),
 	}
 
 	l.sendEvent(event)

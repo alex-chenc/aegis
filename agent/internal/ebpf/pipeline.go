@@ -1,6 +1,7 @@
 package ebpf
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"aegis-agent/internal/logger"
 	"aegis-agent/internal/monitor"
 	"aegis-agent/internal/sigma"
+	"aegis-agent/internal/tools"
 	pb "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
@@ -19,14 +21,15 @@ type EventReporter interface {
 }
 
 type Pipeline struct {
-	collector  *Collector
-	ruleLoader *sigma.Loader
-	reporter   EventReporter
-	hostID     string
-	hostname   string
-	metrics    *monitor.Metrics
-	seq        uint64
-	flushEvery time.Duration
+	collector   *Collector
+	ruleLoader  *sigma.Loader
+	reporter    EventReporter
+	hostID      string
+	hostname    string
+	metrics     *monitor.Metrics
+	seq         uint64
+	flushEvery  time.Duration
+	toolManager *tools.ToolManager
 }
 
 func NewPipeline(collector *Collector, ruleLoader *sigma.Loader, reporter EventReporter, hostID string, metrics *monitor.Metrics) *Pipeline {
@@ -35,13 +38,14 @@ func NewPipeline(collector *Collector, ruleLoader *sigma.Loader, reporter EventR
 		metrics = monitor.NewMetrics()
 	}
 	return &Pipeline{
-		collector:  collector,
-		ruleLoader: ruleLoader,
-		reporter:   reporter,
-		hostID:     hostID,
-		hostname:   hostname,
-		metrics:    metrics,
-		flushEvery: 2 * time.Second,
+		collector:   collector,
+		ruleLoader:  ruleLoader,
+		reporter:    reporter,
+		hostID:      hostID,
+		hostname:    hostname,
+		metrics:     metrics,
+		flushEvery:  2 * time.Second,
+		toolManager: tools.NewToolManager(),
 	}
 }
 
@@ -81,7 +85,7 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 	p.metrics.IncrEvents()
 	eventMap := p.buildEventMap(event)
 
-	logger.Info("Event captured",
+	logger.Debug("Event captured",
 		zap.String("type", event.EventType),
 		zap.String("cmd", event.CommandLine),
 		zap.Int("pid", event.PID))
@@ -142,6 +146,11 @@ func (p *Pipeline) buildEventMap(event Event) map[string]any {
 }
 
 func (p *Pipeline) buildRuntimeEvent(event Event, match *sigma.CompiledRule) *pb.RuntimeEvent {
+	processTreeJSON := ""
+	if p.toolManager != nil && event.PID > 0 {
+		processTreeJSON = p.getProcessTreeJSON(event.PID)
+	}
+
 	return &pb.RuntimeEvent{
 		EventId:       p.nextEventID(),
 		HostId:        event.HostID,
@@ -158,7 +167,24 @@ func (p *Pipeline) buildRuntimeEvent(event Event, match *sigma.CompiledRule) *pb
 		MatchedRuleId: match.ID,
 		MitreId:       match.MitreID,
 		Severity:      match.Severity,
+		ProcessTree:   processTreeJSON,
 	}
+}
+
+func (p *Pipeline) getProcessTreeJSON(pid int) string {
+	tree, err := p.toolManager.GetProcessTree(pid)
+	if err != nil {
+		logger.Debug("Failed to get process tree", zap.Int("pid", pid), zap.Error(err))
+		return ""
+	}
+
+	data, err := json.Marshal(tree)
+	if err != nil {
+		logger.Debug("Failed to marshal process tree", zap.Error(err))
+		return ""
+	}
+
+	return string(data)
 }
 
 func (p *Pipeline) nextEventID() string {

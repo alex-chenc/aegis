@@ -1,80 +1,127 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"time"
 
+	"aegis-system/internal/grpc_server"
 	"aegis-system/internal/model"
 	"aegis-system/internal/repository"
+	pb "aegis-system/pkg/api/v1"
 	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// BlockService handles threat blocking operations
 type BlockService struct {
-	blockRepo *repository.BlockRepository
-	logger    *zap.Logger
+	blockRepo  *repository.BlockRepository
+	alertRepo  *repository.AlertRepository
+	grpcServer *grpc_server.GRPCServer
+	logger     *zap.Logger
 }
 
-// NewBlockService creates a new block service
-func NewBlockService(blockRepo *repository.BlockRepository) *BlockService {
+func NewBlockService(blockRepo *repository.BlockRepository, alertRepo *repository.AlertRepository) *BlockService {
 	return &BlockService{
 		blockRepo: blockRepo,
+		alertRepo: alertRepo,
 		logger:    logger.Logger,
 	}
 }
 
-// ExecuteBlock creates a block record and dispatches the command
-func (s *BlockService) ExecuteBlock(hostID string, action string, target string, alertID *uuid.UUID, issuedBy string) (*model.BlockRecord, error) {
-	// Create block record
+func (s *BlockService) SetGRPCServer(server *grpc_server.GRPCServer) {
+	s.grpcServer = server
+}
+
+type BlockResult struct {
+	Record   *model.BlockRecord
+	Success  bool
+	Message  string
+	AlertMsg string
+}
+
+func (s *BlockService) ExecuteBlock(hostID string, action string, target string, alertID string, issuedBy string) (*BlockResult, error) {
+	hostUUID, err := uuid.Parse(hostID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid host_id: %w", err)
+	}
+
+	var alertUUID *uuid.UUID
+	if alertID != "" {
+		id, err := uuid.Parse(alertID)
+		if err == nil {
+			alertUUID = &id
+		}
+	}
+
 	record := &model.BlockRecord{
 		BlockID:  "BLK-" + uuid.New().String()[:8],
-		AlertID:  alertID,
-		HostID:   uuid.MustParse(hostID),
+		AlertID:  alertUUID,
+		HostID:   hostUUID,
 		Action:   action,
 		Target:   target,
 		IssuedBy: issuedBy,
 	}
 
-	// Dispatch block command
-	err := s.dispatchBlockCommand(hostID, action, target)
+	if s.grpcServer == nil {
+		record.Success = false
+		record.Message = "gRPC服务不可用"
+		s.blockRepo.Create(record)
+		return &BlockResult{Record: record, Success: false, Message: record.Message}, nil
+	}
+
+	if !s.grpcServer.IsAgentConnected(hostUUID) {
+		record.Success = false
+		record.Message = "Agent未连接"
+		s.blockRepo.Create(record)
+		return &BlockResult{Record: record, Success: false, Message: record.Message}, nil
+	}
+
+	blockStatus := "blocking"
+	if alertUUID != nil {
+		s.alertRepo.UpdateBlockStatus(alertID, blockStatus, "阻断指令下发中...")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := s.grpcServer.ExecuteBlockCommand(ctx, &pb.BlockCommand{
+		CommandId: record.BlockID,
+		HostId:    hostID,
+		Action:    action,
+		Target:    target,
+		Reason:    "manual block",
+	})
+
 	if err != nil {
 		record.Success = false
-		record.Message = err.Error()
-		s.logger.Error("block command failed",
-			zap.String("host_id", hostID),
-			zap.String("action", action),
-			zap.Error(err),
-		)
-	} else {
+		record.Message = fmt.Sprintf("阻断指令发送失败: %v", err)
+		s.blockRepo.Create(record)
+		if alertUUID != nil {
+			s.alertRepo.UpdateBlockStatus(alertID, "failed", record.Message)
+		}
+		return &BlockResult{Record: record, Success: false, Message: record.Message}, nil
+	}
+
+	if resp.Success {
 		record.Success = true
-		record.Message = "阻断指令已下发"
+		record.Message = "阻断成功"
+		s.blockRepo.Create(record)
+		if alertUUID != nil {
+			s.alertRepo.UpdateBlockStatus(alertID, "success", "阻断执行成功")
+		}
+		return &BlockResult{Record: record, Success: true, Message: "阻断成功"}, nil
+	} else {
+		record.Success = false
+		record.Message = resp.Error
+		if record.Message == "" {
+			record.Message = "阻断失败，原因未知"
+		}
+		s.blockRepo.Create(record)
+		if alertUUID != nil {
+			s.alertRepo.UpdateBlockStatus(alertID, "failed", record.Message)
+		}
+		return &BlockResult{Record: record, Success: false, Message: record.Message}, nil
 	}
-
-	// Save record
-	if err := s.blockRepo.Create(record); err != nil {
-		return nil, fmt.Errorf("failed to create block record: %w", err)
-	}
-
-	s.logger.Info("block executed",
-		zap.String("block_id", record.BlockID),
-		zap.String("host_id", hostID),
-		zap.String("action", action),
-		zap.Bool("success", record.Success),
-	)
-
-	return record, nil
-}
-
-// dispatchBlockCommand sends the block command to the agent via gRPC
-func (s *BlockService) dispatchBlockCommand(hostID, action, target string) error {
-	// TODO: Implement actual gRPC call to agent
-	// For now, just log the command
-	s.logger.Info("dispatching block command",
-		zap.String("host_id", hostID),
-		zap.String("action", action),
-		zap.String("target", target),
-	)
-	return nil
 }

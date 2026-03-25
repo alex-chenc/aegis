@@ -23,12 +23,18 @@ import (
 
 type TaskResultCallback func(taskID uuid.UUID, stdout, stderr string, exitCode int, status string)
 
+type WebSocketBroadcaster interface {
+	BroadcastAlert(alert *model.Alert)
+}
+
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
 	server             *grpc.Server
 	hostRepo           *repository.HostRepository
 	taskLogRepo        *repository.TaskLogRepository
 	sigmaRuleRepo      *repository.SigmaRuleRepository
+	alertRepo          *repository.AlertRepository
+	wsBroadcaster      WebSocketBroadcaster
 	redisClient        *storage.RedisClient
 	kafkaProducer      *queue.KafkaProducer
 	agentConnections   sync.Map
@@ -60,6 +66,11 @@ func (s *GRPCServer) SetTaskLogRepo(taskLogRepo *repository.TaskLogRepository) {
 
 func (s *GRPCServer) SetSigmaRuleRepo(repo *repository.SigmaRuleRepository) {
 	s.sigmaRuleRepo = repo
+}
+
+func (s *GRPCServer) SetAlertRepo(alertRepo *repository.AlertRepository, wsBroadcaster WebSocketBroadcaster) {
+	s.alertRepo = alertRepo
+	s.wsBroadcaster = wsBroadcaster
 }
 
 func (s *GRPCServer) SetTaskResultCallback(callback TaskResultCallback) {
@@ -288,6 +299,8 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				logger.Info("agent connection established",
 					zap.Stringer("host_id", hostID),
 				)
+
+				go s.pushActiveRulesToAgent(hostID, connection)
 			}
 
 		case *pb.CommandRequest_Result:
@@ -355,20 +368,18 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		zap.Int("event_count", len(req.Events)),
 	)
 
-	if s.kafkaProducer == nil {
-		logger.Warn("kafka producer not initialized, events will not be processed")
-		return &pb.ReportEventResponse{
-			Success:       true,
-			ReceivedCount: int32(len(req.Events)),
-		}, nil
-	}
-
 	for _, event := range req.Events {
-		if err := s.kafkaProducer.SendRawEvent(ctx, req.HostId, event); err != nil {
-			logger.Error("failed to send event to kafka",
-				zap.String("event_id", event.EventId),
-				zap.Error(err),
-			)
+		if s.kafkaProducer != nil {
+			if err := s.kafkaProducer.SendRawEvent(ctx, req.HostId, event); err != nil {
+				logger.Error("failed to send event to kafka",
+					zap.String("event_id", event.EventId),
+					zap.Error(err),
+				)
+			}
+		}
+
+		if s.alertRepo != nil && event.MatchedRuleId != "" {
+			s.createAlertFromEvent(req.HostId, event)
 		}
 	}
 
@@ -376,6 +387,63 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		Success:       true,
 		ReceivedCount: int32(len(req.Events)),
 	}, nil
+}
+
+func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEvent) {
+	hostID, err := uuid.Parse(hostIDStr)
+	if err != nil {
+		logger.Error("invalid host_id", zap.String("host_id", hostIDStr), zap.Error(err))
+		return
+	}
+
+	dedupeKey := fmt.Sprintf("%s:%d:%s", hostIDStr, event.Pid, event.MatchedRuleId)
+
+	existing, err := s.alertRepo.FindByDedupeKey(dedupeKey)
+	if err == nil && existing != nil {
+		existing.HitCount++
+		existing.LastSeenAt = time.Now()
+		if event.ProcessTree != "" {
+			existing.ProcessTree = event.ProcessTree
+		}
+		if err := s.alertRepo.Update(existing); err != nil {
+			logger.Error("failed to update alert", zap.Error(err))
+		}
+		if s.wsBroadcaster != nil {
+			s.wsBroadcaster.BroadcastAlert(existing)
+		}
+		return
+	}
+
+	alert := &model.Alert{
+		AlertID:        "ALT-" + uuid.New().String()[:8],
+		HostID:         hostID,
+		PID:            int(event.Pid),
+		PPID:           int(event.Ppid),
+		CommandLine:    event.CommandLine,
+		ProcessTree:    event.ProcessTree,
+		MitreID:        event.MitreId,
+		Severity:       event.Severity,
+		DedupeKey:      dedupeKey,
+		HitCount:       1,
+		Status:         "pending",
+		JudgmentSource: "system",
+		RuleID:         event.MatchedRuleId,
+	}
+
+	if err := s.alertRepo.Create(alert); err != nil {
+		logger.Error("failed to create alert", zap.Error(err))
+		return
+	}
+
+	logger.Info("alert created from event",
+		zap.String("alert_id", alert.AlertID),
+		zap.String("mitre_id", event.MitreId),
+		zap.Int("pid", int(event.Pid)),
+		zap.Bool("has_process_tree", event.ProcessTree != ""))
+
+	if s.wsBroadcaster != nil {
+		s.wsBroadcaster.BroadcastAlert(alert)
+	}
 }
 
 func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
@@ -437,7 +505,7 @@ func (s *GRPCServer) UpdateRules(ctx context.Context, req *pb.RuleUpdateRequest)
 		}
 
 		rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
-			logger.Info("querying active rules from database")
+		logger.Info("querying active rules from database")
 		if err != nil {
 			logger.Error("failed to get rules for sync", zap.Error(err))
 			return &pb.RuleUpdateResponse{Success: false, LoadedCount: 0}, nil
@@ -498,11 +566,33 @@ func (s *GRPCServer) ExecuteBlockCommand(ctx context.Context, cmd *pb.BlockComma
 	}
 
 	agentConn := conn.(*AgentConnection)
+
+	if agentConn.Stream != nil {
+		err := agentConn.Stream.Send(&pb.CommandRequest{
+			Request: &pb.CommandRequest_Block{
+				Block: cmd,
+			},
+		})
+		if err != nil {
+			logger.Error("failed to send block command via stream", zap.Error(err))
+			return &pb.BlockResponse{
+				CommandId: cmd.CommandId,
+				Success:   false,
+				Error:     fmt.Sprintf("failed to send block command: %v", err),
+			}, nil
+		}
+		logger.Info("block command sent via stream", zap.String("command_id", cmd.CommandId))
+		return &pb.BlockResponse{
+			CommandId: cmd.CommandId,
+			Success:   true,
+		}, nil
+	}
+
 	if agentConn.Client == nil {
 		return &pb.BlockResponse{
 			CommandId: cmd.CommandId,
 			Success:   false,
-			Error:     "agent callback client not available",
+			Error:     "agent not connected",
 		}, nil
 	}
 
@@ -706,6 +796,59 @@ func (s *GRPCServer) parseSoftwareList(output string) ([]model.SoftwareInfo, err
 	return software, nil
 }
 
+func (s *GRPCServer) pushActiveRulesToAgent(hostID uuid.UUID, conn *AgentConnection) {
+	time.Sleep(1 * time.Second)
+
+	if s.sigmaRuleRepo == nil {
+		logger.Warn("sigma rule repo not initialized")
+		return
+	}
+
+	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+	if err != nil {
+		logger.Error("failed to get active rules for push", zap.Error(err))
+		return
+	}
+
+	if len(rules) == 0 {
+		logger.Info("no active rules to push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	updates := make([]*pb.RuleUpdate, 0, len(rules))
+	for _, rule := range rules {
+		updates = append(updates, &pb.RuleUpdate{
+			RuleId:  rule.RuleID,
+			Action:  "add",
+			Content: rule.Content,
+		})
+	}
+
+	if conn.Stream == nil {
+		logger.Warn("agent stream is nil", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	err = conn.Stream.Send(&pb.CommandRequest{
+		Request: &pb.CommandRequest_RuleUpdate{
+			RuleUpdate: &pb.RuleUpdateRequest{
+				Action: "full_sync",
+				Rules:  updates,
+			},
+		},
+	})
+
+	if err != nil {
+		logger.Error("failed to push rules to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
+	} else {
+		logger.Info("pushed active rules to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Int("rule_count", len(rules)))
+	}
+}
+
 func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 	// Retry loop to wait for bidirectional stream establishment
 	maxRetries := 5
@@ -733,14 +876,14 @@ func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 	}
 
 	if s.sigmaRuleRepo == nil {
-			logger.Warn("sigmaRuleRepo is nil, cannot return rules")
+		logger.Warn("sigmaRuleRepo is nil, cannot return rules")
 		logger.Warn("sigma rule repo not initialized")
 		return
 	}
 
 	// Get all active/experimental rules
 	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
-			logger.Info("querying active rules from database")
+	logger.Info("querying active rules from database")
 	if err != nil {
 		logger.Error("failed to get rules for push", zap.Error(err))
 		return
@@ -793,4 +936,37 @@ func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 			zap.Int("rule_count", len(rules)),
 			zap.Int32("loaded_count", resp.LoadedCount))
 	}
+}
+
+func (s *GRPCServer) BroadcastRuleUpdate(update *pb.RuleUpdate) {
+	s.agentConnections.Range(func(key, value interface{}) bool {
+		conn, ok := value.(*AgentConnection)
+		if !ok || conn.Stream == nil {
+			logger.Warn("agent connection has no stream",
+				zap.String("host_id", key.(uuid.UUID).String()))
+			return true
+		}
+
+		err := conn.Stream.Send(&pb.CommandRequest{
+			Request: &pb.CommandRequest_RuleUpdate{
+				RuleUpdate: &pb.RuleUpdateRequest{
+					Action: "incremental",
+					Rules:  []*pb.RuleUpdate{update},
+				},
+			},
+		})
+
+		if err != nil {
+			logger.Warn("failed to send rule update to agent",
+				zap.String("host_id", key.(uuid.UUID).String()),
+				zap.String("rule_id", update.RuleId),
+				zap.Error(err))
+		} else {
+			logger.Info("rule update sent to agent",
+				zap.String("host_id", key.(uuid.UUID).String()),
+				zap.String("rule_id", update.RuleId),
+				zap.String("action", update.Action))
+		}
+		return true
+	})
 }

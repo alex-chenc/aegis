@@ -9,17 +9,23 @@ import (
 )
 
 type ProcessTree struct {
-	PID         int           `json:"pid"`
-	PPID        int           `json:"ppid"`
-	Name        string        `json:"name"`
-	CommandLine string        `json:"command_line"`
-	User        string        `json:"user"`
-	Children    []ProcessInfo `json:"children"`
+	PID             int           `json:"pid"`
+	PPID            int           `json:"ppid"`
+	Name            string        `json:"name"`
+	CommandLine     string        `json:"command_line"`
+	User            string        `json:"user"`
+	UserGroup       string        `json:"user_group"`
+	ExePath         string        `json:"exe_path"`
+	PPIDCommandLine string        `json:"ppid_command_line"`
+	PPIDUser        string        `json:"ppid_user"`
+	Children        []ProcessInfo `json:"children"`
 }
 
 type ProcessInfo struct {
-	PID  int    `json:"pid"`
-	Name string `json:"name"`
+	PID         int    `json:"pid"`
+	Name        string `json:"name"`
+	CommandLine string `json:"command_line"`
+	User        string `json:"user"`
 }
 
 func (m *ToolManager) GetProcessTree(pid int) (*ProcessTree, error) {
@@ -34,6 +40,8 @@ func (m *ToolManager) GetProcessTree(pid int) (*ProcessTree, error) {
 	commData, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
 	comm := strings.TrimSpace(string(commData))
 
+	exePath, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+
 	fields := strings.Fields(string(statData))
 	ppid := 0
 	if len(fields) > 3 {
@@ -41,20 +49,44 @@ func (m *ToolManager) GetProcessTree(pid int) (*ProcessTree, error) {
 	}
 
 	uid := getProcessUID(pid)
-	u, _ := user.LookupId(strconv.Itoa(uid))
-	username := ""
-	if u != nil {
-		username = u.Username
-	}
+	username, userGroup := getUserInfo(uid)
 
-	return &ProcessTree{
+	tree := &ProcessTree{
 		PID:         pid,
 		PPID:        ppid,
 		Name:        comm,
 		CommandLine: cmdline,
 		User:        username,
+		UserGroup:   userGroup,
+		ExePath:     exePath,
 		Children:    findChildren(pid),
-	}, nil
+	}
+
+	if ppid > 0 {
+		ppidCmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", ppid))
+		tree.PPIDCommandLine = strings.TrimSpace(strings.ReplaceAll(string(ppidCmdline), "\x00", " "))
+
+		ppidUID := getProcessUID(ppid)
+		ppidUser, _ := getUserInfo(ppidUID)
+		tree.PPIDUser = ppidUser
+	}
+
+	return tree, nil
+}
+
+func getUserInfo(uid int) (username, userGroup string) {
+	u, err := user.LookupId(strconv.Itoa(uid))
+	if err != nil {
+		return "", ""
+	}
+	username = u.Username
+
+	g, err := user.LookupGroupId(u.Gid)
+	if err == nil {
+		userGroup = g.Name
+	}
+
+	return username, userGroup
 }
 
 func findChildren(pid int) []ProcessInfo {
@@ -84,9 +116,17 @@ func findChildren(pid int) []ProcessInfo {
 		}
 
 		commData, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", childPID))
+		cmdlineData, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", childPID))
+		cmdline := strings.TrimSpace(strings.ReplaceAll(string(cmdlineData), "\x00", " "))
+
+		uid := getProcessUID(childPID)
+		username, _ := getUserInfo(uid)
+
 		children = append(children, ProcessInfo{
-			PID:  childPID,
-			Name: strings.TrimSpace(string(commData)),
+			PID:         childPID,
+			Name:        strings.TrimSpace(string(commData)),
+			CommandLine: cmdline,
+			User:        username,
 		})
 	}
 

@@ -33,10 +33,32 @@ func (r *AlertRepository) Update(alert *model.Alert) error {
 }
 
 func (r *AlertRepository) FindByID(id string) (*model.Alert, error) {
-	var alert model.Alert
-	err := r.db.Where("alert_id = ?", id).First(&alert).Error
+	type AlertWithHost struct {
+		model.Alert
+		Hostname  string `json:"hostname"`
+		RuleTitle string `json:"rule_title"`
+	}
+
+	var result AlertWithHost
+	err := r.db.Table("alerts").
+		Select(`alerts.*, 
+			hosts.hostname, 
+			COALESCE(
+				NULLIF(alerts.rule_title, ''),
+				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				alerts.mitre_id
+			) as rule_title`).
+		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Where("alerts.alert_id = ?", id).
+		First(&result).Error
 	if err != nil {
 		return nil, err
+	}
+
+	alert := result.Alert
+	alert.Hostname = result.Hostname
+	if result.RuleTitle != "" {
+		alert.RuleTitle = result.RuleTitle
 	}
 
 	return &alert, nil
@@ -219,4 +241,11 @@ func (r *AlertRepository) UpdateLLMSummary(alertID string, summary string) error
 			"llm_summary": summary,
 			"updated_at":  gorm.Expr("NOW()"),
 		}).Error
+}
+
+func (r *AlertRepository) DeleteByIDs(alertIDs []string) error {
+	if len(alertIDs) == 0 {
+		return nil
+	}
+	return r.db.Where("alert_id IN ?", alertIDs).Delete(&model.Alert{}).Error
 }

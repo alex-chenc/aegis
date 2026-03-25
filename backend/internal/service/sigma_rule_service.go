@@ -3,26 +3,71 @@ package service
 import (
 	"time"
 
+	"aegis-system/internal/grpc_server"
 	"aegis-system/internal/repository"
+	pb "aegis-system/pkg/api/v1"
 	"aegis-system/pkg/logger"
 
 	"go.uber.org/zap"
 )
 
 type SigmaRuleService struct {
-	ruleRepo *repository.SigmaRuleRepository
+	ruleRepo   *repository.SigmaRuleRepository
+	grpcServer *grpc_server.GRPCServer
 }
 
 func NewSigmaRuleService(ruleRepo *repository.SigmaRuleRepository) *SigmaRuleService {
 	return &SigmaRuleService{ruleRepo: ruleRepo}
 }
 
+func (s *SigmaRuleService) SetGRPCServer(server *grpc_server.GRPCServer) {
+	s.grpcServer = server
+}
+
 func (s *SigmaRuleService) ApproveRule(ruleID string) error {
-	return s.ruleRepo.UpdateStatus(ruleID, "active")
+	if err := s.ruleRepo.UpdateStatus(ruleID, "active"); err != nil {
+		return err
+	}
+	s.broadcastRuleUpdate(ruleID, "active")
+	return nil
 }
 
 func (s *SigmaRuleService) DisableRule(ruleID string) error {
-	return s.ruleRepo.UpdateStatus(ruleID, "disabled")
+	if err := s.ruleRepo.UpdateStatus(ruleID, "disabled"); err != nil {
+		return err
+	}
+	s.broadcastRuleUpdate(ruleID, "disabled")
+	return nil
+}
+
+func (s *SigmaRuleService) broadcastRuleUpdate(ruleID, status string) {
+	if s.grpcServer == nil {
+		return
+	}
+
+	action := "update"
+	if status == "disabled" {
+		action = "delete"
+	}
+
+	rule, err := s.ruleRepo.FindByID(ruleID)
+	if err != nil {
+		logger.Warn("failed to get rule for broadcast", zap.String("rule_id", ruleID), zap.Error(err))
+		return
+	}
+
+	content := rule.Content
+	if status == "disabled" {
+		content = ""
+	}
+
+	s.grpcServer.BroadcastRuleUpdate(&pb.RuleUpdate{
+		RuleId:  ruleID,
+		Action:  action,
+		Content: content,
+	})
+
+	logger.Info("rule update broadcasted", zap.String("rule_id", ruleID), zap.String("action", action))
 }
 
 func (s *SigmaRuleService) CheckAndPromoteRules() {

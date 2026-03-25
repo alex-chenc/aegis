@@ -17,8 +17,8 @@ export function blockAlert(alertId: string, action?: string): Promise<BlockRecor
   return request.post(`/detection/alerts/${alertId}/block`, { action: action || 'kill_process' })
 }
 
-export function getBlockPolicies(): Promise<BlockPolicy[]> {
-  return request.get('/detection/block-policies')
+export function getBlockPolicies(params?: { page?: number; page_size?: number }): Promise<{ data: any[]; total: number }> {
+  return request.get('/detection/block-policies', { params })
 }
 
 export function updateBlockPolicy(mitreId: string, data: any): Promise<void> {
@@ -60,4 +60,8 @@ export function startLLMAggregation(startTime: string, endTime: string, hostIds?
 
 export function getLLMAggregationStatus(aggregationId: string): Promise<LLMAggregation> {
   return request.get(`/detection/llm/aggregate/${aggregationId}`)
+}
+
+export function deleteAlerts(alertIds: string[]): Promise<{ deleted_count: number }> {
+  return request.delete('/detection/alerts', { data: { alert_ids: alertIds } })
 }

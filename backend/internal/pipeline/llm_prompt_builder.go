@@ -53,12 +53,18 @@ func getSystemPrompt() string {
 {
   "alerts": [
     {
+      "rule_id": "规则ID，如 reverse_shell_001",
+      "rule_title": "规则名称，如 反弹Shell检测",
       "mitre_id": "T1059.004",
+      "mitre_name": "Command and Scripting Interpreter",
       "severity": "critical|high|medium|low",
       "pid": 12345,
-      "description": "威胁描述",
-      "block_action": "kill_process",
-      "block_target": "12345"
+      "description": "详细威胁描述，说明检测到的威胁行为",
+      "llm_summary": "简要分析结论，一句话概括威胁",
+      "disposal_strategy": "处置建议，如 建议立即终止进程",
+      "block_action": "kill_process|quarantine_file|block_connection",
+      "block_target": "进程PID或文件路径",
+      "judgment_source": "ai"
     }
   ],
   "tool_calls": [
@@ -85,7 +91,8 @@ func getSystemPrompt() string {
 5. 最多调用10次工具
 6. 如果事件是误报，alerts数组可以为空
 7. severity应根据MITRE ATT&CK技术的危险程度判断
-8. 优先关注反弹shell、提权、数据渗出等高危行为`
+8. 优先关注反弹shell、提权、数据渗出等高危行为
+9. description和llm_summary必须填写，不能为空`
 }
 
 // BuildToolResultPrompt builds a prompt to include tool call results

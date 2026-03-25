@@ -1,13 +1,13 @@
 package config
 
 import (
-	"github.com/google/uuid"
-	"github.com/pelletier/go-toml/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
 )
 
-// Config Agent 配置结构
 type Config struct {
 	ServerAddr      string `toml:"ServerAddr"`
 	AuthToken       string `toml:"AuthToken"`
@@ -15,11 +15,11 @@ type Config struct {
 	EventBufferSize int    `toml:"EventBufferSize"`
 	RuleDir         string `toml:"RuleDir"`
 	QuarantineDir   string `toml:"QuarantineDir"`
+	LogLevel        string `toml:"LogLevel"`
 }
 
 const configPath = "/etc/aegis-agent/config.toml"
 
-// LoadConfig 加载配置文件，如果 HostID 为空则生成 UUID 并回写
 func LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -33,7 +33,6 @@ func LoadConfig() (*Config, error) {
 
 	updated := false
 
-	// 如果 HostID 为空，生成新的 UUID 并回写
 	if cfg.HostID == "" {
 		cfg.HostID = uuid.New().String()
 		updated = true
@@ -51,6 +50,11 @@ func LoadConfig() (*Config, error) {
 
 	if cfg.QuarantineDir == "" {
 		cfg.QuarantineDir = "/var/quarantine"
+		updated = true
+	}
+
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
 		updated = true
 	}
 

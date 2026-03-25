@@ -23,11 +23,15 @@
         </el-input>
         <el-button type="primary" @click="loadAlerts">查询</el-button>
         <el-button type="warning" @click="showAIDenoiseDialog">AI降噪</el-button>
+        <el-button type="danger" :disabled="selectedAlerts.length === 0" @click="handleBatchDelete">
+          批量删除 ({{ selectedAlerts.length }})
+        </el-button>
       </div>
     </el-card>
 
     <el-card>
-      <el-table v-loading="alertLoading" :data="alerts" border stripe>
+      <el-table v-loading="alertLoading" :data="alerts" border stripe @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="rule_title" label="规则名称" min-width="180">
           <template #default="{ row }">
             {{ row.rule_title || row.mitre_id || '-' }}
@@ -84,15 +88,22 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="detailVisible" title="告警详情" width="760px">
+    <el-dialog v-model="detailVisible" title="告警详情" width="900px">
       <el-descriptions v-if="selectedAlert" :column="2" border>
-        <el-descriptions-item label="规则名称">{{ selectedAlert.rule_title || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="规则名称" :span="2">{{ selectedAlert.rule_title || selectedAlert.mitre_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="主机">{{ selectedAlert.hostname || selectedAlert.host_id }}</el-descriptions-item>
         <el-descriptions-item label="MITRE ID">{{ selectedAlert.mitre_id }}</el-descriptions-item>
-        <el-descriptions-item label="威胁名称">{{ selectedAlert.mitre_name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="进程PID">{{ selectedAlert.pid }}</el-descriptions-item>
         <el-descriptions-item label="判定来源">{{ judgmentSourceLabel(selectedAlert.judgment_source) }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ statusLabel(selectedAlert.status, selectedAlert.block_status) }}</el-descriptions-item>
+        <el-descriptions-item v-if="selectedAlert.block_status" label="阻断状态">
+          <el-tag :type="selectedAlert.block_status === 'success' ? 'success' : selectedAlert.block_status === 'failed' ? 'danger' : 'warning'">
+            {{ selectedAlert.block_status === 'success' ? '阻断成功' : selectedAlert.block_status === 'failed' ? '阻断失败' : '阻断中' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="selectedAlert.block_message" label="阻断结果" :span="2">
+          <el-text :type="selectedAlert.block_status === 'failed' ? 'danger' : 'success'">{{ selectedAlert.block_message }}</el-text>
+        </el-descriptions-item>
         <el-descriptions-item label="命中次数">{{ selectedAlert.hit_count }}</el-descriptions-item>
         <el-descriptions-item label="首次发现">{{ formatTime(selectedAlert.first_seen_at) }}</el-descriptions-item>
         <el-descriptions-item label="最近发现">{{ formatTime(selectedAlert.last_seen_at) }}</el-descriptions-item>
@@ -104,6 +115,10 @@
         </el-descriptions-item>
         <el-descriptions-item label="描述" :span="2">{{ selectedAlert.description || '-' }}</el-descriptions-item>
       </el-descriptions>
+      <div v-if="selectedAlert" class="process-tree-section">
+        <h4>进程树</h4>
+        <ProcessTree :process-tree="selectedAlert.process_tree" />
+      </div>
     </el-dialog>
 
     <el-dialog v-model="blockDialogVisible" title="选择阻断动作" width="400px">
@@ -179,6 +194,7 @@ import { useDetectionStore } from '@/store/detection'
 import * as api from '@/api/detection'
 import type { Alert } from '@/types'
 import { SeverityLabels, AlertStatusLabels, BlockStatusLabels, JudgmentSourceLabels } from '@/types'
+import ProcessTree from '@/components/ProcessTree.vue'
 
 const store = useDetectionStore()
 
@@ -199,6 +215,11 @@ const aiDenoiseAutoDispose = ref(false)
 const aiDenoiseLoading = ref(false)
 const aiDenoiseResultVisible = ref(false)
 const aiDenoiseResult = ref<any>(null)
+const selectedAlerts = ref<Alert[]>([])
+
+function handleSelectionChange(selection: Alert[]) {
+  selectedAlerts.value = selection
+}
 
 const alerts = computed(() => store.alerts)
 const alertTotal = computed(() => store.alertTotal)
@@ -271,6 +292,23 @@ async function confirmBlock() {
   ElMessage.success('阻断指令已下发')
   blockDialogVisible.value = false
   loadAlerts()
+}
+
+async function handleBatchDelete() {
+  if (selectedAlerts.value.length === 0) {
+    ElMessage.warning('请先选择要删除的告警')
+    return
+  }
+  
+  try {
+    const alertIds = selectedAlerts.value.map(a => a.alert_id)
+    await api.deleteAlerts(alertIds)
+    ElMessage.success(`已删除 ${alertIds.length} 条告警`)
+    selectedAlerts.value = []
+    loadAlerts()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.message || '删除失败')
+  }
 }
 
 function disabledDate(time: Date) {
@@ -360,5 +398,18 @@ onMounted(() => {
   margin-left: 10px;
   color: #909399;
   font-size: 12px;
+}
+
+.process-tree-section {
+  margin-top: 20px;
+  border-top: 1px solid #ebeef5;
+  padding-top: 16px;
+}
+
+.process-tree-section h4 {
+  margin: 0 0 12px 0;
+  color: #303133;
+  font-size: 14px;
+  font-weight: 500;
 }
 </style>

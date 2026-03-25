@@ -1,11 +1,14 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"aegis-system/internal/grpc_server"
 	"aegis-system/internal/model"
 	"aegis-system/internal/repository"
+	pb "aegis-system/pkg/api/v1"
 	"aegis-system/pkg/logger"
 
 	"github.com/google/uuid"
@@ -27,6 +30,7 @@ type AlertService struct {
 	alertRepo       *repository.AlertRepository
 	blockPolicyRepo *repository.BlockPolicyRepository
 	blockRepo       *repository.BlockRepository
+	grpcServer      *grpc_server.GRPCServer
 }
 
 func NewAlertService(
@@ -39,6 +43,10 @@ func NewAlertService(
 		blockPolicyRepo: blockPolicyRepo,
 		blockRepo:       blockRepo,
 	}
+}
+
+func (s *AlertService) SetGRPCServer(server *grpc_server.GRPCServer) {
+	s.grpcServer = server
 }
 
 func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, ruleID, ruleTitle, mitreID, mitreName, severity, description string) (*model.Alert, error) {
@@ -125,11 +133,16 @@ func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockR
 		action = "kill_process"
 	}
 
-	alert.ManualBlocked = true
-	blockStatus := BlockBlocking
-	alert.BlockStatus = &blockStatus
-	if err := s.alertRepo.Update(alert); err != nil {
-		return nil, err
+	var target string
+	switch action {
+	case "kill_process":
+		target = fmt.Sprintf("%d", alert.PID)
+	case "quarantine_file":
+		target = alert.CommandLine
+	case "block_connection", "disable_user":
+		target = fmt.Sprintf("%d", alert.PID)
+	default:
+		target = fmt.Sprintf("%d", alert.PID)
 	}
 
 	record := &model.BlockRecord{
@@ -137,12 +150,55 @@ func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockR
 		AlertID:  &alert.ID,
 		HostID:   alert.HostID,
 		Action:   action,
-		Target:   fmt.Sprintf("%d", alert.PID),
+		Target:   target,
 		IssuedBy: "manual",
 	}
 
-	if err := s.blockRepo.Create(record); err != nil {
-		return nil, err
+	alert.ManualBlocked = true
+	blockStatus := BlockBlocking
+	alert.BlockStatus = &blockStatus
+	s.alertRepo.Update(alert)
+
+	if s.grpcServer == nil || !s.grpcServer.IsAgentConnected(alert.HostID) {
+		record.Success = false
+		record.Message = "Agent未连接"
+		s.blockRepo.Create(record)
+		s.alertRepo.UpdateBlockStatus(alertID, BlockFailed, "Agent未连接")
+		return record, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := s.grpcServer.ExecuteBlockCommand(ctx, &pb.BlockCommand{
+		CommandId: record.BlockID,
+		HostId:    alert.HostID.String(),
+		Action:    action,
+		Target:    target,
+		Reason:    "manual block",
+	})
+
+	if err != nil {
+		record.Success = false
+		record.Message = fmt.Sprintf("阻断指令发送失败: %v", err)
+		s.blockRepo.Create(record)
+		s.alertRepo.UpdateBlockStatus(alertID, BlockFailed, record.Message)
+		return record, nil
+	}
+
+	if resp.Success {
+		record.Success = true
+		record.Message = "阻断成功"
+		s.blockRepo.Create(record)
+		s.alertRepo.UpdateBlockStatus(alertID, BlockSuccess, "阻断执行成功")
+	} else {
+		record.Success = false
+		record.Message = resp.Error
+		if record.Message == "" {
+			record.Message = "阻断失败，原因未知"
+		}
+		s.blockRepo.Create(record)
+		s.alertRepo.UpdateBlockStatus(alertID, BlockFailed, record.Message)
 	}
 
 	return record, nil

@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>阻断策略</span>
+          <span>阻断策略 (共 {{ total }} 条)</span>
           <el-button size="small" @click="loadPolicies">刷新</el-button>
         </div>
       </template>
@@ -40,19 +40,32 @@
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
       </el-table>
+
+      <div class="pagination-container">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="loadPolicies"
+          @current-change="loadPolicies"
+        />
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useDetectionStore } from '@/store/detection'
+import * as api from '@/api/detection'
 
-const store = useDetectionStore()
-
-const blockPolicies = computed(() => store.blockPolicies)
-const policyLoading = computed(() => store.policyLoading)
+const blockPolicies = ref<any[]>([])
+const policyLoading = ref(false)
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 function formatTime(time: string) {
   if (!time) return '-'
@@ -60,26 +73,35 @@ function formatTime(time: string) {
 }
 
 async function loadPolicies() {
-  await store.fetchBlockPolicies()
+  policyLoading.value = true
+  try {
+    const res = await api.getBlockPolicies({ page: page.value, page_size: pageSize.value })
+    blockPolicies.value = res.data || []
+    total.value = res.total || 0
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载失败')
+  } finally {
+    policyLoading.value = false
+  }
 }
 
 async function handleToggleEnabled(mitreId: string, enabled: boolean) {
-  await store.updateBlockPolicy(mitreId, { enabled })
+  await api.updateBlockPolicy(mitreId, { enabled })
   ElMessage.success('策略启用状态已更新')
 }
 
 async function handleToggleAutoBlock(mitreId: string, autoBlock: boolean) {
-  await store.updateBlockPolicy(mitreId, { auto_block: autoBlock })
+  await api.updateBlockPolicy(mitreId, { auto_block: autoBlock })
   ElMessage.success('自动阻断状态已更新')
 }
 
 async function handleToggleAutoDispose(mitreId: string, autoDispose: boolean) {
-  await store.updateBlockPolicy(mitreId, { auto_dispose: autoDispose })
+  await api.updateBlockPolicy(mitreId, { auto_dispose: autoDispose })
   ElMessage.success('自动处置状态已更新')
 }
 
 async function handleUpdateAction(mitreId: string, action: string) {
-  await store.updateBlockPolicy(mitreId, { action })
+  await api.updateBlockPolicy(mitreId, { action })
   ElMessage.success('阻断动作已更新')
 }
 
@@ -97,5 +119,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.pagination-container {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

@@ -503,6 +503,8 @@ type CommandRequest struct {
 	//
 	//	*CommandRequest_Execute
 	//	*CommandRequest_Result
+	//	*CommandRequest_RuleUpdate
+	//	*CommandRequest_Block
 	Request       isCommandRequest_Request `protobuf_oneof:"request"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -563,6 +565,24 @@ func (x *CommandRequest) GetResult() *CommandResult {
 	return nil
 }
 
+func (x *CommandRequest) GetRuleUpdate() *RuleUpdateRequest {
+	if x != nil {
+		if x, ok := x.Request.(*CommandRequest_RuleUpdate); ok {
+			return x.RuleUpdate
+		}
+	}
+	return nil
+}
+
+func (x *CommandRequest) GetBlock() *BlockCommand {
+	if x != nil {
+		if x, ok := x.Request.(*CommandRequest_Block); ok {
+			return x.Block
+		}
+	}
+	return nil
+}
+
 type isCommandRequest_Request interface {
 	isCommandRequest_Request()
 }
@@ -575,9 +595,21 @@ type CommandRequest_Result struct {
 	Result *CommandResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
 }
 
+type CommandRequest_RuleUpdate struct {
+	RuleUpdate *RuleUpdateRequest `protobuf:"bytes,3,opt,name=rule_update,json=ruleUpdate,proto3,oneof"`
+}
+
+type CommandRequest_Block struct {
+	Block *BlockCommand `protobuf:"bytes,4,opt,name=block,proto3,oneof"`
+}
+
 func (*CommandRequest_Execute) isCommandRequest_Request() {}
 
 func (*CommandRequest_Result) isCommandRequest_Request() {}
+
+func (*CommandRequest_RuleUpdate) isCommandRequest_Request() {}
+
+func (*CommandRequest_Block) isCommandRequest_Request() {}
 
 // SoftwareListRequest 软件列表采集请求
 type SoftwareListRequest struct {
@@ -748,6 +780,7 @@ type RuntimeEvent struct {
 	MatchedRuleId string                 `protobuf:"bytes,13,opt,name=matched_rule_id,json=matchedRuleId,proto3" json:"matched_rule_id,omitempty"`
 	MitreId       string                 `protobuf:"bytes,14,opt,name=mitre_id,json=mitreId,proto3" json:"mitre_id,omitempty"`
 	Severity      string                 `protobuf:"bytes,15,opt,name=severity,proto3" json:"severity,omitempty"`
+	ProcessTree   string                 `protobuf:"bytes,16,opt,name=process_tree,json=processTree,proto3" json:"process_tree,omitempty"` // JSON格式的进程树，Agent检测到威胁时自动采集
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -883,6 +916,13 @@ func (x *RuntimeEvent) GetMitreId() string {
 func (x *RuntimeEvent) GetSeverity() string {
 	if x != nil {
 		return x.Severity
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetProcessTree() string {
+	if x != nil {
+		return x.ProcessTree
 	}
 	return ""
 }
@@ -1486,10 +1526,13 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12\x16\n" +
 	"\x06stdout\x18\x04 \x01(\tR\x06stdout\x12\x16\n" +
 	"\x06stderr\x18\x05 \x01(\tR\x06stderr\x12\x19\n" +
-	"\bis_final\x18\x06 \x01(\bR\aisFinal\"\x8e\x01\n" +
+	"\bis_final\x18\x06 \x01(\bR\aisFinal\"\x88\x02\n" +
 	"\x0eCommandRequest\x129\n" +
 	"\aexecute\x18\x01 \x01(\v2\x1d.agent_comm.v1.CommandExecuteH\x00R\aexecute\x126\n" +
-	"\x06result\x18\x02 \x01(\v2\x1c.agent_comm.v1.CommandResultH\x00R\x06resultB\t\n" +
+	"\x06result\x18\x02 \x01(\v2\x1c.agent_comm.v1.CommandResultH\x00R\x06result\x12C\n" +
+	"\vrule_update\x18\x03 \x01(\v2 .agent_comm.v1.RuleUpdateRequestH\x00R\n" +
+	"ruleUpdate\x123\n" +
+	"\x05block\x18\x04 \x01(\v2\x1b.agent_comm.v1.BlockCommandH\x00R\x05blockB\t\n" +
 	"\arequest\"\x15\n" +
 	"\x13SoftwareListRequest\"\x89\x01\n" +
 	"\fSoftwareInfo\x12\x12\n" +
@@ -1498,7 +1541,7 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\x0fpackage_manager\x18\x03 \x01(\tR\x0epackageManager\x12\"\n" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\"X\n" +
 	"\x14SoftwareListResponse\x12@\n" +
-	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\xb6\x03\n" +
+	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\xd9\x03\n" +
 	"\fRuntimeEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x1a\n" +
@@ -1517,7 +1560,8 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"remoteAddr\x12&\n" +
 	"\x0fmatched_rule_id\x18\r \x01(\tR\rmatchedRuleId\x12\x19\n" +
 	"\bmitre_id\x18\x0e \x01(\tR\amitreId\x12\x1a\n" +
-	"\bseverity\x18\x0f \x01(\tR\bseverity\"b\n" +
+	"\bseverity\x18\x0f \x01(\tR\bseverity\x12!\n" +
+	"\fprocess_tree\x18\x10 \x01(\tR\vprocessTree\"b\n" +
 	"\x12ReportEventRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x123\n" +
 	"\x06events\x18\x02 \x03(\v2\x1b.agent_comm.v1.RuntimeEventR\x06events\"V\n" +
@@ -1610,31 +1654,33 @@ var file_proto_agent_comm_proto_depIdxs = []int32{
 	0,  // 0: agent_comm.v1.RegisterRequest.asset_info:type_name -> agent_comm.v1.AssetInfo
 	5,  // 1: agent_comm.v1.CommandRequest.execute:type_name -> agent_comm.v1.CommandExecute
 	6,  // 2: agent_comm.v1.CommandRequest.result:type_name -> agent_comm.v1.CommandResult
-	9,  // 3: agent_comm.v1.SoftwareListResponse.software_list:type_name -> agent_comm.v1.SoftwareInfo
-	11, // 4: agent_comm.v1.ReportEventRequest.events:type_name -> agent_comm.v1.RuntimeEvent
-	16, // 5: agent_comm.v1.RuleUpdateRequest.rules:type_name -> agent_comm.v1.RuleUpdate
-	16, // 6: agent_comm.v1.RuleUpdateResponse.rules:type_name -> agent_comm.v1.RuleUpdate
-	1,  // 7: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
-	3,  // 8: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
-	7,  // 9: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
-	8,  // 10: agent_comm.v1.AgentService.CollectSoftwareList:input_type -> agent_comm.v1.SoftwareListRequest
-	12, // 11: agent_comm.v1.AgentService.ReportEvent:input_type -> agent_comm.v1.ReportEventRequest
-	14, // 12: agent_comm.v1.AgentService.ExecuteTool:input_type -> agent_comm.v1.ToolRequest
-	17, // 13: agent_comm.v1.AgentService.UpdateRules:input_type -> agent_comm.v1.RuleUpdateRequest
-	19, // 14: agent_comm.v1.AgentService.ExecuteBlockCommand:input_type -> agent_comm.v1.BlockCommand
-	2,  // 15: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
-	4,  // 16: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
-	7,  // 17: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
-	10, // 18: agent_comm.v1.AgentService.CollectSoftwareList:output_type -> agent_comm.v1.SoftwareListResponse
-	13, // 19: agent_comm.v1.AgentService.ReportEvent:output_type -> agent_comm.v1.ReportEventResponse
-	15, // 20: agent_comm.v1.AgentService.ExecuteTool:output_type -> agent_comm.v1.ToolResponse
-	18, // 21: agent_comm.v1.AgentService.UpdateRules:output_type -> agent_comm.v1.RuleUpdateResponse
-	20, // 22: agent_comm.v1.AgentService.ExecuteBlockCommand:output_type -> agent_comm.v1.BlockResponse
-	15, // [15:23] is the sub-list for method output_type
-	7,  // [7:15] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	17, // 3: agent_comm.v1.CommandRequest.rule_update:type_name -> agent_comm.v1.RuleUpdateRequest
+	19, // 4: agent_comm.v1.CommandRequest.block:type_name -> agent_comm.v1.BlockCommand
+	9,  // 5: agent_comm.v1.SoftwareListResponse.software_list:type_name -> agent_comm.v1.SoftwareInfo
+	11, // 6: agent_comm.v1.ReportEventRequest.events:type_name -> agent_comm.v1.RuntimeEvent
+	16, // 7: agent_comm.v1.RuleUpdateRequest.rules:type_name -> agent_comm.v1.RuleUpdate
+	16, // 8: agent_comm.v1.RuleUpdateResponse.rules:type_name -> agent_comm.v1.RuleUpdate
+	1,  // 9: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
+	3,  // 10: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
+	7,  // 11: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
+	8,  // 12: agent_comm.v1.AgentService.CollectSoftwareList:input_type -> agent_comm.v1.SoftwareListRequest
+	12, // 13: agent_comm.v1.AgentService.ReportEvent:input_type -> agent_comm.v1.ReportEventRequest
+	14, // 14: agent_comm.v1.AgentService.ExecuteTool:input_type -> agent_comm.v1.ToolRequest
+	17, // 15: agent_comm.v1.AgentService.UpdateRules:input_type -> agent_comm.v1.RuleUpdateRequest
+	19, // 16: agent_comm.v1.AgentService.ExecuteBlockCommand:input_type -> agent_comm.v1.BlockCommand
+	2,  // 17: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
+	4,  // 18: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
+	7,  // 19: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
+	10, // 20: agent_comm.v1.AgentService.CollectSoftwareList:output_type -> agent_comm.v1.SoftwareListResponse
+	13, // 21: agent_comm.v1.AgentService.ReportEvent:output_type -> agent_comm.v1.ReportEventResponse
+	15, // 22: agent_comm.v1.AgentService.ExecuteTool:output_type -> agent_comm.v1.ToolResponse
+	18, // 23: agent_comm.v1.AgentService.UpdateRules:output_type -> agent_comm.v1.RuleUpdateResponse
+	20, // 24: agent_comm.v1.AgentService.ExecuteBlockCommand:output_type -> agent_comm.v1.BlockResponse
+	17, // [17:25] is the sub-list for method output_type
+	9,  // [9:17] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_proto_agent_comm_proto_init() }
@@ -1645,6 +1691,8 @@ func file_proto_agent_comm_proto_init() {
 	file_proto_agent_comm_proto_msgTypes[7].OneofWrappers = []any{
 		(*CommandRequest_Execute)(nil),
 		(*CommandRequest_Result)(nil),
+		(*CommandRequest_RuleUpdate)(nil),
+		(*CommandRequest_Block)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

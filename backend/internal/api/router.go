@@ -155,8 +155,10 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 		{
 			detection.GET("/alerts", r.detectionHandler.ListAlerts)
 			detection.GET("/alerts/:id", r.detectionHandler.GetAlert)
+			detection.GET("/alerts/:id/process-tree", r.detectionHandler.GetProcessTree)
 			detection.POST("/alerts/:id/resolve", r.detectionHandler.ResolveAlert)
 			detection.POST("/alerts/:id/block", r.detectionHandler.BlockAlert)
+			detection.DELETE("/alerts", r.detectionHandler.DeleteAlerts)
 
 			detection.GET("/blocks", r.detectionHandler.ListBlockRecords)
 

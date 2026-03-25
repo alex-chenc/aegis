@@ -1,15 +1,13 @@
-.PHONY: all build clean test bpf package
+.PHONY: all build clean test bpf package upload
 
 BINARY_NAME=aegis-agent
 BPF_DIR=internal/ebpf/bpf
 BPF_OBJ_DIR=internal/ebpf/bpf/obj
 
-# BPF programs
-BPF_PROGRAMS=execve fork exit openat connect setuid setgid capset
+BPF_PROGRAMS=execve fork openat connect setuid setgid capset
 
 all: bpf build package
 
-# Build BPF objects
 bpf: $(BPF_OBJ_DIR)
 	@echo "Building eBPF programs..."
 	@for prog in $(BPF_PROGRAMS); do \
@@ -29,19 +27,27 @@ bpf: $(BPF_OBJ_DIR)
 $(BPF_OBJ_DIR):
 	@mkdir -p $(BPF_OBJ_DIR)
 
-# Build Go binary
 build:
 	@echo "Building agent..."
 	GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
 	GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
 
-# Package agent with BPF files
 package:
 	@echo "Packaging agent..."
 	@mkdir -p dist/bpf
 	@cp $(BPF_OBJ_DIR)/*.bpf.o dist/bpf/
 	cd dist && tar -czf $(BINARY_NAME).tar.gz $(BINARY_NAME)-linux-amd64 bpf/*.bpf.o
 	@echo "Package created: dist/$(BINARY_NAME).tar.gz"
+
+upload:
+	@echo "Uploading to MinIO..."
+	@if [ -z "$(MINIO_ENDPOINT)" ]; then \
+		echo "Error: MINIO_ENDPOINT not set"; \
+		exit 1; \
+	fi
+	mc alias set local $(MINIO_ENDPOINT) $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) 2>/dev/null || true
+	mc cp dist/$(BINARY_NAME).tar.gz local/agent-artifacts/$(BINARY_NAME).tar.gz
+	@echo "Upload complete: agent-artifacts/$(BINARY_NAME).tar.gz"
 
 clean:
 	rm -rf dist
