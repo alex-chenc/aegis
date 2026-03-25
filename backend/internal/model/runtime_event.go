@@ -16,7 +16,7 @@ type RuntimeEvent struct {
 	RuleTitle     string    `gorm:"type:varchar(255)" json:"rule_title"`
 	MitreID       string    `gorm:"type:varchar(20)" json:"mitre_id"`
 	Severity      string    `gorm:"type:varchar(16)" json:"severity"`
-	PID           int       `json:"pid"`
+	PID           int       `gorm:"column:pid" json:"pid"`
 	CommandLine   string    `gorm:"type:text" json:"command_line"`
 	Timestamp     int64     `gorm:"not null;index" json:"timestamp"`
 	CreatedAt     time.Time `gorm:"default:now()" json:"created_at"`

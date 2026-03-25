@@ -34,6 +34,8 @@ type GRPCServer struct {
 	taskLogRepo        *repository.TaskLogRepository
 	sigmaRuleRepo      *repository.SigmaRuleRepository
 	alertRepo          *repository.AlertRepository
+	runtimeEventRepo   *repository.RuntimeEventRepository
+	blockPolicyRepo    *repository.BlockPolicyRepository
 	wsBroadcaster      WebSocketBroadcaster
 	redisClient        *storage.RedisClient
 	kafkaProducer      *queue.KafkaProducer
@@ -75,6 +77,14 @@ func (s *GRPCServer) SetAlertRepo(alertRepo *repository.AlertRepository, wsBroad
 
 func (s *GRPCServer) SetTaskResultCallback(callback TaskResultCallback) {
 	s.taskResultCallback = callback
+}
+
+func (s *GRPCServer) SetRuntimeEventRepo(repo *repository.RuntimeEventRepository) {
+	s.runtimeEventRepo = repo
+}
+
+func (s *GRPCServer) SetBlockPolicyRepo(repo *repository.BlockPolicyRepository) {
+	s.blockPolicyRepo = repo
 }
 
 // Start 启动 gRPC 服务器
@@ -368,10 +378,40 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		zap.Int("event_count", len(req.Events)),
 	)
 
+	hostID, err := uuid.Parse(req.HostId)
+	if err != nil {
+		logger.Error("invalid host_id in ReportEvent", zap.String("host_id", req.HostId), zap.Error(err))
+		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
+	}
+
 	for _, event := range req.Events {
 		if s.kafkaProducer != nil {
 			if err := s.kafkaProducer.SendRawEvent(ctx, req.HostId, event); err != nil {
 				logger.Error("failed to send event to kafka",
+					zap.String("event_id", event.EventId),
+					zap.Error(err),
+				)
+			}
+		}
+
+		if s.runtimeEventRepo != nil {
+			eventDataJSON := fmt.Sprintf(`{"process_name":"%s","file_path":"%s","remote_addr":"%s","process_tree":"%s"}`,
+				event.ProcessName, event.FilePath, event.RemoteAddr, event.ProcessTree)
+			runtimeEvent := &model.RuntimeEvent{
+				EventID:       event.EventId,
+				HostID:        hostID,
+				EventType:     event.EventType,
+				EventData:     eventDataJSON,
+				MatchedRuleID: event.MatchedRuleId,
+				MitreID:       event.MitreId,
+				Severity:      event.Severity,
+				PID:           int(event.Pid),
+				CommandLine:   event.CommandLine,
+				Timestamp:     event.Timestamp,
+				Aggregated:    false,
+			}
+			if err := s.runtimeEventRepo.Create(runtimeEvent); err != nil {
+				logger.Error("failed to persist runtime event",
 					zap.String("event_id", event.EventId),
 					zap.Error(err),
 				)
@@ -430,6 +470,12 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		RuleID:         event.MatchedRuleId,
 	}
 
+	mitreName, mitreDesc := model.GetMITREChineseDescription(event.MitreId)
+	if mitreName != "" {
+		alert.MitreName = mitreName
+		alert.Description = mitreDesc
+	}
+
 	if err := s.alertRepo.Create(alert); err != nil {
 		logger.Error("failed to create alert", zap.Error(err))
 		return
@@ -441,8 +487,39 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		zap.Int("pid", int(event.Pid)),
 		zap.Bool("has_process_tree", event.ProcessTree != ""))
 
+	s.checkAutoActions(alert)
+
 	if s.wsBroadcaster != nil {
 		s.wsBroadcaster.BroadcastAlert(alert)
+	}
+}
+
+func (s *GRPCServer) checkAutoActions(alert *model.Alert) {
+	if s.blockPolicyRepo == nil {
+		return
+	}
+
+	policy, err := s.blockPolicyRepo.FindByMitreID(alert.MitreID)
+	if err != nil || !policy.Enabled {
+		return
+	}
+
+	if policy.AutoDispose {
+		logger.Info("auto-disposing alert",
+			zap.String("alert_id", alert.AlertID),
+			zap.String("mitre_id", alert.MitreID))
+		alert.AutoDispose = true
+		alert.Status = "resolved"
+		s.alertRepo.Update(alert)
+		s.broadcastPolicyUpdate(policy)
+	}
+}
+
+func (s *GRPCServer) broadcastPolicyUpdate(policy *model.BlockPolicy) {
+	if s.wsBroadcaster != nil {
+		if b, ok := s.wsBroadcaster.(interface{ BroadcastPolicyUpdate(*model.BlockPolicy) }); ok {
+			b.BroadcastPolicyUpdate(policy)
+		}
 	}
 }
 

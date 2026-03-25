@@ -37,6 +37,7 @@ type DetectionHandler struct {
 	runtimeEventRepo   *repository.RuntimeEventRepository
 	configRepo         *repository.ConfigRepository
 	grpcServer         *grpc_server.GRPCServer
+	wsService          *service.WebSocketService
 }
 
 func NewDetectionHandler(
@@ -51,6 +52,7 @@ func NewDetectionHandler(
 	runtimeEventRepo *repository.RuntimeEventRepository,
 	configRepo *repository.ConfigRepository,
 	grpcServer *grpc_server.GRPCServer,
+	wsService *service.WebSocketService,
 ) *DetectionHandler {
 	return &DetectionHandler{
 		alertRepo:          alertRepo,
@@ -64,6 +66,7 @@ func NewDetectionHandler(
 		runtimeEventRepo:   runtimeEventRepo,
 		configRepo:         configRepo,
 		grpcServer:         grpcServer,
+		wsService:          wsService,
 	}
 }
 
@@ -254,6 +257,8 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 		return
 	}
 
+	mitreID := c.Param("mitre_id")
+
 	updates := make(map[string]interface{})
 	if body.Enabled != nil {
 		updates["enabled"] = *body.Enabled
@@ -268,9 +273,14 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 		updates["action"] = *body.Action
 	}
 
-	if err := h.blockPolicyRepo.Update(c.Param("mitre_id"), updates); err != nil {
+	if err := h.blockPolicyRepo.Update(mitreID, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
 		return
+	}
+
+	policy, err := h.blockPolicyRepo.FindByMitreID(mitreID)
+	if err == nil && policy != nil && h.wsService != nil {
+		h.wsService.BroadcastPolicyUpdate(policy)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
@@ -740,6 +750,9 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 			logger.Error("Failed to get alerts for LLM", zap.Error(err))
 		}
 
+		agg.AlertCount = len(alerts)
+		h.llmAggregationRepo.Update(agg)
+
 		llmResponse := ""
 		if len(alerts) > 0 {
 			llmResponse, err = h.callLLMForAlerts(c.Request.Context(), alerts)
@@ -792,7 +805,6 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 	}
 
 	agg.EventCount = len(events)
-	agg.AlertCount = len(events)
 	agg.AIJudgedCount = aiJudgedCount
 	agg.AutoDisposeCount = autoDisposeCount
 	agg.Status = "completed"

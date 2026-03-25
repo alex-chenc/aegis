@@ -18,7 +18,7 @@ func TestBuildAnalysisPrompt(t *testing.T) {
 				CommandLine: "/bin/bash -i",
 				MitreID:     "T1059.004",
 				Severity:    "critical",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().UnixMilli(),
 			},
 		},
 	}

@@ -57,15 +57,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as api from '@/api/detection'
 
 const blockPolicies = ref<any[]>([])
 const policyLoading = ref(false)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(10)
 const total = ref(0)
+let ws: WebSocket | null = null
 
 function formatTime(time: string) {
   if (!time) return '-'
@@ -86,27 +87,98 @@ async function loadPolicies() {
 }
 
 async function handleToggleEnabled(mitreId: string, enabled: boolean) {
-  await api.updateBlockPolicy(mitreId, { enabled })
-  ElMessage.success('策略启用状态已更新')
+  try {
+    await api.updateBlockPolicy(mitreId, { enabled })
+    const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+    if (index !== -1) {
+      blockPolicies.value[index].enabled = enabled
+    }
+    ElMessage.success('策略启用状态已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  }
 }
 
 async function handleToggleAutoBlock(mitreId: string, autoBlock: boolean) {
-  await api.updateBlockPolicy(mitreId, { auto_block: autoBlock })
-  ElMessage.success('自动阻断状态已更新')
+  try {
+    await api.updateBlockPolicy(mitreId, { auto_block: autoBlock })
+    const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+    if (index !== -1) {
+      blockPolicies.value[index].auto_block = autoBlock
+    }
+    ElMessage.success('自动阻断状态已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  }
 }
 
 async function handleToggleAutoDispose(mitreId: string, autoDispose: boolean) {
-  await api.updateBlockPolicy(mitreId, { auto_dispose: autoDispose })
-  ElMessage.success('自动处置状态已更新')
+  try {
+    await api.updateBlockPolicy(mitreId, { auto_dispose: autoDispose })
+    const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+    if (index !== -1) {
+      blockPolicies.value[index].auto_dispose = autoDispose
+    }
+    ElMessage.success('自动处置状态已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  }
 }
 
 async function handleUpdateAction(mitreId: string, action: string) {
-  await api.updateBlockPolicy(mitreId, { action })
-  ElMessage.success('阻断动作已更新')
+  try {
+    await api.updateBlockPolicy(mitreId, { action })
+    const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+    if (index !== -1) {
+      blockPolicies.value[index].action = action
+    }
+    ElMessage.success('阻断动作已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  }
+}
+
+function connectWebSocket() {
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsHost = window.location.host.replace(':8081', ':8080')
+  const wsUrl = `${wsProtocol}//${wsHost}/api/v1/detection/runtime/ws`
+
+  ws = new WebSocket(wsUrl)
+
+  ws.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data)
+      if (message.type === 'policy_update' && message.data) {
+        const updatedPolicy = message.data
+        const index = blockPolicies.value.findIndex(p => p.mitre_id === updatedPolicy.mitre_id)
+        if (index !== -1) {
+          blockPolicies.value[index] = { ...blockPolicies.value[index], ...updatedPolicy }
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  ws.onerror = () => {
+    console.warn('WebSocket connection error')
+  }
+
+  ws.onclose = () => {
+    setTimeout(connectWebSocket, 3000)
+  }
 }
 
 onMounted(() => {
   loadPolicies()
+  connectWebSocket()
+})
+
+onUnmounted(() => {
+  if (ws) {
+    ws.close()
+    ws = null
+  }
 })
 </script>
 

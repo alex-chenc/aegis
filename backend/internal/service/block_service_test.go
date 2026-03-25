@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewBlockService(t *testing.T) {
-	s := NewBlockService(nil)
+	s := NewBlockService(nil, nil)
 	if s == nil {
 		t.Fatal("expected non-nil service")
 	}

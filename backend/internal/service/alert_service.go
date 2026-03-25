@@ -123,6 +123,34 @@ func (s *AlertService) CheckAndAutoBlock(alert *model.Alert) error {
 	return s.blockRepo.Create(record)
 }
 
+// CheckAndAutoDispose checks if auto-dispose is enabled for the alert's MITRE ID
+// and automatically resolves the alert if so
+func (s *AlertService) CheckAndAutoDispose(alert *model.Alert) error {
+	policy, err := s.blockPolicyRepo.FindByMitreID(alert.MitreID)
+	if err != nil || !policy.Enabled || !policy.AutoDispose {
+		return nil
+	}
+
+	logger.Info("auto-disposing alert",
+		zap.String("alert_id", alert.AlertID),
+		zap.String("mitre_id", alert.MitreID),
+		zap.Int("pid", alert.PID),
+	)
+
+	alert.AutoDispose = true
+	alert.Status = StatusResolved
+	if err := s.alertRepo.Update(alert); err != nil {
+		return err
+	}
+
+	logger.Info("alert auto-disposed successfully",
+		zap.String("alert_id", alert.AlertID),
+		zap.String("status", StatusResolved),
+	)
+
+	return nil
+}
+
 func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockRecord, error) {
 	alert, err := s.alertRepo.FindByID(alertID)
 	if err != nil {

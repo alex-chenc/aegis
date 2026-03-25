@@ -181,12 +181,12 @@ func (l *Loader) processExecEvent(data []byte) {
 		if procCmdline, err := os.ReadFile(procPath); err == nil {
 			cmdLine = string(bytes.ReplaceAll(procCmdline, []byte{0}, []byte(" ")))
 			cmdLine = strings.TrimSpace(cmdLine)
-			logger.Info("Read cmdline from /proc",
+			logger.Debug("Read cmdline from /proc",
 				zap.Int("pid", int(e.Pid)),
 				zap.String("comm", comm),
 				zap.String("cmdline", cmdLine))
 		} else {
-			logger.Info("Failed to read /proc cmdline",
+			logger.Debug("Failed to read /proc cmdline",
 				zap.Int("pid", int(e.Pid)),
 				zap.String("comm", comm),
 				zap.Error(err))

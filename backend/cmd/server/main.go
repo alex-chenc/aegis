@@ -152,6 +152,8 @@ func main() {
 	grpcServer.SetTaskResultCallback(taskService.ProcessTaskResult)
 	grpcServer.SetSigmaRuleRepo(sigmaRuleRepo)
 	grpcServer.SetAlertRepo(alertRepo, websocketHandler)
+	grpcServer.SetRuntimeEventRepo(runtimeEventRepo)
+	grpcServer.SetBlockPolicyRepo(blockPolicyRepo)
 
 	alertService.SetGRPCServer(grpcServer)
 	sigmaRuleService.SetGRPCServer(grpcServer)
@@ -171,7 +173,7 @@ func main() {
 	agentHandler := handler.NewAgentHandler(grpcServer, minioClient, serverIP, cfg.Server.HTTPPort, externalGRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
-	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, runtimeEventRepo, configRepo, grpcServer)
+	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, runtimeEventRepo, configRepo, grpcServer, wsService)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)

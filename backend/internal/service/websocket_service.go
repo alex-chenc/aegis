@@ -85,6 +85,14 @@ func (s *WebSocketService) BroadcastRuleUpdate(rule *model.SigmaRule) {
 	})
 }
 
+// BroadcastPolicyUpdate broadcasts a block policy update to all clients
+func (s *WebSocketService) BroadcastPolicyUpdate(policy *model.BlockPolicy) {
+	s.Broadcast(WSMessage{
+		Type: "policy_update",
+		Data: policy,
+	})
+}
+
 // GetClientCount returns the number of connected clients
 func (s *WebSocketService) GetClientCount() int {
 	s.mu.RLock()
