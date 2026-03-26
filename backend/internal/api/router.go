@@ -163,6 +163,8 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			detection.GET("/blocks", r.detectionHandler.ListBlockRecords)
 
 			detection.GET("/block-policies", r.detectionHandler.ListBlockPolicies)
+			detection.POST("/block-policies/sync", r.detectionHandler.SyncBlockPolicies)
+			detection.POST("/block-policies/normalize", r.detectionHandler.NormalizeMitreIDs)
 			detection.PUT("/block-policies/:mitre_id", r.detectionHandler.UpdateBlockPolicy)
 
 			detection.GET("/attack-matrix", r.detectionHandler.GetAttackMatrix)
@@ -173,6 +175,9 @@ func (r *Router) Setup(grpcServer *grpc_server.GRPCServer) {
 			detectionRules := detection.Group("/rules")
 			{
 				detectionRules.POST("/import", r.detectionHandler.ImportRules)
+				detectionRules.POST("/generate", r.detectionHandler.GenerateSigmaRule)
+				detectionRules.POST("/check-delete", r.detectionHandler.CheckRulesBeforeDelete)
+				detectionRules.DELETE("", r.detectionHandler.DeleteRules)
 				detectionRules.GET("", r.detectionHandler.ListRules)
 				detectionRules.GET("/:id", r.detectionHandler.GetRule)
 				detectionRules.PUT("/:id/status", r.detectionHandler.UpdateRuleStatus)

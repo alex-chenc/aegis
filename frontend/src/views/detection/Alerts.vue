@@ -38,7 +38,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="hostname" label="主机" min-width="150" />
-        <el-table-column prop="mitre_id" label="MITRE" width="120" />
+        <el-table-column label="MITRE" width="120">
+          <template #default="{ row }">
+            <el-link type="primary" @click="goToRules(row.mitre_id)">{{ row.mitre_id || '-' }}</el-link>
+          </template>
+        </el-table-column>
         <el-table-column prop="severity" label="严重程度" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="severityTagType(row.severity)">{{ severityLabel(row.severity) }}</el-tag>
@@ -92,7 +96,9 @@
       <el-descriptions v-if="selectedAlert" :column="2" border>
         <el-descriptions-item label="规则名称" :span="2">{{ selectedAlert.rule_title || selectedAlert.mitre_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="主机">{{ selectedAlert.hostname || selectedAlert.host_id }}</el-descriptions-item>
-        <el-descriptions-item label="MITRE ID">{{ selectedAlert.mitre_id }}</el-descriptions-item>
+        <el-descriptions-item label="MITRE ID">
+          <el-link type="primary" @click="goToRules(selectedAlert.mitre_id)">{{ selectedAlert.mitre_id }}</el-link>
+        </el-descriptions-item>
         <el-descriptions-item label="进程PID">{{ selectedAlert.pid }}</el-descriptions-item>
         <el-descriptions-item label="判定来源">{{ judgmentSourceLabel(selectedAlert.judgment_source) }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ statusLabel(selectedAlert.status, selectedAlert.block_status) }}</el-descriptions-item>
@@ -188,6 +194,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { useDetectionStore } from '@/store/detection'
@@ -195,6 +202,8 @@ import * as api from '@/api/detection'
 import type { Alert } from '@/types'
 import { SeverityLabels, AlertStatusLabels, BlockStatusLabels, JudgmentSourceLabels } from '@/types'
 import ProcessTree from '@/components/ProcessTree.vue'
+
+const router = useRouter()
 
 const store = useDetectionStore()
 
@@ -228,6 +237,11 @@ const alertLoading = computed(() => store.alertLoading)
 function formatTime(time: string) {
   if (!time) return '-'
   return new Date(time).toLocaleString('zh-CN')
+}
+
+function goToRules(mitreId: string) {
+  if (!mitreId) return
+  router.push({ path: '/detection/rules', query: { query: mitreId } })
 }
 
 function severityTagType(level: string) {

@@ -164,10 +164,9 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=${INSTALL_DIR}/aegis-agent
+WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=10
-StandardOutput=append:${INSTALL_DIR}/logs/agent.log
-StandardError=append:${INSTALL_DIR}/logs/agent.log
 Environment="TZ=Asia/Shanghai"
 
 [Install]

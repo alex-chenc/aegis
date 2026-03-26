@@ -65,3 +65,39 @@ export function getLLMAggregationStatus(aggregationId: string): Promise<LLMAggre
 export function deleteAlerts(alertIds: string[]): Promise<{ deleted_count: number }> {
   return request.delete('/detection/alerts', { data: { alert_ids: alertIds } })
 }
+
+export interface GenerateSigmaRuleRequest {
+  event: string
+  method?: string
+  mitre_id?: string
+  severity?: string
+}
+
+export interface GenerateSigmaRuleResponse {
+  rule_id: string
+  title: string
+  mitre_id: string
+  severity: string
+  content: string
+  duration: number
+}
+
+export function generateSigmaRule(data: GenerateSigmaRuleRequest): Promise<GenerateSigmaRuleResponse> {
+  return request.post('/detection/rules/generate', data)
+}
+
+export function checkRulesBeforeDelete(ruleIds: string[]): Promise<{
+  has_alerts: boolean
+  rules_with_alerts: Array<{ rule_id: string; title: string; alert_count: number }>
+  total_alerts: number
+}> {
+  return request.post('/detection/rules/check-delete', { rule_ids: ruleIds })
+}
+
+export function deleteRules(ruleIds: string[]): Promise<{
+  deleted_rules: number
+  deleted_alerts: number
+  deleted_policies: number
+}> {
+  return request.delete('/detection/rules', { data: { rule_ids: ruleIds } })
+}

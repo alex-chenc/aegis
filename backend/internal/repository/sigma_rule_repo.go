@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"context"
+	"strings"
+
 	"aegis-system/internal/model"
 
 	"gorm.io/gorm"
@@ -22,6 +25,12 @@ func (r *SigmaRuleRepository) Update(rule *model.SigmaRule) error {
 	return r.db.Save(rule).Error
 }
 
+func (r *SigmaRuleRepository) ExistsByMitreID(mitreID string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.SigmaRule{}).Where("mitre_id = ?", mitreID).Count(&count).Error
+	return count > 0, err
+}
+
 func (r *SigmaRuleRepository) FindByID(ruleID string) (*model.SigmaRule, error) {
 	var rule model.SigmaRule
 	err := r.db.Where("rule_id = ?", ruleID).First(&rule).Error
@@ -39,7 +48,19 @@ func (r *SigmaRuleRepository) List(page, pageSize int, filters map[string]interf
 	)
 
 	query := r.db.Model(&model.SigmaRule{})
+
+	if searchQuery, ok := filters["query"].(string); ok && searchQuery != "" {
+		searchPattern := "%" + searchQuery + "%"
+		query = query.Where(
+			"title ILIKE ? OR rule_id ILIKE ? OR mitre_id ILIKE ?",
+			searchPattern, searchPattern, searchPattern,
+		)
+	}
+
 	for key, val := range filters {
+		if key == "query" {
+			continue
+		}
 		if val != nil && val != "" {
 			query = query.Where(key+" = ?", val)
 		}
@@ -78,4 +99,45 @@ func (r *SigmaRuleRepository) GetActiveCount() (int64, error) {
 	var count int64
 	err := r.db.Model(&model.SigmaRule{}).Where("status IN ?", []string{"active", "experimental"}).Count(&count).Error
 	return count, err
+}
+
+func (r *SigmaRuleRepository) GetExperimentalRules() ([]model.SigmaRule, error) {
+	var rules []model.SigmaRule
+	err := r.db.Where("status = ?", "experimental").Find(&rules).Error
+	return rules, err
+}
+
+func (r *SigmaRuleRepository) FindByRuleID(ruleID string) (*model.SigmaRule, error) {
+	var rule model.SigmaRule
+	err := r.db.Where("rule_id = ?", ruleID).First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+func (r *SigmaRuleRepository) DeleteByRuleID(ruleID string) error {
+	return r.db.Where("rule_id = ?", ruleID).Delete(&model.SigmaRule{}).Error
+}
+
+func (r *SigmaRuleRepository) NormalizeMitreIDs(ctx context.Context) (int, error) {
+	var rules []model.SigmaRule
+	if err := r.db.Where("mitre_id IS NOT NULL AND mitre_id != ''").Find(&rules).Error; err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, rule := range rules {
+		upperID := strings.ToUpper(rule.MitreID)
+		if !strings.HasPrefix(upperID, "T") {
+			upperID = "T" + upperID
+		}
+		if upperID != rule.MitreID {
+			if err := r.db.Model(&model.SigmaRule{}).Where("id = ?", rule.ID).Update("mitre_id", upperID).Error; err != nil {
+				continue
+			}
+			updated++
+		}
+	}
+	return updated, nil
 }

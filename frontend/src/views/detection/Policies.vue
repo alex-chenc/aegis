@@ -1,16 +1,37 @@
 <template>
   <div class="detection-policies-page">
+    <el-card class="filter-card">
+      <div class="filter-row">
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索MITRE ID / 规则标题"
+          clearable
+          class="search-input"
+          @keyup.enter="loadPolicies"
+        />
+        <el-button type="primary" @click="loadPolicies">查询</el-button>
+        <el-button @click="loadPolicies">刷新</el-button>
+      </div>
+    </el-card>
+
     <el-card>
       <template #header>
         <div class="card-header">
           <span>阻断策略 (共 {{ total }} 条)</span>
-          <el-button size="small" @click="loadPolicies">刷新</el-button>
         </div>
       </template>
 
       <el-table v-loading="policyLoading" :data="blockPolicies" border stripe>
-        <el-table-column prop="mitre_id" label="MITRE" width="140" />
-        <el-table-column prop="mitre_name" label="策略名称" min-width="180" />
+        <el-table-column label="MITRE" width="140">
+          <template #default="{ row }">
+            <el-link type="primary" @click="goToRules(row.mitre_id)">{{ row.mitre_id }}</el-link>
+          </template>
+        </el-table-column>
+        <el-table-column prop="rule_title" label="规则标题" min-width="180">
+          <template #default="{ row }">
+            {{ row.rule_title || row.mitre_name || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="阻断动作" width="160" align="center">
           <template #default="{ row }">
             <el-select v-model="row.action" size="small" @change="(v: string) => handleUpdateAction(row.mitre_id, v)">
@@ -58,9 +79,12 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as api from '@/api/detection'
 
+const router = useRouter()
+const searchQuery = ref('')
 const blockPolicies = ref<any[]>([])
 const policyLoading = ref(false)
 const page = ref(1)
@@ -73,10 +97,18 @@ function formatTime(time: string) {
   return new Date(time).toLocaleString('zh-CN')
 }
 
+function goToRules(mitreId: string) {
+  router.push({ path: '/detection/rules', query: { query: mitreId } })
+}
+
 async function loadPolicies() {
   policyLoading.value = true
   try {
-    const res = await api.getBlockPolicies({ page: page.value, page_size: pageSize.value })
+    const res = await api.getBlockPolicies({ 
+      page: page.value, 
+      page_size: pageSize.value,
+      query: searchQuery.value || undefined
+    })
     blockPolicies.value = res.data || []
     total.value = res.total || 0
   } catch (e: any) {
@@ -185,6 +217,20 @@ onUnmounted(() => {
 <style scoped>
 .detection-policies-page {
   padding: 20px;
+}
+
+.filter-card {
+  margin-bottom: 16px;
+}
+
+.filter-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  width: 280px;
 }
 
 .card-header {

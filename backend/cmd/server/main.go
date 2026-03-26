@@ -113,6 +113,16 @@ func main() {
 	ruleLoader := service.NewRuleLoader(sigmaRuleRepo)
 	websocketHandler := handler.NewWebSocketHandler(wsService)
 
+	falsePositiveService := service.NewFalsePositiveDetectionService(
+		alertRepo,
+		sigmaRuleRepo,
+		configRepo,
+		nil,
+		sigmaRuleService,
+		cfg.LLM.TimeoutSeconds,
+		cfg.LLM.MaxRetries,
+	)
+
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -157,6 +167,8 @@ func main() {
 
 	alertService.SetGRPCServer(grpcServer)
 	sigmaRuleService.SetGRPCServer(grpcServer)
+	falsePositiveService.SetGRPCServer(grpcServer)
+	falsePositiveService.Start(ctx)
 	taskService.SetGRPCServer(grpcServer)
 	taskService.SetScriptGenService(scriptGenService)
 

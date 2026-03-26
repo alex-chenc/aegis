@@ -226,7 +226,7 @@ func (h *DetectionHandler) ListBlockPolicies(c *gin.Context) {
 		pageSize = 10
 	}
 
-	policies, total, err := h.blockPolicyRepo.ListPaginated(page, pageSize, query)
+	policies, total, err := h.blockPolicyRepo.ListPaginatedWithRuleTitle(page, pageSize, query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "internal error"})
 		return
@@ -286,6 +286,85 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
+func (h *DetectionHandler) SyncBlockPolicies(c *gin.Context) {
+	rules, _, err := h.sigmaRuleRepo.List(1, 1000, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to get rules"})
+		return
+	}
+
+	created := 0
+	for _, rule := range rules {
+		if rule.MitreID == "" {
+			continue
+		}
+
+		upperMitreID := strings.ToUpper(rule.MitreID)
+		if !strings.HasPrefix(upperMitreID, "T") {
+			upperMitreID = "T" + upperMitreID
+		}
+		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(upperMitreID)
+		if existingPolicy == nil {
+			policy := &model.BlockPolicy{
+				MitreID:     upperMitreID,
+				MitreName:   rule.Title,
+				Enabled:     true,
+				AutoBlock:   false,
+				AutoDispose: false,
+				Action:      "kill_process",
+			}
+			if err := h.blockPolicyRepo.Create(policy); err != nil {
+				logger.Warn("failed to create block policy", zap.String("mitre_id", upperMitreID), zap.Error(err))
+			} else {
+				created++
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"created":     created,
+			"total_rules": len(rules),
+		},
+	})
+}
+
+func (h *DetectionHandler) NormalizeMitreIDs(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	rulesUpdated, err := h.sigmaRuleRepo.NormalizeMitreIDs(ctx)
+	if err != nil {
+		logger.Error("failed to normalize rule mitre_ids", zap.Error(err))
+	}
+
+	policiesUpdated, err := h.blockPolicyRepo.NormalizeMitreIDs(ctx)
+	if err != nil {
+		logger.Error("failed to normalize block policy mitre_ids", zap.Error(err))
+	}
+
+	alertsUpdated, err := h.alertRepo.NormalizeMitreIDs(ctx)
+	if err != nil {
+		logger.Error("failed to normalize alert mitre_ids", zap.Error(err))
+	}
+
+	logger.Info("mitre_ids normalized",
+		zap.Int("rules_updated", rulesUpdated),
+		zap.Int("policies_updated", policiesUpdated),
+		zap.Int("alerts_updated", alertsUpdated))
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"rules_updated":    rulesUpdated,
+			"policies_updated": policiesUpdated,
+			"alerts_updated":   alertsUpdated,
+		},
+	})
+}
+
 func (h *DetectionHandler) ListRules(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
@@ -296,6 +375,9 @@ func (h *DetectionHandler) ListRules(c *gin.Context) {
 	}
 	if v := c.Query("mitre_id"); v != "" {
 		filters["mitre_id"] = v
+	}
+	if v := c.Query("query"); v != "" {
+		filters["query"] = v
 	}
 
 	rules, total, err := h.sigmaRuleRepo.List(page, pageSize, filters)
@@ -655,8 +737,27 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 	}
 
 	imported := 0
+	skipped := 0
 	for _, rule := range rules {
 		r := rule
+
+		if r.MitreID != "" {
+			upperMitreID := strings.ToUpper(r.MitreID)
+			if !strings.HasPrefix(upperMitreID, "T") {
+				upperMitreID = "T" + upperMitreID
+			}
+			r.MitreID = upperMitreID
+
+			exists, err := h.sigmaRuleRepo.ExistsByMitreID(upperMitreID)
+			if err != nil {
+				logger.Error("failed to check mitre_id existence", zap.String("mitre_id", upperMitreID), zap.Error(err))
+			} else if exists {
+				logger.Warn("skipping rule with duplicate mitre_id", zap.String("mitre_id", upperMitreID), zap.String("title", r.Title))
+				skipped++
+				continue
+			}
+		}
+
 		if err := h.sigmaRuleRepo.Create(&r); err != nil {
 			logger.Error("failed to create rule",
 				zap.String("rule_id", rule.RuleID),
@@ -664,11 +765,29 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 			continue
 		}
 		imported++
+
+		if r.MitreID != "" {
+			existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(r.MitreID)
+			if existingPolicy == nil {
+				policy := &model.BlockPolicy{
+					MitreID:     r.MitreID,
+					MitreName:   r.Title,
+					Enabled:     true,
+					AutoBlock:   false,
+					AutoDispose: false,
+					Action:      "kill_process",
+				}
+				if err := h.blockPolicyRepo.Create(policy); err != nil {
+					logger.Warn("failed to create block policy for imported rule", zap.String("mitre_id", r.MitreID), zap.Error(err))
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"total":    len(rules),
 		"imported": imported,
+		"skipped":  skipped,
 	})
 }
 
@@ -742,63 +861,58 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 	aiJudgedCount := 0
 	autoDisposeCount := 0
 
-	if len(events) > 0 {
-		alerts, _, err := h.alertRepo.List(1, 1000, map[string]interface{}{
-			"status": "pending",
-		})
+	alerts, err := h.alertRepo.FindPendingByTimeRange(startTime, endTime, body.HostIDs)
+	if err != nil {
+		logger.Error("Failed to get alerts for LLM", zap.Error(err))
+	}
+
+	agg.AlertCount = len(alerts)
+	h.llmAggregationRepo.Update(agg)
+
+	if len(alerts) > 0 {
+		llmResponse, err := h.callLLMForAlerts(c.Request.Context(), alerts)
 		if err != nil {
-			logger.Error("Failed to get alerts for LLM", zap.Error(err))
-		}
+			logger.Error("LLM call failed", zap.Error(err))
+			agg.LLMResponse = fmt.Sprintf("LLM调用失败: %s", err.Error())
+		} else {
+			agg.LLMResponse = llmResponse
 
-		agg.AlertCount = len(alerts)
-		h.llmAggregationRepo.Update(agg)
+			cleanResponse := llmResponse
+			if strings.Contains(cleanResponse, "```json") {
+				cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
+				cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
+				cleanResponse = strings.TrimSpace(cleanResponse)
+			}
 
-		llmResponse := ""
-		if len(alerts) > 0 {
-			llmResponse, err = h.callLLMForAlerts(c.Request.Context(), alerts)
-			if err != nil {
-				logger.Error("LLM call failed", zap.Error(err))
-				agg.LLMResponse = fmt.Sprintf("LLM调用失败: %s", err.Error())
-			} else {
-				agg.LLMResponse = llmResponse
+			var result struct {
+				Alerts []struct {
+					AlertID        string `json:"alert_id"`
+					IsThreat       bool   `json:"is_threat"`
+					LLMSummary     string `json:"llm_summary"`
+					Recommendation string `json:"recommendation"`
+				} `json:"alerts"`
+			}
 
-				cleanResponse := llmResponse
-				if strings.Contains(cleanResponse, "```json") {
-					cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
-					cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
-					cleanResponse = strings.TrimSpace(cleanResponse)
-				}
-
-				var result struct {
-					Alerts []struct {
-						AlertID        string `json:"alert_id"`
-						IsThreat       bool   `json:"is_threat"`
-						LLMSummary     string `json:"llm_summary"`
-						Recommendation string `json:"recommendation"`
-					} `json:"alerts"`
-				}
-
-				if err := json.Unmarshal([]byte(cleanResponse), &result); err == nil {
-					for _, alertResult := range result.Alerts {
-						llmSummary := alertResult.LLMSummary
-						if alertResult.Recommendation != "" {
-							llmSummary += "\n\n处置建议：\n- " + alertResult.Recommendation
-						}
-
-						if alertResult.IsThreat {
-							aiJudgedCount++
-							h.alertRepo.MarkAIJudged(alertResult.AlertID, llmSummary)
-						} else {
-							fpSummary := fmt.Sprintf("AI判定为误报：%s", alertResult.LLMSummary)
-							h.alertRepo.UpdateLLMSummary(alertResult.AlertID, fpSummary)
-						}
+			if err := json.Unmarshal([]byte(cleanResponse), &result); err == nil {
+				for _, alertResult := range result.Alerts {
+					llmSummary := alertResult.LLMSummary
+					if alertResult.Recommendation != "" {
+						llmSummary += "\n\n处置建议：\n- " + alertResult.Recommendation
 					}
-				} else {
-					logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
-					for _, alert := range alerts {
+
+					if alertResult.IsThreat {
 						aiJudgedCount++
-						h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+						h.alertRepo.MarkAIJudged(alertResult.AlertID, llmSummary)
+					} else {
+						fpSummary := fmt.Sprintf("AI判定为误报：%s", alertResult.LLMSummary)
+						h.alertRepo.UpdateLLMSummary(alertResult.AlertID, fpSummary)
 					}
+				}
+			} else {
+				logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
+				for _, alert := range alerts {
+					aiJudgedCount++
+					h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
 				}
 			}
 		}
@@ -886,5 +1000,319 @@ func (h *DetectionHandler) GetLLMAggregationStatus(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 		"data":    agg,
+	})
+}
+
+func (h *DetectionHandler) GenerateSigmaRule(c *gin.Context) {
+	var req struct {
+		Event    string `json:"event" binding:"required"`
+		Method   string `json:"method"`
+		MitreID  string `json:"mitre_id"`
+		Severity string `json:"severity"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "event is required"})
+		return
+	}
+
+	startTime := time.Now()
+
+	config, err := h.configRepo.GetActive()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "LLM config not found"})
+		return
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to decrypt API key"})
+		return
+	}
+
+	client := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 120, 2)
+
+	severity := req.Severity
+	if severity == "" {
+		severity = "medium"
+	}
+
+	prompt := fmt.Sprintf(`你是一个安全规则专家。请根据用户描述生成一个Sigma规则。
+
+## 用户需求
+- 检测事件: %s
+- 检测方式: %s
+- MITRE技术ID: %s
+- 严重程度: %s
+
+## 输出要求
+1. 生成符合Sigma规则格式的YAML内容
+2. 规则必须包含: title, id, status, description, level, logsource, detection
+3. id字段使用uuid格式生成一个新的规则ID
+4. status设为 experimental
+5. 在tags中包含MITRE技术ID（如果有）
+6. detection部分需要包含具体的检测逻辑和条件
+
+## 输出格式
+只输出YAML内容，不要有其他文字说明。
+
+示例格式:
+title: 规则标题
+id: 生成的UUID
+status: experimental
+description: 规则描述
+level: high
+tags:
+  - attack.t1059.004
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - 'bash -i'
+      - 'nc -e'
+  condition: selection
+
+请生成Sigma规则:`, req.Event, req.Method, req.MitreID, severity)
+
+	response, err := client.ChatCompletion(c.Request.Context(), "", prompt, 0.7)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": fmt.Sprintf("LLM call failed: %v", err)})
+		return
+	}
+
+	cleanResponse := response
+	if strings.Contains(cleanResponse, "```yaml") {
+		cleanResponse = strings.ReplaceAll(cleanResponse, "```yaml", "")
+		cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
+		cleanResponse = strings.TrimSpace(cleanResponse)
+	}
+
+	var rawRule struct {
+		Title       string                 `yaml:"title"`
+		ID          string                 `yaml:"id"`
+		Status      string                 `yaml:"status"`
+		Description string                 `yaml:"description"`
+		Level       string                 `yaml:"level"`
+		Tags        []string               `yaml:"tags"`
+		Logsource   map[string]interface{} `yaml:"logsource"`
+		Detection   map[string]interface{} `yaml:"detection"`
+	}
+
+	if err := yaml.Unmarshal([]byte(cleanResponse), &rawRule); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": fmt.Sprintf("failed to parse LLM response: %v", err)})
+		return
+	}
+
+	if rawRule.ID == "" {
+		rawRule.ID = uuid.New().String()
+	}
+
+	mitreID := req.MitreID
+	if mitreID == "" {
+		for _, tag := range rawRule.Tags {
+			if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
+				rawMitre := strings.TrimPrefix(tag, "attack.")
+				rawMitre = strings.TrimPrefix(rawMitre, "t")
+				rawMitre = strings.TrimPrefix(rawMitre, "T")
+				mitreID = "T" + rawMitre
+				break
+			}
+		}
+	}
+
+	ruleContent := map[string]interface{}{
+		"title":       rawRule.Title,
+		"id":          rawRule.ID,
+		"status":      rawRule.Status,
+		"description": rawRule.Description,
+		"level":       rawRule.Level,
+		"tags":        rawRule.Tags,
+	}
+	if rawRule.Logsource != nil {
+		ruleContent["logsource"] = rawRule.Logsource
+	}
+	if rawRule.Detection != nil {
+		ruleContent["detection"] = rawRule.Detection
+	}
+
+	ruleYaml, _ := yaml.Marshal(ruleContent)
+
+	rule := &model.SigmaRule{
+		RuleID:      rawRule.ID,
+		Title:       rawRule.Title,
+		Description: rawRule.Description,
+		Content:     string(ruleYaml),
+		Status:      "experimental",
+		MitreID:     mitreID,
+		Severity:    rawRule.Level,
+		GeneratedBy: "llm",
+		Version:     "1.0",
+	}
+
+	if rule.Title == "" {
+		rule.Title = req.Event
+	}
+	if rule.Severity == "" {
+		rule.Severity = severity
+	}
+
+	if rule.MitreID != "" {
+		upperMitreID := strings.ToUpper(rule.MitreID)
+		if !strings.HasPrefix(upperMitreID, "T") {
+			upperMitreID = "T" + upperMitreID
+		}
+		rule.MitreID = upperMitreID
+
+		exists, err := h.sigmaRuleRepo.ExistsByMitreID(upperMitreID)
+		if err != nil {
+			logger.Error("failed to check mitre_id existence", zap.String("mitre_id", upperMitreID), zap.Error(err))
+		} else if exists {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": fmt.Sprintf("MITRE ID %s already exists, cannot create duplicate rule", upperMitreID),
+			})
+			return
+		}
+	}
+
+	if err := h.sigmaRuleRepo.Create(rule); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": fmt.Sprintf("failed to save rule: %v", err)})
+		return
+	}
+
+	// 创建对应的阻断策略（如果MITRE ID存在）
+	if rule.MitreID != "" {
+		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(rule.MitreID)
+		if existingPolicy == nil {
+			policy := &model.BlockPolicy{
+				MitreID:     rule.MitreID,
+				MitreName:   rule.Title,
+				Enabled:     true,
+				AutoBlock:   false,
+				AutoDispose: false,
+				Action:      "kill_process",
+			}
+			if err := h.blockPolicyRepo.Create(policy); err != nil {
+				logger.Warn("failed to create block policy for rule", zap.String("mitre_id", rule.MitreID), zap.Error(err))
+			} else {
+				logger.Info("created block policy for generated rule", zap.String("mitre_id", rule.MitreID))
+			}
+		}
+	}
+
+	duration := time.Since(startTime).Seconds()
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"rule_id":  rule.RuleID,
+			"title":    rule.Title,
+			"mitre_id": rule.MitreID,
+			"severity": rule.Severity,
+			"content":  rule.Content,
+			"duration": int(duration),
+		},
+	})
+}
+
+func (h *DetectionHandler) CheckRulesBeforeDelete(c *gin.Context) {
+	var req struct {
+		RuleIDs []string `json:"rule_ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "rule_ids is required"})
+		return
+	}
+
+	rulesWithAlerts := make([]map[string]interface{}, 0)
+	totalAlerts := 0
+
+	for _, ruleID := range req.RuleIDs {
+		alertCount, err := h.alertRepo.CountByRuleID(ruleID)
+		if err != nil {
+			logger.Error("failed to count alerts for rule", zap.String("rule_id", ruleID), zap.Error(err))
+			continue
+		}
+
+		if alertCount > 0 {
+			rule, err := h.sigmaRuleRepo.FindByRuleID(ruleID)
+			title := ""
+			if err == nil && rule != nil {
+				title = rule.Title
+			}
+			rulesWithAlerts = append(rulesWithAlerts, map[string]interface{}{
+				"rule_id":     ruleID,
+				"title":       title,
+				"alert_count": alertCount,
+			})
+			totalAlerts += alertCount
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"has_alerts":        len(rulesWithAlerts) > 0,
+			"rules_with_alerts": rulesWithAlerts,
+			"total_alerts":      totalAlerts,
+		},
+	})
+}
+
+func (h *DetectionHandler) DeleteRules(c *gin.Context) {
+	var req struct {
+		RuleIDs []string `json:"rule_ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "rule_ids is required"})
+		return
+	}
+
+	deletedRules := 0
+	deletedAlerts := 0
+	deletedPolicies := 0
+
+	for _, ruleID := range req.RuleIDs {
+		rule, err := h.sigmaRuleRepo.FindByRuleID(ruleID)
+		if err != nil {
+			continue
+		}
+
+		alertCount, _ := h.alertRepo.DeleteByRuleID(ruleID)
+		deletedAlerts += alertCount
+
+		if rule.MitreID != "" {
+			policyDeleted, _ := h.blockPolicyRepo.DeleteByMitreID(rule.MitreID)
+			if policyDeleted {
+				deletedPolicies++
+			}
+		}
+
+		if err := h.sigmaRuleRepo.DeleteByRuleID(ruleID); err != nil {
+			logger.Error("failed to delete rule", zap.String("rule_id", ruleID), zap.Error(err))
+			continue
+		}
+		deletedRules++
+	}
+
+	logger.Info("rules deleted",
+		zap.Int("deleted_rules", deletedRules),
+		zap.Int("deleted_alerts", deletedAlerts),
+		zap.Int("deleted_policies", deletedPolicies))
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"deleted_rules":    deletedRules,
+			"deleted_alerts":   deletedAlerts,
+			"deleted_policies": deletedPolicies,
+		},
 	})
 }

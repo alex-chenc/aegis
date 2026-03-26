@@ -1,14 +1,299 @@
-# Aegis System Design Update - V5.1
+# Aegis System Design Update - V5.2
 
-**版本**: 5.1  
-**日期**: 2026-03-25  
-**类型**: 功能增强与Bug修复  
+**版本**: 5.2  
+**日期**: 2026-03-26  
+**类型**: 功能修复与体验优化  
 
 ---
 
 ## 更新概述
 
-本次更新主要针对V5.0版本的功能增强和生产环境优化，包括Agent日志级别配置、阻断策略初始化、分页支持、规则同步机制优化等。
+本次更新主要修复V5.1版本遗留的功能问题，优化用户交互体验，完善事件持久化和中文本地化支持。
+
+详细变更日志请参考: [CHANGELOG_v5.2.md](./CHANGELOG_v5.2.md)
+
+---
+
+## 1. 阻断策略实时更新
+
+### 1.1 问题描述
+
+阻断策略页面的开关按钮（启用/自动阻断/自动处置）点击后，需要刷新页面才能看到状态变化，用户体验不佳。
+
+### 1.2 技术方案
+
+**架构设计**:
+
+```
+前端Policies.vue                Backend                    WebSocket服务
+      │                            │                            │
+      │  1. PUT /block-policies   │                            │
+      │ ─────────────────────────>│                            │
+      │                            │  2. 更新数据库              │
+      │                            │ ──────>                    │
+      │                            │                            │
+      │                            │  3. BroadcastPolicyUpdate  │
+      │                            │ ──────────────────────────>│
+      │                            │                            │
+      │  4. WebSocket消息          │                            │
+      │ <─────────────────────────────────────────────────────│
+      │                            │                            │
+      │  5. 更新本地状态            │                            │
+      │ ──────>                    │                            │
+```
+
+**消息类型**:
+
+```typescript
+interface WSMessage {
+    type: 'alert' | 'policy_update' | 'rule_update'
+    data: any
+}
+```
+
+### 1.3 实现要点
+
+1. **后端广播**: `UpdateBlockPolicy` API完成后调用`wsService.BroadcastPolicyUpdate(policy)`
+2. **前端监听**: WebSocket连接建立后监听`policy_update`消息类型
+3. **本地更新**: 按钮点击时立即更新本地状态，同时等待WebSocket确认
+
+### 1.4 容错处理
+
+- WebSocket断开后自动重连（间隔3秒）
+- 本地状态更新失败不影响API调用
+- 广播失败不影响API响应
+
+---
+
+## 2. 自动处置功能
+
+### 2.1 问题描述
+
+开启自动处置后，符合MITRE的告警不会自动变更为"已处置"状态。
+
+### 2.2 业务流程
+
+```
+Agent上报事件
+    │
+    ▼
+Backend匹配规则，创建Alert
+    │
+    ▼
+查询BlockPolicy (WHERE mitre_id = alert.mitre_id)
+    │
+    ├── 策略不存在 → 跳过
+    ├── 策略未启用 → 跳过
+    └── 策略已启用 && auto_dispose=true
+            │
+            ▼
+        Alert.status = "resolved"
+        Alert.auto_dispose = true
+            │
+            ▼
+        更新数据库
+        广播Alert更新
+```
+
+### 2.3 与自动阻断的区别
+
+| 功能 | 触发条件 | 执行动作 |
+|------|----------|----------|
+| 自动阻断 | `enabled=true && auto_block=true` | 下发阻断指令给Agent |
+| 自动处置 | `enabled=true && auto_dispose=true` | 直接更新Alert状态为resolved |
+
+---
+
+## 3. 事件持久化
+
+### 3.1 数据流变更
+
+**变更前**:
+```
+Agent → gRPC ReportEvent → Kafka → (无持久化)
+```
+
+**变更后**:
+```
+Agent → gRPC ReportEvent → Kafka
+                            └→ runtime_events表 (持久化)
+```
+
+### 3.2 runtime_events表结构
+
+```sql
+CREATE TABLE runtime_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id VARCHAR(64) UNIQUE NOT NULL,
+    host_id UUID NOT NULL,
+    event_type VARCHAR(32) NOT NULL,
+    event_data JSONB NOT NULL,
+    matched_rule_id VARCHAR(128),
+    rule_title VARCHAR(255),
+    mitre_id VARCHAR(20),
+    severity VARCHAR(16),
+    pid INTEGER,
+    command_line TEXT,
+    timestamp BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    aggregated BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX idx_runtime_events_timestamp ON runtime_events(timestamp);
+CREATE INDEX idx_runtime_events_aggregated ON runtime_events(aggregated);
+CREATE INDEX idx_runtime_events_host_id ON runtime_events(host_id);
+```
+
+### 3.3 AI降噪查询
+
+```go
+func (r *RuntimeEventRepository) FindUnaggregated(startTime, endTime int64, hostIDs []string) ([]model.RuntimeEvent, error) {
+    query := r.db.Where("aggregated = ? AND timestamp >= ? AND timestamp <= ?", false, startTime, endTime)
+    if len(hostIDs) > 0 {
+        query = query.Where("host_id IN ?", hostIDs)
+    }
+    return query.Order("timestamp ASC").Find(&events).Error
+}
+```
+
+---
+
+## 4. MITRE中文映射
+
+### 4.1 设计原则
+
+1. **映射数据**: 覆盖现有规则中使用的32个MITRE技术
+2. **存储方式**: Go代码中硬编码（初始化快、查询快）
+3. **大小写兼容**: 统一转换为大写后匹配
+
+### 4.2 使用方式
+
+```go
+// 创建告警时自动填充
+mitreName, mitreDesc := model.GetMITREChineseDescription(event.MitreId)
+if mitreName != "" {
+    alert.MitreName = mitreName
+    alert.Description = mitreDesc
+}
+```
+
+### 4.3 扩展方式
+
+如需添加新的MITRE技术映射，编辑`backend/internal/model/mitre_mapping.go`:
+
+```go
+var mitreChineseMapping = map[string]struct {
+    Name        string
+    Description string
+}{
+    // 添加新映射
+    "T1566.001": {
+        Name:        "钓鱼附件",
+        Description: "攻击者通过钓鱼邮件附件投放恶意软件",
+    },
+}
+```
+
+---
+
+## 5. 前端优化
+
+### 5.1 分页默认值
+
+```typescript
+// 阻断策略页面
+const pageSize = ref(10)  // 从20改为10
+
+// 告警列表页面
+const pageSize = ref(10)  // 保持10
+```
+
+### 5.2 按钮交互优化
+
+**变更前**: 调用API后只显示Toast提示，需刷新页面看到变化
+
+**变更后**: 调用API成功后立即更新本地数据，同时监听WebSocket确认
+
+```typescript
+async function handleToggleEnabled(mitreId: string, enabled: boolean) {
+    try {
+        await api.updateBlockPolicy(mitreId, { enabled })
+        // 立即更新本地状态
+        const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+        if (index !== -1) {
+            blockPolicies.value[index].enabled = enabled
+        }
+        ElMessage.success('策略启用状态已更新')
+    } catch (e: any) {
+        ElMessage.error(e.message || '更新失败')
+    }
+}
+```
+
+---
+
+## 6. Agent日志优化
+
+### 6.1 变更内容
+
+| 日志内容 | 变更前 | 变更后 |
+|----------|--------|--------|
+| cmdline读取成功 | `logger.Info` | `logger.Debug` |
+| cmdline读取失败 | `logger.Info` | `logger.Debug` |
+
+### 6.2 效果
+
+生产环境（`LogLevel=info`）不再输出大量cmdline日志，仅保留规则匹配和命令执行日志。
+
+---
+
+## 7. 测试覆盖
+
+### 7.1 自动化测试
+
+```bash
+# API正向测试
+./tests/api/positive-tests.sh
+# 覆盖: health, config, hosts, templates, alerts, block-policies, blocks, rules, tool-calls, tasks, agent
+
+# API反向测试
+./tests/api/negative-tests.sh
+# 覆盖: 无效端点、无效方法、无效参数、无效请求体、边界情况
+```
+
+### 7.2 手动测试清单
+
+- [ ] 阻断策略页面开关点击后状态立即更新
+- [ ] 开启自动处置后新告警自动变为"已处置"
+- [ ] AI降噪显示正确的事件数量
+- [ ] 告警显示中文MITRE名称和描述
+- [ ] Agent日志不再刷屏
+
+---
+
+## 8. 部署检查清单
+
+- [ ] 后端构建: `cd backend && make build`
+- [ ] 前端构建: `cd frontend && npm run build`
+- [ ] Agent构建: `cd agent && make all`
+- [ ] Docker镜像构建
+- [ ] Agent上传到MinIO
+- [ ] 数据库检查: `runtime_events`表存在
+- [ ] API测试通过
+- [ ] WebSocket连接正常
+
+---
+
+## 9. 总结
+
+V5.2版本主要修复了用户反馈的功能问题，提升了系统的可用性和用户体验：
+
+1. **实时更新** - WebSocket广播策略变更，无需刷新页面
+2. **自动处置** - 完整实现自动处置功能
+3. **事件持久化** - AI降噪可正确统计事件数量
+4. **中文本地化** - MITRE技术中文描述
+5. **日志优化** - 减少不必要的日志输出
+6. **交互优化** - 分页默认值、按钮状态同步
 
 ---
 
