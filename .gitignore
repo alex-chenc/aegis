@@ -34,3 +34,7 @@ docker-compose.override.yml
 .idea/
 .vscode/
 *.iml
+
+# Worktrees
+.worktrees/
+worktrees/
