@@ -29,6 +29,10 @@ agent/*.out
 agent/vendor/
 agent/agent
 
+server/bin/*
+api-servrer/bin/*
+dc/bin/*
+
 docker-compose.override.yml
 
 .idea/

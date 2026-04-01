@@ -1,6 +1,5 @@
 # docker-compose.yml
-# 自动化基线检查与自愈系统 - 容器编排配置
-# 版本：V2.0
+# Aegis V5.5 微服务架构 - 容器编排配置
 
 version: "3.8"
 
@@ -191,15 +190,14 @@ services:
       - aegis-network
 
   # ============================================================
-  # 应用层
+  # 应用层 - 微服务
   # ============================================================
 
-  # Go 后端服务
-  backend:
-    image: aegis-system/backend:latest
-    container_name: aegis-backend
+  # API Server (HTTP REST + gRPC客户端)
+  api-server:
+    build: ./api-server
+    container_name: aegis-api-server
     restart: unless-stopped
-    # DNS 配置 - 解决外部 API 域名解析问题
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -212,8 +210,6 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
     environment:
       # 数据库配置
@@ -238,28 +234,120 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
       MINIO_USE_SSL: "false"
       # 服务配置
-      SERVER_HTTP_PORT: 8080
-      SERVER_GRPC_PORT: 9090
+      SERVER_HTTP_PORT: 8082
+      SERVER_GRPC_PORT: 19093
       SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
+      # Agent 配置
+      AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
+      # Kafka 配置
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-api-server-consumer
+    ports:
+      - "8082:8082"
+      - "19093:19093"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Server (gRPC Agent Hub + Kafka Producer)
+  server:
+    build: ./server
+    container_name: aegis-server
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 223.5.5.5
+    dns_search:
+      - .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # 数据库配置
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: aegis_user
+      DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      DATABASE_DBNAME: aegis_db
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 25
+      DATABASE_MAX_IDLE_CONNS: 10
+      DATABASE_CONN_MAX_LIFETIME: 300
+      # Redis 配置
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-a_strong_redis_password}
+      REDIS_DB: 0
+      REDIS_POOL_SIZE: 20
+      # Kafka 配置
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-server-consumer
+      # Server gRPC 配置
+      SERVER_GRPC_PORT: 19090
+      SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
+      SERVER_EXTERNAL_GRPC_PORT: 19090
       # Agent 配置
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       AGENT_HEARTBEAT_TIMEOUT: 90
       AGENT_SCRIPT_TIMEOUT: 300
-      # 对外暴露的端口（用于 Agent 连接）
-      SERVER_EXTERNAL_GRPC_PORT: 19090
-      # 自愈配置
-      SELF_HEALING_MAX_RETRIES: 3
-      SELF_HEALING_ENABLED: "true"
-      # Kafka 配置
-      KAFKA_BROKERS: kafka:9092
-      KAFKA_GROUP_ID: aegis-backend-consumer
     ports:
-      - "8080:8080"
-      - "19090:9090"
+      - "19090:19090"
     networks:
       - aegis-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "nc -z localhost 19090 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # DC (Data Consumer - Kafka Consumer + LLM Analysis)
+  dc:
+    build: ./dc
+    container_name: aegis-dc
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # 数据库配置
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: aegis_user
+      DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      DATABASE_DBNAME: aegis_db
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 25
+      DATABASE_MAX_IDLE_CONNS: 5
+      DATABASE_CONN_MAX_LIFETIME: 300
+      # Kafka 配置
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-dc-consumer
+      KAFKA_TOPIC: aegis.security.events
+      # DC gRPC 配置
+      GRPC_SERVER_PORT: 19092
+      # LLM 配置
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+    ports:
+      - "19092:19092"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 19092 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -271,18 +359,18 @@ services:
     container_name: aegis-frontend
     restart: unless-stopped
     depends_on:
-      backend:
+      api-server:
         condition: service_healthy
     ports:
       - "8081:80"
     networks:
       - aegis-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+  #     start_period: 10s
 
 # ============================================================
 # 网络配置

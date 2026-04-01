@@ -1,0 +1,34 @@
+server:
+  grpc_port: 19092
+
+database:
+  host: postgres
+  port: 5432
+  user: aegis_user
+  password: a_strong_db_password
+  dbname: aegis_db
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+
+kafka:
+  brokers:
+    - kafka:9092
+  group_id: aegis-dc-consumer
+  topic: aegis.security.events
+
+llm:
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  model_name: "gpt-4"
+  timeout_seconds: 120
+  max_retries: 3
+
+aggregation:
+  window_size_seconds: 120
+  max_events_per_window: 1000
+
+alert:
+  severity_threshold: "medium"
+  auto_block: true

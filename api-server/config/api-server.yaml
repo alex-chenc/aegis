@@ -1,0 +1,58 @@
+# API Server Configuration
+server:
+  http_port: 8082
+  grpc_port: 19093
+  external_ip: ""
+
+# gRPC Client Configuration (connect to Server service)
+grpc:
+  server_address: "server:19090"
+
+# Database Configuration
+database:
+  host: postgres
+  port: 5432
+  user: aegis
+  password: aegis123
+  dbname: aegis
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+
+# Redis Configuration
+redis:
+  host: redis
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 10
+
+# MinIO Configuration
+minio:
+  endpoint: minio:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  use_ssl: false
+  buckets:
+    - aegis-documents
+    - aegis-scripts
+
+# LLM Configuration
+llm:
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  model_name: "gpt-4"
+  timeout_seconds: 120
+  max_retries: 3
+
+# Agent Configuration
+agent:
+  auth_token: "aegis-agent-token"
+  heartbeat_timeout_seconds: 60
+  script_timeout_seconds: 300
+
+# Self Healing Configuration
+self_healing:
+  max_retries: 3
+  enabled: true
