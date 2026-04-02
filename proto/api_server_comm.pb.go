@@ -669,7 +669,7 @@ type UpdateAgentRulesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"` // 目标主机ID（空表示所有Agent）
 	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`               // full_sync, incremental
-	Rules         []*AgentRuleUpdate     `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Rules         []*RuleUpdate          `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -718,14 +718,14 @@ func (x *UpdateAgentRulesRequest) GetAction() string {
 	return ""
 }
 
-func (x *UpdateAgentRulesRequest) GetRules() []*AgentRuleUpdate {
+func (x *UpdateAgentRulesRequest) GetRules() []*RuleUpdate {
 	if x != nil {
 		return x.Rules
 	}
 	return nil
 }
 
-type AgentRuleUpdate struct {
+type RuleUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
 	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`   // add, update, delete
@@ -734,20 +734,20 @@ type AgentRuleUpdate struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AgentRuleUpdate) Reset() {
-	*x = AgentRuleUpdate{}
+func (x *RuleUpdate) Reset() {
+	*x = RuleUpdate{}
 	mi := &file_proto_api_server_comm_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AgentRuleUpdate) String() string {
+func (x *RuleUpdate) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AgentRuleUpdate) ProtoMessage() {}
+func (*RuleUpdate) ProtoMessage() {}
 
-func (x *AgentRuleUpdate) ProtoReflect() protoreflect.Message {
+func (x *RuleUpdate) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_api_server_comm_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -759,26 +759,26 @@ func (x *AgentRuleUpdate) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AgentRuleUpdate.ProtoReflect.Descriptor instead.
-func (*AgentRuleUpdate) Descriptor() ([]byte, []int) {
+// Deprecated: Use RuleUpdate.ProtoReflect.Descriptor instead.
+func (*RuleUpdate) Descriptor() ([]byte, []int) {
 	return file_proto_api_server_comm_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *AgentRuleUpdate) GetRuleId() string {
+func (x *RuleUpdate) GetRuleId() string {
 	if x != nil {
 		return x.RuleId
 	}
 	return ""
 }
 
-func (x *AgentRuleUpdate) GetAction() string {
+func (x *RuleUpdate) GetAction() string {
 	if x != nil {
 		return x.Action
 	}
 	return ""
 }
 
-func (x *AgentRuleUpdate) GetContent() string {
+func (x *RuleUpdate) GetContent() string {
 	if x != nil {
 		return x.Content
 	}
@@ -1331,12 +1331,13 @@ const file_proto_api_server_comm_proto_rawDesc = "" +
 	"\adetails\x18\x04 \x03(\v24.api_server_comm.v1.HealthCheckResponse.DetailsEntryR\adetails\x1a:\n" +
 	"\fDetailsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x85\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x01\n" +
 	"\x17UpdateAgentRulesRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x16\n" +
-	"\x06action\x18\x02 \x01(\tR\x06action\x129\n" +
-	"\x05rules\x18\x03 \x03(\v2#.api_server_comm.v1.AgentRuleUpdateR\x05rules\"\\\n" +
-	"\x0fAgentRuleUpdate\x12\x17\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x124\n" +
+	"\x05rules\x18\x03 \x03(\v2\x1e.api_server_comm.v1.RuleUpdateR\x05rules\"W\n" +
+	"\n" +
+	"RuleUpdate\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x18\n" +
 	"\acontent\x18\x03 \x01(\tR\acontent\"w\n" +
@@ -1412,7 +1413,7 @@ var file_proto_api_server_comm_proto_goTypes = []any{
 	(*HealthCheckRequest)(nil),            // 7: api_server_comm.v1.HealthCheckRequest
 	(*HealthCheckResponse)(nil),           // 8: api_server_comm.v1.HealthCheckResponse
 	(*UpdateAgentRulesRequest)(nil),       // 9: api_server_comm.v1.UpdateAgentRulesRequest
-	(*AgentRuleUpdate)(nil),               // 10: api_server_comm.v1.AgentRuleUpdate
+	(*RuleUpdate)(nil),                    // 10: api_server_comm.v1.RuleUpdate
 	(*UpdateAgentRulesResponse)(nil),      // 11: api_server_comm.v1.UpdateAgentRulesResponse
 	(*ExecuteBlockCommandRequest)(nil),    // 12: api_server_comm.v1.ExecuteBlockCommandRequest
 	(*ExecuteBlockCommandResponse)(nil),   // 13: api_server_comm.v1.ExecuteBlockCommandResponse
@@ -1425,7 +1426,7 @@ var file_proto_api_server_comm_proto_goTypes = []any{
 var file_proto_api_server_comm_proto_depIdxs = []int32{
 	6,  // 0: api_server_comm.v1.ListConnectedAgentsResponse.agents:type_name -> api_server_comm.v1.AgentInfo
 	18, // 1: api_server_comm.v1.HealthCheckResponse.details:type_name -> api_server_comm.v1.HealthCheckResponse.DetailsEntry
-	10, // 2: api_server_comm.v1.UpdateAgentRulesRequest.rules:type_name -> api_server_comm.v1.AgentRuleUpdate
+	10, // 2: api_server_comm.v1.UpdateAgentRulesRequest.rules:type_name -> api_server_comm.v1.RuleUpdate
 	0,  // 3: api_server_comm.v1.APIServerToServer.ForwardCommand:input_type -> api_server_comm.v1.ForwardCommandRequest
 	2,  // 4: api_server_comm.v1.APIServerToServer.GetAgentStatus:input_type -> api_server_comm.v1.GetAgentStatusRequest
 	4,  // 5: api_server_comm.v1.APIServerToServer.ListConnectedAgents:input_type -> api_server_comm.v1.ListConnectedAgentsRequest

@@ -113,6 +113,23 @@ func (r *RedisClient) IsOnline(hostID string) (bool, error) {
 	return exists > 0, nil
 }
 
+// GetHeartbeatTime gets the heartbeat timestamp for a host (returns 0 if not found)
+func (r *RedisClient) GetHeartbeatTime(hostID string) (int64, error) {
+	key := heartbeatKey(hostID)
+	result, err := r.client.Get(r.ctx, key).Int64()
+	if err != nil {
+		if err == redis.Nil {
+			return 0, nil
+		}
+		logger.Error("failed to get heartbeat time",
+			zap.Error(err),
+			zap.String("host_id", hostID),
+		)
+		return 0, err
+	}
+	return result, nil
+}
+
 // BatchCheckOnline checks online status for multiple hosts
 func (r *RedisClient) BatchCheckOnline(hostIDs []string) (map[string]bool, error) {
 	if len(hostIDs) == 0 {

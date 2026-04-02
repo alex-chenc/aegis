@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,9 +12,11 @@ import (
 	"server/internal/queue"
 	"server/internal/repository"
 	"server/internal/storage"
+	"server/pkg/api/v1"
 	"server/pkg/logger"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -63,6 +66,11 @@ func main() {
 
 	// Create repositories
 	hostRepo := repository.NewHostRepository(db)
+	taskLogRepo := repository.NewTaskLogRepository(db)
+	sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
+	alertRepo := repository.NewAlertRepository(db)
+	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
+	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 
 	grpcServer := grpc_server.NewGRPCServer(
 		hostRepo,
@@ -71,8 +79,33 @@ func main() {
 		cfg.Server.GRPCPort,
 	)
 
+	// Set additional repositories for event handling and rule pushing
+	grpcServer.SetTaskLogRepo(taskLogRepo)
+	grpcServer.SetSigmaRuleRepo(sigmaRuleRepo)
+	grpcServer.SetAlertRepo(alertRepo, nil) // wsBroadcaster is nil for server - DC handles WS broadcasting
+	grpcServer.SetRuntimeEventRepo(runtimeEventRepo)
+	grpcServer.SetBlockPolicyRepo(blockPolicyRepo)
+
+	// Create APIServerToServer gRPC server on different port (19094)
+	apiServerGRPCPort := 19094
+	apiServerLis, err := net.Listen("tcp", fmt.Sprintf(":%d", apiServerGRPCPort))
+	if err != nil {
+		logger.Fatal("Failed to listen for APIServerToServer gRPC", zap.Error(err), zap.Int("port", apiServerGRPCPort))
+	}
+
+	apiServerGRPCServer := grpc.NewServer()
+	apiServerImpl := grpc_server.NewAPIServerToServerImpl(grpcServer, hostRepo, redisClient)
+	pb.RegisterAPIServerToServerServer(apiServerGRPCServer, apiServerImpl)
+
 	go func() {
-		logger.Info("Starting gRPC server", zap.Int("port", cfg.Server.GRPCPort))
+		logger.Info("Starting APIServerToServer gRPC server", zap.Int("port", apiServerGRPCPort))
+		if err := apiServerGRPCServer.Serve(apiServerLis); err != nil {
+			logger.Error("Failed to serve APIServerToServer gRPC", zap.Error(err))
+		}
+	}()
+
+	go func() {
+		logger.Info("Starting AgentService gRPC server", zap.Int("port", cfg.Server.GRPCPort))
 		if err := grpcServer.Start(); err != nil {
 			logger.Fatal("Failed to start gRPC server", zap.Error(err))
 		}
@@ -84,6 +117,7 @@ func main() {
 	logger.Info("Shutting down server...")
 
 	grpcServer.Stop()
+	apiServerGRPCServer.GracefulStop()
 
 	logger.Info("Server stopped")
 }

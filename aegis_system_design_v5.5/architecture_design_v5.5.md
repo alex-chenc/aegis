@@ -36,29 +36,42 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Frontend                                       │
 │                           Vue 3 + Element Plus                              │
-│                           localhost:8081                                    │
+│                           localhost:8081 (Nginx)                            │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │ HTTP/WebSocket
 ┌─────────────────────────────────▼───────────────────────────────────────────┐
 │                           API Gateway (Nginx)                              │
-│                         localhost:8080 → 多个后端服务                       │
+│                         localhost:8081 → api-server:8082                    │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │
           ┌───────────────────────┼───────────────────────┐
           │                       │                       │
           ↓                       ↓                       ↓
 ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐
-│   API Service     │   │   Agent Hub       │   │  Pipeline Service │
+│   API Server      │   │   Server          │   │   DC              │
 │                   │   │                   │   │                   │
-│   端口: 8080      │   │   端口: 19090     │   │   端口: 19091     │
+│   端口: 8082      │   │   端口: 19090     │   │   端口: 19092     │
 │   协议: HTTP      │   │   协议: gRPC      │   │   协议: gRPC      │
-│                   │   │                   │   │                   │
-│   职责:           │   │   职责:           │   │   职责:           │
-│   - REST API      │   │   - Agent注册     │   │   - Kafka消费     │
-│   - WebSocket     │   │   - 心跳监控      │   │   - LLM分析       │
-│   - 认证授权      │   │   - 命令下发      │   │   - 告警生成      │
-│   - 请求路由      │   │   - 结果回收      │   │   - 阻断策略      │
+│                   │   │   端口: 19094     │   │                   │
+│   职责:           │   │   (APIServerComm) │   │   职责:           │
+│   - REST API      │   │                   │   │   - Kafka消费     │
+│   - WebSocket     │   │   职责:           │   │   - LLM分析       │
+│   - 认证授权      │   │   - Agent注册     │   │   - 告警生成      │
+│   - 请求路由      │   │   - 心跳监控      │   │   - 阻断策略      │
+│                   │   │   - 命令下发      │   │                   │
+│                   │   │   - 结果回收      │   │                   │
 └───────────────────┘   └───────────────────┘   └───────────────────┘
+          │                       │                       │
+          └───────────────────────┼───────────────────────┘
+                                  ↓
+                    ┌───────────────────────────┐
+                    │     Shared Services       │
+                    ├───────────────────────────┤
+                    │  PostgreSQL (5432)        │
+                    │  Redis (6379)             │
+                    │  MinIO (9000/9001)        │
+                    │  Kafka (29092)            │
+                    └───────────────────────────┘
           │                       │                       │
           └───────────────────────┼───────────────────────┘
                                   ↓
@@ -142,13 +155,13 @@
 
 ## 3. 服务架构详解
 
-### 3.1 API Service
+### 3.1 API Server
 
-**职责**: 处理所有HTTP请求
+**职责**: 处理所有HTTP请求，gRPC客户端到Server和DC
 
 ```
 ┌─────────────────────────────────────────────┐
-│              API Service                     │
+│              API Server                      │
 ├─────────────────────────────────────────────┤
 │                                              │
 │  ┌──────────────┐    ┌──────────────┐       │
@@ -183,73 +196,67 @@
 │                   │                          │
 │                   ↓                          │
 │  ┌──────────────────────────────────────┐   │
-│  │        Repository Layer              │   │
-│  │  (直接访问数据库)                      │   │
+│  │       gRPC Client (to Server)        │   │
+│  │  - APIServerToServer service        │   │
 │  └──────────────────────────────────────┘   │
 │                                              │
 └─────────────────────────────────────────────┘
 ```
 
-**端口**: 8080 (HTTP)
+**端口**: 8082 (HTTP), 19093 (gRPC client)
 **依赖**: PostgreSQL, Redis, MinIO
 
-### 3.2 Agent Hub
+### 3.2 Server (Agent Hub)
 
-**职责**: 管理所有Agent连接和通信
+**职责**: 管理所有Agent连接和通信，双端口设计
 
 ```
 ┌─────────────────────────────────────────────┐
-│              Agent Hub                       │
+│              Server                          │
 ├─────────────────────────────────────────────┤
 │                                              │
 │  ┌──────────────────────────────────────┐   │
-│  │         gRPC Server                  │   │
-│  │  - Stream 管理                        │   │
-│  │  - 认证                               │   │
-│  │  - 负载均衡                           │   │
+│  │    gRPC Server (Agent Hub)           │   │
+│  │    端口: 19090                        │   │
+│  │  - Agent注册管理                      │   │
+│  │  - 心跳监控                           │   │
+│  │  - 命令下发                           │   │
+│  │  - 结果回收                           │   │
 │  └──────────────────────────────────────┘   │
-│                   │                          │
-│                   ↓                          │
+│                                              │
 │  ┌──────────────────────────────────────┐   │
-│  │       Agent Manager                  │   │
-│  │  ┌────────────┐ ┌────────────────┐   │   │
-│  │  │ Registry   │ │ Heartbeat      │   │   │
-│  │  │ (注册表)    │ │ Monitor        │   │   │
-│  │  │            │ │ (心跳监控)      │   │   │
-│  │  └────────────┘ └────────────────┘   │   │
-│  │  ┌────────────┐ ┌────────────────┐   │   │
-│  │  │ Command    │ │ Result         │   │   │
-│  │  │ Dispatcher │ │ Collector      │   │   │
-│  │  │ (命令下发)  │ │ (结果回收)      │   │   │
-│  │  └────────────┘ └────────────────┘   │   │
+│  │    gRPC Server (APIServerToServer)  │   │
+│  │    端口: 19094                        │   │
+│  │  - 接收API Server命令                │   │
+│  │  - 透传给Agent                        │   │
 │  └──────────────────────────────────────┘   │
-│                   │                          │
-│                   ↓                          │
+│                                              │
 │  ┌──────────────────────────────────────┐   │
 │  │       Event Processor                │   │
 │  │  - 接收Agent事件                      │   │
-│  │  - 发送到Kafka                        │   │
+│  │  - 发送到Kafka (aegis.security.events)│   │
 │  │  - 广播阻断策略                       │   │
 │  └──────────────────────────────────────┘   │
 │                                              │
 └─────────────────────────────────────────────┘
 ```
 
-**端口**: 19090 (gRPC)
+**端口**: 19090 (Agent Hub), 19094 (APIServerToServer)
 **依赖**: PostgreSQL, Redis, Kafka
 
-### 3.3 Pipeline Service
+### 3.3 DC (Data Consumer)
 
 **职责**: 处理安全事件流
 
 ```
 ┌─────────────────────────────────────────────┐
-│            Pipeline Service                 │
+│            DC (Data Consumer)                │
 ├─────────────────────────────────────────────┤
 │                                              │
 │  ┌──────────────────────────────────────┐   │
 │  │       Kafka Consumer                 │   │
-│  │  - 消费Agent事件                      │   │
+│  │  - 消费aegis.security.events         │   │
+│  │  - 消费aegis.block.commands          │   │
 │  │  - 批量处理                           │   │
 │  └──────────────────────────────────────┘   │
 │                   │                          │
@@ -279,7 +286,7 @@
 └─────────────────────────────────────────────┘
 ```
 
-**端口**: 19091 (gRPC内部)
+**端口**: 19092 (gRPC)
 **依赖**: PostgreSQL, Redis, Kafka, LLM
 
 ---
@@ -375,8 +382,15 @@
 ### 4.2 命令下发流
 
 ```
-Frontend → API Service → Agent Hub → Agent执行 → 结果回收 → 存储
+Frontend → API Server → Server (APIServerToServer:19094) → Agent执行 → 结果回收 → 存储
 ```
+
+**详细流程**:
+1. Frontend通过HTTP请求API Server
+2. API Server通过gRPC调用Server的APIServerToServer服务 (端口19094)
+3. Server通过双向流将命令下发到对应Agent (端口19090)
+4. Agent执行完成后通过同一gRPC流返回结果
+5. Server将结果通过APIServerToServer返回给API Server
 
 ---
 
@@ -505,19 +519,23 @@ func (fe *FeatureExtractor) calcFrequency(event Event) float64 {
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                    │
-│  │ API Service │  │Agent Hub    │  │Pipeline Svc │                    │
+│  │ api-server  │  │   server    │  │     dc      │                    │
+│  │ 8082,19093  │  │ 19090,19094 │  │    19092    │                    │
 │  └─────────────┘  └─────────────┘  └─────────────┘                    │
 │                                                                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                    │
-│  │  Frontend   │  │   Nginx     │  │             │                    │
+│  │  Frontend   │  │             │  │             │                    │
+│  │  (8081)     │  │             │  │             │                    │
 │  └─────────────┘  └─────────────┘  └─────────────┘                    │
 │                                                                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                    │
 │  │  PostgreSQL │  │    Redis    │  │    Kafka    │                    │
+│  │    5432     │  │    6379     │  │   29092     │                    │
 │  └─────────────┘  └─────────────┘  └─────────────┘                    │
 │                                                                          │
 │  ┌─────────────┐                                                       │
 │  │   MinIO     │                                                       │
+│  │  9000/9001  │                                                       │
 │  └─────────────┘                                                       │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -533,17 +551,26 @@ func (fe *FeatureExtractor) calcFrequency(event Event) float64 {
 
 | 服务 | 注册方式 | 健康检查 |
 |------|----------|----------|
-| API Service | Nginx upstream | /health |
-| Agent Hub | Redis + DNS | gRPC health check |
-| Pipeline Service | Redis | gRPC health check |
+| api-server | Nginx upstream | /health |
+| server | Redis + DNS | gRPC health check |
+| dc | Redis | gRPC health check |
 
 ### 7.2 服务间通信
 
 ```
-API Service → Agent Hub: gRPC (端口19090)
-Agent Hub → Pipeline Service: Kafka (topic: aegis.security.events)
-Pipeline Service → API Service: gRPC或共享数据库
+API Server → Server: gRPC (APIServerToServer端口19094)
+Server → DC: Kafka (topic: aegis.security.events, aegis.block.commands)
+Server → Agent: gRPC双向流 (端口19090)
+DC → API Server: gRPC或共享数据库
 ```
+
+### 7.3 Kafka Topics
+
+| Topic | 生产者 | 消费者 | 用途 |
+|-------|--------|--------|------|
+| aegis.security.events | Server | DC | 运行时安全事件 |
+| aegis.block.commands | DC | Server | 阻断命令 |
+| aegis.rule.updates | API Server | Server | 规则更新 |
 
 ---
 

@@ -330,7 +330,7 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				continue
 			}
 
-			if result.IsFinal && s.taskResultCallback != nil {
+			if result.IsFinal {
 				taskID, err := uuid.Parse(result.TaskId)
 				if err != nil {
 					logger.Error("invalid task_id in result",
@@ -357,16 +357,37 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 								zap.Int32("exit_code", result.ExitCode),
 							)
 						}
+
+						// Save result to database
+						stdout := result.Stdout
+						stderr := result.Stderr
+						exitCode := int(result.ExitCode)
+						finishedAt := time.Now()
+						if err := s.taskLogRepo.UpdateResult(taskID, &stdout, &stderr, &exitCode, status, finishedAt); err != nil {
+							logger.Error("failed to update task result",
+								zap.String("task_id", result.TaskId),
+								zap.Error(err),
+							)
+						} else {
+							logger.Info("task result saved",
+								zap.String("task_id", result.TaskId),
+								zap.String("status", status),
+								zap.Int32("exit_code", result.ExitCode),
+							)
+						}
 					}
 				}
 
-				s.taskResultCallback(
-					taskID,
-					result.Stdout,
-					result.Stderr,
-					int(result.ExitCode),
-					status,
-				)
+				// Also call callback if set (for real-time notifications)
+				if s.taskResultCallback != nil {
+					s.taskResultCallback(
+						taskID,
+						result.Stdout,
+						result.Stderr,
+						int(result.ExitCode),
+						status,
+					)
+				}
 			}
 		}
 	}
@@ -395,13 +416,26 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		}
 
 		if s.runtimeEventRepo != nil {
-			eventDataJSON := fmt.Sprintf(`{"process_name":"%s","file_path":"%s","remote_addr":"%s","process_tree":"%s"}`,
-				event.ProcessName, event.FilePath, event.RemoteAddr, event.ProcessTree)
+			// Properly marshal event data to JSON to handle escaping correctly
+			eventData := map[string]interface{}{
+				"process_name": event.ProcessName,
+				"file_path":    event.FilePath,
+				"remote_addr":  event.RemoteAddr,
+				"process_tree": event.ProcessTree,
+			}
+			eventDataJSON, err := json.Marshal(eventData)
+			if err != nil {
+				logger.Error("failed to marshal event data",
+					zap.String("event_id", event.EventId),
+					zap.Error(err),
+				)
+				eventDataJSON = []byte("{}")
+			}
 			runtimeEvent := &model.RuntimeEvent{
-				EventID:       event.EventId,
+				EventID:        event.EventId,
 				HostID:        hostID,
 				EventType:     event.EventType,
-				EventData:     eventDataJSON,
+				EventData:     string(eventDataJSON),
 				MatchedRuleID: event.MatchedRuleId,
 				MitreID:       event.MitreId,
 				Severity:      event.Severity,
@@ -770,7 +804,13 @@ func (s *GRPCServer) GetConnectedHostIDs() []uuid.UUID {
 }
 
 func (s *GRPCServer) CollectSoftwareList(ctx context.Context, req *pb.SoftwareListRequest) (*pb.SoftwareListResponse, error) {
-	return nil, fmt.Errorf("collect software list over unary RPC is not supported")
+	// Note: Software collection is done via bidirectional stream (ExecuteCommand),
+	// not via unary RPC. Agents receive #SOFTWARE_COLLECT# command and respond
+	// through the stream. This unary RPC is kept for backwards compatibility
+	// but is not used in normal operation.
+	logger.Warn("CollectSoftwareList unary RPC called, but software collection uses bidirectional stream",
+		zap.String("method", "CollectSoftwareList"))
+	return nil, fmt.Errorf("collect software list should be done via ExecuteCommand stream, not unary RPC")
 }
 
 func (s *GRPCServer) CollectSoftwareListForHost(ctx context.Context, hostIDStr string) ([]model.SoftwareInfo, error) {
@@ -1046,4 +1086,25 @@ func (s *GRPCServer) BroadcastRuleUpdate(update *pb.RuleUpdate) {
 		}
 		return true
 	})
+}
+
+// GetPort returns the gRPC server port
+func (s *GRPCServer) GetPort() int {
+	return s.port
+}
+
+// SendBlockCommand sends a block command to an agent
+func (s *GRPCServer) SendBlockCommand(hostID uuid.UUID, cmd *pb.BlockCommand) error {
+	conn, ok := s.agentConnections.Load(hostID)
+	if !ok {
+		return fmt.Errorf("agent not connected: %s", hostID)
+	}
+
+	agentConn := conn.(*AgentConnection)
+	select {
+	case agentConn.Inbox <- nil: // nil indicates block command
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout sending block command to agent: %s", hostID)
+	}
 }

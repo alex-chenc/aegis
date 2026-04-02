@@ -16,7 +16,7 @@ type RuntimeEvent struct {
 	MatchedRuleID string    `gorm:"index" json:"matched_rule_id"`
 	MitreID       string    `gorm:"index" json:"mitre_id"`
 	Severity      string    `gorm:"index" json:"severity"`
-	PID           int       `json:"pid"`
+	PID           int       `gorm:"column:pid" json:"pid"`
 	CommandLine   string    `gorm:"type:text" json:"command_line"`
 	ProcessName   string    `json:"process_name"`
 	Timestamp     int64     `json:"timestamp"`

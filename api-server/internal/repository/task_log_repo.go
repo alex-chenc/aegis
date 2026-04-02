@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -110,6 +111,13 @@ func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent stri
 			zap.String("id", id.String()),
 		)
 		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		logger.Error("task not found for redispatch",
+			zap.String("id", id.String()),
+		)
+		return fmt.Errorf("task not found: %s", id.String())
 	}
 
 	logger.Info("task updated for redispatch",

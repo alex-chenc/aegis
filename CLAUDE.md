@@ -16,7 +16,7 @@ Aegis (ai-benchmark) is an AI-native host security platform that integrates LLM 
                               │ HTTP/WebSocket
 ┌─────────────────────────────▼───────────────────────────────────┐
 │                    API Server (Go)                              │
-│               HTTP:8082 / gRPC:19093                            │
+│               HTTP:8082 / gRPC:19093 (client)                   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐   │
 │  │ Handlers│ │ Services │ │   LLM    │ │ gRPC Client      │   │
 │  │ (API)   │ │(Business)│ │ Client   │ │ (DC Comm)        │   │
@@ -61,18 +61,25 @@ Aegis (ai-benchmark) is an AI-native host security platform that integrates LLM 
 
 ## Microservices
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| frontend | 8081 | Vue 3 UI (Nginx) |
-| api-server | 8082 | HTTP REST API, gRPC client to DC |
-| server | 19090 | gRPC Agent Hub, Kafka Producer |
-| dc | 19092 | Kafka Consumer, LLM Analysis, Alert Generation |
-| postgres | 5432 | Primary database |
-| redis | 6379 | Caching |
-| minio | 9000/9001 | Object storage for scripts |
-| kafka | 29092 | Message queue for runtime events |
+| Service    | Port         | Purpose                                        |
+| ---------- | ------------ | ---------------------------------------------- |
+| frontend   | 8081         | Vue 3 UI (Nginx)                               |
+| api-server | 8082         | HTTP REST API, gRPC client to DC               |
+| server     | 19090, 19094 | 19090: Agent Hub; 19094: API Server comms      |
+| dc         | 19092        | Kafka Consumer, LLM Analysis, Alert Generation |
+| postgres   | 5432         | Primary database                               |
+| redis      | 6379         | Caching                                        |
+| minio      | 9000/9001    | Object storage for scripts                     |
+| kafka      | 29092        | Message queue for runtime events               |
 
 ## Key Architectural Components
+
+### gRPC Protocol Files
+
+| Proto File              | Purpose                                | Location                      |
+| ----------------------- | -------------------------------------- | ----------------------------- |
+| `agent_comm.proto`      | Agent ↔ Server bidirectional streaming | `proto/agent_comm.proto`      |
+| `api_server_comm.proto` | API Server ↔ Server command forwarding | `proto/api_server_comm.proto` |
 
 ### Agent → Server → DC Communication (gRPC)
 
@@ -86,6 +93,22 @@ The Agent registers with the Server via gRPC bi-directional streaming (defined i
 
 The gRPC server implementation is in `server/internal/grpc_server/` and the DC server in `dc/internal/server/`.
 
+### Task Command Flow
+
+```
+Frontend → API Server (8082) → Server APIServerToServer (19094) → Agent (19090, bidirectional)
+```
+
+1. Frontend sends HTTP request to API Server
+2. API Server calls `ForwardCommand` via gRPC to Server (port 19094)
+3. Server dispatches command to Agent via bidirectional gRPC stream (port 19090)
+4. Agent executes and returns result through the same stream
+5. Server forwards result back to API Server via gRPC
+
+Note: Server has two distinct gRPC ports:
+- **19090**: Agent Hub (bidirectional streaming with Agents)
+- **19094**: APIServerToServer (unary RPC from API Server)
+
 ### Runtime Threat Detection Pipeline (V5.0)
 
 The real-time threat detection uses eBPF + Sigma rules + LLM analysis:
@@ -96,6 +119,13 @@ The real-time threat detection uses eBPF + Sigma rules + LLM analysis:
 4. **Alert Management** (`dc/internal/alert_generator/`, `dc/internal/block_manager/`): Deduplication, false-positive analysis, auto-block
 
 Build eBPF programs before building the agent: `cd agent && make bpf && make build`
+
+### Kafka Topics
+
+| Topic                   | Partitions | Purpose                                      |
+| ----------------------- | ---------- | -------------------------------------------- |
+| `aegis.security.events` | 3          | Runtime security events from Agent Hub to DC |
+| `aegis.block.commands`  | 3          | Block commands from DC to Agent Hub          |
 
 ### LLM Integration Layer
 
@@ -128,19 +158,19 @@ All repositories follow GORM patterns:
 ### API Server
 
 ```bash
-cd api-server && go build -o bin/api-server ./cmd/...
+cd api-server && make
 ```
 
 ### Server (gRPC Agent Hub)
 
 ```bash
-cd server && go build -o bin/server ./cmd/...
+cd server && make
 ```
 
 ### DC (Data Consumer)
 
 ```bash
-cd dc && go build -o bin/dc ./cmd/...
+cd dc && make
 ```
 
 ### Frontend
@@ -186,18 +216,19 @@ npm run type-check
 
 ## Important File Locations
 
-| Concern | Location |
-|---------|---------|
-| API Server entry point | `api-server/cmd/main.go` |
-| Server (gRPC Hub) entry point | `server/cmd/main.go` |
-| DC entry point | `dc/cmd/main.go` |
-| Agent entry point | `agent/cmd/agent/main.go` |
-| gRPC proto definition | `proto/agent_comm.proto` |
-| LLM prompts | `api-server/internal/llm/prompts.go` |
-| File parsers | `api-server/internal/fileparser/` |
-| Sigma rules (agent) | `agent/internal/sigma/` |
-| DC Pipeline | `dc/internal/pipeline/` |
-| Docker orchestration | `docker-compose.yml` |
+| Concern                       | Location                             |
+| ----------------------------- | ------------------------------------ |
+| API Server entry point        | `api-server/cmd/main.go`             |
+| Server (gRPC Hub) entry point | `server/cmd/main.go`                 |
+| DC entry point                | `dc/cmd/main.go`                     |
+| Agent entry point             | `agent/cmd/agent/main.go`            |
+| Agent ↔ Server proto          | `proto/agent_comm.proto`             |
+| API Server ↔ Server proto     | `proto/api_server_comm.proto`        |
+| LLM prompts                   | `api-server/internal/llm/prompts.go` |
+| File parsers                  | `api-server/internal/fileparser/`    |
+| Sigma rules (agent)           | `agent/internal/sigma/`              |
+| DC Pipeline                   | `dc/internal/pipeline/`              |
+| Docker orchestration          | `docker-compose.yml`                 |
 
 ## Frontend API Integration
 

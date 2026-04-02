@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package api_server_comm.v1;
 
-option go_package = "api-server/pkg/api/v1;pb";
+option go_package = "pkg/api/v1;pb";
 
 // ============================================================
 // API Server ↔ Server gRPC Communication Protocol

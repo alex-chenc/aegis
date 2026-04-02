@@ -11,203 +11,195 @@
 ### 1.1 V5.5后端整体结构
 
 ```
-/backend
-├── cmd/
-│   ├── server/                   # 单体服务入口 (兼容旧版)
+/
+├── api-server/                   # API Server服务
+│   ├── cmd/
 │   │   └── main.go
-│   ├── api-service/              # API服务入口 (V5.5新增)
+│   └── internal/
+│       ├── api/                  # HTTP层
+│       ├── service/              # 业务服务层
+│       ├── repository/           # 数据访问层
+│       ├── storage/              # 存储层
+│       ├── queue/                # Kafka生产者
+│       ├── grpc/                 # gRPC客户端
+│       └── llm/                  # LLM客户端
+│
+├── server/                       # Server服务 (Agent Hub)
+│   ├── cmd/
 │   │   └── main.go
-│   ├── agent-hub/                # Agent Hub服务入口 (V5.5新增)
+│   └── internal/
+│       ├── grpc_server/          # gRPC服务端
+│       │   ├── server.go
+│       │   └── api_server_impl.go
+│       ├── repository/
+│       ├── storage/
+│       └── queue/                # Kafka生产者
+│
+├── dc/                          # DC服务 (Data Consumer)
+│   ├── cmd/
 │   │   └── main.go
-│   └── pipeline/                 # Pipeline服务入口 (V5.5新增)
-│       └── main.go
+│   └── internal/
+│       ├── server/               # gRPC服务端
+│       ├── pipeline/            # 事件处理管道
+│       ├── consumer/            # Kafka消费者
+│       └── repository/
 │
-├── internal/
-│   ├── api/                      # HTTP层 (API Service使用)
-│   │   ├── router.go
-│   │   └── handler/
-│   │       ├── host_handler.go
-│   │       ├── rule_handler.go
-│   │       ├── alert_handler.go
-│   │       └── ...
-│   │
-│   ├── service/                  # 业务服务层
-│   │   ├── template_service.go
-│   │   ├── task_service.go
-│   │   ├── alert_service.go
-│   │   ├── rule_service.go
-│   │   └── ...
-│   │
-│   ├── agent_hub/                # Agent通信层 (V5.5新增)
-│   │   ├── server.go             # gRPC Server
-│   │   ├── manager.go            # Agent管理器
-│   │   ├── registry.go           # 注册表
-│   │   ├── heartbeat.go          # 心跳监控
-│   │   ├── dispatcher.go         # 命令下发
-│   │   └── collector.go          # 结果回收
-│   │
-│   ├── pipeline/                 # 事件处理管道 (V5.5新增)
-│   │   ├── consumer.go           # Kafka消费者
-│   │   ├── processor.go          # 事件处理器
-│   │   ├── llm_analyzer.go       # LLM分析器
-│   │   ├── alert_generator.go   # 告警生成器
-│   │   └── block_manager.go     # 阻断管理器
-│   │
-│   ├── repository/               # 数据访问层
-│   │   ├── host_repo.go
-│   │   ├── rule_repo.go
-│   │   ├── alert_repo.go
-│   │   └── ...
-│   │
-│   ├── model/                    # 数据模型
-│   │   ├── host.go
-│   │   ├── rule.go
-│   │   ├── alert.go
-│   │   └── ...
-│   │
-│   ├── queue/                    # Kafka队列
-│   │   ├── producer.go
-│   │   └── consumer.go
-│   │
-│   ├── storage/                  # 存储层
-│   │   ├── redis_client.go
-│   │   └── minio_client.go
-│   │
-│   └── llm/                      # LLM客户端
-│       ├── client.go
-│       └── prompts.go
-│
-├── pkg/                          # 公共包
-│   ├── api/v1/                   # 生成protobuf
-│   └── logger/
-│
-└── config/
-    └── config.yaml
+└── frontend/                     # Vue 3前端
 ```
 
 ---
 
 ## 2. 微服务详细设计
 
-### 2.1 API Service
+### 2.1 API Server
 
 ```go
-// cmd/api-service/main.go
+// api-server/cmd/main.go
 package main
 
 func main() {
     // 初始化配置
-    cfg := config.Load()
+    cfg := config.Load("config/api-server.yaml")
 
     // 初始化日志
-    logger.Init(cfg.Logger)
+    logger.Init(&logger.Config{...})
 
     // 初始化数据库
-    db := repository.NewDB(&cfg.Database)
+    db, err := repository.NewDB(&cfg.Database)
 
     // 初始化Redis
-    redis := storage.NewRedisClient(&cfg.Redis)
+    redisClient, err := storage.NewRedisClient(&cfg.Redis)
 
     // 初始化MinIO
-    minio := storage.NewMinIOClient(&cfg.MinIO)
+    minioClient, err := storage.NewMinIOClient(&cfg.MinIO)
+
+    // 初始化Kafka Producer
+    kafkaProducer := queue.NewKafkaProducer(kafkaBrokers, logger.Get())
+
+    // 初始化gRPC Client到Server
+    serverClient, err := grpcclient.NewServerClient(serverAddr)
 
     // 初始化Repository
     hostRepo := repository.NewHostRepository(db)
-    ruleRepo := repository.NewRuleRepository(db)
+    taskLogRepo := repository.NewTaskLogRepository(db)
     alertRepo := repository.NewAlertRepository(db)
+    ruleRepo := repository.NewRuleRepository(db)
+    sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
 
     // 初始化Service
-    alertService := service.NewAlertService(alertRepo)
+    taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, serverClient)
+    alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
     wsService := service.NewWebSocketService()
 
     // 初始化Handler
-    hostHandler := handler.NewHostHandler(hostRepo, redis)
-    alertHandler := handler.NewAlertHandler(alertRepo, wsService)
+    hostHandler := handler.NewHostHandler(hostRepo, redisClient, serverClient)
+    taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, selfHealingService)
+    detectionHandler := handler.NewDetectionHandler(...)
 
     // 初始化Router
-    router := api.NewRouter(hostHandler, alertHandler, ...)
+    router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)
+    router.Setup()
 
-    // 启动HTTP服务器
-    router.Run(fmt.Sprintf(":%d", cfg.Server.HTTPPort))
+    // 启动HTTP服务器 (端口8082)
+    go router.Run(fmt.Sprintf(":%d", cfg.Server.HTTPPort))
 }
 ```
 
-**端口**: 8080
+**端口**: 8082 (HTTP), 19093 (gRPC client)
 **职责**:
 - HTTP REST API
 - WebSocket实时推送
 - 认证授权
 - 请求路由
+- gRPC客户端到Server服务 (APIServerToServer:19094)
+- gRPC客户端到DC服务
 
-### 2.2 Agent Hub
+### 2.2 Server (Agent Hub)
 
 ```go
-// cmd/agent-hub/main.go
+// server/cmd/main.go
 package main
 
 func main() {
-    cfg := config.Load()
-    logger.Init(cfg.Logger)
+    cfg, err := config.Load("config/server.yaml")
+    logger.Init(&logger.Config{...})
 
     // 初始化数据库
-    db := repository.NewDB(&cfg.Database)
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 
     // 初始化Redis
-    redis := storage.NewRedisClient(&cfg.Redis)
+    redisClient, err := storage.NewRedisClient(&cfg.Redis)
 
     // 初始化Kafka Producer
-    kafkaProducer := queue.NewKafkaProducer(cfg.Kafka.Brokers)
+    kafkaProducerInstance := queue.NewKafkaProducer(cfg.Kafka.Brokers, logger.Get())
 
     // 初始化Repository
     hostRepo := repository.NewHostRepository(db)
+    sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
+    alertRepo := repository.NewAlertRepository(db)
     runtimeEventRepo := repository.NewRuntimeEventRepository(db)
+    blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 
-    // 初始化Agent Manager
-    manager := agent_hub.NewAgentManager(hostRepo, redis)
-
-    // 初始化gRPC Server
-    grpcServer := agent_hub.NewGRPCServer(
-        manager,
-        kafkaProducer,
-        cfg.Server.GRPCPort,
+    // 初始化gRPC Server (Agent Hub)
+    grpcServer := grpc_server.NewGRPCServer(
+        hostRepo,
+        redisClient,
+        kafkaProducerInstance,
+        cfg.Server.GRPCPort,  // 19090
     )
 
-    // 启动服务
-    if err := grpcServer.Start(); err != nil {
-        logger.Fatal("failed to start gRPC server", zap.Error(err))
-    }
+    // 设置额外repository用于事件处理和规则推送
+    grpcServer.SetSigmaRuleRepo(sigmaRuleRepo)
+    grpcServer.SetAlertRepo(alertRepo, nil)
+    grpcServer.SetRuntimeEventRepo(runtimeEventRepo)
+    grpcServer.SetBlockPolicyRepo(blockPolicyRepo)
+
+    // 创建APIServerToServer gRPC服务 (端口19094)
+    apiServerLis, err := net.Listen("tcp", fmt.Sprintf(":%d", 19094))
+    apiServerGRPCServer := grpc.NewServer()
+    apiServerImpl := grpc_server.NewAPIServerToServerImpl(grpcServer, hostRepo, redisClient)
+    pb.RegisterAPIServerToServerServer(apiServerGRPCServer, apiServerImpl)
+
+    // 启动Agent Hub gRPC服务
+    go func() {
+        grpcServer.Start()  // 端口19090
+    }()
+
+    // 启动APIServerToServer gRPC服务
+    go func() {
+        apiServerGRPCServer.Serve(apiServerLis)  // 端口19094
+    }()
 }
 ```
 
-**端口**: 19090 (gRPC)
+**端口**: 19090 (Agent Hub), 19094 (APIServerToServer)
 **职责**:
-- Agent注册管理
-- 心跳监控
-- 命令下发
-- 结果回收
+- Agent注册管理 (19090)
+- 心跳监控 (19090)
+- 命令下发 (19090)
+- 结果回收 (19090)
+- 接收API Server命令 (19094)
 - 事件路由到Kafka
+- 阻断策略管理
 
-### 2.3 Pipeline Service
+### 2.3 DC (Data Consumer)
 
 ```go
-// cmd/pipeline/main.go
+// dc/cmd/main.go
 package main
 
 func main() {
-    cfg := config.Load()
-    logger.Init(cfg.Logger)
+    cfg := config.Load("config/dc.yaml")
+    logger.Init(&logger.Config{...})
 
     // 初始化数据库
-    db := repository.NewDB(&cfg.Database)
-
-    // 初始化Redis
-    redis := storage.NewRedisClient(&cfg.Redis)
+    db, err := repository.NewDB(&cfg.Database)
 
     // 初始化Kafka Consumer
     kafkaConsumer := queue.NewKafkaConsumer(
         cfg.Kafka.Brokers,
-        "pipeline-group",
-        []string{"aegis.security.events"},
+        "aegis-dc-consumer",
+        []string{"aegis.security.events", "aegis.block.commands"},
     )
 
     // 初始化LLM Client
@@ -217,24 +209,28 @@ func main() {
     alertRepo := repository.NewAlertRepository(db)
     sigmaRuleRepo := repository.NewSigmaRuleRepository(db)
     runtimeEventRepo := repository.NewRuntimeEventRepository(db)
+    blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 
-    // 初始化Pipeline
-    pipeline := pipeline.NewPipeline(
-        kafkaConsumer,
-        llmClient,
+    // 初始化gRPC Server
+    grpcServer := dc.NewDCServer(
         alertRepo,
         sigmaRuleRepo,
         runtimeEventRepo,
+        blockPolicyRepo,
+        kafkaConsumer,
+        llmClient,
+        cfg.GRPC.ServerPort,
     )
 
-    // 启动处理
-    pipeline.Start(context.Background())
+    // 启动gRPC服务和Kafka消费者
+    go grpcServer.Start()  // 端口19092
+    kafkaConsumer.Start(context.Background())
 }
 ```
 
-**端口**: 19091 (内部gRPC)
+**端口**: 19092 (gRPC)
 **职责**:
-- Kafka事件消费
+- Kafka事件消费 (aegis.security.events, aegis.block.commands)
 - LLM智能分析
 - 告警生成
 - 阻断策略管理
@@ -631,80 +627,73 @@ func (ah *AgentHub) sendEventToPipeline(event *model.RuntimeEvent) error {
 ### 6.1 统一配置文件
 
 ```yaml
-# config/config.yaml
+# docker-compose.yml 环境变量
 
-# 服务器通用配置
-server:
-  http_port: 8080
-  grpc_port: 19090
-  external_ip: ""
+# API Server配置
+DATABASE_HOST: postgres
+DATABASE_PORT: 5432
+DATABASE_USER: aegis_user
+DATABASE_PASSWORD: xxx
+DATABASE_DBNAME: aegis_db
+REDIS_HOST: redis
+REDIS_PORT: 6379
+REDIS_PASSWORD: xxx
+MINIO_ENDPOINT: minio:9000
+SERVER_HTTP_PORT: 8082
+SERVER_GRPC_PORT: 19093
+GRPC_SERVER_ADDRESS: server:19094
 
-# 数据库配置
-database:
-  host: postgres
-  port: 5432
-  user: aegis
-  password: aegis
-  dbname: aegis
+# Server配置
+KAFKA_BROKERS: kafka:9092
+SERVER_GRPC_PORT: 19090
+AGENT_AUTH_TOKEN: xxx
+AGENT_HEARTBEAT_TIMEOUT: 90
 
-# Redis配置
-redis:
-  host: redis
-  port: 6379
-  password: ""
-  db: 0
-
-# MinIO配置
-minio:
-  endpoint: minio:9000
-  access_key: minioadmin
-  secret_key: minioadmin
-  use_ssl: false
-  bucket: aegis
-
-# Kafka配置
-kafka:
-  brokers:
-    - kafka:29092
-  topics:
-    events: aegis.security.events
-    control: aegis.control
-
-# LLM配置
-llm:
-  provider: openai
-  api_key: ""
-  model: gpt-4
-  timeout_seconds: 30
-  max_retries: 3
+# DC配置
+KAFKA_BROKERS: kafka:9092
+KAFKA_GROUP_ID: aegis-dc-consumer
+KAFKA_TOPIC: aegis.security.events
+GRPC_SERVER_PORT: 19092
+LLM_API_KEY: xxx
+LLM_BASE_URL: https://api.openai.com/v1
+LLM_MODEL_NAME: gpt-4
 ```
 
 ### 6.2 微服务独立配置
 
 ```yaml
-# config/api-service.yaml
+# api-server/config/api-server.yaml
 service:
-  name: api-service
-  port: 8080
+  name: api-server
+  http_port: 8082
+  grpc_port: 19093
 
-# config/agent-hub.yaml
+# server/config/server.yaml
 service:
-  name: agent-hub
-  port: 19090
+  name: server
+  grpc_port: 19090
+  api_server_grpc_port: 19094
 
 agent:
   heartbeat_interval: 30s
   heartbeat_timeout: 90s
 
-# config/pipeline.yaml
+kafka:
+  brokers:
+    - kafka:9092
+
+# dc/config/dc.yaml
 service:
-  name: pipeline
-  port: 19091
+  name: dc
+  grpc_port: 19092
 
 kafka:
-  consumer_group: pipeline-group
-  batch_size: 100
-  batch_timeout: 1s
+  brokers:
+    - kafka:9092
+  consumer_group: aegis-dc-consumer
+  topics:
+    - aegis.security.events
+    - aegis.block.commands
 ```
 
 ---
@@ -756,94 +745,126 @@ func (s *GRPCServer) Check(ctx context.Context, req *health.CheckRequest) (*heal
 ### 8.1 Docker Compose (微服务模式)
 
 ```yaml
-version: '3.8'
+# docker-compose.yml (实际配置)
 
 services:
-  # API Service
-  api-service:
-    build: ./backend
-    command: ./api-service
+  # API Server
+  api-server:
+    build: ./api-server
     ports:
-      - "8080:8080"
+      - "8082:8082"
+      - "19093:19093"
     environment:
-      - CONFIG_PATH=/config/api-service.yaml
+      DATABASE_HOST: postgres
+      SERVER_HTTP_PORT: 8082
+      GRPC_SERVER_ADDRESS: server:19094
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
-  # Agent Hub
-  agent-hub:
-    build: ./backend
-    command: ./agent-hub
+  # Server (Agent Hub)
+  server:
+    build: ./server
     ports:
       - "19090:19090"
+      - "19094:19094"
     environment:
-      - CONFIG_PATH=/config/agent-hub.yaml
+      DATABASE_HOST: postgres
+      KAFKA_BROKERS: kafka:9092
+      SERVER_GRPC_PORT: 19090
     depends_on:
-      - postgres
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
 
-  # Pipeline Service
-  pipeline:
-    build: ./backend
-    command: ./pipeline
+  # DC (Data Consumer)
+  dc:
+    build: ./dc
+    ports:
+      - "19092:19092"
     environment:
-      - CONFIG_PATH=/config/pipeline.yaml
+      DATABASE_HOST: postgres
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-dc-consumer
+      KAFKA_TOPIC: aegis.security.events
+      GRPC_SERVER_PORT: 19092
     depends_on:
-      - postgres
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
 
   # 共享服务
   postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: aegis
-      POSTGRES_USER: aegis
-      POSTGRES_PASSWORD: aegis
+    image: postgres:14-alpine
+    ports:
+      - "5432:5432"
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "29092:9092"
 
   minio:
-    image: minio/minio
-    command: server /data
-
-  nginx:
-    image: nginx:alpine
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    image: minio/minio:latest
     ports:
-      - "80:80"
+      - "9000:9000"
+      - "9001:9001"
+
+  frontend:
+    image: aegis-system/frontend:latest
+    ports:
+      - "8081:80"
 ```
 
 ---
 
-## 9. 迁移策略
+## 9. Kafka Topic设计
 
-### 9.1 从单体到微服务
+### 9.1 Topic列表
 
-**阶段1**: 保持单体代码结构，添加服务入口
-- 添加 `cmd/api-service/main.go`
-- 添加 `cmd/agent-hub/main.go`
-- 添加 `cmd/pipeline/main.go`
+| Topic | 分区数 | 消费者 | 用途 |
+|-------|--------|--------|------|
+| aegis.security.events | 3 | DC | Agent上报的运行时安全事件 |
+| aegis.block.commands | 3 | Server | DC生成的阻断命令 |
+| aegis.rule.updates | 3 | Server | 规则更新通知 |
 
-**阶段2**: 代码拆分
-- 将 `internal/agent_hub/` 抽取为独立模块
-- 将 `internal/pipeline/` 抽取为独立模块
-- 共享 `internal/repository/`、`internal/model/`
+### 9.2 消息格式
 
-**阶段3**: 配置分离
-- 配置文件拆分
-- 环境变量配置
+```json
+// aegis.security.events
+{
+  "host_id": "uuid",
+  "event_type": "process_create|network_connect|...",
+  "timestamp": "2026-04-02T10:00:00Z",
+  "data": {
+    "process_name": "bash",
+    "file_path": "/bin/bash",
+    "remote_addr": "",
+    "process_tree": "[{\"pid\":1,\"name\":\"init\"},...]"
+  }
+}
 
-**阶段4**: 独立部署
-- Docker镜像拆分
-- Kubernetes部署
+// aegis.block.commands
+{
+  "type": "block_ip|block_process|unblock",
+  "target": "192.168.1.100",
+  "rule_id": "uuid",
+  "timestamp": "2026-04-02T10:00:00Z"
+}
+```
 
 ---
 

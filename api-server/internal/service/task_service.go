@@ -135,7 +135,7 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 
 			taskIDs = append(taskIDs, taskLog.ID.String())
 
-			go s.dispatchToAgent(ctx, taskLog.ID, hostID, ruleID, scriptContent, taskType)
+			go s.dispatchToAgent(context.Background(), taskLog.ID, hostID, ruleID, scriptContent, taskType)
 		}
 	}
 
@@ -213,7 +213,7 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 	if updatedTask.RuleID != nil {
 		ruleID = *updatedTask.RuleID
 	}
-	go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, ruleID, scriptContent, updatedTask.TaskType)
+	go s.dispatchToAgent(context.Background(), updatedTask.ID, updatedTask.HostID, ruleID, scriptContent, updatedTask.TaskType)
 
 	return updatedTask, nil
 }
@@ -230,7 +230,12 @@ func (s *TaskService) dispatchToAgent(ctx context.Context, taskID, hostID, ruleI
 		return
 	}
 
-	_, err := s.serverClient.ForwardCommand(ctx, &pb.ForwardCommandRequest{
+	// Use background context for async dispatch - the HTTP request context
+	// will be canceled when the handler returns, but we need the gRPC
+	// call to continue running until completion
+	bgCtx := context.Background()
+
+	_, err := s.serverClient.ForwardCommand(bgCtx, &pb.ForwardCommandRequest{
 		TaskId:         taskID.String(),
 		HostId:         hostID.String(),
 		RuleId:         ruleID.String(),

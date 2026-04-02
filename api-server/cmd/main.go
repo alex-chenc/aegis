@@ -86,9 +86,14 @@ func main() {
 	logger.Info("Kafka producer initialized")
 
 	// Initialize gRPC client to Server service
-	serverAddr := fmt.Sprintf("%s:%d", cfg.Server.ExternalIP, cfg.Server.GRPCPort)
-	if cfg.Server.ExternalIP == "" {
-		serverAddr = fmt.Sprintf("localhost:%d", cfg.Server.GRPCPort)
+	var serverAddr string
+	if cfg.GRPC.ServerAddress != "" {
+		serverAddr = cfg.GRPC.ServerAddress
+	} else {
+		serverAddr = fmt.Sprintf("%s:%d", cfg.Server.ExternalIP, cfg.Server.GRPCPort)
+		if cfg.Server.ExternalIP == "" {
+			serverAddr = fmt.Sprintf("localhost:%d", cfg.Server.GRPCPort)
+		}
 	}
 	serverClient, err := grpcclient.NewServerClient(serverAddr)
 	if err != nil {

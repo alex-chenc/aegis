@@ -1,7 +1,13 @@
 package block_manager
 
 import (
+	"context"
+
 	"dc/internal/model"
+	"dc/internal/repository"
+	"dc/pkg/logger"
+
+	"go.uber.org/zap"
 	"sync"
 )
 
@@ -39,4 +45,25 @@ func (m *BlockManager) IsBlocked(mitreID string) bool {
 		return false
 	}
 	return policy.Enabled
+}
+
+// LoadPolicies loads all block policies from the database into memory
+func (m *BlockManager) LoadPolicies(ctx context.Context, repo *repository.BlockPolicyRepository) error {
+	policies, err := repo.FindAll(ctx)
+	if err != nil {
+		logger.Error("Failed to load block policies from database", zap.Error(err))
+		return err
+	}
+
+	for _, policy := range policies {
+		m.StorePolicy(policy)
+		logger.Debug("Loaded block policy",
+			zap.String("mitre_id", policy.MitreID),
+			zap.Bool("enabled", policy.Enabled),
+			zap.Bool("auto_dispose", policy.AutoDispose),
+		)
+	}
+
+	logger.Info("Loaded block policies", zap.Int("count", len(policies)))
+	return nil
 }

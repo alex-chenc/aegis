@@ -6,9 +6,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"dc/config"
+	"dc/internal/aggregator"
+	"dc/internal/alert_generator"
+	"dc/internal/block_manager"
 	"dc/internal/kafka_consumer"
+	"dc/internal/llm"
+	"dc/internal/llm_analyzer"
 	"dc/internal/repository"
 	"dc/internal/server"
 	"dc/pkg/logger"
@@ -60,15 +66,59 @@ func main() {
 	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
 
-	// Create Kafka consumer with repository
-	consumer, err := kafka_consumer.NewKafkaConsumer(&cfg.Kafka, runtimeEventRepo)
+	// Create shared components
+	blockMgr := block_manager.NewBlockManager()
+	alertGen := alert_generator.NewAlertGenerator(blockMgr)
+
+	// Create LLM client if configured
+	var llmClient *llm.Client
+	var llmAnalyzer *llm_analyzer.LLMAnalyzer
+	if cfg.LLM.APIKey != "" {
+		llmClient, err = llm.NewClient(&cfg.LLM)
+		if err != nil {
+			logger.Warn("Failed to create LLM client, LLM analysis disabled", zap.Error(err))
+		} else {
+			llmAnalyzer = llm_analyzer.NewLLMAnalyzer(llmClient)
+			logger.Info("LLM analyzer enabled")
+		}
+	} else {
+		llmAnalyzer = llm_analyzer.NewLLMAnalyzer(nil)
+		logger.Warn("LLM API key not configured, LLM analysis disabled")
+	}
+
+	// Create aggregator with 2 minute window and 1000 max events
+	agg := aggregator.NewAggregator(2*time.Minute, 1000)
+
+	// Create Kafka consumer with all components
+	consumer, err := kafka_consumer.NewKafkaConsumer(
+		&cfg.Kafka,
+		runtimeEventRepo,
+		llmAnalyzer,
+		alertGen,
+		agg,
+	)
 	if err != nil {
 		logger.Fatal("Failed to create Kafka consumer", zap.Error(err))
 	}
 	defer consumer.Close()
 
+	// Load block policies from database into block manager
+	if err := blockMgr.LoadPolicies(ctx, blockPolicyRepo); err != nil {
+		logger.Warn("Failed to load block policies", zap.Error(err))
+	}
+
 	// Create and start DC server
-	dcServer := server.NewServer(cfg, db, consumer, alertRepo, blockPolicyRepo, runtimeEventRepo)
+	dcServer := server.NewServer(
+		cfg,
+		db,
+		consumer,
+		alertRepo,
+		blockPolicyRepo,
+		runtimeEventRepo,
+		llmAnalyzer,
+		alertGen,
+		agg,
+	)
 
 	if err := dcServer.Start(ctx); err != nil {
 		logger.Fatal("Failed to start DC server", zap.Error(err))

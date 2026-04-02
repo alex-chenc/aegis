@@ -2,7 +2,11 @@ package event_handler
 
 import (
 	"context"
+	"time"
 
+	"dc/internal/alert_generator"
+	"dc/internal/aggregator"
+	"dc/internal/llm_analyzer"
 	"dc/internal/model"
 	"dc/internal/repository"
 	"dc/pkg/logger"
@@ -12,14 +16,25 @@ import (
 )
 
 type EventHandler struct {
-	logger *zap.Logger
-	repo   *repository.RuntimeEventRepository
+	logger       *zap.Logger
+	repo         *repository.RuntimeEventRepository
+	llmAnalyzer  *llm_analyzer.LLMAnalyzer
+	alertGen     *alert_generator.AlertGenerator
+	aggregator   *aggregator.Aggregator
 }
 
-func NewEventHandler(repo *repository.RuntimeEventRepository) *EventHandler {
+func NewEventHandler(
+	repo *repository.RuntimeEventRepository,
+	llmAnalyzer *llm_analyzer.LLMAnalyzer,
+	alertGen *alert_generator.AlertGenerator,
+	aggregator *aggregator.Aggregator,
+) *EventHandler {
 	return &EventHandler{
-		logger: logger.Get(),
-		repo:   repo,
+		logger:      logger.Get(),
+		repo:        repo,
+		llmAnalyzer: llmAnalyzer,
+		alertGen:    alertGen,
+		aggregator:  aggregator,
 	}
 }
 
@@ -76,6 +91,45 @@ func (h *EventHandler) Handle(event map[string]interface{}) error {
 		zap.String("host_id", runtimeEvent.HostID.String()),
 		zap.String("event_type", runtimeEvent.EventType),
 	)
+
+	// Add to aggregator for batch processing
+	if h.aggregator != nil {
+		h.aggregator.AddEvent(runtimeEvent)
+	}
+
+	// Generate alert if matched rule exists
+	if h.alertGen != nil && matchedRuleID != "" {
+		alert := h.alertGen.GenerateAlert(runtimeEvent)
+		if alert != nil {
+			h.logger.Info("Alert generated",
+				zap.String("alert_id", alert.AlertID),
+				zap.String("severity", alert.Severity),
+			)
+		}
+	}
+
+	// Trigger LLM analysis for critical/high severity events
+	if h.llmAnalyzer != nil && (severity == "critical" || severity == "high") {
+		go func() {
+			analysisCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			result, err := h.llmAnalyzer.AnalyzeEvents(analysisCtx, []*model.RuntimeEvent{runtimeEvent})
+			if err != nil {
+				h.logger.Error("LLM analysis failed",
+					zap.String("event_id", eventID),
+					zap.Error(err),
+				)
+				return
+			}
+
+			h.logger.Info("LLM analysis completed",
+				zap.String("event_id", eventID),
+				zap.String("summary", result.Summary),
+			)
+			// TODO: Store analysis result if there's a storage mechanism
+		}()
+	}
 
 	return nil
 }

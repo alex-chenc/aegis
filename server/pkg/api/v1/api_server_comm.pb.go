@@ -1386,7 +1386,7 @@ const file_proto_api_server_comm_proto_rawDesc = "" +
 	"\vHealthCheck\x12&.api_server_comm.v1.HealthCheckRequest\x1a'.api_server_comm.v1.HealthCheckResponse\x12m\n" +
 	"\x10UpdateAgentRules\x12+.api_server_comm.v1.UpdateAgentRulesRequest\x1a,.api_server_comm.v1.UpdateAgentRulesResponse\x12v\n" +
 	"\x13ExecuteBlockCommand\x12..api_server_comm.v1.ExecuteBlockCommandRequest\x1a/.api_server_comm.v1.ExecuteBlockCommandResponse\x12j\n" +
-	"\x0fCollectSoftware\x12*.api_server_comm.v1.CollectSoftwareRequest\x1a+.api_server_comm.v1.CollectSoftwareResponseB\x1aZ\x18api-server/pkg/api/v1;pbb\x06proto3"
+	"\x0fCollectSoftware\x12*.api_server_comm.v1.CollectSoftwareRequest\x1a+.api_server_comm.v1.CollectSoftwareResponseB\x0fZ\rpkg/api/v1;pbb\x06proto3"
 
 var (
 	file_proto_api_server_comm_proto_rawDescOnce sync.Once

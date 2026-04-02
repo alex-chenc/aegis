@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"dc/config"
+	"dc/internal/alert_generator"
+	"dc/internal/aggregator"
 	"dc/internal/event_handler"
+	"dc/internal/llm_analyzer"
 	"dc/internal/repository"
 	"dc/pkg/logger"
 
@@ -20,7 +23,13 @@ type KafkaConsumer struct {
 	logger       *zap.Logger
 }
 
-func NewKafkaConsumer(cfg *config.KafkaConfig, runtimeEventRepo *repository.RuntimeEventRepository) (*KafkaConsumer, error) {
+func NewKafkaConsumer(
+	cfg *config.KafkaConfig,
+	runtimeEventRepo *repository.RuntimeEventRepository,
+	llmAnalyzer *llm_analyzer.LLMAnalyzer,
+	alertGen *alert_generator.AlertGenerator,
+	aggregator *aggregator.Aggregator,
+) (*KafkaConsumer, error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        cfg.Brokers,
 		GroupID:        cfg.GroupID,
@@ -39,7 +48,7 @@ func NewKafkaConsumer(cfg *config.KafkaConfig, runtimeEventRepo *repository.Runt
 
 	return &KafkaConsumer{
 		reader:       reader,
-		eventHandler: event_handler.NewEventHandler(runtimeEventRepo),
+		eventHandler: event_handler.NewEventHandler(runtimeEventRepo, llmAnalyzer, alertGen, aggregator),
 		logger:       logger.Get(),
 	}, nil
 }

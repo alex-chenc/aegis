@@ -6,6 +6,7 @@ import (
 	"net"
 
 	"dc/config"
+	"dc/internal/aggregator"
 	"dc/internal/alert_generator"
 	"dc/internal/block_manager"
 	"dc/internal/kafka_consumer"
@@ -27,6 +28,7 @@ type Server struct {
 	alertGen    *alert_generator.AlertGenerator
 	blockMgr    *block_manager.BlockManager
 	llmAnalyzer *llm_analyzer.LLMAnalyzer
+	aggregator  *aggregator.Aggregator
 }
 
 func NewServer(
@@ -36,10 +38,16 @@ func NewServer(
 	alertRepo *repository.AlertRepository,
 	blockPolicyRepo *repository.BlockPolicyRepository,
 	runtimeEventRepo *repository.RuntimeEventRepository,
+	llmAnalyzer *llm_analyzer.LLMAnalyzer,
+	alertGen *alert_generator.AlertGenerator,
+	aggregator *aggregator.Aggregator,
 ) *Server {
 	blockMgr := block_manager.NewBlockManager()
-	alertGen := alert_generator.NewAlertGenerator(blockMgr)
-	llmAnalyzer := llm_analyzer.NewLLMAnalyzer(nil) // LLM client will be initialized later
+
+	// Use provided alertGen if not nil, otherwise create new one
+	if alertGen == nil {
+		alertGen = alert_generator.NewAlertGenerator(blockMgr)
+	}
 
 	return &Server{
 		cfg:         cfg,
@@ -48,6 +56,7 @@ func NewServer(
 		blockMgr:    blockMgr,
 		alertGen:    alertGen,
 		llmAnalyzer: llmAnalyzer,
+		aggregator:  aggregator,
 	}
 }
 

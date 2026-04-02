@@ -31,10 +31,15 @@ func NewServerClient(address string) (*ServerClient, error) {
 		PermitWithoutStream: true,
 	}
 
-	conn, err := grpc.NewClient(
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := grpc.DialContext(
+		ctx,
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithKeepaliveParams(kaParams),
+		grpc.WithBlock(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to server gRPC: %w", err)
@@ -90,10 +95,14 @@ func (c *ServerClient) ExecuteBlockCommand(ctx context.Context, req *pb.ExecuteB
 }
 
 // CollectSoftware collects software list from an agent via the Server service
-// Note: This requires the Server to implement a CollectSoftware RPC method
 func (c *ServerClient) CollectSoftware(ctx context.Context, hostID string) (*SoftwareCollectionResponse, error) {
-	// This is a placeholder - the actual implementation depends on what RPC
-	// method the Server exposes for software collection
-	// For now, return empty response
-	return &SoftwareCollectionResponse{SoftwareJson: "[]"}, nil
+	resp, err := c.client.CollectSoftware(ctx, &pb.CollectSoftwareRequest{
+		HostId: hostID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SoftwareCollectionResponse{
+		SoftwareJson: resp.SoftwareJson,
+	}, nil
 }

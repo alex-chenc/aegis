@@ -30,7 +30,7 @@ agent/vendor/
 agent/agent
 
 server/bin/*
-api-servrer/bin/*
+api-server/bin/*
 dc/bin/*
 
 docker-compose.override.yml

@@ -10,13 +10,13 @@
 
 V5.5版本采用微服务架构，服务间通信更加规范和高效。主要通信模式：
 
-| 通信路径 | 协议 | 用途 |
-|---------|------|------|
-| Frontend → API Service | HTTP/WebSocket | 用户请求、实时推送 |
-| Agent → Agent Hub | gRPC (双向流) | 事件上报、命令下发 |
-| Agent Hub → Pipeline | Kafka | 事件转发 |
-| API Service → Agent Hub | gRPC | 命令下发、状态查询 |
-| API Service ↔ Pipeline | gRPC | 状态同步、数据共享 |
+| 通信路径 | 协议 | 端口 | 用途 |
+|---------|------|------|------|
+| Frontend → API Server | HTTP/WebSocket | 8082 | 用户请求、实时推送 |
+| Server → Agent | gRPC (双向流) | 19090 | 事件上报、命令下发 |
+| API Server → Server | gRPC | 19094 | 命令下发、状态查询 |
+| Server → DC | Kafka | - | 事件转发 |
+| DC → Server | Kafka | - | 阻断命令 |
 
 ---
 
