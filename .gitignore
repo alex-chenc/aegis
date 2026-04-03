@@ -42,3 +42,4 @@ docker-compose.override.yml
 # Worktrees
 .worktrees/
 worktrees/
+prompt/*
