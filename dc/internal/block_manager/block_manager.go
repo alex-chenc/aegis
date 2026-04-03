@@ -49,14 +49,15 @@ func (m *BlockManager) IsBlocked(mitreID string) bool {
 
 // LoadPolicies loads all block policies from the database into memory
 func (m *BlockManager) LoadPolicies(ctx context.Context, repo *repository.BlockPolicyRepository) error {
-	policies, err := repo.FindAll(ctx)
+	policies, err := repo.FindAll()
 	if err != nil {
 		logger.Error("Failed to load block policies from database", zap.Error(err))
 		return err
 	}
 
 	for _, policy := range policies {
-		m.StorePolicy(policy)
+		// StorePolicy expects a pointer, so take the address
+		m.StorePolicy(&policy)
 		logger.Debug("Loaded block policy",
 			zap.String("mitre_id", policy.MitreID),
 			zap.Bool("enabled", policy.Enabled),

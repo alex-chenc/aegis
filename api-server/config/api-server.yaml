@@ -43,7 +43,7 @@ llm:
   api_key: ""
   base_url: "https://api.openai.com/v1"
   model_name: "gpt-4"
-  timeout_seconds: 120
+  timeout_seconds: 1200
   max_retries: 3
 
 # Agent Configuration

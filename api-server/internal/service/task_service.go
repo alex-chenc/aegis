@@ -151,46 +151,45 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 		return nil, fmt.Errorf("failed to find original task: %w", err)
 	}
 
-	if originalTask.RuleID == nil {
-		return nil, fmt.Errorf("task has no rule_id")
-	}
-
-	rule, err := s.ruleRepo.FindByID(*originalTask.RuleID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find rule: %w", err)
-	}
-
 	var scriptContent string
+	var newVersion int
+
+	// For CHECK tasks, we need a rule_id to get the script
+	// For POC_VERIFY and VULNERABILITY_FIX tasks, we use the original task's ScriptContent
 	if originalTask.TaskType == "CHECK" {
+		if originalTask.RuleID == nil {
+			return nil, fmt.Errorf("CHECK task has no rule_id")
+		}
+
+		rule, err := s.ruleRepo.FindByID(*originalTask.RuleID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find rule: %w", err)
+		}
+
 		if rule.GeneratedCheckScript != nil {
 			scriptContent = *rule.GeneratedCheckScript
 		}
-	} else {
-		if rule.GeneratedFixScript != nil {
-			scriptContent = *rule.GeneratedFixScript
-		}
-	}
 
-	if scriptContent == "" && originalTask.ScriptContent != nil {
-		scriptContent = *originalTask.ScriptContent
+		newVersion = rule.CheckScriptVersion
+	} else {
+		// For POC_VERIFY and VULNERABILITY_FIX, use the original task's ScriptContent
+		if originalTask.ScriptContent != nil {
+			scriptContent = *originalTask.ScriptContent
+		}
+
+		if originalTask.ScriptVersion != nil {
+			newVersion = *originalTask.ScriptVersion
+		} else {
+			newVersion = 1
+		}
 	}
 
 	if scriptContent == "" {
 		return nil, fmt.Errorf("script content is empty")
 	}
 
-	newVersion := 0
-	if originalTask.TaskType == "CHECK" {
-		newVersion = rule.CheckScriptVersion
-	} else {
-		newVersion = rule.FixScriptVersion
-	}
 	if newVersion <= 0 {
-		if originalTask.ScriptVersion != nil {
-			newVersion = *originalTask.ScriptVersion
-		} else {
-			newVersion = 1
-		}
+		newVersion = 1
 	}
 
 	if err := s.taskLogRepo.UpdateForRedispatch(originalTask.ID, scriptContent, newVersion); err != nil {

@@ -21,6 +21,7 @@ type ServerClient struct {
 // SoftwareCollectionResponse represents software collection response
 type SoftwareCollectionResponse struct {
 	SoftwareJson string
+	Error        string
 }
 
 // NewServerClient creates a new gRPC client connection to the Server service
@@ -102,7 +103,14 @@ func (c *ServerClient) CollectSoftware(ctx context.Context, hostID string) (*Sof
 	if err != nil {
 		return nil, err
 	}
+	if !resp.Success {
+		return &SoftwareCollectionResponse{
+			SoftwareJson: resp.SoftwareJson,
+			Error:        resp.Error,
+		}, fmt.Errorf("software collection failed: %s", resp.Error)
+	}
 	return &SoftwareCollectionResponse{
 		SoftwareJson: resp.SoftwareJson,
+		Error:        "",
 	}, nil
 }

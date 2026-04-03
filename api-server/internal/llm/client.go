@@ -77,7 +77,15 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		response, err := c.sendRequest(ctx, reqBody)
 		if err == nil {
-			return response, nil
+			// Check for empty response - treat as retryable error
+			if response == "" {
+				logger.Warn("LLM returned empty response, retrying",
+					zap.Int("attempt", attempt+1),
+					zap.Int("max_retries", c.maxRetries))
+				lastErr = fmt.Errorf("empty response from LLM")
+			} else {
+				return response, nil
+			}
 		}
 
 		lastErr = err
@@ -180,6 +188,10 @@ func (c *LLMClient) isRetryableError(err error) bool {
 		"server misbehaving",
 		"no such host",
 		"temporary failure",
+		"unexpect",
+		"decode",
+		"end of JSON",
+		"empty response",
 	})
 }
 

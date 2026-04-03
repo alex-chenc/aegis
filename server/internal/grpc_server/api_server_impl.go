@@ -173,7 +173,7 @@ func (s *APIServerToServerImpl) ForwardCommand(ctx context.Context, req *pb.Forw
 		return &pb.ForwardCommandResponse{
 			Success: false,
 			Message: fmt.Sprintf("invalid host_id: %v", err),
-		}, nil
+		}, err
 	}
 
 	// Create command to send to agent
@@ -194,7 +194,7 @@ func (s *APIServerToServerImpl) ForwardCommand(ctx context.Context, req *pb.Forw
 			Success: false,
 			Message: fmt.Sprintf("failed to send command: %v", err),
 			TaskId:  req.TaskId,
-		}, nil
+		}, err
 	}
 
 	logger.Info("command forwarded",

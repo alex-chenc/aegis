@@ -109,35 +109,56 @@ func GetSelfHealingFixPrompt(originalScript, errorMessage string, exitCode int, 
 }
 
 // CVEAnalysisPrompt analyzes software inventory to identify CVE vulnerabilities
-const CVEAnalysisPrompt = `你是一位资深的网络安全专家，专门负责分析软件清单以识别潜在的 CVE 漏洞。
+const CVEAnalysisPrompt = `You are a senior cybersecurity expert specializing in CVE vulnerability analysis.
 
-## 分析原则
-1. 准确性优先：只返回你确信存在的漏洞
-2. 版本精确匹配：确保版本号在受影响范围内
-3. 严重程度准确：Critical(9.0-10.0), High(7.0-8.9), Medium(4.0-6.9), Low(0.1-3.9)
+## Output Requirements (MUST follow strictly)
+Output ONLY a JSON array, no other text, explanations or comments.
 
-## 输出要求（严格遵守）
-你必须只返回一个 JSON 数组，不要包含任何其他文字、解释或说明。
-
-JSON 数组格式：
+JSON Array Format:
 [
   {
-    "cve_id": "CVE-XXXX-XXXXX",
-    "severity": "Critical",
+    "cve_id": "CVE-YYYY-NNNNN",
+    "severity": "Critical|High|Medium|Low",
     "cvss_score": 9.8,
-    "description": "漏洞描述",
+    "description": "Brief description in Chinese",
+    "affected_package": "package-name",
+    "affected_versions": "version range",
+    "fix_version": "safe version",
+    "attack_vector": "Network|Local|Adjacent",
+    "references": ["https://nvd.nist.gov/vuln/detail/CVE-YYYY-NNNNN"]
+  }
+]
+
+## Rules
+- If vulnerabilities found: return JSON array with vulnerability info
+- If NO vulnerabilities found: return empty array []
+- Output ONLY JSON, no Chinese text or any other content`
+
+// CVEAnalysisPromptZH is the Chinese version for Chinese model
+const CVEAnalysisPromptZH = `你是一个CVE漏洞分析助手。
+
+## 输出要求（必须严格遵守）
+只输出JSON数组，不要任何其他文字、解释或说明。
+
+JSON数组格式：
+[
+  {
+    "cve_id": "CVE-年份-编号",
+    "severity": "Critical|High|Medium|Low",
+    "cvss_score": 分数,
+    "description": "漏洞中文描述",
     "affected_package": "软件包名",
-    "affected_versions": "受影响版本范围",
-    "fix_version": "安全版本",
-    "attack_vector": "Network",
-    "references": ["https://..."]
+    "affected_versions": "受影响版本",
+    "fix_version": "修复版本",
+    "attack_vector": "Network|Local|Adjacent",
+    "references": ["链接"]
   }
 ]
 
 ## 重要规则
-- 如果发现漏洞，返回包含漏洞信息的 JSON 数组
-- 如果没有发现漏洞或软件列表为空，返回空数组：[]
-- 不要输出任何中文解释或说明，只输出 JSON`
+- 发现漏洞：返回包含漏洞信息的JSON数组
+- 未发现漏洞：返回空数组[]
+- 只输出JSON，禁止输出任何中文或其他内容`
 
 // VulnerabilityFixPrompt generates secure fix scripts for vulnerabilities
 const VulnerabilityFixPrompt = `你是一位资深的 DevOps 工程师，专门负责编写安全、可靠的服务器运维脚本。

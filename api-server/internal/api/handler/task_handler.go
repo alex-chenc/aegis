@@ -4,12 +4,14 @@ import (
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/repository"
 	"api-server/internal/service"
+	"api-server/pkg/logger"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type TaskHandler struct {
@@ -465,6 +467,7 @@ func (h *TaskHandler) RedispatchTask(c *gin.Context) {
 
 	newTask, err := h.taskService.RedispatchTask(c.Request.Context(), taskID)
 	if err != nil {
+		logger.Error("failed to redispatch task", zap.Error(err), zap.String("task_id", taskIDStr))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "failed to redispatch task: " + err.Error(),
