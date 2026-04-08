@@ -51,9 +51,8 @@ type Error struct {
 
 func NewLLMClient(apiKey, baseURL, modelName string, timeoutSeconds, maxRetries int) *LLMClient {
 	return &LLMClient{
-		httpClient: &http.Client{
-			Timeout: time.Duration(timeoutSeconds) * time.Second,
-		},
+		// Don't set httpClient.Timeout - rely on context deadline instead
+		httpClient: &http.Client{},
 		apiKey:     apiKey,
 		baseURL:    baseURL,
 		modelName:  modelName,
@@ -76,25 +75,34 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		response, err := c.sendRequest(ctx, reqBody)
-		if err == nil {
+		if err == nil && response != "" {
 			return response, nil
 		}
 
-		lastErr = err
+		// Handle empty response case
+		if err == nil && response == "" {
+			logger.Warn("LLM returned empty response, retrying",
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", c.maxRetries))
+			lastErr = fmt.Errorf("empty response from LLM")
+		} else {
+			lastErr = err
+		}
 
-		// Check if error is retryable
-		if !c.isRetryableError(err) {
+		// Check if error is retryable (empty response is always retryable)
+		isRetryable := c.isRetryableError(lastErr) || lastErr.Error() == "empty response from LLM"
+		if !isRetryable {
 			logger.Error("LLM request failed with non-retryable error",
-				zap.Error(err),
+				zap.Error(lastErr),
 				zap.Int("attempt", attempt+1),
 			)
-			return "", err
+			return "", lastErr
 		}
 
 		// Exponential backoff: 2s, 4s, 8s
 		backoff := time.Duration(1<<uint(attempt)) * time.Second
 		logger.Warn("LLM request failed, retrying with backoff",
-			zap.Error(err),
+			zap.Error(lastErr),
 			zap.Int("attempt", attempt+1),
 			zap.Duration("backoff", backoff),
 		)

@@ -17,6 +17,7 @@
 | [frontend_detailed_design_v5.5_complete.md](./frontend_detailed_design_v5.5_complete.md) | 前端详细设计 |
 | [database_structure_design_v5.5_complete.md](./database_structure_design_v5.5_complete.md) | 数据库结构设计 |
 | [communication_protocol_design_v5.5.md](./communication_protocol_design_v5.5.md) | 通信协议设计 |
+| [CHANGELOG_v5.5.md](./CHANGELOG_v5.5.md) | 版本变更日志 |
 
 ---
 
@@ -223,6 +224,7 @@ docker compose -f docker-compose.microservices.yml up -d
 
 | 版本 | 日期 | 主要变更 |
 |------|------|----------|
+| 5.5 | 2026-04-08 | 漏洞扫描终止按钮、CVE去重、清理已修复漏洞、LLM提示词优化 |
 | 5.5 | 2026-03-30 | 微服务架构重构、Agent轻量级智能、通信协议优化、资源高效利用 |
 | 5.2 | 2026-03-26 | MITRE ID统一、AI降噪增强、智能误报检测、AI规则生成 |
 | 5.1 | 2026-03-25 | Agent日志配置、阻断策略初始化 |

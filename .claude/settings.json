@@ -12,7 +12,10 @@
       "Bash(docker-compose ps:*)",
       "Bash(ldd /code/ai-benchmark/api-server/bin/api-server)",
       "Bash(ldd bin/api-server)",
-      "Bash(/code/ai-benchmark/api-server/bin/api-server version:*)"
+      "Bash(/code/ai-benchmark/api-server/bin/api-server version:*)",
+      "Bash(kill 1861199)",
+      "Bash(nohup ./bin/api-server)",
+      "Bash(page_size=5 2>&1)"
     ],
     "additionalDirectories": [
       "/code/ai-benchmark/server/pkg/api/v1"

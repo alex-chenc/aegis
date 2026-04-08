@@ -1,0 +1,431 @@
+# Aegis V5.5 版本变更日志
+
+**版本**: 5.5
+**日期**: 2026-04-08
+**状态**: 已完成
+
+---
+
+## 1. 版本概述
+
+V5.5版本在V5.2基础上，新增漏洞扫描终止功能和优化：
+
+- 漏洞扫描终止按钮（随时停止扫描任务）
+- CVE结果去重（同一主机同一CVE不重复入库）
+- 清理已修复漏洞（主机软件更新后自动清理无效关联）
+- LLM提示词优化（更严格的JSON输出要求）
+
+---
+
+## 2. 新增功能
+
+### 2.1 漏洞扫描终止功能
+
+#### 功能描述
+
+在漏洞扫描过程中，用户可以随时点击"停止"按钮终止扫描任务，并获得：
+- `total_parsed`: LLM解析到的CVE总数
+- `total_saved`: 已入库的CVE数量（去重后）
+
+#### 后端实现
+
+**新增API**: `POST /api/v1/vulnerability/scan/stop`
+
+```go
+// api-server/internal/service/vulnerability_service.go
+
+// StopScanResult contains the results when a scan is stopped
+type StopScanResult struct {
+    ScanID       string `json:"scan_id"`
+    TotalParsed  int    `json:"total_parsed"`  // Total CVEs parsed from LLM
+    TotalSaved   int    `json:"total_saved"`   // CVEs saved to database (after deduplication)
+    CurrentBatch int    `json:"current_batch"` // Current batch number when stopped
+    TotalBatches int    `json:"total_batches"` // Total batches
+    Message      string `json:"message"`
+}
+
+// StopScan stops the currently running vulnerability scan
+func (s *VulnerabilityService) StopScan(ctx context.Context) (*StopScanResult, error) {
+    s.scanMutex.Lock()
+    if !s.scanInProgress {
+        s.scanMutex.Unlock()
+        return nil, fmt.Errorf("no scan is currently running")
+    }
+    s.stopRequested = true
+    scanID := s.currentScanID
+    s.scanMutex.Unlock()
+
+    // Wait for current batch to finish (with 30s timeout)
+    // Returns accumulated total_parsed and total_saved
+}
+```
+
+**扫描状态追踪字段**:
+
+```go
+type VulnerabilityService struct {
+    scanInProgress  bool
+    stopRequested   bool
+    scanMutex       sync.Mutex
+    currentScanID      string
+    currentScanHostIDs []string
+    currentScanTotal   int      // Total CVEs parsed
+    currentScanSaved   int      // CVEs saved to database
+}
+```
+
+**批量处理中的停止检查**:
+
+```go
+func (s *VulnerabilityService) analyzeCVEWithLLM(ctx context.Context, scanID string, software []model.SoftwareInfo, hostIDs []string) ([]model.CveAnalysisResult, error) {
+    for i := 0; i < len(software); i += batchSize {
+        batchNum := (i / batchSize) + 1
+
+        // Check if stop has been requested
+        s.scanMutex.Lock()
+        if s.stopRequested {
+            s.scanMutex.Unlock()
+            logger.Info("stop requested, ending batch processing",
+                zap.Int("batches_completed", batchNum-1),
+                zap.Int("cves_parsed_so_far", len(allResults)))
+            s.currentScanTotal = len(allResults)
+            break
+        }
+        s.scanMutex.Unlock()
+
+        // Continue with batch processing...
+    }
+}
+```
+
+#### 前端实现
+
+**停止按钮** (`Vulnerability.vue`):
+
+```vue
+<el-button
+  v-if="scanning"
+  type="danger"
+  :icon="Close"
+  @click="handleStop"
+>
+  停止
+</el-button>
+```
+
+**Store方法** (`vulnerability.ts`):
+
+```typescript
+async function stopScan(): Promise<boolean> {
+  try {
+    const result = await api.stopVulnerabilityScan()
+    scanning.value = false
+    if (scanStatus.value) {
+      scanStatus.value.status = 'stopped'
+      scanStatus.value.message = result.message || '扫描已停止'
+    }
+    return true
+  } catch (error) {
+    console.error('Failed to stop scan:', error)
+    return false
+  }
+}
+```
+
+**API函数** (`vulnerability.ts`):
+
+```typescript
+export interface StopScanResult {
+  scan_id: string
+  total_parsed: number
+  total_saved: number
+  current_batch: number
+  total_batches: number
+  message: string
+}
+
+export function stopVulnerabilityScan(): Promise<StopScanResult> {
+  return request.post('/vulnerability/scan/stop')
+}
+```
+
+---
+
+### 2.2 CVE结果去重
+
+#### 功能描述
+
+同一主机同一CVE不会重复入库，避免数据冗余。
+
+#### 实现
+
+**新增Repository方法** (`vulnerability_repo.go`):
+
+```go
+// HostVulnerabilityExists 检查主机漏洞关联是否已存在
+func (r *VulnerabilityRepo) HostVulnerabilityExists(hostID, vulnerabilityID uuid.UUID) (bool, error) {
+    var count int64
+    err := r.db.Model(&model.HostVulnerability{}).
+        Where("host_id = ? AND vulnerability_id = ?", hostID, vulnerabilityID).
+        Count(&count).Error
+    return count > 0, nil
+}
+```
+
+**去重逻辑** (`vulnerability_service.go`):
+
+```go
+func (s *VulnerabilityService) saveAnalysisResults(cveResults []model.CveAnalysisResult, hostSoftwareMap map[string]*model.HostSoftwareList, scanSessionID uuid.UUID) (int, error) {
+    for _, cve := range cveResults {
+        // ... upsert vulnerability ...
+
+        for hostIDStr, hostSoftware := range hostSoftwareMap {
+            // Check if this host-vulnerability association already exists (deduplication)
+            exists, err := s.vulnRepo.HostVulnerabilityExists(hostID, vuln.ID)
+            if err != nil {
+                logger.Error("failed to check host vulnerability existence", zap.Error(err))
+                continue
+            }
+            if exists {
+                logger.Debug("host-vulnerability already exists, skipping",
+                    zap.String("host_id", hostIDStr),
+                    zap.String("cve_id", cve.CveID))
+                continue
+            }
+            // Create host-vulnerability association...
+        }
+    }
+}
+```
+
+---
+
+### 2.3 清理已修复漏洞
+
+#### 功能描述
+
+扫描完成后，对比新扫描结果与历史记录：
+- 如果主机不再有某个漏洞，删除该主机-漏洞关联
+- 如果漏洞不再关联任何主机，删除该漏洞记录
+
+#### 实现
+
+**新增Repository方法**:
+
+```go
+// GetHostVulnerabilityIDs 获取主机当前的所有漏洞ID列表
+func (r *VulnerabilityRepo) GetHostVulnerabilityIDs(hostID uuid.UUID) ([]uuid.UUID, error)
+
+// DeleteHostVulnerability 删除单个主机漏洞关联
+func (r *VulnerabilityRepo) DeleteHostVulnerability(hostID, vulnerabilityID uuid.UUID) error
+
+// VulnerabilityHasHosts 检查漏洞是否还有关联的主机
+func (r *VulnerabilityRepo) VulnerabilityHasHosts(vulnerabilityID uuid.UUID) (bool, error)
+
+// DeleteVulnerabilityByID 删除漏洞记录
+func (r *VulnerabilityRepo) DeleteVulnerabilityByID(vulnerabilityID uuid.UUID) error
+```
+
+**清理逻辑**:
+
+```go
+func (s *VulnerabilityService) cleanupFixedVulnerabilities(cveResults []model.CveAnalysisResult, hostSoftwareMap map[string]*model.HostSoftwareList) (int, int, error) {
+    // Build a map of vulnerability IDs found in this scan
+    foundVulnIDs := make(map[uuid.UUID]bool)
+    for _, cve := range cveResults {
+        vuln, _ := s.vulnRepo.FindByCveID(cve.CveID)
+        foundVulnIDs[vuln.ID] = true
+    }
+
+    // For each host, find vulnerabilities that are no longer present
+    for hostIDStr := range hostSoftwareMap {
+        existingVulnIDs, _ := s.vulnRepo.GetHostVulnerabilityIDs(hostID)
+
+        for _, vulnID := range existingVulnIDs {
+            if !foundVulnIDs[vulnID] {
+                // Remove the association - vulnerability is now fixed
+                s.vulnRepo.DeleteHostVulnerability(hostID, vulnID)
+                cleanedHostVulns++
+
+                // If vulnerability has no more hosts, delete it
+                if !s.vulnRepo.VulnerabilityHasHosts(vulnID) {
+                    s.vulnRepo.DeleteVulnerabilityByID(vulnID)
+                    deletedVulns++
+                }
+            }
+        }
+    }
+}
+```
+
+**调用时机** (`executeScan`):
+
+```go
+s.updateScanStatus(scanID, "analyzing", 80, "正在保存分析结果...", "result_save")
+vulnCount, _ := s.saveAnalysisResults(cveResults, hostSoftwareMap, scanSessionID)
+
+// Cleanup: remove vulnerabilities that no longer exist on hosts
+s.updateScanStatus(scanID, "analyzing", 90, "正在清理已修复的漏洞...", "cleanup")
+cleanedCount, deletedVulnCount, _ := s.cleanupFixedVulnerabilities(cveResults, hostSoftwareMap)
+```
+
+---
+
+### 2.4 LLM提示词优化
+
+#### 优化内容
+
+CVE分析提示词更加严格，确保返回有效JSON数组：
+
+```go
+const CVEAnalysisPromptZH = `你是一个CVE漏洞分析助手...
+
+## 强制输出要求（最重要，任何情况下都必须遵守）
+1. 你必须且只能输出一个有效的JSON数组
+2. 禁止输出任何其他文字、解释、说明、注释或空行
+3. 即使发生错误，也必须返回一个JSON数组（空数组[]表示无漏洞）
+
+## 禁止事项
+- 禁止输出任何中文文字（"漏洞"、"分析"等）
+- 禁止输出解释性文字
+- 禁止输出空响应（即使是错误情况也必须返回[]）
+
+## 输出示例
+正确：[]
+正确：[{"cve_id":"CVE-2021-44228",...}]
+错误：CVE-2021-44228
+错误：未发现漏洞
+错误：（无输出）`
+```
+
+---
+
+## 3. 文件变更清单
+
+### 后端 (API Server)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `internal/api/handler/vulnerability_handler.go` | 修改 | 新增StopScan Handler |
+| `internal/api/router.go` | 修改 | 新增 `/vulnerability/scan/stop` 路由 |
+| `internal/service/vulnerability_service.go` | 修改 | StopScan、saveAnalysisResults、cleanupFixedVulnerabilities |
+| `internal/repository/vulnerability_repo.go` | 修改 | HostVulnerabilityExists、GetHostVulnerabilityIDs、DeleteHostVulnerability、VulnerabilityHasHosts、DeleteVulnerabilityByID |
+| `internal/llm/prompts.go` | 修改 | CVEAnalysisPromptZH 提示词优化 |
+
+### 前端 (Frontend)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `src/api/vulnerability.ts` | 修改 | 新增 stopVulnerabilityScan API、StopScanResult 接口 |
+| `src/store/vulnerability.ts` | 修改 | 新增 stopScan 方法 |
+| `src/views/Vulnerability.vue` | 修改 | 新增停止按钮 |
+
+---
+
+## 4. API变更
+
+### 新增API
+
+| API | 方法 | 说明 |
+|-----|------|------|
+| `/api/v1/vulnerability/scan/stop` | POST | 终止正在运行的漏洞扫描 |
+
+### API响应格式
+
+**POST /api/v1/vulnerability/scan/stop** (成功):
+
+```json
+{
+  "code": 0,
+  "message": "扫描已停止",
+  "data": {
+    "scan_id": "fd2f2258-27ef-476d-9c0b-418d068a8fcc",
+    "total_parsed": 5,
+    "total_saved": 3,
+    "current_batch": 2,
+    "total_batches": 71,
+    "message": "扫描已停止"
+  }
+}
+```
+
+**POST /api/v1/vulnerability/scan/stop** (无扫描运行):
+
+```json
+{
+  "code": 400,
+  "message": "no scan is currently running"
+}
+```
+
+---
+
+## 5. 数据库变更
+
+无新增表或字段变更。
+
+---
+
+## 6. 测试验证
+
+### 6.1 停止API测试
+
+```bash
+# 启动扫描
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
+  -H "Content-Type: application/json" \
+  -d '{"host_ids": ["0e08e429-75da-4cd8-acdd-63cecdaeab1b"]}'
+
+# 立即停止
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan/stop
+
+# 预期响应:
+# {"code":0,"data":{"current_batch":0,"scan_id":"xxx","total_batches":0,"total_parsed":0,"total_saved":0},"message":"扫描已停止"}
+```
+
+### 6.2 去重测试
+
+```bash
+# 同一主机扫描两次相同CVE
+# 预期: 第二次扫描该CVE不会重复创建 host_vulnerability 记录
+```
+
+### 6.3 清理测试
+
+```bash
+# 更新主机软件后重新扫描
+# 预期: 被移除的软件的CVE关联会被删除
+# 预期: 没有主机关联的CVE会被删除
+```
+
+---
+
+## 7. 部署说明
+
+### 构建步骤
+
+```bash
+# 后端
+cd api-server && make build
+
+# 前端（使用Docker）
+cd frontend
+docker run --rm -v $(pwd):/app -w /app node:18 npm run build
+docker build -t aegis-system/frontend:latest -f frontend/Dockerfile frontend/
+
+# 部署
+docker compose up -d api-server frontend
+```
+
+---
+
+## 8. 后续计划
+
+1. **V5.6**:
+   - 扫描进度百分比精确计算
+   - 多主机并行扫描
+   - 扫描结果导出功能
+
+---
+
+**文档结束**

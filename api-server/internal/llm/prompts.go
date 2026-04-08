@@ -111,54 +111,84 @@ func GetSelfHealingFixPrompt(originalScript, errorMessage string, exitCode int, 
 // CVEAnalysisPrompt analyzes software inventory to identify CVE vulnerabilities
 const CVEAnalysisPrompt = `You are a senior cybersecurity expert specializing in CVE vulnerability analysis.
 
-## Output Requirements (MUST follow strictly)
-Output ONLY a JSON array, no other text, explanations or comments.
+## MANDATORY Output Rules (CRITICAL - must follow in ALL cases)
+1. You MUST output ONLY a valid JSON array, nothing else
+2. No explanations, comments, or any other text
+3. Even on errors, you MUST return a JSON array (empty array [] means no vulnerabilities)
 
-JSON Array Format:
+## JSON Array Format (strict format):
 [
   {
     "cve_id": "CVE-YYYY-NNNNN",
     "severity": "Critical|High|Medium|Low",
     "cvss_score": 9.8,
-    "description": "Brief description in Chinese",
-    "affected_package": "package-name",
-    "affected_versions": "version range",
-    "fix_version": "safe version",
+    "description": "Brief description of the vulnerability",
+    "affected_package": "The vulnerable software package name",
+    "affected_versions": "Version range affected",
+    "fix_version": "Fixed version",
     "attack_vector": "Network|Local|Adjacent",
     "references": ["https://nvd.nist.gov/vuln/detail/CVE-YYYY-NNNNN"]
   }
 ]
 
 ## Rules
-- If vulnerabilities found: return JSON array with vulnerability info
-- If NO vulnerabilities found: return empty array []
-- Output ONLY JSON, no Chinese text or any other content`
+- If vulnerabilities found: return JSON array with vulnerability info (1 or more)
+- If NO vulnerabilities found: MUST return empty array [] (NOT null, NOT empty string, NOT any text)
+- If uncertain: analyze based on package name and known vulnerability patterns, return most likely CVEs
+
+## FORBIDDEN
+- No explanations or comments
+- No empty lines or whitespace only
+- No empty response (even on errors, MUST return [])
+
+## Valid Output Examples
+Correct: []
+Correct: [{"cve_id":"CVE-2021-44228","severity":"Critical","cvss_score":10.0,"description":"Log4j RCE","affected_package":"log4j-core","affected_versions":"2.0-2.14.1","fix_version":"2.17.0","attack_vector":"Network","references":["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"]}]
+Incorrect: CVE-2021-44228
+Incorrect: No vulnerabilities found
+Incorrect: (empty)`
 
 // CVEAnalysisPromptZH is the Chinese version for Chinese model
-const CVEAnalysisPromptZH = `你是一个CVE漏洞分析助手。
+const CVEAnalysisPromptZH = `你是一个CVE漏洞分析助手，负责分析软件清单并识别安全漏洞。
 
-## 输出要求（必须严格遵守）
-只输出JSON数组，不要任何其他文字、解释或说明。
+## 强制输出要求（最重要，任何情况下都必须遵守）
+1. 你必须且只能输出一个有效的JSON数组
+2. 禁止输出任何其他文字、解释、说明、注释或空行
+3. 即使发生错误，也必须返回一个JSON数组（空数组[]表示无漏洞）
 
-JSON数组格式：
+## JSON数组格式（必须严格遵循）
 [
   {
     "cve_id": "CVE-年份-编号",
     "severity": "Critical|High|Medium|Low",
-    "cvss_score": 分数,
-    "description": "漏洞中文描述",
-    "affected_package": "软件包名",
-    "affected_versions": "受影响版本",
-    "fix_version": "修复版本",
-    "attack_vector": "Network|Local|Adjacent",
-    "references": ["链接"]
+    "cvss_score": 分数（0.0-10.0）,
+    "description": "漏洞中文描述，简洁准确",
+    "affected_package": "存在漏洞的软件包名称",
+    "affected_versions": "受影响版本范围",
+    "fix_version": "修复该漏洞的版本",
+    "attack_vector": "攻击向量：Network|Local|Adjacent",
+    "references": ["https://nvd.nist.gov/vuln/detail/CVE-XXXX-XXXXX"]
   }
 ]
 
-## 重要规则
-- 发现漏洞：返回包含漏洞信息的JSON数组
-- 未发现漏洞：返回空数组[]
-- 只输出JSON，禁止输出任何中文或其他内容`
+## 分析规则
+- 如果发现漏洞：返回包含漏洞信息的JSON数组（可能包含1个或多个漏洞）
+- 如果未发现任何漏洞：必须返回空数组 []（不能返回其他任何内容）
+- 如果无法确定：基于软件包名称和已知漏洞模式进行分析，给出最可能的CVE
+
+## 禁止事项
+- 禁止输出任何中文文字（"漏洞"、"分析"等）
+- 禁止输出解释性文字
+- 禁止输出注释
+- 禁止输出空行或空白内容
+- 禁止输出空响应（即使是错误情况也必须返回[]）
+
+## 输出示例
+正确：[]
+正确：[{"cve_id":"CVE-2021-44228","severity":"Critical","cvss_score":10.0,"description":"Log4j远程代码执行漏洞","affected_package":"log4j-core","affected_versions":"2.0-2.14.1","fix_version":"2.17.0","attack_vector":"Network","references":["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"]}]
+错误：CVE-2021-44228
+错误：未发现漏洞
+错误：（无输出）`
 
 // VulnerabilityFixPrompt generates secure fix scripts for vulnerabilities
 const VulnerabilityFixPrompt = `你是一位资深的 DevOps 工程师，专门负责编写安全、可靠的服务器运维脚本。

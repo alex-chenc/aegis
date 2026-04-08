@@ -155,6 +155,22 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 		return nil, fmt.Errorf("failed to find original task: %w", err)
 	}
 
+	// Validate task is in a redispatchable state
+	// Only allow redispatch for tasks that have reached a terminal state (failed, timeout, success)
+	// or are currently pending (can be retried)
+	switch originalTask.Status {
+	case "FAILED", "TIMEOUT", "SUCCESS":
+		// Terminal states - allow redispatch
+	case "PENDING", "RUNNING":
+		// These states mean the task is still being processed
+		// For safety, we still allow redispatch but log a warning
+		logger.Warn("redispatching task that may still be running",
+			zap.String("task_id", originalTaskID.String()),
+			zap.String("current_status", originalTask.Status))
+	default:
+		return nil, fmt.Errorf("task is not in a redispatchable state: %s", originalTask.Status)
+	}
+
 	if originalTask.RuleID == nil {
 		return nil, fmt.Errorf("task has no rule_id")
 	}
@@ -180,7 +196,7 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 	}
 
 	if scriptContent == "" {
-		return nil, fmt.Errorf("script content is empty")
+		return nil, fmt.Errorf("script content is empty, please regenerate the script first")
 	}
 
 	newVersion := 0
@@ -217,7 +233,7 @@ func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UU
 	if updatedTask.RuleID != nil {
 		ruleID = *updatedTask.RuleID
 	}
-	go s.dispatchToAgent(ctx, updatedTask.ID, updatedTask.HostID, ruleID, scriptContent, updatedTask.TaskType)
+	go s.dispatchToAgent(context.Background(), updatedTask.ID, updatedTask.HostID, ruleID, scriptContent, updatedTask.TaskType)
 
 	return updatedTask, nil
 }

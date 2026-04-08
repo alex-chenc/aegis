@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -20,10 +19,9 @@ type Client struct {
 
 func NewClient(cfg *config.LLMConfig) (*Client, error) {
 	return &Client{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
-		},
+		cfg:    cfg,
+		// Don't set client.Timeout - rely on context deadline instead
+		client: &http.Client{},
 	}, nil
 }
 
