@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Aegis (ai-benchmark) is an AI-native host security platform that integrates LLM technology for automated baseline auditing, vulnerability management, and real-time threat detection. The system uses a microservices architecture: API Server (control plane), Server (gRPC agent hub), DC (data consumer), Agent (data plane), and Frontend (UI).
 
+## Build and Test Workflow
+
+**IMPORTANT**: When performing build, test, or verification operations, you **MUST** use the `aegis-build-test` skill. This ensures consistent build/test procedures across all components.
+
+To invoke the skill, use: `/aegis-build-test`
+
 ## High-Level Architecture (V5.5)
 
 ```

@@ -419,12 +419,192 @@ docker compose up -d api-server frontend
 
 ---
 
-## 8. 后续计划
+## 8. Bug 修复 (V5.5.1)
+
+**日期**: 2026-04-09
+
+### 8.1 停止/暂停超时后状态卡死问题
+
+#### 问题描述
+
+当用户点击"停止"或"暂停"按钮后，如果后端处理超时（停止30秒超时，暂停60秒超时），`scanInProgress` 内存状态不会被重置，导致后续所有扫描请求都返回 409 Conflict。
+
+#### 修复方案
+
+**StopScan 超时处理** (`vulnerability_service.go`):
+
+```go
+case <-timeout:
+    logger.Warn("stop timeout reached, forcing stop", zap.String("scan_id", scanID))
+    // Force reset scanInProgress to allow new scans to start
+    s.scanMutex.Lock()
+    s.scanInProgress = false
+    s.scanMutex.Unlock()
+    return &StopScanResult{...}, nil
+```
+
+**PauseScan 超时处理** (`vulnerability_service.go`):
+
+```go
+case <-timeout:
+    logger.Warn("pause timeout reached, forcing pause", zap.String("scan_id", scanID))
+    // ... update status to paused in Redis ...
+
+    // Force reset scanInProgress to allow new scans to start
+    s.scanMutex.Lock()
+    s.scanInProgress = false
+    s.scanMutex.Unlock()
+    return &StopScanResult{...}, nil
+```
+
+---
+
+### 8.2 前端暂停状态刷新丢失问题
+
+#### 问题描述
+
+用户点击"暂停"后页面显示正确，但刷新页面后状态丢失，表现为：
+1. 暂停标签消失
+2. 一键扫描按钮恢复可用
+3. 再次点击扫描会返回 409
+
+#### 根因分析
+
+`restoreScanStatus()` 函数在收到 `not_found` 状态时，虽然调用了 `clearScanId()`，但没有重置 `scanStatus.value` 和 `scanning.value`，导致 UI 显示残留状态。
+
+#### 修复方案
+
+**VulnerabilityStore** (`vulnerability.ts`):
+
+```typescript
+if (status.status === 'not_found') {
+  // Scan not found - reset all scan state
+  scanStatus.value = null
+  scanning.value = false
+  clearScanId()
+  return false
+}
+```
+
+---
+
+### 8.3 前端暂停/停止按钮并发点击问题
+
+#### 问题描述
+
+用户快速连续点击"暂停"或"停止"按钮时，后端可能收到多个请求，且按钮在 API 返回前没有即时禁用。
+
+#### 修复方案
+
+**Vulnerability.vue** - 新增本地 loading 状态：
+
+```typescript
+const pauseLoading = ref(false)
+const stopLoading = ref(false)
+```
+
+**按钮模板** - 添加 loading 和 disabled 属性：
+
+```vue
+<el-button
+  type="warning"
+  :icon="VideoPause"
+  :disabled="isPauseDisabled || pauseLoading"
+  :loading="pauseLoading"
+  @click="handlePause"
+>
+  {{ pauseLoading ? '暂停中...' : '暂停' }}
+</el-button>
+
+<el-button
+  type="danger"
+  :icon="Close"
+  :disabled="isStopDisabled || stopLoading"
+  :loading="stopLoading"
+  @click="handleStop"
+>
+  {{ stopLoading ? '停止中...' : '停止' }}
+</el-button>
+```
+
+**处理函数** - 立即设置 loading 状态：
+
+```typescript
+async function handleStop() {
+  stopLoading.value = true
+  const success = await vulnStore.stopScan()
+  stopLoading.value = false
+  // ...
+}
+
+async function handlePause() {
+  pauseLoading.value = true
+  const success = await vulnStore.pauseScan()
+  pauseLoading.value = false
+  // ...
+}
+```
+
+---
+
+## 9. 文件变更清单 (V5.5.1)
+
+### 后端 (API Server)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `internal/service/vulnerability_service.go` | 修复 | StopScan/PauseScan 超时后强制重置 scanInProgress |
+
+### 前端 (Frontend)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `src/store/vulnerability.ts` | 修复 | restoreScanStatus 正确重置状态 |
+| `src/views/Vulnerability.vue` | 修复 | 暂停/停止按钮添加 loading 状态 |
+
+---
+
+## 10. 测试验证 (V5.5.1)
+
+### 10.1 停止超时后状态重置测试
+
+```bash
+# 启动扫描
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
+  -H "Content-Type: application/json" \
+  -d '{"host_ids":["5494e21e-10ef-43cf-ab37-dec36f014f8a"]}'
+
+# 等待扫描开始后立即停止
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan/stop
+
+# 等待超时完成 (30秒)
+# 验证状态是否为 completed
+curl http://localhost:8082/api/v1/vulnerability/scan/{scan_id}/status
+
+# 再次发起扫描 - 应返回 202 而非 409
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
+  -H "Content-Type: application/json" \
+  -d '{"host_ids":["5494e21e-10ef-43cf-ab37-dec36f014f8a"]}'
+```
+
+### 10.2 刷新后状态保持测试
+
+```bash
+# 1. 前端发起扫描并暂停
+# 2. 刷新页面
+# 3. 验证 "已暂停" 标签是否显示
+# 4. 验证 "暂停" 按钮是否正确显示
+```
+
+---
+
+## 11. 后续计划
 
 1. **V5.6**:
    - 扫描进度百分比精确计算
    - 多主机并行扫描
    - 扫描结果导出功能
+   - ResumeScan 独立接口
 
 ---
 
