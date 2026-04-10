@@ -1,7 +1,7 @@
 # Aegis V5.5 版本变更日志
 
-**版本**: 5.5
-**日期**: 2026-04-08
+**版本**: 5.5.2
+**日期**: 2026-04-10
 **状态**: 已完成
 
 ---
@@ -598,7 +598,155 @@ curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
 
 ---
 
-## 11. 后续计划
+## 11. Bug 修复 (V5.5.2)
+
+**日期**: 2026-04-10
+
+### 11.1 彻底剔除"暂停"功能
+
+#### 问题描述
+
+暂停功能存在以下问题：
+1. 系统卡死在"扫描已暂停"状态
+2. 暂停状态下的UI交互复杂，容易导致用户困惑
+3. 暂停后恢复逻辑存在边界情况问题
+
+#### 修复方案
+
+**后端移除** (`vulnerability_service.go`):
+- 删除 `ScanCompletionPaused` 常量
+- 删除 `PauseScan()` 方法
+- 删除 `pauseRequested` 状态字段
+- 移除批量处理中的 `pauseRequested` 检查逻辑
+
+**API 路由移除** (`router.go`):
+- 删除 `POST /vulnerability/scan/pause` 路由
+- 删除 `vulnerability_handler.go` 中的 `PauseScan` Handler
+
+**前端移除** (`Vulnerability.vue`):
+- 删除"暂停"按钮（`VideoPause` 图标相关代码）
+- 删除 `pauseLoading` 状态变量
+- 删除 `isPauseDisabled` 计算属性
+- 删除 `handlePause()` 方法
+
+**Store 移除** (`vulnerability.ts`):
+- 删除 `pauseScan()` 方法
+- 从 `pollScanStatus()` 中移除 `pausing`、`paused` 状态处理
+- 从 `restoreScanStatus()` 中移除 `paused` 状态处理
+
+---
+
+### 11.2 停止功能重构 - 增量入库策略
+
+#### 问题描述
+
+停止扫描时，需要确保：
+1. 停止前已扫描的数据能正确入库
+2. 不执行全量扫描的"比对与清理"逻辑
+3. 原数据库中该主机的历史存量漏洞记录必须 100% 保留
+
+#### 修复方案
+
+**停止后增量入库逻辑** (`vulnerability_service.go`):
+
+```go
+// StopScan 停止扫描时，确保已扫描的数据入库，但不执行清理
+func (s *VulnerabilityService) StopScan(ctx context.Context) (*StopScanResult, error) {
+    // ... 设置 stopRequested 标志 ...
+
+    // 等待当前批次完成
+    // 调用 saveAnalysisResults 保存已扫描的数据
+
+    // 关键：停止时跳过 cleanupFixedVulnerabilities 清理逻辑
+    // 确保历史漏洞记录不被删除
+}
+```
+
+**cleanupFixedVulnerabilities 仅在完成时调用**:
+
+```go
+// 仅在 ScanCompletionCompleted 时执行清理
+if s.scanCompletionType == ScanCompletionCompleted {
+    s.updateScanStatus(scanID, "analyzing", 90, "正在清理已修复的漏洞...", "cleanup")
+    cleanedCount, deletedVulnCount, _ = s.cleanupFixedVulnerabilities(cveResults, hostSoftwareMap)
+}
+```
+
+**前端停止状态刷新重置**:
+
+刷新页面后，停止状态不再持久化显示，而是自动清除：
+
+```typescript
+} else if (status.status === 'stopped') {
+  // 停止状态刷新后应消失，不保留扫描状态
+  scanStatus.value = status
+  scanning.value = false
+  clearScanId()
+  return true
+}
+```
+
+---
+
+## 12. 文件变更清单 (V5.5.2)
+
+### 后端 (API Server)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------||
+| `internal/api/router.go` | 删除 | 移除 `/vulnerability/scan/pause` 路由 |
+| `internal/api/handler/vulnerability_handler.go` | 删除 | 移除 `PauseScan` Handler |
+| `internal/service/vulnerability_service.go` | 重构 | 移除 PauseScan、pauseRequested；StopScan 跳过清理逻辑 |
+
+### 前端 (Frontend)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------||
+| `src/views/Vulnerability.vue` | 删除 | 移除暂停按钮及相关状态 |
+| `src/api/vulnerability.ts` | 删除 | 移除 `pauseVulnerabilityScan` API |
+| `src/store/vulnerability.ts` | 修改 | 移除 pauseScan；停止状态刷新后清除 |
+
+---
+
+## 13. 测试验证 (V5.5.2)
+
+### 13.1 暂停 API 剔除断言
+
+```bash
+# 断言返回 404
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan/pause
+# 预期: 404 Not Found
+```
+
+### 13.2 停止增量入库断言
+
+```bash
+# 1. 启动扫描
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
+  -H "Content-Type: application/json" \
+  -d '{"host_ids": ["HOST_ID"]}'
+
+# 2. 扫描中途停止
+curl -X POST http://localhost:8082/api/v1/vulnerability/scan/stop
+
+# 3. 连接 PGSQL 验证
+# - 任务状态已变为 STOPPED
+# - 停止前已扫描的漏洞成功入库
+# - 该主机原有的老漏洞未被清理
+```
+
+### 13.3 刷新后状态清除测试
+
+```bash
+# 1. 前端发起扫描并停止
+# 2. 刷新页面
+# 3. 验证停止状态标签是否消失
+# 4. 验证是否可以发起新扫描
+```
+
+---
+
+## 14. 后续计划
 
 1. **V5.6**:
    - 扫描进度百分比精确计算

@@ -654,9 +654,11 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 		for _, tag := range rawRule.Tags {
 			if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
 				rawMitre := strings.TrimPrefix(tag, "attack.")
-				rawMitre = strings.TrimPrefix(rawMitre, "t")
-				rawMitre = strings.TrimPrefix(rawMitre, "T")
-				mitreID = "T" + rawMitre
+				rawMitre = strings.ToUpper(rawMitre)
+				if !strings.HasPrefix(rawMitre, "T") {
+					rawMitre = "T" + rawMitre
+				}
+				mitreID = rawMitre
 				break
 			}
 		}
@@ -835,7 +837,11 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 	agg.AlertCount = len(alerts)
 	h.llmAggregationRepo.Update(agg)
 
+	logger.Info("AI降噪请求开始", zap.Time("start_time", startTime), zap.Time("end_time", endTime),
+		zap.Int("event_count", len(events)), zap.Int("alert_count", len(alerts)))
+
 	if len(alerts) > 0 {
+		logger.Info("开始调用LLM进行告警分析", zap.Int("alert_count", len(alerts)))
 		llmResponse, err := h.callLLMForAlerts(c.Request.Context(), alerts)
 		if err != nil {
 			logger.Error("LLM call failed", zap.Error(err))
@@ -1080,9 +1086,11 @@ detection:
 		for _, tag := range rawRule.Tags {
 			if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
 				rawMitre := strings.TrimPrefix(tag, "attack.")
-				rawMitre = strings.TrimPrefix(rawMitre, "t")
-				rawMitre = strings.TrimPrefix(rawMitre, "T")
-				mitreID = "T" + rawMitre
+				rawMitre = strings.ToUpper(rawMitre)
+				if !strings.HasPrefix(rawMitre, "T") {
+					rawMitre = "T" + rawMitre
+				}
+				mitreID = rawMitre
 				break
 			}
 		}

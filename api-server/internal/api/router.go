@@ -135,7 +135,6 @@ func (r *Router) Setup() {
 		{
 			vulnerability.POST("/scan", r.vulnerabilityHandler.StartScan)
 			vulnerability.POST("/scan/stop", r.vulnerabilityHandler.StopScan)
-			vulnerability.POST("/scan/pause", r.vulnerabilityHandler.PauseScan)
 			vulnerability.GET("/scan/:scan_id/status", r.vulnerabilityHandler.GetScanStatus)
 			vulnerability.GET("", r.vulnerabilityHandler.ListVulnerabilities)
 			vulnerability.GET("/:cve_id/affected-hosts", r.vulnerabilityHandler.GetAffectedHosts)

@@ -470,6 +470,17 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		return
 	}
 
+	// Check if the rule is disabled - skip alert creation if so
+	if s.sigmaRuleRepo != nil && event.MatchedRuleId != "" {
+		rule, err := s.sigmaRuleRepo.FindByRuleID(event.MatchedRuleId)
+		if err == nil && rule != nil && rule.Status == "disabled" {
+			logger.Debug("rule is disabled, skipping alert creation",
+				zap.String("rule_id", event.MatchedRuleId),
+				zap.String("mitre_id", event.MitreId))
+			return
+		}
+	}
+
 	dedupeKey := fmt.Sprintf("%s:%d:%s", hostIDStr, event.Pid, event.MatchedRuleId)
 
 	existing, err := s.alertRepo.FindByDedupeKey(dedupeKey)
@@ -495,7 +506,7 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		PPID:           int(event.Ppid),
 		CommandLine:    event.CommandLine,
 		ProcessTree:    event.ProcessTree,
-		MitreID:        event.MitreId,
+		MitreID:        strings.ToUpper(event.MitreId),
 		Severity:       event.Severity,
 		DedupeKey:      dedupeKey,
 		HitCount:       1,
