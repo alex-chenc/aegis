@@ -87,6 +87,23 @@ func (l *Loader) SaveRuleToDisk(ruleID string, content []byte) error {
 	return nil
 }
 
+// DeleteRuleFromDisk removes a rule file from disk
+func (l *Loader) DeleteRuleFromDisk(ruleID string) error {
+	if l.ruleDir == "" {
+		return fmt.Errorf("rule directory not set")
+	}
+	path := filepath.Join(l.ruleDir, ruleID+".yml")
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			logger.Info("Rule file does not exist on disk, nothing to delete", zap.String("rule_id", ruleID))
+			return nil
+		}
+		return fmt.Errorf("failed to delete rule from disk: %w", err)
+	}
+	logger.Info("Rule deleted from disk", zap.String("rule_id", ruleID))
+	return nil
+}
+
 // LoadFromDisk loads all rules from the local rule directory
 func (l *Loader) LoadFromDisk() error {
 	if l.ruleDir == "" {

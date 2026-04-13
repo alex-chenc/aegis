@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -849,12 +850,7 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 		} else {
 			agg.LLMResponse = llmResponse
 
-			cleanResponse := llmResponse
-			if strings.Contains(cleanResponse, "```json") {
-				cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
-				cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
-				cleanResponse = strings.TrimSpace(cleanResponse)
-			}
+			cleanResponse := extractJSONFromResponse(llmResponse)
 
 			var result struct {
 				Alerts []struct {
@@ -884,7 +880,7 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 				logger.Error("Failed to parse LLM response JSON", zap.Error(err), zap.String("response", cleanResponse))
 				for _, alert := range alerts {
 					aiJudgedCount++
-					h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+					h.alertRepo.MarkAIJudged(alert.AlertID, cleanResponse)
 				}
 			}
 		}
@@ -913,6 +909,26 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 			"llm_response":    agg.LLMResponse,
 		},
 	})
+}
+
+// extractJSONFromResponse extracts clean JSON from LLM response that may contain markdown fences
+func extractJSONFromResponse(response string) string {
+	// Try regex extraction first for ```json ... ``` blocks
+	re := regexp.MustCompile("(?s)```json\\s*(.*?)\\s*```")
+	matches := re.FindStringSubmatch(response)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// Fallback: find first { and last }
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+	if start != -1 && end != -1 && end > start {
+		return strings.TrimSpace(response[start : end+1])
+	}
+
+	// Last resort: return original trimmed
+	return strings.TrimSpace(response)
 }
 
 func (h *DetectionHandler) callLLMForAlerts(ctx context.Context, alerts []model.Alert) (string, error) {
@@ -956,7 +972,7 @@ func (h *DetectionHandler) callLLMForAlerts(ctx context.Context, alerts []model.
   ]
 }
 
-每条告警的摘要和处置建议必须是独立的，不要混在一起。只返回JSON，不要其他内容。`, len(alerts), strings.Join(alertSummaries, "\n\n"))
+每条告警的摘要和处置建议必须是独立的，不要混在一起。只返回JSON，不要其他内容。绝对禁止使用markdown代码块标记，直接输出纯JSON字符串。`, len(alerts), strings.Join(alertSummaries, "\n\n"))
 
 	response, err := client.ChatCompletion(ctx, "", prompt, 0.7)
 	if err != nil {

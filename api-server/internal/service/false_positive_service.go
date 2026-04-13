@@ -454,7 +454,9 @@ func (s *FalsePositiveDetectionService) checkExperimentalRulesPromotion(ctx cont
 	}
 
 	for _, rule := range rules {
-		if rule.ActivatedAt != nil && time.Since(*rule.ActivatedAt) >= 1*time.Hour {
+		// Only promote rules that have been in experimental status for 7 days
+		// This is the documented silent period before rules become active
+		if rule.ActivatedAt != nil && time.Since(*rule.ActivatedAt) >= 7*24*time.Hour {
 			if err := s.promoteRuleToActive(&rule); err != nil {
 				logger.Error("failed to promote rule to active",
 					zap.Error(err),

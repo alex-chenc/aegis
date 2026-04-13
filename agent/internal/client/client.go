@@ -228,7 +228,12 @@ func (c *Client) applyRuleUpdate(req *pb.RuleUpdateRequest) {
 			logger.Error("Failed to apply rule update", zap.String("rule_id", rule.RuleId), zap.Error(err))
 			continue
 		}
-		if rule.Action != "delete" && rule.Content != "" {
+		if rule.Action == "delete" {
+			// Delete rule file from disk when rule is deleted
+			if err := c.ruleLoader.DeleteRuleFromDisk(rule.RuleId); err != nil {
+				logger.Error("Failed to delete rule from disk", zap.String("rule_id", rule.RuleId), zap.Error(err))
+			}
+		} else if rule.Content != "" {
 			if err := c.ruleLoader.SaveRuleToDisk(rule.RuleId, []byte(rule.Content)); err != nil {
 				logger.Error("Failed to save rule to disk", zap.String("rule_id", rule.RuleId), zap.Error(err))
 			}

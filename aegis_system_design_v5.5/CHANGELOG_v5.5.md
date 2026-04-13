@@ -1,7 +1,7 @@
 # Aegis V5.5 版本变更日志
 
-**版本**: 5.5.2
-**日期**: 2026-04-10
+**版本**: 5.5.3
+**日期**: 2026-04-13
 **状态**: 已完成
 
 ---
@@ -746,7 +746,77 @@ curl -X POST http://localhost:8082/api/v1/vulnerability/scan/stop
 
 ---
 
-## 14. 后续计划
+## 14. AI降噪Bug修复 (2026-04-13)
+
+### 14.1 问题描述
+
+AI降噪功能返回给前端的LLM摘要是一个未解析的、混乱的JSON字符串（如 `{"alert_details": "...", "threat_classification": "Real Threat"}`），而没有和原有的告警ID逐条精准对应。
+
+### 14.2 问题根因
+
+**位置**: `api-server/internal/api/handler/detection_handler.go`
+
+1. **JSON清洗逻辑不足**: 原有的 `cleanResponse` 只是简单的字符串替换，无法处理LLM返回的markdown代码块
+2. **Fallback错误**: 当JSON解析失败时，错误处理使用原始 `llmResponse` 而非清洗后的 `cleanResponse`，导致整个JSON被当作summary存入数据库
+3. **Prompt约束不足**: 没有明确禁止LLM使用markdown代码块标记
+
+### 14.3 修复方案
+
+#### 14.3.1 新增JSON清洗函数
+
+```go
+// extractJSONFromResponse extracts clean JSON from LLM response that may contain markdown fences
+func extractJSONFromResponse(response string) string {
+	// Try regex extraction first for ```json ... ``` blocks
+	re := regexp.MustCompile("(?s)```json\\s*(.*?)\\s*```")
+	matches := re.FindStringSubmatch(response)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// Fallback: find first { and last }
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+	if start != -1 && end != -1 && end > start {
+		return strings.TrimSpace(response[start : end+1])
+	}
+
+	// Last resort: return original trimmed
+	return strings.TrimSpace(response)
+}
+```
+
+#### 14.3.2 修复Fallback逻辑
+
+```go
+// Before (BUG):
+h.alertRepo.MarkAIJudged(alert.AlertID, llmResponse)
+
+// After (FIX):
+h.alertRepo.MarkAIJudged(alert.AlertID, cleanResponse)
+```
+
+#### 14.3.3 强化Prompt约束
+
+在LLM Prompt末尾添加：
+```
+绝对禁止使用markdown代码块标记，直接输出纯JSON字符串。
+```
+
+### 14.4 验证结果
+
+修复后，AI降噪接口返回的 `llm_summary` 字段正确包含每条告警的独立摘要：
+
+```json
+{
+  "alert_id": "ALT-a6e287db",
+  "llm_summary": "检测到PID 288914的进程尝试建立反向Shell连接，表明攻击者可能已获得系统访问权限并试图远程控制主机。\n\n处置建议：\n- 立即终止该进程..."
+}
+```
+
+---
+
+## 15. 后续计划
 
 1. **V5.6**:
    - 扫描进度百分比精确计算

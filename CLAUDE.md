@@ -12,6 +12,8 @@ Aegis (ai-benchmark) is an AI-native host security platform that integrates LLM 
 
 To invoke the skill, use: `/aegis-build-test`
 
+**Upon completion of any development work, you MUST invoke the `aegis-build-test` skill to perform build and test verification before considering the task complete.**
+
 ## High-Level Architecture (V5.5)
 
 ```
@@ -198,17 +200,6 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-## Test Commands
-
-### Go Services
-
-```bash
-# Single test
-go test -v ./internal/repository -run TestTaskLogRepository_UpdateForRedispatch
-
-# All tests in package
-go test -v ./internal/service/...
-```
 
 ### Frontend
 

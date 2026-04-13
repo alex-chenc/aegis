@@ -43,3 +43,4 @@ docker-compose.override.yml
 .worktrees/
 worktrees/
 prompt/*
+test/*
