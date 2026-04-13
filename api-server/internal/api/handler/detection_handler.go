@@ -888,6 +888,9 @@ func (h *DetectionHandler) StartLLMAggregation(c *gin.Context) {
 				}
 			}
 		}
+	} else {
+		logger.Warn("AI降噪请求范围内没有待处理告警", zap.Time("start_time", startTime),
+			zap.Time("end_time", endTime), zap.Int("alert_count", 0))
 	}
 
 	agg.EventCount = len(events)
@@ -923,6 +926,8 @@ func (h *DetectionHandler) callLLMForAlerts(ctx context.Context, alerts []model.
 		return "", fmt.Errorf("failed to decrypt API key: %w", err)
 	}
 
+	logger.Info("创建LLM客户端", zap.String("base_url", config.BaseURL),
+		zap.String("model", config.ModelName))
 	client := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 2)
 
 	var alertSummaries []string

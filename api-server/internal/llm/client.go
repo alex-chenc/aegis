@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"api-server/pkg/logger"
@@ -144,10 +145,19 @@ func (c *LLMClient) sendRequest(ctx context.Context, reqBody ChatCompletionReque
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfter := resp.Header.Get("Retry-After")
 		if retryAfter != "" {
-			logger.Warn("LLM rate limited, waiting for Retry-After",
-				zap.String("retry_after", retryAfter),
-			)
-			time.Sleep(time.Duration(len(retryAfter)) * time.Second)
+			if seconds, err := strconv.Atoi(retryAfter); err == nil {
+				logger.Warn("LLM rate limited, waiting for Retry-After",
+					zap.String("retry_after", retryAfter),
+					zap.Int("sleep_seconds", seconds),
+				)
+				time.Sleep(time.Duration(seconds) * time.Second)
+			} else {
+				logger.Warn("LLM rate limited, invalid Retry-After value",
+					zap.String("retry_after", retryAfter),
+					zap.Error(err),
+				)
+				time.Sleep(time.Second)
+			}
 		}
 		return "", fmt.Errorf("rate limited")
 	}
