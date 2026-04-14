@@ -179,6 +179,12 @@ func (r *Router) Setup() {
 				detectionRules.POST("/check-delete", r.detectionHandler.CheckRulesBeforeDelete)
 				detectionRules.DELETE("", r.detectionHandler.DeleteRules)
 				detectionRules.GET("", r.detectionHandler.ListRules)
+
+				// AI规则配置 - 使用 /ai-rule-config 路径避免与 /:id 冲突
+				detectionRules.GET("/ai-rule-config", r.detectionHandler.GetAIConfig)
+				detectionRules.PUT("/ai-rule-config", r.detectionHandler.UpdateAIConfig)
+				detectionRules.POST("/generate-test", r.detectionHandler.GenerateTestRule)
+
 				detectionRules.GET("/:id", r.detectionHandler.GetRule)
 				detectionRules.PUT("/:id/status", r.detectionHandler.UpdateRuleStatus)
 			}

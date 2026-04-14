@@ -389,3 +389,66 @@ func (r *AlertRepository) NormalizeMitreIDs(ctx context.Context) (int, error) {
 	}
 	return updated, nil
 }
+
+// CountByMitreIDInTimeRange 统计指定时间范围内同一MITRE ID的告警数
+func (r *AlertRepository) CountByMitreIDInTimeRange(mitreID string, hours int) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Alert{}).
+		Where("mitre_id = ?", mitreID).
+		Where("created_at >= NOW() - INTERVAL '1 hour' * ?", hours).
+		Count(&count).Error
+	return count, err
+}
+
+// GetAlertIDsByMitreIDInTimeRange 获取指定时间范围内同一MITRE ID的告警ID列表
+func (r *AlertRepository) GetAlertIDsByMitreIDInTimeRange(mitreID string, hours int, limit int) ([]model.Alert, error) {
+	var alerts []model.Alert
+	err := r.db.Where("mitre_id = ?", mitreID).
+		Where("created_at >= NOW() - INTERVAL '1 hour' * ?", hours).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&alerts).Error
+	return alerts, err
+}
+
+// FindByAlertIDs 根据告警ID列表获取告警
+func (r *AlertRepository) FindByAlertIDs(alertIDs []string) ([]model.Alert, error) {
+	if len(alertIDs) == 0 {
+		return []model.Alert{}, nil
+	}
+
+	type AlertWithHost struct {
+		model.Alert
+		Hostname  string `json:"hostname"`
+		RuleTitle string `json:"rule_title"`
+	}
+
+	var alertsWithHost []AlertWithHost
+	err := r.db.Table("alerts").
+		Select(`alerts.*,
+			hosts.hostname,
+			COALESCE(
+				NULLIF(alerts.rule_title, ''),
+				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				alerts.mitre_name
+			) as rule_title`).
+		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Where("alerts.alert_id IN ?", alertIDs).
+		Find(&alertsWithHost).Error
+	if err != nil {
+		return nil, err
+	}
+
+	alerts := make([]model.Alert, len(alertsWithHost))
+	for i, a := range alertsWithHost {
+		alerts[i] = a.Alert
+		alerts[i].Hostname = a.Hostname
+		if a.RuleTitle != "" {
+			alerts[i].RuleTitle = a.RuleTitle
+		} else {
+			alerts[i].RuleTitle = a.Alert.MitreName
+		}
+	}
+
+	return alerts, nil
+}

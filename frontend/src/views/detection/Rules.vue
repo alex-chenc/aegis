@@ -1,5 +1,8 @@
 <template>
   <div class="detection-rules-page">
+    <!-- AI规则配置面板 -->
+    <AIConfigPanel v-if="showAIConfig" />
+
     <el-card class="filter-card">
       <div class="filter-row">
         <el-input
@@ -207,6 +210,7 @@ import { useDetectionStore } from '@/store/detection'
 import type { SigmaRule } from '@/types'
 import { SeverityLabels, RuleStatusLabels } from '@/types'
 import * as api from '@/api/detection'
+import AIConfigPanel from '@/components/detection/AIConfigPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -221,6 +225,7 @@ const selectedRule = ref<SigmaRule | null>(null)
 
 const selectedRules = ref<SigmaRule[]>([])
 const deleteConfirmVisible = ref(false)
+const showAIConfig = ref(true)
 const deleteLoading = ref(false)
 const deleteCheckResult = ref<{
   has_alerts: boolean

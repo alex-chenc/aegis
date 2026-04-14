@@ -26,18 +26,20 @@ import (
 )
 
 type DetectionHandler struct {
-	alertRepo          *repository.AlertRepository
-	blockRepo          *repository.BlockRepository
-	blockPolicyRepo    *repository.BlockPolicyRepository
-	sigmaRuleRepo      *repository.SigmaRuleRepository
-	toolCallRepo       *repository.ToolCallRepository
-	alertService       *service.AlertService
-	sigmaRuleService   *service.SigmaRuleService
+	alertRepo           *repository.AlertRepository
+	blockRepo           *repository.BlockRepository
+	blockPolicyRepo     *repository.BlockPolicyRepository
+	sigmaRuleRepo       *repository.SigmaRuleRepository
+	toolCallRepo        *repository.ToolCallRepository
+	alertService        *service.AlertService
+	sigmaRuleService    *service.SigmaRuleService
 	llmAggregationRepo *repository.LLMAggregationRepository
-	runtimeEventRepo   *repository.RuntimeEventRepository
-	configRepo         *repository.ConfigRepository
-	serverClient       *grpcclient.ServerClient
-	wsService          *service.WebSocketService
+	runtimeEventRepo    *repository.RuntimeEventRepository
+	configRepo          *repository.ConfigRepository
+	serverClient        *grpcclient.ServerClient
+	wsService           *service.WebSocketService
+	aiRuleConfigService *service.AIRuleConfigService
+	ruleGenService      *service.RuleGenerationService
 }
 
 func NewDetectionHandler(
@@ -53,20 +55,24 @@ func NewDetectionHandler(
 	configRepo *repository.ConfigRepository,
 	serverClient *grpcclient.ServerClient,
 	wsService *service.WebSocketService,
+	aiRuleConfigService *service.AIRuleConfigService,
+	ruleGenService *service.RuleGenerationService,
 ) *DetectionHandler {
 	return &DetectionHandler{
-		alertRepo:          alertRepo,
-		blockRepo:          blockRepo,
-		blockPolicyRepo:    blockPolicyRepo,
-		sigmaRuleRepo:      sigmaRuleRepo,
-		toolCallRepo:       toolCallRepo,
-		alertService:       alertService,
-		sigmaRuleService:   sigmaRuleService,
-		llmAggregationRepo: llmAggregationRepo,
-		runtimeEventRepo:   runtimeEventRepo,
-		configRepo:         configRepo,
-		serverClient:       serverClient,
-		wsService:          wsService,
+		alertRepo:           alertRepo,
+		blockRepo:           blockRepo,
+		blockPolicyRepo:     blockPolicyRepo,
+		sigmaRuleRepo:       sigmaRuleRepo,
+		toolCallRepo:        toolCallRepo,
+		alertService:        alertService,
+		sigmaRuleService:    sigmaRuleService,
+		llmAggregationRepo:  llmAggregationRepo,
+		runtimeEventRepo:    runtimeEventRepo,
+		configRepo:          configRepo,
+		serverClient:        serverClient,
+		wsService:           wsService,
+		aiRuleConfigService: aiRuleConfigService,
+		ruleGenService:      ruleGenService,
 	}
 }
 
@@ -1310,4 +1316,81 @@ func (h *DetectionHandler) DeleteRules(c *gin.Context) {
 			"deleted_policies": deletedPolicies,
 		},
 	})
+}
+
+// GetAIConfig 获取AI规则配置
+func (h *DetectionHandler) GetAIConfig(c *gin.Context) {
+	config, err := h.aiRuleConfigService.GetConfig()
+	if err != nil {
+		logger.Error("failed to get AI config", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "internal error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": config})
+}
+
+// UpdateAIConfig 更新AI规则配置
+func (h *DetectionHandler) UpdateAIConfig(c *gin.Context) {
+	var req model.UpdateAIConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	config, err := h.aiRuleConfigService.UpdateConfig(&req)
+	if err != nil {
+		logger.Error("failed to update AI config", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": config})
+}
+
+// GenerateTestRule 测试规则生成（不保存到数据库）
+func (h *DetectionHandler) GenerateTestRule(c *gin.Context) {
+	var req struct {
+		MitreID      string   `json:"mitre_id" binding:"required"`
+		SampleAlerts []string `json:"sample_alerts"`
+		Conservatism float64  `json:"conservatism"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "mitre_id is required"})
+		return
+	}
+
+	if req.Conservatism == 0 {
+		req.Conservatism = 0.5
+	}
+
+	// 初始化LLM客户端
+	config, err := h.configRepo.GetActive()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "LLM config not found"})
+		return
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to decrypt API key"})
+		return
+	}
+
+	h.ruleGenService.InitLLMClient(apiKey, config.BaseURL, config.ModelName, 120, 2)
+
+	result, err := h.ruleGenService.GenerateTestRule(c.Request.Context(), &service.GenerateRuleRequest{
+		MitreID:      req.MitreID,
+		SampleAlerts:  req.SampleAlerts,
+		Conservatism:  req.Conservatism,
+	})
+
+	if err != nil {
+		logger.Error("failed to generate test rule", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
 }

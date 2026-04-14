@@ -132,6 +132,11 @@ func main() {
 	alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
 	sigmaRuleService := service.NewSigmaRuleService(sigmaRuleRepo, serverClient)
 
+	// AI Rule Config Services
+	aiRuleConfigRepo := repository.NewAIRuleConfigRepository(db)
+	aiRuleConfigService := service.NewAIRuleConfigService(aiRuleConfigRepo)
+	ruleGenerationService := service.NewRuleGenerationService(aiRuleConfigService, aiRuleConfigRepo, sigmaRuleRepo, alertRepo)
+
 	// V5.0 Runtime Detection Services
 	wsService := service.NewWebSocketService()
 	_ = service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
@@ -179,7 +184,7 @@ func main() {
 	agentHandler := handler.NewAgentHandler(serverClient, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.GRPCPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
-	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService)
+	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService, aiRuleConfigService, ruleGenerationService)
 
 	// Initialize HTTP router
 	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)

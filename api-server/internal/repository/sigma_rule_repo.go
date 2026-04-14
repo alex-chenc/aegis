@@ -152,3 +152,23 @@ func (r *SigmaRuleRepository) NormalizeMitreIDs(ctx context.Context) (int, error
 	}
 	return updated, nil
 }
+
+// ListByGeneratedBy 按生成来源和状态获取规则列表
+func (r *SigmaRuleRepository) ListByGeneratedBy(generatedBy, status string) ([]model.SigmaRule, error) {
+	var rules []model.SigmaRule
+	query := r.db.Where("generated_by = ?", generatedBy)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	err := query.Order("created_at DESC").Find(&rules).Error
+	return rules, err
+}
+
+// CountPendingByMitreID 统计同一MITRE ID的待审核规则数
+func (r *SigmaRuleRepository) CountPendingByMitreID(mitreID string) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.SigmaRule{}).
+		Where("mitre_id = ? AND status = ?", mitreID, "pending").
+		Count(&count).Error
+	return count, err
+}

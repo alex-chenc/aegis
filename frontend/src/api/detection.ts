@@ -101,3 +101,67 @@ export function deleteRules(ruleIds: string[]): Promise<{
 }> {
   return request.delete('/detection/rules', { data: { rule_ids: ruleIds } })
 }
+
+// AI规则配置
+export interface AIConfig {
+  id: string
+  name: string
+  enabled: boolean
+  mode: 'suggest' | 'auto'
+  triggers: string[]
+  thresholds: {
+    high_frequency_count: number
+    high_frequency_hours: number
+  }
+  conservatism: number
+  require_approval: boolean
+  auto_activate_after_approval: boolean
+  activation_delay_hours: number
+  notify_on_generation: boolean
+  notify_on_approval: boolean
+  notification_targets: string[]
+  rules_generated_count: number
+  rules_approved_count: number
+}
+
+export interface UpdateAIConfigRequest {
+  enabled?: boolean
+  mode?: 'suggest' | 'auto'
+  triggers?: string[]
+  thresholds?: {
+    high_frequency_count: number
+    high_frequency_hours: number
+  }
+  conservatism?: number
+  require_approval?: boolean
+  auto_activate_after_approval?: boolean
+  activation_delay_hours?: number
+  notify_on_generation?: boolean
+  notify_on_approval?: boolean
+  notification_targets?: string[]
+}
+
+export function getAIConfig(): Promise<AIConfig> {
+  return request.get('/detection/rules/ai-rule-config')
+}
+
+export function updateAIConfig(data: UpdateAIConfigRequest): Promise<AIConfig> {
+  return request.put('/detection/rules/ai-rule-config', data)
+}
+
+export interface GenerateTestRuleRequest {
+  mitre_id: string
+  sample_alerts?: string[]
+  conservatism?: number
+}
+
+export function generateTestRule(data: GenerateTestRuleRequest): Promise<{
+  rule_id: string
+  title: string
+  mitre_id: string
+  severity: string
+  content: string
+  status: string
+}> {
+  return request.post('/detection/rules/generate-test', data)
+}
