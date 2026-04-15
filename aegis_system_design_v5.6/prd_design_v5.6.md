@@ -188,10 +188,10 @@ level: critical
 │                                                                              │
 │  触发条件:                                                                    │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ ☑ 同一MITRE ID 24小时内告警 >= 5次                                    │   │
-│  │ ☑ 新型告警(无对应规则的新MITRE ID)                                     │   │
-│  │ ☑ 高严重程度告警(critical)                                            │   │
-│  │ ☐ 管理员手动触发                                                      │   │
+│  │ 同一MITRE ID在 [ 1 ] 小时内触发 [ 10 ] 次，即进行AI更新规则            │   │
+│  │                                                                              │   │
+│  │ 小时范围: 1-24 (默认1)                                                  │   │
+│  │ 触发次数: 10-100 (默认10)                                               │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │  规则生成策略:                                                                │
@@ -199,8 +199,7 @@ level: critical
 │  │ 生成模式: [████████] 保守  ────●─── 激进                             │   │
 │  │                                                                              │   │
 │  │ ☑ 规则生成后发送审核通知                                                │   │
-│  │ ☑ 审核通过后自动加入实验规则                                            │   │
-│  │ ☐ 审核通过后直接激活                                                    │   │
+│  │ (仅建议模式) ☑ 无人审核后24小时自动从待审核调整为实验性                  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │  [保存配置]  [测试规则生成]                                                   │
@@ -643,18 +642,39 @@ PUT /api/v1/detection/rules/:id/status
 Request: { "status": "active" | "disabled" }
 
 # 获取AI规则更新配置
-GET /api/v1/detection/rules/ai-config
+GET /api/v1/detection/rules/ai-rule-config
 
 # 更新AI规则更新配置
-PUT /api/v1/detection/rules/ai-config
+PUT /api/v1/detection/rules/ai-rule-config
 Request: {
   "enabled": true,
   "mode": "suggest" | "auto",
-  "triggers": ["high_frequency", "new_mitre", "critical"],
-  "strategy": {
-    "conservative": 0.3,
-    "aggressive": 0.7
-  }
+  "thresholds": {
+    "high_frequency_count": 10,   // 触发次数 (10-100)
+    "high_frequency_hours": 1     // 时间窗口 (1-24)
+  },
+  "conservatism": 0.5,             // 生成策略 (0.0-1.0)
+  "require_approval": true,
+  "auto_activate_after_approval": false  // 仅suggest模式下可设置
+}
+Response: {
+  "id": "xxx",
+  "name": "default",
+  "enabled": true,
+  "mode": "suggest",
+  "thresholds": {
+    "high_frequency_count": 10,
+    "high_frequency_hours": 1
+  },
+  "conservatism": 0.5,
+  "require_approval": true,
+  "auto_activate_after_approval": false,
+  "activation_delay_hours": 24,
+  "notify_on_generation": true,
+  "notify_on_approval": true,
+  "notification_targets": [],
+  "rules_generated_count": 0,
+  "rules_approved_count": 0
 }
 ```
 

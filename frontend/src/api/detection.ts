@@ -108,7 +108,6 @@ export interface AIConfig {
   name: string
   enabled: boolean
   mode: 'suggest' | 'auto'
-  triggers: string[]
   thresholds: {
     high_frequency_count: number
     high_frequency_hours: number
@@ -127,7 +126,6 @@ export interface AIConfig {
 export interface UpdateAIConfigRequest {
   enabled?: boolean
   mode?: 'suggest' | 'auto'
-  triggers?: string[]
   thresholds?: {
     high_frequency_count: number
     high_frequency_hours: number

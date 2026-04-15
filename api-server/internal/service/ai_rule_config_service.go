@@ -45,12 +45,6 @@ func (s *AIRuleConfigService) UpdateConfig(req *model.UpdateAIConfigRequest) (*m
 		config.Mode = *req.Mode
 		updates["mode"] = *req.Mode
 	}
-	if req.Triggers != nil {
-		if err := config.SetTriggers(req.Triggers); err != nil {
-			return nil, err
-		}
-		updates["triggers"] = config.Triggers
-	}
 	if req.Thresholds != nil {
 		if err := config.SetThresholds(req.Thresholds); err != nil {
 			return nil, err
@@ -129,23 +123,13 @@ func (s *AIRuleConfigService) GetMode() string {
 	return config.Mode
 }
 
-// GetTriggers 获取触发条件
-func (s *AIRuleConfigService) GetTriggers() []string {
-	config, err := s.configRepo.GetDefaultConfig()
-	if err != nil {
-		return []string{}
-	}
-	triggers, _ := config.GetTriggers()
-	return triggers
-}
-
 // GetThresholds 获取触发阈值
 func (s *AIRuleConfigService) GetThresholds() *model.Thresholds {
 	config, err := s.configRepo.GetDefaultConfig()
 	if err != nil {
 		return &model.Thresholds{
-			HighFrequencyCount: 5,
-			HighFrequencyHours: 24,
+			HighFrequencyCount: 10,
+			HighFrequencyHours: 1,
 		}
 	}
 	thresholds, _ := config.GetThresholds()
@@ -177,4 +161,13 @@ func (s *AIRuleConfigService) AutoActivateAfterApproval() bool {
 		return false
 	}
 	return config.AutoActivateAfterApproval
+}
+
+// GetActivationDelayHours 获取激活延迟小时数
+func (s *AIRuleConfigService) GetActivationDelayHours() int {
+	config, err := s.configRepo.GetDefaultConfig()
+	if err != nil {
+		return 24
+	}
+	return config.ActivationDelayHours
 }

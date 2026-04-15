@@ -24,14 +24,29 @@
 
         <!-- 触发条件 -->
         <el-form-item label="触发条件">
-          <el-checkbox-group v-model="localConfig.triggers" :disabled="!localConfig.enabled" @change="handleConfigChange">
-            <el-checkbox value="high_frequency">
-              同一MITRE ID {{ localConfig.thresholds.high_frequency_hours }}小时内告警 >= {{ localConfig.thresholds.high_frequency_count }}次
-            </el-checkbox>
-            <el-checkbox value="new_mitre">新型告警（无对应规则的新MITRE ID）</el-checkbox>
-            <el-checkbox value="critical">高严重程度告警（critical）</el-checkbox>
-            <el-checkbox value="manual">管理员手动触发</el-checkbox>
-          </el-checkbox-group>
+          <div class="trigger-config">
+            <span class="trigger-label">同一MITRE ID在</span>
+            <el-input-number
+              v-model="localConfig.thresholds.high_frequency_hours"
+              :min="1"
+              :max="24"
+              :disabled="!localConfig.enabled"
+              controls-position="right"
+              class="threshold-input"
+              @change="handleConfigChange"
+            />
+            <span class="trigger-label">小时内触发</span>
+            <el-input-number
+              v-model="localConfig.thresholds.high_frequency_count"
+              :min="10"
+              :max="100"
+              :disabled="!localConfig.enabled"
+              controls-position="right"
+              class="threshold-input"
+              @change="handleConfigChange"
+            />
+            <span class="trigger-label">次，即进行AI更新规则</span>
+          </div>
         </el-form-item>
 
         <!-- 规则生成策略 - 滑块 -->
@@ -66,11 +81,12 @@
             规则生成后发送审核通知
           </el-checkbox>
           <el-checkbox
+            v-if="localConfig.mode === 'suggest'"
             v-model="localConfig.auto_activate_after_approval"
-            :disabled="!localConfig.enabled || localConfig.mode === 'auto'"
+            :disabled="!localConfig.enabled || !localConfig.require_approval"
             @change="handleConfigChange"
           >
-            审核通过后自动加入实验规则
+            无人审核后24小时自动从待审核调整为实验性
           </el-checkbox>
         </el-form-item>
 
@@ -155,10 +171,9 @@ const localConfig = reactive<AIConfig>({
   name: 'default',
   enabled: false,
   mode: 'suggest',
-  triggers: [],
   thresholds: {
-    high_frequency_count: 5,
-    high_frequency_hours: 24
+    high_frequency_count: 10,
+    high_frequency_hours: 1
   },
   conservatism: 0.5,
   require_approval: true,
@@ -221,7 +236,6 @@ async function saveConfig() {
     const request: UpdateAIConfigRequest = {
       enabled: localConfig.enabled,
       mode: localConfig.mode,
-      triggers: localConfig.triggers,
       thresholds: localConfig.thresholds,
       conservatism: localConfig.conservatism,
       require_approval: localConfig.require_approval,
@@ -314,6 +328,40 @@ onMounted(() => {
   color: #909399;
   margin-top: 8px;
   line-height: 1.5;
+}
+
+.trigger-config {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trigger-label {
+  font-size: 14px;
+  color: #606266;
+}
+
+.threshold-input {
+  width: 100px;
+}
+
+.approval-delay-config {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.approval-label {
+  font-size: 14px;
+  color: #606266;
+}
+
+.approval-hint {
+  font-size: 14px;
+  color: #909399;
+  margin-top: 8px;
 }
 
 .stats-row {

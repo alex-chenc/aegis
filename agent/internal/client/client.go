@@ -223,6 +223,15 @@ func (c *Client) handleBlockCommand(cmd *pb.BlockCommand) {
 }
 
 func (c *Client) applyRuleUpdate(req *pb.RuleUpdateRequest) {
+	// Handle clear_all action - removes all rules from memory and disk
+	if req.Action == "clear_all" {
+		logger.Info("Received clear_all, clearing all rules")
+		if err := c.ruleLoader.ClearAll(); err != nil {
+			logger.Error("Failed to clear all rules", zap.Error(err))
+		}
+		return
+	}
+
 	for _, rule := range req.Rules {
 		if err := c.ruleLoader.ApplyUpdate(rule.Action, rule.RuleId, []byte(rule.Content)); err != nil {
 			logger.Error("Failed to apply rule update", zap.String("rule_id", rule.RuleId), zap.Error(err))
@@ -400,6 +409,22 @@ func (c *Client) HandleToolCall(ctx context.Context, req *pb.ToolRequest) (*pb.T
 func (c *Client) HandleRuleUpdate(ctx context.Context, req *pb.RuleUpdateRequest) (*pb.RuleUpdateResponse, error) {
 	_ = ctx
 	logger.Info("Rule update received", zap.String("action", req.Action), zap.Int("rule_count", len(req.Rules)))
+
+	// Handle clear_all action - removes all rules from memory and disk
+	if req.Action == "clear_all" {
+		logger.Info("Received clear_all, clearing all rules")
+		if err := c.ruleLoader.ClearAll(); err != nil {
+			logger.Error("Failed to clear all rules", zap.Error(err))
+			return &pb.RuleUpdateResponse{
+				Success:     false,
+				LoadedCount: 0,
+			}, nil
+		}
+		return &pb.RuleUpdateResponse{
+			Success:     true,
+			LoadedCount: 0,
+		}, nil
+	}
 
 	var loaded int32
 	for _, rule := range req.Rules {

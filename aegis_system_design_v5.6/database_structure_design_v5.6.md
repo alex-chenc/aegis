@@ -251,19 +251,18 @@ CREATE TABLE IF NOT EXISTS ai_rule_config (
     mode VARCHAR(20) DEFAULT 'suggest',
     CONSTRAINT chk_mode CHECK (mode IN ('suggest', 'auto')),
 
-    -- 触发条件
-    triggers JSONB DEFAULT '[]',           -- ["high_frequency", "new_mitre", "critical", "manual"]
-
-    -- 触发阈值
-    thresholds JSONB DEFAULT '{"high_frequency_count": 5, "high_frequency_hours": 24}',
+    -- 触发阈值 (V5.6简化: 移除triggers，使用可配置阈值)
+    thresholds JSONB DEFAULT '{"high_frequency_count": 10, "high_frequency_hours": 1}',
+    -- high_frequency_count: 触发次数 (10-100)
+    -- high_frequency_hours: 时间窗口 (1-24)
 
     -- 生成策略 (0.0-1.0, 越低越保守)
     conservatism DECIMAL(3,2) DEFAULT 0.5,
 
     -- 审核配置
     require_approval BOOLEAN DEFAULT TRUE,
-    auto_activate_after_approval BOOLEAN DEFAULT FALSE,
-    activation_delay_hours INTEGER DEFAULT 24,  -- 审核通过后延迟激活时间
+    auto_activate_after_approval BOOLEAN DEFAULT FALSE,  -- 仅建议模式下可勾选
+    activation_delay_hours INTEGER DEFAULT 24,            -- 无人审核后自动转为实验性的延迟(小时)
 
     -- 通知配置
     notify_on_generation BOOLEAN DEFAULT TRUE,

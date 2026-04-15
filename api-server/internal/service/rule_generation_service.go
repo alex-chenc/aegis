@@ -60,89 +60,38 @@ func (s *RuleGenerationService) CheckTriggers(mitreID string, severity string) (
 		return &TriggerCheckResult{ShouldTrigger: false, Message: "AI规则更新未启用"}, nil
 	}
 
-	triggers := s.configService.GetTriggers()
 	thresholds := s.configService.GetThresholds()
 
-	// 检查manual触发
-	for _, t := range triggers {
-		if t == "manual" {
-			return &TriggerCheckResult{
-				ShouldTrigger: true,
-				TriggerType:   "manual",
-				MitreID:       mitreID,
-				Message:       "手动触发",
-			}, nil
-		}
-	}
-
-	// 检查critical触发
-	if severity == "critical" {
-		for _, t := range triggers {
-			if t == "critical" {
-				return &TriggerCheckResult{
-					ShouldTrigger: true,
-					TriggerType:   "critical",
-					MitreID:       mitreID,
-					Message:       "高严重程度告警触发",
-				}, nil
-			}
-		}
-	}
-
 	// 检查high_frequency触发
-	if mitreID != "" {
-		for _, t := range triggers {
-			if t == "high_frequency" {
-				count, err := s.alertRepo.CountByMitreIDInTimeRange(mitreID, thresholds.HighFrequencyHours)
-				if err != nil {
-					logger.Warn("failed to count alerts by mitre id", zap.String("mitre_id", mitreID), zap.Error(err))
-					return nil, err
-				}
-
-				if count >= int64(thresholds.HighFrequencyCount) {
-					// 获取样本告警ID
-					alerts, _ := s.alertRepo.GetAlertIDsByMitreIDInTimeRange(mitreID, thresholds.HighFrequencyHours, 5)
-					sampleAlerts := make([]string, len(alerts))
-					for i, a := range alerts {
-						sampleAlerts[i] = a.AlertID
-					}
-
-					return &TriggerCheckResult{
-						ShouldTrigger: count >= int64(thresholds.HighFrequencyCount),
-						TriggerType:   "high_frequency",
-						MitreID:       mitreID,
-						AlertCount:    int(count),
-						Message:       fmt.Sprintf("同一MITRE ID %d小时内告警次数(%d)超过阈值(%d)", thresholds.HighFrequencyHours, count, thresholds.HighFrequencyCount),
-						SampleAlerts:  sampleAlerts,
-					}, nil
-				}
-			}
-		}
+	if mitreID == "" {
+		return &TriggerCheckResult{ShouldTrigger: false, Message: "MITRE ID为空"}, nil
 	}
 
-	// 检查new_mitre触发
-	if mitreID != "" {
-		for _, t := range triggers {
-			if t == "new_mitre" {
-				exists, err := s.sigmaRuleRepo.ExistsByMitreID(mitreID)
-				if err != nil {
-					logger.Warn("failed to check mitre id existence", zap.String("mitre_id", mitreID), zap.Error(err))
-					return nil, err
-				}
-
-				if !exists {
-					return &TriggerCheckResult{
-						ShouldTrigger: true,
-						TriggerType:   "new_mitre",
-						MitreID:       mitreID,
-						Message:       "新MITRE ID无对应规则",
-					}, nil
-				}
-			}
-		}
+	count, err := s.alertRepo.CountByMitreIDInTimeRange(mitreID, thresholds.HighFrequencyHours)
+	if err != nil {
+		logger.Warn("failed to count alerts by mitre id", zap.String("mitre_id", mitreID), zap.Error(err))
+		return nil, err
 	}
 
-	return &TriggerCheckResult{ShouldTrigger: false, Message: "未满足任何触发条件"}, nil
+	if count >= int64(thresholds.HighFrequencyCount) {
+		// 获取样本告警ID
+		alerts, _ := s.alertRepo.GetAlertIDsByMitreIDInTimeRange(mitreID, thresholds.HighFrequencyHours, 5)
+		sampleAlerts := make([]string, len(alerts))
+		for i, a := range alerts {
+			sampleAlerts[i] = a.AlertID
+		}
+
+		return &TriggerCheckResult{
+			ShouldTrigger: true,
+			TriggerType:   "high_frequency",
+			MitreID:       mitreID,
+			AlertCount:    int(count),
+			Message:       fmt.Sprintf("同一MITRE ID %d小时内告警次数(%d)超过阈值(%d)", thresholds.HighFrequencyHours, count, thresholds.HighFrequencyCount),
+			SampleAlerts:  sampleAlerts,
+		}, nil
+	}
+
+	return &TriggerCheckResult{ShouldTrigger: false, Message: "未满足触发条件"}, nil
 }
 
 // GenerateRuleRequest 生成规则请求
@@ -376,16 +325,11 @@ func (s *RuleGenerationService) SubmitForApproval(ruleID string) error {
 	}
 
 	if s.configService.RequireApproval() {
-		// 需要审核，状态保持pending
+		// 需要审核，状态保持pending，24小时后自动变为experimental
 		return nil
 	}
 
-	// 不需要审核，直接激活
-	if s.configService.AutoActivateAfterApproval() {
-		return s.ActivateRule(ruleID)
-	}
-
-	// 状态变为experimental，等待激活
+	// 不需要审核，状态变为experimental
 	return s.sigmaRuleRepo.UpdateStatus(ruleID, "experimental")
 }
 

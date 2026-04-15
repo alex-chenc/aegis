@@ -1,8 +1,5 @@
 <template>
   <div class="detection-rules-page">
-    <!-- AI规则配置面板 -->
-    <AIConfigPanel v-if="showAIConfig" />
-
     <el-card class="filter-card">
       <div class="filter-row">
         <el-input
@@ -20,15 +17,26 @@
         </el-select>
         <el-button type="primary" @click="loadRules">查询</el-button>
         <el-button type="success" @click="showAIGenerateDialog">AI规则</el-button>
-        <el-button 
-          type="danger" 
+        <el-button
+          type="danger"
           :disabled="selectedRules.length === 0"
           @click="confirmDeleteSelected"
         >
           删除选中 ({{ selectedRules.length }})
         </el-button>
+        <el-button type="warning" @click="showAIConfigDrawer = true" class="ai-config-btn">AI规则自动更新配置</el-button>
       </div>
     </el-card>
+
+    <!-- AI规则自动更新配置抽屉 -->
+    <el-drawer
+      v-model="showAIConfigDrawer"
+      title="AI规则自动更新配置"
+      direction="rtl"
+      size="600px"
+    >
+      <AIConfigPanel />
+    </el-drawer>
 
     <el-card>
       <el-table 
@@ -225,7 +233,7 @@ const selectedRule = ref<SigmaRule | null>(null)
 
 const selectedRules = ref<SigmaRule[]>([])
 const deleteConfirmVisible = ref(false)
-const showAIConfig = ref(true)
+const showAIConfigDrawer = ref(false)
 const deleteLoading = ref(false)
 const deleteCheckResult = ref<{
   has_alerts: boolean
@@ -419,6 +427,11 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.ai-config-btn {
+  margin-left: auto;
 }
 
 .filter-item {

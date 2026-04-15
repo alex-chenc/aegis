@@ -939,7 +939,23 @@ func (s *GRPCServer) pushActiveRulesToAgent(hostID uuid.UUID, conn *AgentConnect
 	}
 
 	if len(rules) == 0 {
-		logger.Info("no active rules to push", zap.String("host_id", hostID.String()))
+		logger.Info("no active rules to push, sending clear_all to agent", zap.String("host_id", hostID.String()))
+		// Send clear_all command to agent to remove all local rules
+		if conn.Stream != nil {
+			err = conn.Stream.Send(&pb.CommandRequest{
+				Request: &pb.CommandRequest_RuleUpdate{
+					RuleUpdate: &pb.RuleUpdateRequest{
+						Action: "clear_all",
+						Rules:  nil,
+					},
+				},
+			})
+			if err != nil {
+				logger.Error("failed to send clear_all to agent",
+					zap.String("host_id", hostID.String()),
+					zap.Error(err))
+			}
+		}
 		return
 	}
 
@@ -1018,7 +1034,37 @@ func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
 	}
 
 	if len(rules) == 0 {
-		logger.Info("no active rules to push", zap.String("host_id", hostID.String()))
+		logger.Info("no active rules to push, sending clear_all to agent", zap.String("host_id", hostID.String()))
+		// Send clear_all command to agent to remove all local rules
+		agentConn, ok := conn.(*AgentConnection)
+		if !ok {
+			logger.Error("failed to cast connection to AgentConnection",
+				zap.String("host_id", hostID.String()))
+			return
+		}
+
+		if agentConn.Client == nil {
+			logger.Warn("agent client not initialized, cannot send clear_all",
+				zap.String("host_id", hostID.String()))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		resp, err := agentConn.Client.UpdateRules(ctx, &pb.RuleUpdateRequest{
+			Action: "clear_all",
+			Rules:  nil,
+		})
+		if err != nil {
+			logger.Error("failed to send clear_all to agent",
+				zap.String("host_id", hostID.String()),
+				zap.Error(err))
+		} else {
+			logger.Info("clear_all sent to agent",
+				zap.String("host_id", hostID.String()),
+				zap.Int32("loaded_count", resp.LoadedCount))
+		}
 		return
 	}
 

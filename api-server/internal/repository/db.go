@@ -39,7 +39,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Auto-migrate models
+	// Auto-migrate models (sigma_rules table already exists with proper structure)
 	if err := db.AutoMigrate(&model.AIConfig{}); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

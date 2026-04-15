@@ -9,26 +9,25 @@ import (
 
 // AIConfig AI规则生成配置
 type AIConfig struct {
-	ID                        uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	Name                      string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"name"`
-	Description               string    `gorm:"type:text" json:"description"`
-	Enabled                   bool      `gorm:"type:boolean;not null;default:false" json:"enabled"`
-	Mode                      string    `gorm:"type:varchar(20);not null;default:'suggest'" json:"mode"` // suggest, auto
-	Triggers                  string    `gorm:"type:jsonb;not null;default:'[]'" json:"triggers"`        // JSON array: ["high_frequency", "new_mitre", "critical", "manual"]
-	Thresholds                string    `gorm:"type:jsonb;not null;default:'{\"high_frequency_count\":5,\"high_frequency_hours\":24}'" json:"thresholds"`
-	Conservatism              float64   `gorm:"type:decimal(3,2);not null;default:0.5" json:"conservatism"` // 0.0-1.0
-	RequireApproval           bool      `gorm:"type:boolean;not null;default:true" json:"require_approval"`
-	AutoActivateAfterApproval bool      `gorm:"type:boolean;not null;default:false" json:"auto_activate_after_approval"`
-	ActivationDelayHours      int       `gorm:"type:integer;not null;default:24" json:"activation_delay_hours"`
-	NotifyOnGeneration        bool      `gorm:"type:boolean;not null;default:true" json:"notify_on_generation"`
-	NotifyOnApproval          bool      `gorm:"type:boolean;not null;default:true" json:"notify_on_approval"`
-	NotificationTargets       string    `gorm:"type:jsonb;not null;default:'[]'" json:"notification_targets"` // ["email:xxx", "webhook:xxx"]
-	RulesGeneratedCount       int       `gorm:"type:integer;not null;default:0" json:"rules_generated_count"`
-	RulesApprovedCount        int       `gorm:"type:integer;not null;default:0" json:"rules_approved_count"`
-	CreatedAt                 time.Time `gorm:"default:now()" json:"created_at"`
-	UpdatedAt                 time.Time `gorm:"default:now()" json:"updated_at"`
-	CreatedBy                 string    `gorm:"type:varchar(100)" json:"created_by"`
-	UpdatedBy                 string    `gorm:"type:varchar(100)" json:"updated_by"`
+	ID                         uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	Name                       string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"name"`
+	Description                string    `gorm:"type:text" json:"description"`
+	Enabled                    bool      `gorm:"type:boolean;not null;default:false" json:"enabled"`
+	Mode                       string    `gorm:"type:varchar(20);not null;default:'suggest'" json:"mode"` // suggest, auto
+	Thresholds                 string    `gorm:"type:jsonb;not null;default:'{\"high_frequency_count\":10,\"high_frequency_hours\":1}'" json:"thresholds"`
+	Conservatism               float64   `gorm:"type:decimal(3,2);not null;default:0.5" json:"conservatism"` // 0.0-1.0
+	RequireApproval            bool      `gorm:"type:boolean;not null;default:true" json:"require_approval"`
+	AutoActivateAfterApproval  bool      `gorm:"type:boolean;not null;default:false" json:"auto_activate_after_approval"`
+	ActivationDelayHours       int       `gorm:"type:integer;not null;default:24" json:"activation_delay_hours"`
+	NotifyOnGeneration         bool      `gorm:"type:boolean;not null;default:true" json:"notify_on_generation"`
+	NotifyOnApproval           bool      `gorm:"type:boolean;not null;default:true" json:"notify_on_approval"`
+	NotificationTargets        string    `gorm:"type:jsonb;not null;default:'[]'" json:"notification_targets"` // ["email:xxx", "webhook:xxx"]
+	RulesGeneratedCount        int       `gorm:"type:integer;not null;default:0" json:"rules_generated_count"`
+	RulesApprovedCount         int       `gorm:"type:integer;not null;default:0" json:"rules_approved_count"`
+	CreatedAt                  time.Time `gorm:"default:now()" json:"created_at"`
+	UpdatedAt                  time.Time `gorm:"default:now()" json:"updated_at"`
+	CreatedBy                  string    `gorm:"type:varchar(100)" json:"created_by"`
+	UpdatedBy                  string    `gorm:"type:varchar(100)" json:"updated_by"`
 }
 
 func (AIConfig) TableName() string { return "ai_rule_config" }
@@ -58,25 +57,6 @@ func (c *AIConfig) SetThresholds(t *Thresholds) error {
 	return nil
 }
 
-// GetTriggers parses and returns the triggers as a slice
-func (c *AIConfig) GetTriggers() ([]string, error) {
-	var triggers []string
-	if err := json.Unmarshal([]byte(c.Triggers), &triggers); err != nil {
-		return nil, err
-	}
-	return triggers, nil
-}
-
-// SetTriggers sets the triggers from a slice
-func (c *AIConfig) SetTriggers(triggers []string) error {
-	data, err := json.Marshal(triggers)
-	if err != nil {
-		return err
-	}
-	c.Triggers = string(data)
-	return nil
-}
-
 // GetNotificationTargets parses and returns notification targets
 func (c *AIConfig) GetNotificationTargets() ([]string, error) {
 	var targets []string
@@ -102,26 +82,20 @@ type AIConfigResponse struct {
 	Name                      string     `json:"name"`
 	Enabled                   bool       `json:"enabled"`
 	Mode                      string     `json:"mode"`
-	Triggers                  []string   `json:"triggers"`
 	Thresholds                Thresholds `json:"thresholds"`
 	Conservatism              float64    `json:"conservatism"`
 	RequireApproval           bool       `json:"require_approval"`
 	AutoActivateAfterApproval bool       `json:"auto_activate_after_approval"`
 	ActivationDelayHours      int        `json:"activation_delay_hours"`
-	NotifyOnGeneration        bool       `json:"notify_on_generation"`
-	NotifyOnApproval          bool       `json:"notify_on_approval"`
+	NotifyOnGeneration       bool       `json:"notify_on_generation"`
+	NotifyOnApproval         bool       `json:"notify_on_approval"`
 	NotificationTargets       []string   `json:"notification_targets"`
 	RulesGeneratedCount       int        `json:"rules_generated_count"`
-	RulesApprovedCount        int        `json:"rules_approved_count"`
+	RulesApprovedCount       int        `json:"rules_approved_count"`
 }
 
 // ToResponse converts AIConfig to API response
 func (c *AIConfig) ToResponse() (*AIConfigResponse, error) {
-	triggers, err := c.GetTriggers()
-	if err != nil {
-		return nil, err
-	}
-
 	thresholds, err := c.GetThresholds()
 	if err != nil {
 		return nil, err
@@ -137,7 +111,6 @@ func (c *AIConfig) ToResponse() (*AIConfigResponse, error) {
 		Name:                      c.Name,
 		Enabled:                   c.Enabled,
 		Mode:                      c.Mode,
-		Triggers:                  triggers,
 		Thresholds:                *thresholds,
 		Conservatism:              c.Conservatism,
 		RequireApproval:           c.RequireApproval,
@@ -146,22 +119,21 @@ func (c *AIConfig) ToResponse() (*AIConfigResponse, error) {
 		NotifyOnGeneration:        c.NotifyOnGeneration,
 		NotifyOnApproval:          c.NotifyOnApproval,
 		NotificationTargets:       notificationTargets,
-		RulesGeneratedCount:       c.RulesGeneratedCount,
-		RulesApprovedCount:        c.RulesApprovedCount,
+		RulesGeneratedCount:        c.RulesGeneratedCount,
+		RulesApprovedCount:         c.RulesApprovedCount,
 	}, nil
 }
 
 // UpdateAIConfigRequest 更新配置请求
 type UpdateAIConfigRequest struct {
-	Enabled                   *bool      `json:"enabled"`
-	Mode                      *string    `json:"mode"`
-	Triggers                  []string   `json:"triggers"`
+	Enabled                   *bool       `json:"enabled"`
+	Mode                      *string     `json:"mode"`
 	Thresholds                *Thresholds `json:"thresholds"`
-	Conservatism              *float64   `json:"conservatism"`
-	RequireApproval           *bool      `json:"require_approval"`
-	AutoActivateAfterApproval *bool      `json:"auto_activate_after_approval"`
-	ActivationDelayHours      *int       `json:"activation_delay_hours"`
-	NotifyOnGeneration        *bool      `json:"notify_on_generation"`
-	NotifyOnApproval          *bool      `json:"notify_on_approval"`
-	NotificationTargets       []string   `json:"notification_targets"`
+	Conservatism              *float64    `json:"conservatism"`
+	RequireApproval           *bool       `json:"require_approval"`
+	AutoActivateAfterApproval *bool       `json:"auto_activate_after_approval"`
+	ActivationDelayHours      *int        `json:"activation_delay_hours"`
+	NotifyOnGeneration        *bool       `json:"notify_on_generation"`
+	NotifyOnApproval          *bool       `json:"notify_on_approval"`
+	NotificationTargets       []string    `json:"notification_targets"`
 }

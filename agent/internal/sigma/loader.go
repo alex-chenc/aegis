@@ -153,3 +153,39 @@ func (l *Loader) LoadFromDisk() error {
 	logger.Info("No rules found on disk")
 	return nil
 }
+
+// ClearAll removes all rules from memory, clears the rule directory, and rebuilds the index
+func (l *Loader) ClearAll() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Clear memory
+	l.rules = make(map[string]*Rule)
+
+	// Clear disk files
+	if l.ruleDir != "" {
+		entries, err := os.ReadDir(l.ruleDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				ext := filepath.Ext(entry.Name())
+				if ext != ".yaml" && ext != ".yml" {
+					continue
+				}
+				path := filepath.Join(l.ruleDir, entry.Name())
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					logger.Warn("Failed to remove rule file during ClearAll",
+						zap.String("file", path), zap.Error(err))
+				}
+			}
+		}
+	}
+
+	// Rebuild empty index
+	l.index.Rebuild(l.rules)
+
+	logger.Info("All rules cleared")
+	return nil
+}

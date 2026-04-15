@@ -37,19 +37,18 @@ func (r *AIRuleConfigRepository) GetDefaultConfig() (*model.AIConfig, error) {
 
 	// 创建默认配置
 	defaultConfig := &model.AIConfig{
-		Name:                      "default",
-		Description:               "AI规则生成默认配置",
-		Enabled:                   false,
-		Mode:                      "suggest",
-		Triggers:                  `["high_frequency", "new_mitre", "critical"]`,
-		Thresholds:                `{"high_frequency_count":5,"high_frequency_hours":24}`,
-		Conservatism:              0.5,
-		RequireApproval:           true,
-		AutoActivateAfterApproval: false,
-		ActivationDelayHours:     24,
-		NotifyOnGeneration:        true,
-		NotifyOnApproval:         true,
-		NotificationTargets:      `[]`,
+		Name:                       "default",
+		Description:                "AI规则生成默认配置",
+		Enabled:                    false,
+		Mode:                       "suggest",
+		Thresholds:                 `{"high_frequency_count":10,"high_frequency_hours":1}`,
+		Conservatism:               0.5,
+		RequireApproval:            true,
+		AutoActivateAfterApproval:  false,
+		ActivationDelayHours:       24,
+		NotifyOnGeneration:         true,
+		NotifyOnApproval:          true,
+		NotificationTargets:        `[]`,
 	}
 
 	if err := r.db.Create(defaultConfig).Error; err != nil {

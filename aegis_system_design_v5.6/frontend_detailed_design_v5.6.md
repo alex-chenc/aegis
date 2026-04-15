@@ -169,16 +169,25 @@ const handleError = (error: any) => {
         </el-radio-group>
       </el-form-item>
 
-      <!-- 触发条件 -->
+      <!-- 触发条件 (V5.6简化: 可配置阈值) -->
       <el-form-item label="触发条件">
-        <el-checkbox-group v-model="config.triggers" :disabled="!config.enabled">
-          <el-checkbox value="high_frequency">
-            同一MITRE ID 24小时内告警 >= {{ config.thresholds.high_frequency_count }} 次
-          </el-checkbox>
-          <el-checkbox value="new_mitre">新型告警（无对应规则的新MITRE ID）</el-checkbox>
-          <el-checkbox value="critical">高严重程度告警（Critical）</el-checkbox>
-          <el-checkbox value="manual">管理员手动触发</el-checkbox>
-        </el-checkbox-group>
+        <div class="trigger-config">
+          <span>同一MITRE ID在</span>
+          <el-input-number
+            v-model="config.thresholds.high_frequency_hours"
+            :min="1"
+            :max="24"
+            :disabled="!config.enabled"
+          />
+          <span>小时内触发</span>
+          <el-input-number
+            v-model="config.thresholds.high_frequency_count"
+            :min="10"
+            :max="100"
+            :disabled="!config.enabled"
+          />
+          <span>次，即进行AI更新规则</span>
+        </div>
       </el-form-item>
 
       <!-- 生成策略 -->
@@ -200,16 +209,17 @@ const handleError = (error: any) => {
         </div>
       </el-form-item>
 
-      <!-- 审核配置 -->
+      <!-- 审核配置 (V5.6修改) -->
       <el-form-item label="审核配置">
         <el-checkbox v-model="config.require_approval" :disabled="!config.enabled">
           规则生成后发送审核通知
         </el-checkbox>
         <el-checkbox
+          v-if="config.mode === 'suggest'"
           v-model="config.auto_activate_after_approval"
-          :disabled="!config.enabled || config.mode === 'auto'"
+          :disabled="!config.enabled || !config.require_approval"
         >
-          审核通过后自动加入实验规则
+          无人审核后24小时自动从待审核调整为实验性
         </el-checkbox>
       </el-form-item>
 
