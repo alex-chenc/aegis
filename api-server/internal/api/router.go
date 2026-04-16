@@ -174,6 +174,7 @@ func (r *Router) Setup() {
 
 			detectionRules := detection.Group("/rules")
 			{
+				detectionRules.POST("/upload", r.detectionHandler.UploadRules)
 				detectionRules.POST("/import", r.detectionHandler.ImportRules)
 				detectionRules.POST("/generate", r.detectionHandler.GenerateSigmaRule)
 				detectionRules.POST("/check-delete", r.detectionHandler.CheckRulesBeforeDelete)

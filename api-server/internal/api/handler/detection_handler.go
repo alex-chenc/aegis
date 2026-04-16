@@ -26,20 +26,21 @@ import (
 )
 
 type DetectionHandler struct {
-	alertRepo           *repository.AlertRepository
-	blockRepo           *repository.BlockRepository
-	blockPolicyRepo     *repository.BlockPolicyRepository
-	sigmaRuleRepo       *repository.SigmaRuleRepository
-	toolCallRepo        *repository.ToolCallRepository
-	alertService        *service.AlertService
-	sigmaRuleService    *service.SigmaRuleService
-	llmAggregationRepo *repository.LLMAggregationRepository
-	runtimeEventRepo    *repository.RuntimeEventRepository
-	configRepo          *repository.ConfigRepository
-	serverClient        *grpcclient.ServerClient
-	wsService           *service.WebSocketService
-	aiRuleConfigService *service.AIRuleConfigService
-	ruleGenService      *service.RuleGenerationService
+	alertRepo            *repository.AlertRepository
+	blockRepo            *repository.BlockRepository
+	blockPolicyRepo      *repository.BlockPolicyRepository
+	sigmaRuleRepo        *repository.SigmaRuleRepository
+	toolCallRepo         *repository.ToolCallRepository
+	alertService         *service.AlertService
+	sigmaRuleService     *service.SigmaRuleService
+	sigmaRuleUploadService *service.SigmaRuleUploadService
+	llmAggregationRepo   *repository.LLMAggregationRepository
+	runtimeEventRepo     *repository.RuntimeEventRepository
+	configRepo           *repository.ConfigRepository
+	serverClient         *grpcclient.ServerClient
+	wsService            *service.WebSocketService
+	aiRuleConfigService  *service.AIRuleConfigService
+	ruleGenService       *service.RuleGenerationService
 }
 
 func NewDetectionHandler(
@@ -50,6 +51,7 @@ func NewDetectionHandler(
 	toolCallRepo *repository.ToolCallRepository,
 	alertService *service.AlertService,
 	sigmaRuleService *service.SigmaRuleService,
+	sigmaRuleUploadService *service.SigmaRuleUploadService,
 	llmAggregationRepo *repository.LLMAggregationRepository,
 	runtimeEventRepo *repository.RuntimeEventRepository,
 	configRepo *repository.ConfigRepository,
@@ -59,20 +61,21 @@ func NewDetectionHandler(
 	ruleGenService *service.RuleGenerationService,
 ) *DetectionHandler {
 	return &DetectionHandler{
-		alertRepo:           alertRepo,
-		blockRepo:           blockRepo,
-		blockPolicyRepo:     blockPolicyRepo,
-		sigmaRuleRepo:       sigmaRuleRepo,
-		toolCallRepo:        toolCallRepo,
-		alertService:        alertService,
-		sigmaRuleService:    sigmaRuleService,
-		llmAggregationRepo:  llmAggregationRepo,
-		runtimeEventRepo:    runtimeEventRepo,
-		configRepo:          configRepo,
-		serverClient:        serverClient,
-		wsService:           wsService,
-		aiRuleConfigService: aiRuleConfigService,
-		ruleGenService:      ruleGenService,
+		alertRepo:              alertRepo,
+		blockRepo:              blockRepo,
+		blockPolicyRepo:        blockPolicyRepo,
+		sigmaRuleRepo:          sigmaRuleRepo,
+		toolCallRepo:           toolCallRepo,
+		alertService:           alertService,
+		sigmaRuleService:       sigmaRuleService,
+		sigmaRuleUploadService: sigmaRuleUploadService,
+		llmAggregationRepo:     llmAggregationRepo,
+		runtimeEventRepo:       runtimeEventRepo,
+		configRepo:             configRepo,
+		serverClient:           serverClient,
+		wsService:              wsService,
+		aiRuleConfigService:    aiRuleConfigService,
+		ruleGenService:         ruleGenService,
 	}
 }
 
@@ -374,7 +377,8 @@ func (h *DetectionHandler) GetRule(c *gin.Context) {
 
 func (h *DetectionHandler) UpdateRuleStatus(c *gin.Context) {
 	var body struct {
-		Status string `json:"status" binding:"required"`
+		Status         string   `json:"status" binding:"required"`
+		TargetHostIDs []string `json:"target_host_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
@@ -382,9 +386,18 @@ func (h *DetectionHandler) UpdateRuleStatus(c *gin.Context) {
 	}
 
 	if body.Status == "active" {
-		if err := h.sigmaRuleService.ApproveRule(c.Param("id")); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
-			return
+		// 如果提供了target_host_ids，使用精确下发
+		if len(body.TargetHostIDs) > 0 && h.sigmaRuleUploadService != nil {
+			if err := h.sigmaRuleUploadService.ApproveRule(c.Param("id"), body.TargetHostIDs); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+				return
+			}
+		} else {
+			// 使用旧的广播方式
+			if err := h.sigmaRuleService.ApproveRule(c.Param("id")); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+				return
+			}
 		}
 	} else if body.Status == "disabled" {
 		if err := h.sigmaRuleService.DisableRule(c.Param("id")); err != nil {
@@ -1393,4 +1406,69 @@ func (h *DetectionHandler) GenerateTestRule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+}
+
+// UploadRules 上传Sigma规则文件
+func (h *DetectionHandler) UploadRules(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "no file uploaded"})
+		return
+	}
+	defer file.Close()
+
+	// 检查文件大小
+	if header.Size > 10*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "file size exceeds maximum limit of 10 MB"})
+		return
+	}
+
+	// 执行上传
+	result, err := h.sigmaRuleUploadService.UploadRules(file, header.Filename, header.Size)
+	if err != nil {
+		logger.Error("failed to upload sigma rules", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "internal error"})
+		return
+	}
+
+	if !result.Success {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": result.Error,
+			"data":    result,
+		})
+		return
+	}
+
+	// 为每个成功上传的规则创建阻断策略（如果不存在）
+	for _, parsedRule := range result.Rules {
+		if parsedRule.MitreID != "" && parsedRule.Status != "skipped_duplicate" {
+			// 获取完整的规则信息以检查是否需要创建阻断策略
+			rule, err := h.sigmaRuleService.GetRuleByID(parsedRule.RuleID)
+			if err == nil && rule != nil {
+				existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(rule.MitreID)
+				if existingPolicy == nil {
+					policy := &model.BlockPolicy{
+						MitreID:     rule.MitreID,
+						MitreName:   rule.Title,
+						Enabled:     true,
+						AutoBlock:   false,
+						AutoDispose: false,
+						Action:      "kill_process",
+					}
+					if err := h.blockPolicyRepo.Create(policy); err != nil {
+						logger.Warn("failed to create block policy for rule", zap.String("mitre_id", rule.MitreID), zap.Error(err))
+					} else {
+						logger.Info("created block policy for uploaded rule", zap.String("mitre_id", rule.MitreID))
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    result,
+	})
 }

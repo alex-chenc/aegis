@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -171,4 +172,51 @@ func (r *SigmaRuleRepository) CountPendingByMitreID(mitreID string) (int64, erro
 		Where("mitre_id = ? AND status = ?", mitreID, "pending").
 		Count(&count).Error
 	return count, err
+}
+
+// FindByFileHash 根据文件hash查找规则（用于去重）
+func (r *SigmaRuleRepository) FindByFileHash(fileHash string) (*model.SigmaRule, error) {
+	var rule model.SigmaRule
+	err := r.db.Where("file_hash = ?", fileHash).First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+// UpdateDispatchStatus 更新规则下发状态
+func (r *SigmaRuleRepository) UpdateDispatchStatus(ruleID string, hosts []string, status string) error {
+	// 将hosts数组转换为JSON字符串
+	hostsJSON := "[]"
+	if len(hosts) > 0 {
+		imported, _ := json.Marshal(hosts)
+		hostsJSON = string(imported)
+	}
+
+	updates := map[string]interface{}{
+		"dispatch_hosts":   hostsJSON,
+		"dispatch_status": status,
+		"updated_at":      gorm.Expr("NOW()"),
+	}
+
+	return r.db.Model(&model.SigmaRule{}).Where("rule_id = ?", ruleID).Updates(updates).Error
+}
+
+// UpdateStatusWithApproval 更新规则状态并记录审批信息
+func (r *SigmaRuleRepository) UpdateStatusWithApproval(ruleID, status, approvedBy string) error {
+	updates := map[string]interface{}{
+		"status":      status,
+		"approved_by": approvedBy,
+		"updated_at":  gorm.Expr("NOW()"),
+	}
+	// 设置activated_at和approved_at时间戳
+	now := time.Now()
+	if status == "active" || status == "experimental" {
+		updates["activated_at"] = now
+	}
+	if approvedBy != "" {
+		updates["approved_at"] = now
+	}
+
+	return r.db.Model(&model.SigmaRule{}).Where("rule_id = ?", ruleID).Updates(updates).Error
 }

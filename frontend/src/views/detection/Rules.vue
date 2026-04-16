@@ -25,6 +25,7 @@
           删除选中 ({{ selectedRules.length }})
         </el-button>
         <el-button type="warning" @click="showAIConfigDrawer = true" class="ai-config-btn">AI规则自动更新配置</el-button>
+        <el-button type="primary" @click="showImportDialog">导入规则</el-button>
       </div>
     </el-card>
 
@@ -207,6 +208,65 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="importVisible" title="导入Sigma规则" width="600px">
+      <div class="import-dialog-content">
+        <el-upload
+          ref="uploadRef"
+          class="sigma-upload"
+          drag
+          :auto-upload="false"
+          :limit="1"
+          accept=".yaml,.yml,.zip"
+          :on-change="handleFileChange"
+          :on-remove="handleFileRemove"
+        >
+          <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+          <div class="el-upload__text">
+            拖拽文件到此处或 <em>点击上传</em>
+          </div>
+          <template #tip>
+            <div class="el-upload__tip">
+              支持 .yaml、.yml 或 .zip 格式，ZIP包内包含多个规则文件，单个文件不超过10MB
+            </div>
+          </template>
+        </el-upload>
+
+        <div v-if="importResult" class="import-result">
+          <el-divider>导入结果</el-divider>
+          <el-alert
+            v-if="importResult.success"
+            title="导入成功"
+            type="success"
+            :description="`成功解析 ${importResult.parsed_count} 条规则，跳过 ${importResult.skipped_count} 条重复规则`"
+            show-icon
+          />
+          <el-alert
+            v-else
+            title="导入失败"
+            type="error"
+            :description="importError"
+            show-icon
+          />
+          <div v-if="importResult.rules && importResult.rules.length > 0" class="imported-rules">
+            <h4>导入的规则：</h4>
+            <el-table :data="importResult.rules" size="small" border>
+              <el-table-column prop="rule_id" label="规则ID" />
+              <el-table-column prop="title" label="标题" />
+              <el-table-column prop="mitre_id" label="MITRE" />
+              <el-table-column prop="severity" label="严重程度" />
+            </el-table>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="importVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="importLoading" :disabled="!selectedFile" @click="handleImport">
+          开始导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -214,10 +274,12 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { UploadFilled } from '@element-plus/icons-vue'
 import { useDetectionStore } from '@/store/detection'
 import type { SigmaRule } from '@/types'
 import { SeverityLabels, RuleStatusLabels } from '@/types'
 import * as api from '@/api/detection'
+import type { UploadRawFile } from 'element-plus'
 import AIConfigPanel from '@/components/detection/AIConfigPanel.vue'
 
 const route = useRoute()
@@ -256,6 +318,24 @@ const aiGenerateResult = ref<{
   severity: string
   content: string
   duration: number
+} | null>(null)
+
+const importVisible = ref(false)
+const importLoading = ref(false)
+const selectedFile = ref<UploadRawFile | null>(null)
+const importError = ref('')
+const importResult = ref<{
+  success: boolean
+  parsed_count: number
+  failed_count: number
+  skipped_count: number
+  rules: Array<{
+    rule_id: string
+    title: string
+    status: string
+    mitre_id: string
+    severity: string
+  }>
 } | null>(null)
 
 const rules = computed(() => store.rules)
@@ -405,6 +485,48 @@ async function enableGeneratedRule() {
   }
 }
 
+function showImportDialog() {
+  selectedFile.value = null
+  importResult.value = null
+  importError.value = ''
+  importVisible.value = true
+}
+
+function handleFileChange(file: UploadRawFile) {
+  selectedFile.value = file
+}
+
+function handleFileRemove() {
+  selectedFile.value = null
+}
+
+async function handleImport() {
+  if (!selectedFile.value) {
+    ElMessage.warning('请选择要导入的文件')
+    return
+  }
+
+  importLoading.value = true
+  importError.value = ''
+  importResult.value = null
+
+  try {
+    const result = await api.uploadSigmaRules(selectedFile.value.raw as File)
+    importResult.value = result
+    if (result.success) {
+      ElMessage.success(`导入成功：解析 ${result.parsed_count} 条规则`)
+      loadRules()
+    } else {
+      ElMessage.error('导入失败')
+    }
+  } catch (error: any) {
+    importError.value = error.message || '导入失败'
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    importLoading.value = false
+  }
+}
+
 onMounted(() => {
   const queryParam = route.query.query as string
   if (queryParam) {
@@ -462,5 +584,31 @@ onMounted(() => {
 
 .ai-result {
   margin-top: 16px;
+}
+
+.import-dialog-content {
+  min-height: 200px;
+}
+
+.sigma-upload {
+  width: 100%;
+}
+
+.sigma-upload .el-upload-dragger {
+  padding: 40px 20px;
+}
+
+.import-result {
+  margin-top: 20px;
+}
+
+.imported-rules {
+  margin-top: 16px;
+}
+
+.imported-rules h4 {
+  margin: 12px 0;
+  font-size: 14px;
+  color: #606266;
 }
 </style>

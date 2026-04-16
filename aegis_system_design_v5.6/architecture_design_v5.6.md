@@ -427,14 +427,42 @@ func (te *ToolExecutor) getProcessTree(args map[string]interface{}) (interface{}
 | 服务 | HTTP端口 | gRPC端口 | 说明 |
 |------|----------|----------|------|
 | Frontend | 8081 | - | 前端界面 |
-| API Server | 8082 | 19093 (client) | 后端API服务 + LangChain Agent |
-| Server | 8083 | 19090 | Agent Hub + 工具调用路由 |
+| API Server | 8082 | 19093 (client) | 后端API服务 + gRPC客户端(连接Server) |
+| Server | 8083 | 19090, 19094 | 19090: Agent Hub; 19094: APIServerToServer |
 | DC | - | 19092 | 数据消费者 |
-| Agent | - | 19090 (client) | 部署在目标主机 |
+| Agent | - | 19090 (client) | 部署在目标主机，连接Server Agent Hub |
+
+**重要配置说明：**
+- Agent 连接到 Server 的 Agent Hub 端口 (**19090**)，不是 API Server 的端口
+- API Server 的 `agent_hub_port` 配置项指定了 Agent Hub 端口，用于生成安装脚本
 
 ---
 
-## 7. 性能指标
+## 7. 环境变量配置
+
+### 7.1 docker-compose 环境变量
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|---------|
+| `EXTERNAL_IP` | 外部可访问IP，用于Agent安装脚本 | - |
+| `DB_PASSWORD` | PostgreSQL密码 | a_strong_db_password |
+| `REDIS_PASSWORD` | Redis密码 | a_strong_redis_password |
+| `AGENT_TOKEN` | Agent认证Token | aegis-agent-token |
+
+### 7.2 Agent 安装脚本IP配置
+
+Agent 安装脚本中的地址由 `EXTERNAL_IP` 环境变量控制：
+
+```
+SERVER_ADDR="${EXTERNAL_IP}:8082"   # API Server HTTP端口
+GRPC_ADDR="${EXTERNAL_IP}:19090"    # Server Agent Hub端口 (agent_hub_port)
+```
+
+**注意**：Agent 需要连接到 Server 服务的 Agent Hub 端口 (19090)，而不是 API Server 的 gRPC 端口 (19093)。
+
+---
+
+## 8. 性能指标
 
 | 指标 | V5.5 | V5.6 | 变化 |
 |------|------|------|------|

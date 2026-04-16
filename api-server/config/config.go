@@ -22,6 +22,7 @@ type Config struct {
 type ServerConfig struct {
 	HTTPPort         int    `mapstructure:"http_port"`
 	GRPCPort         int    `mapstructure:"grpc_port"`
+	AgentHubPort     int    `mapstructure:"agent_hub_port"` // Port for Agent Hub (Server service agent gRPC port)
 	ExternalIP       string `mapstructure:"external_ip"`
 	ExternalGRPCPort int    `mapstructure:"external_grpc_port"`
 }
@@ -146,6 +147,9 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if serverGRPCPort := getEnvInt("SERVER_GRPC_PORT"); serverGRPCPort != 0 {
 		cfg.Server.GRPCPort = serverGRPCPort
+	}
+	if agentHubPort := getEnvInt("AGENT_HUB_PORT"); agentHubPort != 0 {
+		cfg.Server.AgentHubPort = agentHubPort
 	}
 	if externalIP := getEnv("SERVER_EXTERNAL_IP"); externalIP != "" {
 		cfg.Server.ExternalIP = externalIP

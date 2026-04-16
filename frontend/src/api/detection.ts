@@ -163,3 +163,27 @@ export function generateTestRule(data: GenerateTestRuleRequest): Promise<{
 }> {
   return request.post('/detection/rules/generate-test', data)
 }
+
+export interface UploadSigmaRulesResponse {
+  success: boolean
+  parsed_count: number
+  failed_count: number
+  skipped_count: number
+  rules: Array<{
+    rule_id: string
+    title: string
+    status: string
+    mitre_id: string
+    severity: string
+  }>
+}
+
+export function uploadSigmaRules(file: File): Promise<UploadSigmaRulesResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post('/detection/rules/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+}

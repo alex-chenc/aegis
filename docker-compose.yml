@@ -236,7 +236,8 @@ services:
       # 服务配置
       SERVER_HTTP_PORT: 8082
       SERVER_GRPC_PORT: 19093
-      SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
+      AGENT_HUB_PORT: 19090
+      SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
       GRPC_SERVER_ADDRESS: server:19094
       # Agent 配置
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
@@ -295,7 +296,7 @@ services:
       KAFKA_GROUP_ID: aegis-server-consumer
       # Server gRPC 配置
       SERVER_GRPC_PORT: 19090
-      SERVER_EXTERNAL_IP: ${SERVER_PUBLIC_IP:-}
+      SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
       SERVER_EXTERNAL_GRPC_PORT: 19090
       # Agent 配置
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}

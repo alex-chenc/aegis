@@ -5,6 +5,7 @@ import (
 	"time"
 
 	grpcclient "api-server/internal/grpc"
+	"api-server/internal/model"
 	"api-server/internal/repository"
 	pb "api-server/pkg/api/v1"
 	"api-server/pkg/logger"
@@ -15,6 +16,10 @@ import (
 type SigmaRuleService struct {
 	ruleRepo     *repository.SigmaRuleRepository
 	serverClient *grpcclient.ServerClient
+}
+
+func (s *SigmaRuleService) GetRuleByID(ruleID string) (*model.SigmaRule, error) {
+	return s.ruleRepo.FindByRuleID(ruleID)
 }
 
 func NewSigmaRuleService(ruleRepo *repository.SigmaRuleRepository, serverClient *grpcclient.ServerClient) *SigmaRuleService {

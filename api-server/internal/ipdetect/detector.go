@@ -21,11 +21,13 @@ func DetectServerIP(configuredIP string) string {
 		return configuredIP
 	}
 
-	if ip := getLocalIP(); ip != "" {
+	// Try outbound IP detection first (more reliable for external access)
+	if ip := getOutboundIP(); ip != "" {
 		return ip
 	}
 
-	if ip := getOutboundIP(); ip != "" {
+	// Fallback to local IP, but skip Docker/internal network ranges
+	if ip := getLocalIP(); ip != "" {
 		return ip
 	}
 
