@@ -92,6 +92,7 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <NotificationBell />
           <el-tooltip content="刷新" placement="bottom">
             <el-button :icon="Refresh" circle size="small" @click="handleRefresh" />
           </el-tooltip>
@@ -109,6 +110,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets } from '@element-plus/icons-vue'
+import NotificationBell from '@/components/notification/NotificationBell.vue'
 
 const route = useRoute()
 const router = useRouter()

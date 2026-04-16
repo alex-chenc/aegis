@@ -358,7 +358,7 @@ services:
 
   # Vue 前端 (Nginx)
   frontend:
-    image: aegis-system/frontend:latest
+    build: ./frontend
     container_name: aegis-frontend
     restart: unless-stopped
     depends_on:

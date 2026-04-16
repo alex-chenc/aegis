@@ -19,6 +19,7 @@ type Router struct {
 	vulnerabilityHandler   *handler.VulnerabilityHandler
 	detectionHandler       *handler.DetectionHandler
 	websocketHandler       *handler.WebSocketHandler
+	notificationHandler    *handler.NotificationHandler
 }
 
 func NewRouter(
@@ -32,6 +33,7 @@ func NewRouter(
 	vulnerabilityHandler *handler.VulnerabilityHandler,
 	detectionHandler *handler.DetectionHandler,
 	websocketHandler *handler.WebSocketHandler,
+	notificationHandler *handler.NotificationHandler,
 ) *Router {
 	return &Router{
 		configHandler:          configHandler,
@@ -44,6 +46,7 @@ func NewRouter(
 		vulnerabilityHandler:   vulnerabilityHandler,
 		detectionHandler:       detectionHandler,
 		websocketHandler:       websocketHandler,
+		notificationHandler:    notificationHandler,
 	}
 }
 
@@ -196,6 +199,14 @@ func (r *Router) Setup() {
 			detection.GET("/statistics/alert-trend", r.detectionHandler.GetAlertTrend)
 
 			detection.GET("/runtime/ws", r.websocketHandler.HandleConnection)
+		}
+
+		// 通知接口
+		notifications := v1.Group("/notifications")
+		{
+			notifications.GET("", r.notificationHandler.GetNotifications)
+			notifications.PUT("/read-all", r.notificationHandler.MarkAllAsRead)
+			notifications.PUT("/:id/read", r.notificationHandler.MarkAsRead)
 		}
 	}
 }

@@ -9,8 +9,11 @@ import (
 	"syscall"
 
 	"api-server/config"
+	"api-server/internal/repository"
+	"api-server/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -19,15 +22,17 @@ import (
 )
 
 type Server struct {
-	cfg          *config.Config
-	logger       *zap.Logger
-	db           *gorm.DB
-	redisClient  *redis.Client
-	minioClient  interface{}
-	grpcServer   *grpc.Server
-	httpEngine   *gin.Engine
-	grpcListener net.Listener
-	httpListener net.Listener
+	cfg                 *config.Config
+	logger              *zap.Logger
+	db                  *gorm.DB
+	redisClient         *redis.Client
+	minioClient         interface{}
+	grpcServer          *grpc.Server
+	httpEngine          *gin.Engine
+	grpcListener        net.Listener
+	httpListener        net.Listener
+	notificationRepo    *repository.NotificationRepository
+	notificationSvc     *service.NotificationService
 }
 
 func NewServer(cfg *config.Config, logger *zap.Logger) *Server {
@@ -58,6 +63,10 @@ func (s *Server) Start() error {
 		s.logger.Warn("MinIO initialization failed", zap.Error(err))
 	}
 	s.logger.Info("MinIO connected")
+
+	// Initialize notification repository and service
+	s.notificationRepo = repository.NewNotificationRepository(s.db)
+	s.notificationSvc = service.NewNotificationService(s.notificationRepo)
 
 	s.grpcServer = grpc.NewServer()
 
@@ -258,6 +267,14 @@ func (s *Server) setupRoutes() {
 			detection.GET("/statistics/alert-trend", s.handleGetAlertTrend)
 
 			detection.GET("/runtime/ws", s.handleRuntimeWS)
+
+			// Notification endpoints
+			notifications := v1.Group("/notifications")
+			{
+				notifications.GET("", s.handleGetNotifications)
+				notifications.PUT("/read-all", s.handleMarkAllNotificationsAsRead)
+				notifications.PUT("/:id/read", s.handleMarkNotificationAsRead)
+			}
 		}
 	}
 }
@@ -940,6 +957,109 @@ func (s *Server) handleRuntimeWS(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"code":    0,
 		"message": "websocket endpoint",
+	})
+}
+
+// Notification handlers
+
+func (s *Server) handleGetNotifications(c *gin.Context) {
+	s.logger.Info("Getting notifications",
+		zap.String("path", c.Request.URL.Path),
+		zap.String("query", c.Request.URL.RawQuery))
+
+	// 解析分页和过滤参数
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
+	if ps := c.Query("pageSize"); ps != "" {
+		fmt.Sscanf(ps, "%d", &pageSize)
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := repository.ListFilter{
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	// 解析 is_read 过滤
+	if isRead := c.Query("is_read"); isRead != "" {
+		val := isRead == "true"
+		filter.IsRead = &val
+	}
+
+	// 解析 type 过滤
+	if typ := c.Query("type"); typ != "" {
+		filter.Type = typ
+	}
+
+	result, err := s.notificationSvc.List(filter)
+	if err != nil {
+		s.logger.Error("Failed to get notifications", zap.Error(err))
+		c.JSON(200, gin.H{
+			"code":    1,
+			"message": "failed to get notifications",
+		})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    result,
+	})
+}
+
+func (s *Server) handleMarkNotificationAsRead(c *gin.Context) {
+	idStr := c.Param("id")
+	s.logger.Info("Marking notification as read", zap.String("id", idStr))
+
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(200, gin.H{
+			"code":    1,
+			"message": "invalid notification id",
+		})
+		return
+	}
+
+	if err := s.notificationSvc.MarkRead(id); err != nil {
+		s.logger.Error("Failed to mark notification as read", zap.String("id", idStr), zap.Error(err))
+		c.JSON(200, gin.H{
+			"code":    1,
+			"message": "notification not found",
+		})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"code":    0,
+		"message": "success",
+	})
+}
+
+func (s *Server) handleMarkAllNotificationsAsRead(c *gin.Context) {
+	s.logger.Info("Marking all notifications as read")
+
+	count, err := s.notificationSvc.MarkAllRead()
+	if err != nil {
+		s.logger.Error("Failed to mark all notifications as read", zap.Error(err))
+		c.JSON(200, gin.H{
+			"code":    1,
+			"message": "failed to mark all as read",
+		})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"updated_count": count,
+		},
 	})
 }
 

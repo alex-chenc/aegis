@@ -120,6 +120,7 @@ func main() {
 	toolCallRepo := repository.NewToolCallRepository(db)
 	llmAggregationRepo := repository.NewLLMAggregationRepository(db)
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
+	notificationRepo := repository.NewNotificationRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -137,6 +138,9 @@ func main() {
 	aiRuleConfigService := service.NewAIRuleConfigService(aiRuleConfigRepo)
 	ruleGenerationService := service.NewRuleGenerationService(aiRuleConfigService, aiRuleConfigRepo, sigmaRuleRepo, alertRepo)
 	sigmaRuleUploadService := service.NewSigmaRuleUploadService(sigmaRuleRepo, serverClient)
+
+	// Notification Service
+	notificationSvc := service.NewNotificationService(notificationRepo)
 
 	// V5.0 Runtime Detection Services
 	wsService := service.NewWebSocketService()
@@ -186,9 +190,10 @@ func main() {
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
 	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, sigmaRuleUploadService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService, aiRuleConfigService, ruleGenerationService)
+	notificationHandler := handler.NewNotificationHandler(notificationSvc)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler)
 	router.Setup()
 
 	// Start HTTP server

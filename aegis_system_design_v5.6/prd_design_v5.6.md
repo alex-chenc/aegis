@@ -913,4 +913,273 @@ message ToolExecuteResponse {
 
 ---
 
+---
+
+## 11. 全局消息通知中心 (V5.6新增)
+
+### 11.1 功能概述
+
+在系统顶栏最右侧"刷新"按钮旁新增**铃铛图标 + 未读 Badge**，点击后展开右侧消息抽屉（Drawer），集中展示所有系统通知（AI规则生成通知、告警触发通知、审核待办通知等）。
+
+**核心价值**：
+- 安全运维人员无需切换页面即可感知关键安全事件
+- AI规则更新配置（4.2节）产生的审核通知可实时推达
+- 告警中心事件（4.3节）可汇聚至通知中心统一处理
+
+---
+
+### 11.2 UI 交互模块设计
+
+#### 11.2.1 顶栏集成位置
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  面包屑: 首页 / 智能异常检测 / 告警中心                                        │
+│                                                    [🔔 99+] [刷新按钮]   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+铃铛图标在 `App.vue` 的 `header-right` 区域，**位于刷新按钮左侧**。
+使用 Element Plus `el-badge` 包裹 `el-button`，Badge 显示未读数量。
+
+规则：
+- 未读数为 0：不显示 Badge
+- 未读数 1–99：显示精确数字
+- 未读数 > 99：显示 `99+`
+
+#### 11.2.2 消息抽屉（Drawer）结构
+
+```
+┌────────────────────────────── Drawer (宽 400px) ──────────────────────────┐
+│  消息通知                                            [全部标为已读] [✕关闭] │
+├─────────────────────────────────────────────────────────────────────────┤
+│  [未读 (3)]  [已读]                                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ 🔴 [critical]  AI规则生成通知                          2分钟前    │   │
+│  │ 检测到 T1059.004 高频告警，AI已生成新规则，请审核。               │   │
+│  │                                                   [前往审核 →]   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ 🟠 [high]  告警触发通知                               15分钟前   │   │
+│  │ 主机 web-server-01 触发 T1071.004 告警，需确认。                 │   │
+│  │                                                   [前往查看 →]   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ─────────── 没有更多通知 ───────────                                    │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 11.2.3 组件层级关系
+
+```
+App.vue
+└── header-right
+    ├── NotificationBell.vue          # 铃铛 + Badge + 触发抽屉
+    └── NotificationDrawer.vue        # 抽屉主体
+        ├── el-tabs (未读 / 已读)
+        │   └── NotificationList.vue  # 通知列表（虚拟滚动）
+        │       └── NotificationItem.vue  # 单条通知
+        └── DrawerFooter.vue          # 底部操作（全部已读 / 加载更多）
+```
+
+---
+
+### 11.3 状态管理模块设计
+
+#### 11.3.1 Pinia Store 定义
+
+```typescript
+// stores/notification.ts
+
+export interface Notification {
+  id: string
+  title: string
+  content: string
+  is_read: boolean
+  timestamp: string          // ISO 8601
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+  type: 'rule_generated' | 'alert_triggered' | 'approval_required' | 'system'
+  link?: string              // 跳转链接（可选）
+  metadata?: Record<string, any>  // 扩展业务字段
+}
+
+export const useNotificationStore = defineStore('notification', {
+  state: () => ({
+    notifications: [] as Notification[],
+    unreadCount: 0,
+    drawerVisible: false,
+    activeTab: 'unread' as 'unread' | 'read',
+    loading: false,
+    polling: null as ReturnType<typeof setInterval> | null
+  }),
+
+  getters: {
+    unreadList: (state) => state.notifications.filter(n => !n.is_read),
+    readList:   (state) => state.notifications.filter(n => n.is_read),
+    badgeCount: (state) => state.unreadCount > 99 ? '99+' : String(state.unreadCount)
+  },
+
+  actions: {
+    // 拉取通知列表
+    async fetchNotifications() { ... },
+    // 标记单条已读
+    async markAsRead(id: string) { ... },
+    // 全部标为已读
+    async markAllAsRead() { ... },
+    // 切换抽屉显示
+    toggleDrawer() { this.drawerVisible = !this.drawerVisible },
+    // 启动轮询（每60秒）
+    startPolling() { ... },
+    stopPolling() { ... }
+  }
+})
+```
+
+#### 11.3.2 点击"标为已读"后的状态流转
+
+```
+用户点击 [标为已读]
+    │
+    ├─► 1. 乐观更新本地状态（立即反映 UI）
+    │       notifications[id].is_read = true
+    │       unreadCount -= 1
+    │
+    ├─► 2. 调用 PUT /api/v1/notifications/:id/read
+    │
+    └─► 3. 成功 → 不再操作（本地已更新）
+         失败 → 回滚本地状态 + 弹出 ElMessage.error
+```
+
+---
+
+### 11.4 数据协议模块设计
+
+#### 11.4.1 通知对象 JSON 结构
+
+```json
+{
+  "id": "3f6c2a1b-...",
+  "title": "AI规则生成通知",
+  "content": "检测到 T1059.004 高频告警（已触发 12 次/1h），AI已生成新Sigma规则，请前往规则管理页面审核。",
+  "is_read": false,
+  "timestamp": "2026-04-16T10:00:00Z",
+  "severity": "high",
+  "type": "rule_generated",
+  "link": "/detection/rules?highlight=rev_shell_002",
+  "metadata": {
+    "rule_id": "rev_shell_002",
+    "mitre_id": "T1059.004",
+    "trigger_count": 12,
+    "trigger_hours": 1,
+    "alert_ids": ["ALT-010", "ALT-011"],
+    "host_ids": ["host-abc123"]
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string (UUID) | ✅ | 通知唯一标识 |
+| `title` | string | ✅ | 通知标题（≤50字符） |
+| `content` | string | ✅ | 通知正文（≤200字符） |
+| `is_read` | boolean | ✅ | 已读状态 |
+| `timestamp` | string (ISO 8601) | ✅ | 通知产生时间 |
+| `severity` | enum | ✅ | 告警级别：critical/high/medium/low/info |
+| `type` | enum | ✅ | 通知类型：rule_generated/alert_triggered/approval_required/system |
+| `link` | string | ❌ | 关联页面跳转路径 |
+| `metadata.rule_id` | string | ❌ | AI生成规则ID（type=rule_generated时携带） |
+| `metadata.mitre_id` | string | ❌ | 相关MITRE ID |
+| `metadata.trigger_count` | number | ❌ | 触发次数 |
+| `metadata.trigger_hours` | number | ❌ | 触发时间窗口（小时） |
+| `metadata.alert_ids` | string[] | ❌ | 相关告警ID列表 |
+| `metadata.host_ids` | string[] | ❌ | 相关主机ID列表 |
+
+#### 11.4.2 API 接口定义
+
+```
+# 获取通知列表
+GET /api/v1/notifications
+Parameters:
+  page      int    第几页 (default: 1)
+  pageSize  int    每页条数 (default: 20, max: 100)
+  is_read   bool   过滤已读/未读 (可选)
+  type      string 过滤通知类型 (可选)
+Response:
+{
+  "success": true,
+  "data": {
+    "list": [ ...Notification ],
+    "total": 42,
+    "unread_count": 3,
+    "page": 1,
+    "page_size": 20
+  }
+}
+
+# 标记单条已读
+PUT /api/v1/notifications/:id/read
+Response: { "success": true }
+
+# 全部标为已读
+PUT /api/v1/notifications/read-all
+Response: { "success": true, "updated_count": 3 }
+```
+
+---
+
+### 11.5 全链路测试用例
+
+#### 11.5.1 功能测试
+
+| ID | 测试场景 | 前置条件 | 操作步骤 | 预期结果 |
+|----|---------|---------|---------|---------|
+| FT-01 | 收到新通知时 Badge 实时更新 | 系统有1条未读通知 | 等待前端轮询（60s）或后端 Push 新通知 | Badge 数字从 0 变为 1 |
+| FT-02 | 点击铃铛打开抽屉 | Badge 显示 3 | 点击铃铛图标 | 抽屉从右侧滑入，默认显示"未读"Tab，列出3条通知 |
+| FT-03 | 点击单条"标为已读" | 抽屉打开，未读列表有1条通知 | 点击通知右侧的"已读"按钮 | 该通知从未读列表消失，移至已读列表；Badge 数字-1 |
+| FT-04 | 点击"全部标为已读" | 抽屉打开，未读列表有3条通知 | 点击抽屉顶部"全部标为已读" | 未读列表清空，Badge 消失（为0不显示），3条通知出现在已读列表 |
+| FT-05 | 通知跳转链接可用 | 通知包含 `link` 字段 | 点击通知的"前往审核"按钮 | 路由跳转至对应页面，并自动关闭抽屉 |
+| FT-06 | 已读 Tab 展示历史通知 | 系统有已读通知 | 切换至"已读"Tab | 已读通知按时间倒序展示，Badge 不受影响 |
+| FT-07 | AI 规则审核通知正确显示 | AI 生成一条新规则（type=rule_generated） | 查看抽屉未读列表 | 通知标题含"AI规则生成通知"，severity 标签显示正确颜色，metadata.mitre_id 展示 |
+
+#### 11.5.2 边界测试
+
+| ID | 测试场景 | 前置条件 | 操作步骤 | 预期结果 |
+|----|---------|---------|---------|---------|
+| BT-01 | 通知数量超过 99 条 | 100+ 条未读通知 | 查看顶栏 Badge | Badge 显示 `99+` 而非实际数字 |
+| BT-02 | 通知数量为 0 | 无任何未读通知 | 查看顶栏 | Badge 不显示（隐藏而非显示0） |
+| BT-03 | 消息内容过长折行处理 | 通知 content 超过 200 字符 | 查看通知列表 | 超出部分用省略号截断，悬浮 Tooltip 显示全文 |
+| BT-04 | 通知标题为空 | title 字段为空字符串 | 查看通知列表 | 显示默认标题"系统通知" |
+| BT-05 | 高频刷新不触发重复请求 | 轮询间隔 60 秒 | 快速点击刷新按钮多次 | 防抖机制保证单次请求，不发出重复 HTTP 请求 |
+| BT-06 | 并发标记已读 | 同时点击多条通知的"标为已读" | 快速连续点击3条通知 | 3条通知均正确标为已读，unreadCount 正确递减 |
+| BT-07 | 网络异常时乐观更新回滚 | 模拟网络断开 | 点击"标为已读" | 请求失败后通知恢复未读状态，提示"操作失败，请重试" |
+| BT-08 | 抽屉滚动加载更多 | 未读通知超过 20 条（分页） | 滚动到抽屉底部 | 自动加载下一页通知（无限滚动） |
+
+#### 11.5.3 交互测试
+
+| ID | 测试场景 | 前置条件 | 操作步骤 | 预期结果 |
+|----|---------|---------|---------|---------|
+| IT-01 | 抽屉弹出动画流畅 | 任意状态 | 点击铃铛 | 抽屉以 300ms 滑入动画出现，无卡顿 |
+| IT-02 | 点击非抽屉区域关闭抽屉 | 抽屉已打开 | 点击抽屉外部遮罩区域 | 抽屉关闭，页面恢复正常交互 |
+| IT-03 | ESC 键关闭抽屉 | 抽屉已打开 | 按下 ESC 键 | 抽屉关闭 |
+| IT-04 | 抽屉打开期间路由切换 | 抽屉已打开 | 点击左侧菜单跳转其他页面 | 抽屉自动关闭，路由跳转正常 |
+| IT-05 | severity 标签颜色区分 | 通知包含不同级别 | 查看通知列表 | critical=红色，high=橙色，medium=黄色，low=蓝色，info=灰色 |
+| IT-06 | 通知列表时间格式友好 | 通知时间为 2 分钟前 | 查看时间列 | 显示相对时间"2分钟前"，超过1天显示具体日期 |
+
+---
+
+### 11.6 验收标准
+
+- [ ] 顶栏铃铛图标已添加至刷新按钮左侧
+- [ ] Badge 正确反映未读数量（0不显示，>99显示99+）
+- [ ] 右侧抽屉（宽400px）可正常展开/关闭
+- [ ] 未读/已读两个 Tab 分别展示对应通知
+- [ ] 单条和全部标为已读功能正常，状态实时同步
+- [ ] AI规则更新通知（type=rule_generated）包含 mitre_id、severity 字段并正确显示
+- [ ] 通知跳转链接可正常路由到目标页面
+- [ ] 边界场景（99+、空列表、长文本）显示正常
+- [ ] 点击抽屉外部可关闭抽屉
+
+---
+
 **文档结束**
