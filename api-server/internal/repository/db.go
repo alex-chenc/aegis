@@ -39,8 +39,12 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Auto-migrate models
-	if err := db.AutoMigrate(&model.AIConfig{}, &model.LLMConfig{}); err != nil {
+	// Auto-migrate only new tables (AIConfig and LLMConfig)
+	// Other tables already exist in database with proper constraints
+	if err := db.AutoMigrate(
+		&model.AIConfig{},
+		&model.LLMConfig{},
+	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)
 	}
