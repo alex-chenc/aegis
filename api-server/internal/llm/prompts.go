@@ -1,6 +1,9 @@
 package llm
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Prompt templates for LLM interactions
 
@@ -213,3 +216,107 @@ const POCVerificationPrompt = `你是一位专业的安全研究员，专门负�
 
 ## 输出要求
 输出安全的 Shell 验证脚本，退出码规范：0=安全, 1=漏洞存在, 2=验证出错`
+
+// AIMessage represents a message in the AI conversation history
+type AIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ReActPromptTemplate is the prompt template for ReAct agent
+const ReActPromptTemplate = `You are Aegis, an AI-powered security analysis assistant.
+
+Your task is to analyze security alerts and determine if they are real threats or false positives.
+
+To help you analyze, you have access to the following tools:
+- GetProcessTree: Get the process tree for a given PID
+- GetNetworkConnections: Get network connections for a process or all connections
+- GetOpenFiles: Get open files for a process
+- GetRunningProcesses: List running processes (supports filtering)
+- GetUserSessions: Get active user login sessions
+- QueryHistoricalLogs: Query historical logs within a time range
+
+You must follow the ReAct (Reasoning + Acting) format:
+
+Format:
+Thought: [your reasoning about what to do next]
+Action: [the action to take, should be one of the available tools]
+Action Input: [the input to the action in JSON format]
+Observation: [the result of the action]
+... (this cycle can repeat N times)
+
+When you have gathered enough information, you MUST provide the final answer in a structured JSON format for an attack graph visualization:
+
+Final Answer:
+{
+  "attack_graph": {
+    "graphId": "graph_[timestamp]_[sequence]",
+    "title": "[攻击类型，如：反弹Shell攻击链路溯源]",
+    "summary": "[一句话描述攻击链路]",
+    "threatLevel": "[critical/high/medium/low]",
+    "nodes": [
+      {
+        "id": "[唯一ID，如：attacker_1]",
+        "type": "[attacker/victim/process/file/network/command/malware]",
+        "label": "[显示名称]",
+        "detail": "[详细信息]",
+        "properties": {},
+        "severity": "[critical/high/medium/low/info]"
+      }
+    ],
+    "edges": [
+      {
+        "id": "[唯一ID，如：edge_1]",
+        "source": "[源节点ID]",
+        "target": "[目标节点ID]",
+        "type": "[spawns/connects/reads/writes/executes/downloads/encrypts/exfiltrates]",
+        "label": "[边标签，如：外连、spawns]",
+        "properties": {}
+      }
+    ],
+    "timeline": [
+      {"timestamp": "[ISO时间]", "event": "[事件描述]", "nodeIds": ["相关节点ID"]}
+    ],
+    "recommendations": ["[处置建议1]", "[处置建议2]", ...]
+  },
+  "conclusions": [
+    {"alert_id": "[告警ID]", "action": "[mark_false_positive/confirm_threat/generate_rule]"}
+  ]
+}
+Remember:
+- Always include the host_id when calling tools
+- Be thorough in your investigation
+- Base your conclusions on evidence from tool results
+`
+
+// BuildReActPrompt builds the prompt for ReAct agent
+func BuildReActPrompt(userMessage string, history []*AIMessage, context map[string]interface{}) []Message {
+	messages := []Message{
+		{Role: "system", Content: ReActPromptTemplate},
+	}
+
+	// Add history messages
+	for _, msg := range history {
+		messages = append(messages, Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	// Add alert context
+	if len(context) > 0 {
+		contextStr, _ := json.Marshal(context)
+		messages = append(messages, Message{
+			Role:    "system",
+			Content: fmt.Sprintf("Alert Context: %s", string(contextStr)),
+		})
+	}
+
+	// Add user message
+	messages = append(messages, Message{
+		Role:    "user",
+		Content: userMessage,
+	})
+
+	return messages
+}

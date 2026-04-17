@@ -29,6 +29,7 @@ type ChatCompletionRequest struct {
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Stream     bool      `json:"stream,omitempty"`
 }
 
 type Message struct {
@@ -64,12 +65,21 @@ func NewLLMClient(apiKey, baseURL, modelName string, timeoutSeconds, maxRetries 
 }
 
 func (c *LLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt string, temperature float64) (string, error) {
-	reqBody := ChatCompletionRequest{
-		Model: c.modelName,
-		Messages: []Message{
+	var messages []Message
+	if systemPrompt != "" {
+		messages = []Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
-		},
+		}
+	} else {
+		messages = []Message{
+			{Role: "user", Content: userPrompt},
+		}
+	}
+
+	reqBody := ChatCompletionRequest{
+		Model:       c.modelName,
+		Messages:    messages,
 		Temperature: temperature,
 		MaxTokens:   4096,
 	}
@@ -241,4 +251,146 @@ func (c *LLMClient) SetBaseURL(baseURL string) {
 // SetModelName updates the model name
 func (c *LLMClient) SetModelName(modelName string) {
 	c.modelName = modelName
+}
+
+// ChatCompletionWithMessages performs a chat completion with full message history
+func (c *LLMClient) ChatCompletionWithMessages(ctx context.Context, messages []Message, temperature float64) (string, error) {
+	reqBody := ChatCompletionRequest{
+		Model:       c.modelName,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   4096,
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		response, err := c.sendRequest(ctx, reqBody)
+		if err == nil && response != "" {
+			return response, nil
+		}
+
+		if err == nil && response == "" {
+			logger.Warn("LLM returned empty response, retrying",
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", c.maxRetries))
+			lastErr = fmt.Errorf("empty response from LLM")
+		} else {
+			lastErr = err
+		}
+
+		isRetryable := c.isRetryableError(lastErr) || lastErr.Error() == "empty response from LLM"
+		if !isRetryable {
+			logger.Error("LLM request failed with non-retryable error",
+				zap.Error(lastErr),
+				zap.Int("attempt", attempt+1),
+			)
+			return "", lastErr
+		}
+
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		logger.Warn("LLM request failed, retrying with backoff",
+			zap.Error(lastErr),
+			zap.Int("attempt", attempt+1),
+			zap.Duration("backoff", backoff),
+		)
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(backoff):
+			continue
+		}
+	}
+
+	return "", fmt.Errorf("LLM request failed after %d attempts: %w", c.maxRetries, lastErr)
+}
+
+// ChatCompletionStreamWithMessages performs a streaming chat completion with full message history
+func (c *LLMClient) ChatCompletionStreamWithMessages(ctx context.Context, messages []Message, temperature float64) (*ChatStream, error) {
+	reqBody := ChatCompletionRequest{
+		Model:       c.modelName,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   4096,
+		Stream:      true,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	logger.Info("streaming response", zap.Int("status", resp.StatusCode), zap.Any("headers", resp.Header))
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return NewChatStream(resp), nil
+}
+
+// ChatCompletionStream performs a streaming chat completion
+func (c *LLMClient) ChatCompletionStream(ctx context.Context, systemPrompt, userPrompt string, temperature float64) (*ChatStream, error) {
+	var messages []Message
+	if systemPrompt != "" {
+		messages = []Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		}
+	} else {
+		messages = []Message{
+			{Role: "user", Content: userPrompt},
+		}
+	}
+
+	reqBody := ChatCompletionRequest{
+		Model:       c.modelName,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   4096,
+		Stream:      true,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return NewChatStream(resp), nil
 }

@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS ai_analysis_message (
     tool_calls JSONB,                       -- [{"call_id": "xxx", "tool": "GetProcessTree", "arguments": {...}}]
     tool_results JSONB,                     -- [{"call_id": "xxx", "result": {...}, "executed_at": "..."}]
 
+    -- ReAct思考步骤（V5.6新增）
+    steps JSONB,                             -- [{"thought": "...", "action": "...", "action_input": {...}, "observation": "..."}]
+
     -- 消息关联
     parent_message_id VARCHAR(100),        -- 父消息ID（用于对话树）
     root_message_id VARCHAR(100),          -- 根消息ID
@@ -104,7 +107,45 @@ ALTER TABLE ai_analysis_message
     ON DELETE CASCADE;
 ```
 
-### 2.3 tool_execution_log（工具执行日志表）
+### 2.3 attack_graph（攻击溯源图表 - V5.6新增）
+
+```sql
+-- 攻击溯源图表
+CREATE TABLE IF NOT EXISTS attack_graph (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id VARCHAR(100) NOT NULL,
+    graph_id VARCHAR(100) UNIQUE NOT NULL,
+
+    -- 溯源图基本信息
+    title VARCHAR(255),
+    summary TEXT,
+    threat_level VARCHAR(20),               -- critical, high, medium, low
+
+    -- 溯源图数据（JSONB格式，支持向量检索）
+    nodes JSONB NOT NULL,                   -- []{"id", "type", "label", "detail", "properties", "severity", "x", "y"}
+    edges JSONB NOT NULL,                    -- []{"id", "source", "target", "type", "label", "properties"}
+    timeline JSONB,                           -- [{"timestamp", "event", "nodeIds"}]
+    recommendations JSONB,                    -- ["建议1", "建议2", ...]
+
+    -- 向量嵌入（用于相似图谱检索）
+    graph_vector VECTOR(1536),
+
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+
+    -- 外键
+    FOREIGN KEY (session_id) REFERENCES ai_analysis_session(session_id) ON DELETE CASCADE
+);
+
+-- 索引
+CREATE INDEX IF NOT EXISTS idx_attack_graph_session ON attack_graph(session_id);
+CREATE INDEX IF NOT EXISTS idx_attack_graph_graph_id ON attack_graph(graph_id);
+CREATE INDEX IF NOT EXISTS idx_attack_graph_threat ON attack_graph(threat_level);
+CREATE INDEX IF NOT EXISTS idx_attack_graph_vector ON attack_graph USING ivfflat(graph_vector vector_cosine_ops);
+```
+
+### 2.4 tool_execution_log（工具执行日志表）
 
 ```sql
 -- 工具执行日志表

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+
 	"api-server/internal/api/handler"
 	"api-server/internal/api/middleware"
 
@@ -20,6 +22,7 @@ type Router struct {
 	detectionHandler       *handler.DetectionHandler
 	websocketHandler       *handler.WebSocketHandler
 	notificationHandler    *handler.NotificationHandler
+	aiAnalysisHandler      *handler.AIAnalysisHandler
 }
 
 func NewRouter(
@@ -34,6 +37,7 @@ func NewRouter(
 	detectionHandler *handler.DetectionHandler,
 	websocketHandler *handler.WebSocketHandler,
 	notificationHandler *handler.NotificationHandler,
+	aiAnalysisHandler *handler.AIAnalysisHandler,
 ) *Router {
 	return &Router{
 		configHandler:          configHandler,
@@ -47,6 +51,7 @@ func NewRouter(
 		detectionHandler:       detectionHandler,
 		websocketHandler:       websocketHandler,
 		notificationHandler:    notificationHandler,
+		aiAnalysisHandler:      aiAnalysisHandler,
 	}
 }
 
@@ -68,6 +73,22 @@ func (r *Router) Setup() {
 
 	// API v1 路由组
 	v1 := r.engine.Group("/api/v1")
+	{
+		// Debug route for AI analysis
+		v1.POST("/debug-ai-session", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "debug ok"})
+		})
+	}
+
+	// Print all registered routes for debugging
+	fmt.Println("=== Registered Routes ===")
+	for _, route := range r.engine.Routes() {
+		fmt.Printf("  %s %s\n", route.Method, route.Path)
+	}
+	fmt.Println("=======================")
+
+	// API v1 路由组 (re-register after debug)
+	v1 = r.engine.Group("/api/v1")
 	{
 		// 配置接口
 		config := v1.Group("/config")
@@ -200,6 +221,14 @@ func (r *Router) Setup() {
 			detection.GET("/statistics/alert-trend", r.detectionHandler.GetAlertTrend)
 
 			detection.GET("/runtime/ws", r.websocketHandler.HandleConnection)
+
+			// AI Analysis endpoints (directly on detection to avoid route conflicts)
+			detection.POST("/alerts/ai-analysis/session", r.aiAnalysisHandler.CreateSession)
+			detection.GET("/alerts/ai-analysis/:session_id/stream", r.aiAnalysisHandler.StreamMessage)
+			detection.POST("/alerts/ai-analysis/:session_id/message", r.aiAnalysisHandler.SendMessage)
+			detection.GET("/alerts/ai-analysis/:session_id/history", r.aiAnalysisHandler.GetSessionHistory)
+			detection.POST("/alerts/ai-analysis/similar", r.aiAnalysisHandler.FindSimilarCases)
+			detection.POST("/alerts/ai-analysis/rag-context", r.aiAnalysisHandler.GetRAGContext)
 		}
 
 		// 通知接口

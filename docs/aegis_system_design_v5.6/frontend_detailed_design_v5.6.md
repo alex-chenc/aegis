@@ -48,11 +48,13 @@ V5.6版本前端主要新增以下功能：
 ├── components/
 │   ├── AlertTable.vue          # 告警表格（支持多选）
 │   ├── AlertFilter.vue         # 筛选组件
-│   ├── AIAnalysisPanel.vue     # AI分析面板 (V5.6新增)
+│   ├── AIAnalysisPanel.vue     # AI分析面板 (V5.6增强: SSE流式+溯源图)
 │   ├── ChatMessage.vue         # 聊天消息组件
 │   ├── ToolCallBlock.vue       # 工具调用块
 │   ├── ConclusionForm.vue      # 分析结论表单
-│   └── TimeRangePicker.vue     # 时间范围选择器
+│   ├── TimeRangePicker.vue     # 时间范围选择器
+│   ├── AttackGraph.vue         # 攻击溯源图 (V5.6新增)
+│   └── AttackGraphCanvas.vue   # D3.js画布 (V5.6新增)
 ```
 
 ---

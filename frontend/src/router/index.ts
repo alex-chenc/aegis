@@ -9,6 +9,7 @@ import DetectionOverview from '../views/detection/Overview.vue'
 import DetectionAlerts from '../views/detection/Alerts.vue'
 import DetectionPolicies from '../views/detection/Policies.vue'
 import DetectionRules from '../views/detection/Rules.vue'
+import AIAnalysis from '../views/detection/AIAnalysis.vue'
 
 const routes = [
   {
@@ -73,6 +74,12 @@ const routes = [
     name: 'DetectionAlerts',
     component: DetectionAlerts,
     meta: { title: '告警列表' }
+  },
+  {
+    path: '/detection/ai-analysis',
+    name: 'AIAnalysis',
+    component: AIAnalysis,
+    meta: { title: 'AI 分析' }
   },
   {
     path: '/detection/policies',

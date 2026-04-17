@@ -339,10 +339,12 @@ func (s *SigmaRuleService) dispatchRuleToHosts(rule *model.SigmaRule, hostIDs []
 // api-server/internal/service/ai_analysis_service.go
 
 type AIAnalysisService struct {
-    sessionRepo  *repository.AISessionRepository
-    messageRepo  *repository.AIMessageRepository
-    serverClient *grpcclient.ServerClient
-    agent        *langchain.Agent
+    sessionRepo     *repository.AISessionRepository
+    messageRepo     *repository.AIMessageRepository
+    serverClient    *grpcclient.ServerClient
+    agent           *langchain.ReActAgent
+    attackGraphSvc  *AttackGraphService
+    vectorSvc       *VectorService
 }
 
 type CreateSessionRequest struct {
@@ -449,55 +451,65 @@ func (s *AIAnalysisService) ApplyConclusion(sessionID string, conclusions []Aler
 }
 ```
 
-### 4.2 LangChain Agent
+### 4.2 ReAct Agent（借鉴 langchaingo 模式）
+
+**借鉴 langchaingo 的 ReAct 模式实现，不直接依赖 langchaingo 库**
 
 ```go
-// api-server/internal/service/llm/langchain/agent.go
+// api-server/internal/service/llm/react_agent.go
 
-package langchain
+type ReActAgent struct {
+    llmClient     *llm.Client
+    memory        *Memory
+    toolManager   *ToolManager
+    vectorService *VectorService  // RAG增强
+    maxIterations int
+}
 
-import (
-    "context"
-    "fmt"
-)
-
-type Agent struct {
-    llmClient   *llm.Client
-    memory      *Memory
-    toolManager *ToolManager
-    promptBuilder *PromptBuilder
+type AgentStep struct {
+    Thought     string                 `json:"thought"`
+    Action      string                 `json:"action"`
+    ActionInput map[string]interface{} `json:"action_input"`
+    Observation string                 `json:"observation"`
 }
 
 type AgentResponse struct {
-    Content    string
-    ToolCalls  []*ToolCall
-    SessionID  string
+    Content    string       `json:"content"`
+    Steps      []AgentStep `json:"steps"`       // 思考过程
+    ToolCalls  []*ToolCall `json:"tool_calls"`
+    SessionID  string       `json:"session_id"`
+    AttackGraph *AttackGraph `json:"attack_graph"` // 溯源图
 }
 
-type ToolCall struct {
-    CallID    string                 `json:"call_id"`
-    Tool      string                 `json:"tool"`
-    Arguments map[string]interface{} `json:"arguments"`
+// SSE 流式事件
+type SSEEvent struct {
+    Type    string      `json:"type"`    // thinking | tool_call | tool_result | content | done
+    Content string      `json:"content"`
+    Tool    string      `json:"tool,omitempty"`
+    CallID  string      `json:"call_id,omitempty"`
+    Args    interface{} `json:"args,omitempty"`
+    Result  interface{} `json:"result,omitempty"`
+    TimeMs  int64       `json:"time_ms,omitempty"`
 }
 
-func NewAgent(llmClient *llm.Client, toolManager *ToolManager) *Agent {
-    return &Agent{
-        llmClient:   llmClient,
-        memory:      NewMemory(),
-        toolManager: toolManager,
-        promptBuilder: NewPromptBuilder(),
+func NewReActAgent(llmClient *llm.Client, memory *Memory, toolManager *ToolManager) *ReActAgent {
+    return &ReActAgent{
+        llmClient:     llmClient,
+        memory:        NewMemory(),
+        toolManager:   toolManager,
+        maxIterations: 10,
     }
 }
 
-func (a *Agent) InitSession(sessionID string, context map[string]interface{}) {
-    a.memory.InitSession(sessionID, context)
-}
+// Invoke 单轮对话（阻塞）
+func (a *ReActAgent) Invoke(userMessage string, history []*model.AIMessage) (*AgentResponse, error) {
+    // 1. 获取RAG上下文
+    ragContext, _ := a.vectorService.BuildRAGContext(ctx, userMessage, "")
 
-func (a *Agent) Invoke(userMessage string, history []*model.AIMessage) (*AgentResponse, error) {
-    // 1. 构建Prompt
-    prompt := a.promptBuilder.Build(userMessage, history, a.memory.GetContext())
+    // 2. 构建ReAct格式Prompt
+    prompt := BuildReActPrompt(userMessage, history, a.memory.GetContext(), ragContext)
 
-    // 2. 调用LLM
+    // 3. 调用LLM
     response, err := a.llmClient.Chat(context.Background(), &llm.ChatRequest{
         Model:    "claude-3-5-sonnet",
         Messages: prompt,
@@ -506,33 +518,48 @@ func (a *Agent) Invoke(userMessage string, history []*model.AIMessage) (*AgentRe
         return nil, fmt.Errorf("LLM调用失败: %w", err)
     }
 
-    // 3. 解析响应
-    result := &AgentResponse{
-        Content:   response.Content,
-        SessionID: a.memory.GetCurrentSessionID(),
-    }
+    // 4. 解析ReAct输出
+    steps, finalAnswer := a.parseReActOutput(response.Content)
 
-    // 4. 检查是否有工具调用
-    if response.ToolCalls != nil {
-        for _, tc := range response.ToolCalls {
-            result.ToolCalls = append(result.ToolCalls, &ToolCall{
-                CallID:    tc.CallID,
-                Tool:      tc.Tool,
-                Arguments: tc.Arguments,
-            })
+    // 5. 执行工具调用循环
+    for i := range steps {
+        if steps[i].Action != "" {
+            result, err := a.toolManager.Execute(ctx, steps[i].Action, steps[i].ActionInput)
+            steps[i].Observation = a.formatObservation(result, err)
+            a.memory.AddStep(steps[i])
         }
     }
 
-    // 5. 更新记忆
-    a.memory.AddMessage("user", userMessage)
-    a.memory.AddMessage("assistant", response.Content)
+    // 6. 解析attack_graph JSON
+    attackGraph := a.parseAttackGraph(finalAnswer)
 
-    return result, nil
+    // 7. 更新记忆
+    a.memory.AddMessage("user", userMessage)
+    a.memory.AddMessage("assistant", finalAnswer)
+
+    return &AgentResponse{
+        Content:     finalAnswer,
+        Steps:       steps,
+        ToolCalls:   a.extractToolCalls(steps),
+        SessionID:   a.memory.GetSessionID(),
+        AttackGraph: attackGraph,
+    }, nil
 }
 
-// ExecuteToolCall 执行工具调用
-func (a *Agent) ExecuteToolCall(ctx context.Context, call *ToolCall) (interface{}, error) {
-    return a.toolManager.Execute(ctx, call.Tool, call.Arguments)
+// Stream 流式执行（SSE）
+func (a *ReActAgent) Stream(ctx context.Context, userMessage string, writer SSEWriter) error {
+    // 实现SSE流式输出，逐步发送 thinking -> tool_call -> tool_result -> content -> done
+}
+
+// parseReActOutput 解析ReAct格式输出
+func (a *ReActAgent) parseReActOutput(content string) ([]AgentStep, string) {
+    // 解析 Thought/Action/Observation 循环
+    // 提取 Final Answer JSON
+}
+
+// parseAttackGraph 从Final Answer中解析attack_graph JSON
+func (a *ReActAgent) parseAttackGraph(finalAnswer string) *AttackGraph {
+    // 解析JSON中的attack_graph字段
 }
 ```
 

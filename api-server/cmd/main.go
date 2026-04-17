@@ -159,6 +159,11 @@ func main() {
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
 	websocketHandler := handler.NewWebSocketHandler(wsService)
 
+	// AI Analysis Services
+	// Note: VectorService needs a valid LLM API key for embeddings, initialized lazily
+	vectorService := service.NewVectorService(db, nil)
+	aiAnalysisHandler := handler.NewAIAnalysisHandler(configRepo, vectorService, serverClient)
+
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -193,7 +198,7 @@ func main() {
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler)
+	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler)
 	router.Setup()
 
 	// Start HTTP server

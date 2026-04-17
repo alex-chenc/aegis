@@ -61,6 +61,10 @@
             <el-icon><Bell /></el-icon>
             <span>告警列表</span>
           </el-menu-item>
+          <el-menu-item index="/detection/ai-analysis">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>AI 分析</span>
+          </el-menu-item>
           <el-menu-item index="/detection/policies">
             <el-icon><Operation /></el-icon>
             <span>阻断策略</span>
@@ -109,7 +113,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 
 const route = useRoute()

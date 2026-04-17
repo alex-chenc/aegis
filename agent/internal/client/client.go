@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"aegis-agent/internal/asset"
@@ -254,6 +255,12 @@ func (c *Client) applyRuleUpdate(req *pb.RuleUpdateRequest) {
 func (c *Client) handleCommand(execute *pb.CommandExecute) {
 	logger.Info("Executing command", zap.String("task_id", execute.TaskId))
 
+	// Check if this is a tool call in #TOOL:ToolName#JSON format
+	if strings.HasPrefix(execute.ScriptContent, "#TOOL:") {
+		c.handleToolCallCommand(execute)
+		return
+	}
+
 	result := c.executor.ExecuteCommand(c.ctx, execute.TaskId, execute.ScriptContent, execute.TimeoutSeconds)
 
 	logger.Info("Command completed",
@@ -278,6 +285,68 @@ func (c *Client) handleCommand(execute *pb.CommandExecute) {
 	}
 
 	logger.Info("Result sent", zap.String("task_id", execute.TaskId))
+}
+
+func (c *Client) handleToolCallCommand(execute *pb.CommandExecute) {
+	logger.Info("Tool call command received", zap.String("task_id", execute.TaskId))
+
+	// Parse #TOOL:ToolName#JSON format
+	scriptContent := execute.ScriptContent
+	remaining := strings.TrimPrefix(scriptContent, "#TOOL:")
+	parts := strings.SplitN(remaining, "#", 2)
+	if len(parts) < 2 {
+		c.sendToolError(execute.TaskId, "invalid tool format, expected #TOOL:ToolName#JSON")
+		return
+	}
+
+	toolName := parts[0]
+	paramsJSON := parts[1]
+
+	var params map[string]interface{}
+	if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+		c.sendToolError(execute.TaskId, fmt.Sprintf("failed to parse params: %v", err))
+		return
+	}
+
+	result, err := c.toolManager.Execute(toolName, params)
+	if err != nil {
+		c.sendToolError(execute.TaskId, err.Error())
+		return
+	}
+
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		c.sendToolError(execute.TaskId, fmt.Sprintf("failed to marshal result: %v", err))
+		return
+	}
+
+	logger.Info("Tool call completed",
+		zap.String("task_id", execute.TaskId),
+		zap.String("tool", toolName))
+
+	c.sendToolResult(execute.TaskId, string(resultJSON))
+}
+
+func (c *Client) sendToolError(taskID, errMsg string) {
+	logger.Error("Tool call failed", zap.String("task_id", taskID), zap.String("error", errMsg))
+	c.sendToolResult(taskID, fmt.Sprintf(`{"success": false, "error": %q}`, errMsg))
+}
+
+func (c *Client) sendToolResult(taskID, resultJSON string) {
+	if err := c.stream.Send(&pb.CommandRequest{
+		Request: &pb.CommandRequest_Result{
+			Result: &pb.CommandResult{
+				TaskId:   taskID,
+				HostId:   c.hostID,
+				ExitCode: 0,
+				Stdout:   resultJSON,
+				Stderr:   "",
+				IsFinal:  true,
+			},
+		},
+	}); err != nil {
+		logger.Error("Failed to send tool result", zap.Error(err))
+	}
 }
 
 func (c *Client) cleanup() {
