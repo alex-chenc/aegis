@@ -148,6 +148,12 @@ const handleError = (error: any) => {
 </script>
 ```
 
+> **实际实现说明 (V5.6更新 2026-04-17)**：
+> - 规则上传功能集成在 `Rules.vue` 主页面中，未单独拆分组件
+> - 上传组件配置：`:limit="10" :multiple="true"`，支持最多10个文件同时上传
+> - 批量操作合并为下拉菜单，包含启用选中、禁用选中、删除选中
+> - 严重程度 `informational` 映射为 `low`（低危）
+
 ### 3.2 AIConfigTab.vue（AI规则配置Tab）
 
 ```vue
@@ -697,12 +703,48 @@ const formatJSON = (data: any) => {
 // api/detection.ts
 
 // 上传Sigma规则
+export interface UploadSigmaRulesResponse {
+  success: boolean
+  parsed_count: number
+  failed_count: number
+  skipped_count: number
+  rules: Array<{
+    rule_id: string
+    title: string
+    status: string
+    mitre_id: string
+    severity: string
+  }>
+  failed_files?: string[]  // 导入失败的文件列表
+}
+
 export const uploadSigmaRules = (file: File) => {
   const formData = new FormData()
   formData.append('file', file)
   return api.post('/api/v1/detection/rules/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   })
+}
+
+// 批量启用规则
+export const batchEnableRules = async (ruleIds: string[]) => {
+  const promises = ruleIds.map(ruleId =>
+    api.put(`/api/v1/detection/rules/${ruleId}/status`, { status: 'active' })
+  )
+  return Promise.all(promises)
+}
+
+// 批量禁用规则
+export const batchDisableRules = async (ruleIds: string[]) => {
+  const promises = ruleIds.map(ruleId =>
+    api.put(`/api/v1/detection/rules/${ruleId}/status`, { status: 'disabled' })
+  )
+  return Promise.all(promises)
+}
+
+// 删除规则
+export const deleteRules = (ruleIds: string[]) => {
+  return api.delete('/api/v1/detection/rules', { data: { rule_ids: ruleIds } })
 }
 
 // 获取AI配置

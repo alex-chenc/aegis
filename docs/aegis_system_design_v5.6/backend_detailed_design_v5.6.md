@@ -950,4 +950,64 @@ message ToolResponse {
 
 ---
 
+## 附录：V5.6 Sigma规则上传功能更新说明
+
+### 1. 功能更新 (2026-04-17)
+
+#### 1.1 文件上传限制
+- 单个文件上传：支持 `.yaml`, `.yml`, `.zip` 格式
+- 批量文件上传：最多支持10个文件同时选择
+- 文件大小限制：单个文件不超过10MB
+
+#### 1.2 MITRE验证规则
+- **必填验证**：MITRE ID为空的规则不允许导入，系统返回错误信息
+- **去重验证**：相同MITRE ID的规则不允许重复导入，已存在的规则会被跳过（skipped_duplicate）
+
+#### 1.3 解析流程
+```
+上传文件 → 文件格式校验 → 文件hash去重 → YAML解析 → MITRE验证 → MITRE去重 → 入库
+```
+
+#### 1.4 严重程度映射
+| Sigma level | 系统severity字段 |
+|--------------|------------------|
+| critical | critical |
+| high | high |
+| medium | medium |
+| low | low |
+| informational | low (视为低危) |
+| warning | warning |
+
+#### 1.5 API响应变化
+```json
+{
+  "success": true,
+  "parsed_count": 1,
+  "failed_count": 0,
+  "skipped_count": 0,
+  "rules": [{
+    "rule_id": "xxx",
+    "title": "规则标题",
+    "status": "pending",
+    "mitre_id": "T1059.004",
+    "severity": "high"
+  }],
+  "failed_files": []  // 新增：导入失败的文件列表
+}
+```
+
+### 2. 前端更新 (2026-04-17)
+
+#### 2.1 批量操作
+- 合并删除、启用、禁用为单个下拉菜单"批量操作"
+- 下拉菜单包含：启用选中、禁用选中、删除选中（删除有分隔线）
+
+#### 2.2 导入对话框
+- 支持拖拽和点击上传
+- 支持多文件选择
+- 显示导入结果，包括成功/失败/跳过的规则列表
+- 失败文件单独显示错误信息
+
+---
+
 **文档结束**

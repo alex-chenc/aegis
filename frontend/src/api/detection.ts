@@ -176,6 +176,7 @@ export interface UploadSigmaRulesResponse {
     mitre_id: string
     severity: string
   }>
+  failed_files?: string[]
 }
 
 export function uploadSigmaRules(file: File): Promise<UploadSigmaRulesResponse> {

@@ -17,13 +17,18 @@
         </el-select>
         <el-button type="primary" @click="loadRules">查询</el-button>
         <el-button type="success" @click="showAIGenerateDialog">AI规则</el-button>
-        <el-button
-          type="danger"
-          :disabled="selectedRules.length === 0"
-          @click="confirmDeleteSelected"
-        >
-          删除选中 ({{ selectedRules.length }})
-        </el-button>
+        <el-dropdown :disabled="selectedRules.length === 0" @command="handleBatchCommand">
+          <el-button type="danger" :disabled="selectedRules.length === 0">
+            批量操作 ({{ selectedRules.length }})<el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="enable">启用选中</el-dropdown-item>
+              <el-dropdown-item command="disable">禁用选中</el-dropdown-item>
+              <el-dropdown-item command="delete" divided>删除选中</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button type="warning" @click="showAIConfigDrawer = true" class="ai-config-btn">AI规则自动更新配置</el-button>
         <el-button type="primary" @click="showImportDialog">导入规则</el-button>
       </div>
@@ -209,15 +214,16 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importVisible" title="导入Sigma规则" width="600px">
+    <el-dialog v-model="importVisible" title="导入Sigma规则" width="600px" @close="handleImportDialogClose">
       <div class="import-dialog-content">
         <el-upload
           ref="uploadRef"
           class="sigma-upload"
           drag
           :auto-upload="false"
-          :limit="1"
+          :limit="10"
           accept=".yaml,.yml,.zip"
+          multiple
           :on-change="handleFileChange"
           :on-remove="handleFileRemove"
         >
@@ -227,7 +233,7 @@
           </div>
           <template #tip>
             <div class="el-upload__tip">
-              支持 .yaml、.yml 或 .zip 格式，ZIP包内包含多个规则文件，单个文件不超过10MB
+              支持 .yaml、.yml 或 .zip 格式，ZIP包内包含多个规则文件，单个文件不超过10MB，可一次选择多个文件
             </div>
           </template>
         </el-upload>
@@ -242,12 +248,31 @@
             show-icon
           />
           <el-alert
+            v-else-if="importResult.failed_count > 0"
+            title="部分导入失败"
+            type="warning"
+            :description="`成功 ${importResult.parsed_count} 条，失败 ${importResult.failed_count} 条（见下方失败文件列表），跳过 ${importResult.skipped_count} 条重复规则`"
+            show-icon
+          />
+          <el-alert
             v-else
             title="导入失败"
             type="error"
             :description="importError"
             show-icon
           />
+          <div v-if="importResult.failed_files && importResult.failed_files.length > 0" class="imported-rules" style="margin-top: 16px;">
+            <h4>失败的文件：</h4>
+            <el-alert
+              v-for="file in importResult.failed_files"
+              :key="file"
+              type="error"
+              :title="file"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 8px;"
+            />
+          </div>
           <div v-if="importResult.rules && importResult.rules.length > 0" class="imported-rules">
             <h4>导入的规则：</h4>
             <el-table :data="importResult.rules" size="small" border>
@@ -262,8 +287,8 @@
 
       <template #footer>
         <el-button @click="importVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="importLoading" :disabled="!selectedFile" @click="handleImport">
-          开始导入
+        <el-button type="primary" :loading="importLoading" :disabled="selectedFiles.length === 0" @click="handleImport">
+          开始导入 ({{ selectedFiles.length }} 个文件)
         </el-button>
       </template>
     </el-dialog>
@@ -274,7 +299,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, ArrowDown } from '@element-plus/icons-vue'
 import { useDetectionStore } from '@/store/detection'
 import type { SigmaRule } from '@/types'
 import { SeverityLabels, RuleStatusLabels } from '@/types'
@@ -322,7 +347,7 @@ const aiGenerateResult = ref<{
 
 const importVisible = ref(false)
 const importLoading = ref(false)
-const selectedFile = ref<UploadRawFile | null>(null)
+const selectedFiles = ref<UploadRawFile[]>([])
 const importError = ref('')
 const importResult = ref<{
   success: boolean
@@ -336,6 +361,7 @@ const importResult = ref<{
     mitre_id: string
     severity: string
   }>
+  failed_files?: string[]
 } | null>(null)
 
 const rules = computed(() => store.rules)
@@ -362,7 +388,8 @@ function severityTagType(level: string) {
   if (level === 'critical') return 'danger'
   if (level === 'high') return 'warning'
   if (level === 'medium') return 'info'
-  return 'success'
+  if (level === 'low' || level === 'informational') return 'success'
+  return 'info'
 }
 
 function severityLabel(level: string) {
@@ -437,6 +464,56 @@ async function deleteSelectedRules() {
   }
 }
 
+async function batchEnableSelected() {
+  if (selectedRules.value.length === 0) {
+    ElMessage.warning('请选择要启用的规则')
+    return
+  }
+
+  try {
+    const ruleIds = selectedRules.value.map(r => r.rule_id)
+    const promises = ruleIds.map(ruleId => store.updateRuleStatus(ruleId, 'active'))
+    await Promise.all(promises)
+    ElMessage.success(`已启用 ${ruleIds.length} 条规则`)
+    selectedRules.value = []
+    loadRules()
+  } catch (error: any) {
+    ElMessage.error(error.message || '启用失败')
+  }
+}
+
+async function batchDisableSelected() {
+  if (selectedRules.value.length === 0) {
+    ElMessage.warning('请选择要禁用的规则')
+    return
+  }
+
+  try {
+    const ruleIds = selectedRules.value.map(r => r.rule_id)
+    const promises = ruleIds.map(ruleId => store.updateRuleStatus(ruleId, 'disabled'))
+    await Promise.all(promises)
+    ElMessage.success(`已禁用 ${ruleIds.length} 条规则`)
+    selectedRules.value = []
+    loadRules()
+  } catch (error: any) {
+    ElMessage.error(error.message || '禁用失败')
+  }
+}
+
+async function handleBatchCommand(command: string) {
+  if (selectedRules.value.length === 0) {
+    ElMessage.warning('请选择要操作的规则')
+    return
+  }
+  if (command === 'enable') {
+    await batchEnableSelected()
+  } else if (command === 'disable') {
+    await batchDisableSelected()
+  } else if (command === 'delete') {
+    await confirmDeleteSelected()
+  }
+}
+
 function showAIGenerateDialog() {
   aiGenerateForm.value = {
     event: '',
@@ -486,22 +563,28 @@ async function enableGeneratedRule() {
 }
 
 function showImportDialog() {
-  selectedFile.value = null
+  selectedFiles.value = []
   importResult.value = null
   importError.value = ''
   importVisible.value = true
 }
 
-function handleFileChange(file: UploadRawFile) {
-  selectedFile.value = file
+function handleFileChange(file: UploadRawFile, fileList: UploadRawFile[]) {
+  selectedFiles.value = fileList
 }
 
-function handleFileRemove() {
-  selectedFile.value = null
+function handleFileRemove(file: UploadRawFile, fileList: UploadRawFile[]) {
+  selectedFiles.value = fileList
+}
+
+function handleImportDialogClose() {
+  selectedFiles.value = []
+  importResult.value = null
+  importError.value = ''
 }
 
 async function handleImport() {
-  if (!selectedFile.value) {
+  if (selectedFiles.value.length === 0) {
     ElMessage.warning('请选择要导入的文件')
     return
   }
@@ -510,15 +593,54 @@ async function handleImport() {
   importError.value = ''
   importResult.value = null
 
+  let totalParsedCount = 0
+  let totalFailedCount = 0
+  let totalSkippedCount = 0
+  const allRules: Array<{
+    rule_id: string
+    title: string
+    status: string
+    mitre_id: string
+    severity: string
+  }> = []
+  const allFailedFiles: string[] = []
+
   try {
-    const result = await api.uploadSigmaRules(selectedFile.value.raw as File)
-    importResult.value = result
-    if (result.success) {
-      ElMessage.success(`导入成功：解析 ${result.parsed_count} 条规则`)
-      loadRules()
-    } else {
-      ElMessage.error('导入失败')
+    for (const fileItem of selectedFiles.value) {
+      try {
+        const result = await api.uploadSigmaRules(fileItem.raw as File)
+        totalParsedCount += result.parsed_count
+        totalFailedCount += result.failed_count
+        totalSkippedCount += result.skipped_count
+        if (result.rules) {
+          allRules.push(...result.rules)
+        }
+        if (result.failed_files) {
+          allFailedFiles.push(...result.failed_files)
+        }
+      } catch (error: any) {
+        totalFailedCount++
+        allFailedFiles.push(fileItem.name)
+        ElMessage.warning(`文件 ${fileItem.name} 上传失败: ${error.message}`)
+      }
     }
+
+    const overallSuccess = totalFailedCount === 0
+    importResult.value = {
+      success: overallSuccess,
+      parsed_count: totalParsedCount,
+      failed_count: totalFailedCount,
+      skipped_count: totalSkippedCount,
+      rules: allRules,
+      failed_files: allFailedFiles
+    }
+
+    if (overallSuccess) {
+      ElMessage.success(`导入成功：共解析 ${totalParsedCount} 条规则，跳过 ${totalSkippedCount} 条重复规则`)
+    } else {
+      ElMessage.warning(`导入完成：成功 ${totalParsedCount} 条，失败 ${totalFailedCount} 条，跳过 ${totalSkippedCount} 条`)
+    }
+    loadRules()
   } catch (error: any) {
     importError.value = error.message || '导入失败'
     ElMessage.error(error.message || '导入失败')

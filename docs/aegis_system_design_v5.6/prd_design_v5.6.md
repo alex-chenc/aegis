@@ -113,12 +113,25 @@ Aegis智能主机安全系统
 
 | 功能 | 说明 |
 |------|------|
-| 文件上传 | 支持单个YAML文件、多个YAML文件、ZIP压缩包（内含多个YAML） |
+| 文件上传 | 支持单个YAML文件、多个YAML文件（最多10个）、ZIP压缩包（内含多个YAML） |
 | 解析验证 | 解析Sigma规则YAML结构，验证必填字段(title、logsource、detection等) |
-| MITRE映射 | 自动提取MITRE ID (通过tags或title关键词匹配) |
+| MITRE映射 | 自动提取MITRE ID (通过tags匹配attack.t开头的标签) |
+| MITRE验证 | **MITRE ID为空的规则不允许导入**，返回错误信息 |
+| MITRE去重 | **相同MITRE ID的规则不允许重复导入**，已存在的规则会被跳过 |
 | 状态初始化 | 新导入规则默认为 `pending` 状态 |
-| 批量操作 | 支持批量审批、批量禁用、批量删除 |
+| 批量操作 | 支持批量启用、批量禁用、批量删除（通过下拉菜单操作） |
 | 规则下发 | 审批通过后自动下发到相关Agent |
+
+#### 4.1.3.1 严重程度映射
+
+| Sigma level | 系统显示 | 说明 |
+|--------------|----------|------|
+| critical | 严重 | 红色标签 |
+| high | 高危 | 橙色标签 |
+| medium | 中危 | 蓝色标签 |
+| low | 低危 | 绿色标签 |
+| informational | 低危 | 绿色标签（ informational 视为低危） |
+| warning | 警告 | 蓝色标签 |
 
 #### 4.1.4 Sigma规则解析逻辑
 

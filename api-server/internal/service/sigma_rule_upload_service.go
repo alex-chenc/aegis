@@ -132,8 +132,44 @@ func (s *SigmaRuleUploadService) parseSingleFile(file io.Reader, fileName string
 		}, nil
 	}
 
+	// 提取MITRE ID用于验证和去重
+	mitreID := s.extractMitreID(parsedRule.Tags)
+
+	// 验证MITRE ID不能为空
+	if mitreID == "" {
+		return &UploadResult{
+			Success:     false,
+			ParsedCount: 0,
+			FailedCount: 1,
+			FailedFiles: []string{fileName},
+			Error:       "MITRE ID is required, rule cannot be imported without MITRE attribution",
+		}, nil
+	}
+
+	// 检查MITRE ID是否已存在（去重）
+	upperMitreID := strings.ToUpper(mitreID)
+	if !strings.HasPrefix(upperMitreID, "T") {
+		upperMitreID = "T" + upperMitreID
+	}
+	exists, err := s.ruleRepo.ExistsByMitreID(upperMitreID)
+	if err == nil && exists {
+		return &UploadResult{
+			Success:      true,
+			ParsedCount:  0,
+			SkippedCount: 1,
+			Rules: []ParsedRule{
+				{
+					RuleID:  parsedRule.ID,
+					Title:   parsedRule.Title,
+					Status:  "skipped_duplicate",
+					MitreID: upperMitreID,
+				},
+			},
+		}, nil
+	}
+
 	// 保存到数据库
-	model := s.createSigmaRuleModel(parsedRule, content, fileName, fileHash, len(content))
+	model := s.createSigmaRuleModel(parsedRule, content, fileName, fileHash, len(content), upperMitreID)
 	if err := s.ruleRepo.Create(model); err != nil {
 		return nil, fmt.Errorf("failed to save rule: %w", err)
 	}
@@ -225,8 +261,35 @@ func (s *SigmaRuleUploadService) parseZipFile(file io.Reader) (*UploadResult, er
 			continue
 		}
 
+		// 提取MITRE ID用于验证和去重
+		mitreID := s.extractMitreID(parsedRule.Tags)
+
+		// 验证MITRE ID不能为空
+		if mitreID == "" {
+			result.FailedCount++
+			result.FailedFiles = append(result.FailedFiles, f.Name+": MITRE ID is required")
+			continue
+		}
+
+		// 检查MITRE ID是否已存在（去重）
+		upperMitreID := strings.ToUpper(mitreID)
+		if !strings.HasPrefix(upperMitreID, "T") {
+			upperMitreID = "T" + upperMitreID
+		}
+		exists, err := s.ruleRepo.ExistsByMitreID(upperMitreID)
+		if err == nil && exists {
+			result.SkippedCount++
+			result.Rules = append(result.Rules, ParsedRule{
+				RuleID:  parsedRule.ID,
+				Title:   parsedRule.Title,
+				Status:  "skipped_duplicate",
+				MitreID: upperMitreID,
+			})
+			continue
+		}
+
 		// 保存到数据库
-		model := s.createSigmaRuleModel(parsedRule, fileContent, f.Name, fileHash, len(fileContent))
+		model := s.createSigmaRuleModel(parsedRule, fileContent, f.Name, fileHash, len(fileContent), upperMitreID)
 		if err := s.ruleRepo.Create(model); err != nil {
 			logger.Warn("failed to save rule from zip",
 				zap.String("file", f.Name),
@@ -361,21 +424,8 @@ func (s *SigmaRuleUploadService) createSigmaRuleModel(
 	fileName string,
 	fileHash string,
 	fileSize int,
+	mitreID string,
 ) *model.SigmaRule {
-	// 提取MITRE ID
-	mitreID := ""
-	mitreRegex := regexp.MustCompile(`T\d{4}(?:\.\d{3})?`)
-	for _, tag := range parsed.Tags {
-		if strings.HasPrefix(strings.ToLower(tag), "attack.t") {
-			rawMitre := strings.TrimPrefix(strings.ToLower(tag), "attack.")
-			upper := strings.ToUpper(rawMitre)
-			if match := mitreRegex.FindString(upper); match != "" {
-				mitreID = match
-				break
-			}
-		}
-	}
-
 	// 规范化severity
 	severity := strings.ToLower(parsed.Level)
 	if severity == "" {
@@ -463,6 +513,21 @@ type ParsedSigmaRule struct {
 	Tags        []string
 	Logsource   map[string]interface{}
 	Detection   map[string]interface{}
+}
+
+// extractMitreID 从tags中提取MITRE ID
+func (s *SigmaRuleUploadService) extractMitreID(tags []string) string {
+	mitreRegex := regexp.MustCompile(`T\d{4}(?:\.\d{3})?`)
+	for _, tag := range tags {
+		if strings.HasPrefix(strings.ToLower(tag), "attack.t") {
+			rawMitre := strings.TrimPrefix(strings.ToLower(tag), "attack.")
+			upper := strings.ToUpper(rawMitre)
+			if match := mitreRegex.FindString(upper); match != "" {
+				return match
+			}
+		}
+	}
+	return ""
 }
 
 // computeHash 计算SHA256哈希

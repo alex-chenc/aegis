@@ -156,7 +156,9 @@ export const SeverityLabels: Record<string, string> = {
   critical: '严重',
   high: '高危',
   medium: '中危',
-  low: '低危'
+  low: '低危',
+  informational: '信息',
+  warning: '警告'
 }
 
 export const AlertStatusLabels: Record<string, string> = {
