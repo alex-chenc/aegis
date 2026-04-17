@@ -2,9 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
+	grpcclient "api-server/internal/grpc"
 	"api-server/internal/llm"
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -12,36 +16,477 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gopkg.in/yaml.v3"
 )
 
-// RuleGenerationService AI规则生成服务
+// RuleGenerationService AI规则自动更新服务（整合误报分析功能）
 type RuleGenerationService struct {
-	configService *AIRuleConfigService
-	configRepo    *repository.AIRuleConfigRepository
-	sigmaRuleRepo *repository.SigmaRuleRepository
-	alertRepo     *repository.AlertRepository
-	llmClient     *llm.LLMClient
+	configService    *AIRuleConfigService
+	llmConfigRepo    *repository.ConfigRepository
+	sigmaRuleRepo     *repository.SigmaRuleRepository
+	alertRepo         *repository.AlertRepository
+	notificationRepo  *repository.NotificationRepository
+	sigmaRuleSvc      *SigmaRuleService
+	serverClient      *grpcclient.ServerClient
+	llmClient         *llm.LLMClient
+	llmTimeout        int
+	llmMaxRetries     int
+	sampleSize        int
+	enabled           bool
+	stopCh            chan struct{}
+	wg                sync.WaitGroup
 }
 
 // NewRuleGenerationService 创建规则生成服务
 func NewRuleGenerationService(
 	configService *AIRuleConfigService,
-	configRepo *repository.AIRuleConfigRepository,
+	llmConfigRepo *repository.ConfigRepository,
 	sigmaRuleRepo *repository.SigmaRuleRepository,
 	alertRepo *repository.AlertRepository,
+	notificationRepo *repository.NotificationRepository,
+	sigmaRuleSvc *SigmaRuleService,
+	serverClient *grpcclient.ServerClient,
+	llmTimeout int,
+	llmMaxRetries int,
 ) *RuleGenerationService {
 	return &RuleGenerationService{
-		configService: configService,
-		configRepo:    configRepo,
-		sigmaRuleRepo: sigmaRuleRepo,
-		alertRepo:    alertRepo,
+		configService:   configService,
+		llmConfigRepo:   llmConfigRepo,
+		sigmaRuleRepo:   sigmaRuleRepo,
+		alertRepo:       alertRepo,
+		notificationRepo: notificationRepo,
+		sigmaRuleSvc:    sigmaRuleSvc,
+		serverClient:    serverClient,
+		llmTimeout:      llmTimeout,
+		llmMaxRetries:   llmMaxRetries,
+		sampleSize:      10,
+		enabled:         true,
+		stopCh:          make(chan struct{}),
 	}
 }
 
 // InitLLMClient 初始化LLM客户端
 func (s *RuleGenerationService) InitLLMClient(apiKey, baseURL, modelName string, timeout, maxRetries int) {
 	s.llmClient = llm.NewLLMClient(apiKey, baseURL, modelName, timeout, maxRetries)
+}
+
+// Start 启动AI规则自动更新服务
+func (s *RuleGenerationService) Start(ctx context.Context) {
+	if !s.configService.IsEnabled() {
+		logger.Info("AI rule auto-update service is disabled")
+		return
+	}
+
+	logger.Info("AI rule auto-update service starting")
+
+	// 定时检查触发条件
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.checkTimeWindow("10m")
+			case <-s.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.checkTimeWindow("30m")
+			case <-s.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(60 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.checkTimeWindow("60m")
+			case <-s.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// 定时检查实验性规则升级
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.checkExperimentalRulesPromotion(ctx)
+			case <-s.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	logger.Info("AI rule auto-update service started")
+}
+
+// Stop 停止AI规则自动更新服务
+func (s *RuleGenerationService) Stop() {
+	close(s.stopCh)
+	s.wg.Wait()
+	logger.Info("AI rule auto-update service stopped")
+}
+
+// checkTimeWindow 检查指定时间窗口内的触发条件
+func (s *RuleGenerationService) checkTimeWindow(window string) {
+	if !s.configService.IsEnabled() {
+		return
+	}
+
+	ctx := context.Background()
+
+	thresholds := s.configService.GetThresholds()
+	threshold := thresholds.HighFrequencyCount
+
+	var startTime time.Time
+	switch window {
+	case "10m":
+		startTime = time.Now().Add(-10 * time.Minute)
+	case "30m":
+		startTime = time.Now().Add(-30 * time.Minute)
+	case "60m":
+		startTime = time.Now().Add(-60 * time.Minute)
+	default:
+		return
+	}
+
+	stats, err := s.alertRepo.GetRuleTriggerStats(startTime, time.Now(), threshold, s.sampleSize)
+	if err != nil {
+		logger.Error("failed to get rule trigger stats", zap.Error(err), zap.String("window", window))
+		return
+	}
+
+	logger.Info("rule trigger stats collected",
+		zap.String("window", window),
+		zap.Int("rules_over_threshold", len(stats)))
+
+	for _, stat := range stats {
+		if stat.AlertCount > threshold {
+			go s.analyzeRule(ctx, stat, window)
+		}
+	}
+}
+
+// analyzeRule 分析规则是否为误报，并进行紧收
+func (s *RuleGenerationService) analyzeRule(ctx context.Context, stats repository.RuleTriggerStats, timeWindow string) {
+	logger.Info("analyzing rule for AI auto-update",
+		zap.String("rule_id", stats.RuleID),
+		zap.Int("alert_count", stats.AlertCount),
+		zap.String("time_window", timeWindow))
+
+	rule, err := s.sigmaRuleRepo.FindByRuleID(stats.RuleID)
+	if err != nil {
+		logger.Error("failed to find rule", zap.Error(err), zap.String("rule_id", stats.RuleID))
+		return
+	}
+
+	result, err := s.callLLMForAnalysis(ctx, rule, stats, timeWindow)
+	if err != nil {
+		logger.Error("LLM analysis failed", zap.Error(err), zap.String("rule_id", stats.RuleID))
+		return
+	}
+
+	logger.Info("LLM analysis completed",
+		zap.String("rule_id", stats.RuleID),
+		zap.Bool("is_false_positive", result.IsFalsePositive),
+		zap.Float64("confidence", result.Confidence))
+
+	if result.IsFalsePositive && result.Confidence >= 0.7 {
+		if err := s.applyRuleAdjustment(rule, result.RuleAdjustment, stats); err != nil {
+			logger.Error("failed to apply rule adjustment", zap.Error(err), zap.String("rule_id", stats.RuleID))
+			return
+		}
+		logger.Info("rule adjusted successfully",
+			zap.String("rule_id", stats.RuleID),
+			zap.String("status", "experimental"))
+	}
+}
+
+// callLLMForAnalysis 调用LLM分析规则是否为误报
+func (s *RuleGenerationService) callLLMForAnalysis(ctx context.Context, rule *model.SigmaRule, stats repository.RuleTriggerStats, timeWindow string) (*FalsePositiveAnalysisResult, error) {
+	config, err := s.llmConfigRepo.GetActive()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM config: %w", err)
+	}
+
+	apiKey, err := s.llmConfigRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt API key: %w", err)
+	}
+
+	client := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, s.llmTimeout, s.llmMaxRetries)
+
+	alertSamples := s.buildAlertSamples(stats.Alerts)
+
+	prompt := fmt.Sprintf(`你是安全分析师。以下规则在%s内触发了%d条告警，需要判断是否为误报。
+
+## 规则信息
+- 规则ID: %s
+- 规则名称: %s
+- MITRE技术: %s
+- 当前规则内容:
+%s
+
+## 告警样本（前%d条）
+%s
+
+## 分析要求
+请判断这些告警是否为误报，并提供以下信息：
+1. 是否为误报？给出置信度(0-1)
+2. 如果是误报，原因是什么？
+3. 如何修改规则来减少误报？
+
+## 返回格式（JSON）
+{
+  "is_false_positive": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "判断原因的详细说明",
+  "rule_adjustments": {
+    "rule_id": "%s",
+    "action": "tighten",
+    "reason": "调整原因",
+    "add_conditions": ["新条件1"],
+    "exclude_patterns": ["排除模式1"],
+    "severity_change": ""
+  }
+}
+
+只返回JSON，不要其他内容。`,
+		timeWindow,
+		stats.AlertCount,
+		rule.RuleID,
+		rule.Title,
+		rule.MitreID,
+		rule.Content,
+		len(stats.Alerts),
+		alertSamples,
+		rule.RuleID,
+	)
+
+	response, err := client.ChatCompletion(ctx, "", prompt, 0.7)
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	cleanResponse := response
+	if strings.Contains(cleanResponse, "```json") {
+		cleanResponse = strings.ReplaceAll(cleanResponse, "```json", "")
+		cleanResponse = strings.ReplaceAll(cleanResponse, "```", "")
+		cleanResponse = strings.TrimSpace(cleanResponse)
+	}
+
+	var result FalsePositiveAnalysisResult
+	if err := json.Unmarshal([]byte(cleanResponse), &result); err != nil {
+		logger.Error("failed to parse LLM response", zap.Error(err), zap.String("response", cleanResponse))
+		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+
+	result.RuleAdjustment.RuleID = rule.RuleID
+	result.RuleAdjustment.Action = "tighten"
+
+	return &result, nil
+}
+
+func (s *RuleGenerationService) buildAlertSamples(alerts []model.Alert) string {
+	var samples []string
+	for i, alert := range alerts {
+		if i >= s.sampleSize {
+			break
+		}
+		sample := fmt.Sprintf("告警%d:\n- 主机: %s\n- PID: %d\n- 命令: %s\n- 严重程度: %s",
+			i+1,
+			alert.Hostname,
+			alert.PID,
+			truncateString(alert.CommandLine, 200),
+			alert.Severity,
+		)
+		samples = append(samples, sample)
+	}
+	return strings.Join(samples, "\n\n")
+}
+
+// applyRuleAdjustment 紧收规则并发送通知
+func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjustment RuleAdjustment, stats repository.RuleTriggerStats) error {
+	newContent, err := s.applyTightening(rule.Content, adjustment)
+	if err != nil {
+		return fmt.Errorf("failed to apply tightening: %w", err)
+	}
+
+	rule.Content = newContent
+	rule.Version = incrementVersion(rule.Version)
+	rule.Status = "experimental"
+	now := time.Now()
+	rule.ActivatedAt = &now
+	rule.UpdatedAt = now
+
+	if adjustment.SeverityChange != "" {
+		rule.Severity = adjustment.SeverityChange
+	}
+
+	if err := s.sigmaRuleRepo.Update(rule); err != nil {
+		return fmt.Errorf("failed to update rule: %w", err)
+	}
+
+	logger.Info("rule tightened and set to experimental",
+		zap.String("rule_id", rule.RuleID),
+		zap.String("version", rule.Version),
+		zap.String("status", rule.Status))
+
+	// 发送通知
+	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnGeneration && s.notificationRepo != nil {
+		metadataBytes, _ := json.Marshal(map[string]interface{}{
+			"rule_id":      rule.RuleID,
+			"mitre_id":     rule.MitreID,
+			"action":       "tighten",
+			"alert_count":  stats.AlertCount,
+			"time_window":  stats.TimeWindow,
+		})
+		notification := &model.Notification{
+			Title:    "AI规则更新通知",
+			Content:  fmt.Sprintf("AI已自动更新规则: %s (MITRE: %s)，更新版本至 %s，减少误报", rule.Title, rule.MitreID, rule.Version),
+			Severity: "info",
+			Type:     "rule_generated",
+			Link:     "/detection/rules?status=experimental",
+			Metadata: datatypes.JSON(metadataBytes),
+		}
+		s.notificationRepo.Create(notification)
+	}
+
+	return nil
+}
+
+func (s *RuleGenerationService) applyTightening(content string, adjustment RuleAdjustment) (string, error) {
+	var sigmaRule map[string]interface{}
+	if err := yaml.Unmarshal([]byte(content), &sigmaRule); err != nil {
+		return content, nil
+	}
+
+	detection, ok := sigmaRule["detection"].(map[string]interface{})
+	if !ok {
+		detection = make(map[string]interface{})
+		sigmaRule["detection"] = detection
+	}
+
+	condition, _ := detection["condition"].(string)
+
+	for _, cond := range adjustment.AddConditions {
+		if cond != "" {
+			if condition == "" {
+				condition = cond
+			} else {
+				condition = condition + " and " + cond
+			}
+		}
+	}
+
+	for _, pattern := range adjustment.ExcludePatterns {
+		if pattern != "" {
+			if condition == "" {
+				condition = "not " + pattern
+			} else {
+				condition = condition + " and not " + pattern
+			}
+		}
+	}
+
+	detection["condition"] = condition
+
+	newContent, err := yaml.Marshal(sigmaRule)
+	if err != nil {
+		return content, err
+	}
+
+	return string(newContent), nil
+}
+
+// checkExperimentalRulesPromotion 检查实验性规则是否需要升级为active
+func (s *RuleGenerationService) checkExperimentalRulesPromotion(ctx context.Context) {
+	rules, err := s.sigmaRuleRepo.GetExperimentalRules()
+	if err != nil {
+		logger.Error("failed to get experimental rules", zap.Error(err))
+		return
+	}
+
+	for _, rule := range rules {
+		// Only promote rules that have been in experimental status for 7 days
+		if rule.ActivatedAt != nil && time.Since(*rule.ActivatedAt) >= 7*24*time.Hour {
+			if err := s.promoteRuleToActive(&rule); err != nil {
+				logger.Error("failed to promote rule to active",
+					zap.Error(err),
+					zap.String("rule_id", rule.RuleID))
+			}
+		}
+	}
+}
+
+// promoteRuleToActive 将规则升级为active状态
+func (s *RuleGenerationService) promoteRuleToActive(rule *model.SigmaRule) error {
+	if err := s.sigmaRuleRepo.UpdateStatus(rule.RuleID, "active"); err != nil {
+		return err
+	}
+
+	// 更新统计
+	s.configService.IncrementApprovedCount()
+
+	// Broadcast rule update via server if available
+	if s.serverClient != nil && s.sigmaRuleSvc != nil {
+		s.sigmaRuleSvc.broadcastRuleUpdate(rule.RuleID, "active")
+	}
+
+	logger.Info("experimental rule promoted to active and broadcasted",
+		zap.String("rule_id", rule.RuleID))
+
+	// 发送通知
+	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnApproval && s.notificationRepo != nil {
+		metadataBytes, _ := json.Marshal(map[string]interface{}{
+			"rule_id":  rule.RuleID,
+			"mitre_id": rule.MitreID,
+		})
+		notification := &model.Notification{
+			Title:    "规则审核通过",
+			Content:  fmt.Sprintf("规则 %s 已审核通过并激活", rule.Title),
+			Severity: "info",
+			Type:     "system",
+			Link:     "/detection/rules?status=active",
+			Metadata: datatypes.JSON(metadataBytes),
+		}
+		s.notificationRepo.Create(notification)
+	}
+
+	return nil
 }
 
 // TriggerCheckResult 触发检查结果
@@ -161,6 +606,23 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 
 	// 更新统计
 	s.configService.IncrementGeneratedCount()
+
+	// 发送通知
+	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnGeneration && s.notificationRepo != nil {
+		metadataBytes, _ := json.Marshal(map[string]interface{}{
+			"rule_id": rule.RuleID,
+			"mitre_id": rule.MitreID,
+		})
+		notification := &model.Notification{
+			Title:    "AI规则生成通知",
+			Content:  fmt.Sprintf("AI已自动生成新规则: %s (MITRE: %s)，请前往审核", rule.Title, rule.MitreID),
+			Severity: "info",
+			Type:     "rule_generated",
+			Link:     "/detection/rules?status=pending",
+			Metadata: datatypes.JSON(metadataBytes),
+		}
+		s.notificationRepo.Create(notification)
+	}
 
 	return &GenerateRuleResponse{
 		RuleID:      rule.RuleID,
@@ -348,6 +810,23 @@ func (s *RuleGenerationService) ActivateRule(ruleID string) error {
 	// 更新统计
 	s.configService.IncrementApprovedCount()
 
+	// 发送通知
+	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnApproval && s.notificationRepo != nil {
+		metadataBytes, _ := json.Marshal(map[string]interface{}{
+			"rule_id":  ruleID,
+			"mitre_id": rule.MitreID,
+		})
+		notification := &model.Notification{
+			Title:    "规则审核通过",
+			Content:  fmt.Sprintf("规则 %s 已审核通过并激活", rule.Title),
+			Severity: "info",
+			Type:     "system",
+			Link:     "/detection/rules?status=active",
+			Metadata: datatypes.JSON(metadataBytes),
+		}
+		s.notificationRepo.Create(notification)
+	}
+
 	logger.Info("rule activated",
 		zap.String("rule_id", ruleID),
 		zap.String("mitre_id", rule.MitreID))
@@ -426,4 +905,42 @@ func (s *RuleGenerationService) GenerateTestRule(ctx context.Context, req *Gener
 		Content:     rule.Content,
 		Status:      "test",
 	}, nil
+}
+
+// FalsePositiveAnalysisResult LLM误报分析结果
+type FalsePositiveAnalysisResult struct {
+	IsFalsePositive bool           `json:"is_false_positive"`
+	Confidence      float64        `json:"confidence"`
+	Reason          string         `json:"reason"`
+	RuleAdjustment  RuleAdjustment `json:"rule_adjustments"`
+}
+
+// RuleAdjustment 规则调整建议
+type RuleAdjustment struct {
+	RuleID          string   `json:"rule_id"`
+	Action          string   `json:"action"`
+	Reason          string   `json:"reason"`
+	AddConditions   []string `json:"add_conditions"`
+	ExcludePatterns []string `json:"exclude_patterns"`
+	SeverityChange  string   `json:"severity_change"`
+}
+
+// incrementVersion 增加版本号
+func incrementVersion(version string) string {
+	if version == "" {
+		return "1.1"
+	}
+
+	var major, minor int
+	fmt.Sscanf(version, "%d.%d", &major, &minor)
+	minor++
+	return fmt.Sprintf("%d.%d", major, minor)
+}
+
+// truncateString 截断字符串
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

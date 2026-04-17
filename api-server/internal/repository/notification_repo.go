@@ -89,3 +89,11 @@ func (r *NotificationRepository) MarkAllRead() (int64, error) {
 	result := r.db.Model(&model.Notification{}).Where("is_read = ?", false).Update("is_read", true)
 	return result.RowsAffected, result.Error
 }
+
+// Create 创建通知
+func (r *NotificationRepository) Create(notification *model.Notification) error {
+	if notification.ID == uuid.Nil {
+		notification.ID = uuid.New()
+	}
+	return r.db.Create(notification).Error
+}

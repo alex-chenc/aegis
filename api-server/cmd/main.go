@@ -136,7 +136,17 @@ func main() {
 	// AI Rule Config Services
 	aiRuleConfigRepo := repository.NewAIRuleConfigRepository(db)
 	aiRuleConfigService := service.NewAIRuleConfigService(aiRuleConfigRepo)
-	ruleGenerationService := service.NewRuleGenerationService(aiRuleConfigService, aiRuleConfigRepo, sigmaRuleRepo, alertRepo)
+	ruleGenerationService := service.NewRuleGenerationService(
+		aiRuleConfigService,
+		configRepo,
+		sigmaRuleRepo,
+		alertRepo,
+		notificationRepo,
+		sigmaRuleService,
+		serverClient,
+		cfg.LLM.TimeoutSeconds,
+		cfg.LLM.MaxRetries,
+	)
 	sigmaRuleUploadService := service.NewSigmaRuleUploadService(sigmaRuleRepo, serverClient)
 
 	// Notification Service
@@ -148,16 +158,6 @@ func main() {
 	_ = service.NewBlockService(blockRepo, alertRepo)
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
 	websocketHandler := handler.NewWebSocketHandler(wsService)
-
-	falsePositiveService := service.NewFalsePositiveDetectionService(
-		alertRepo,
-		sigmaRuleRepo,
-		configRepo,
-		sigmaRuleService,
-		cfg.LLM.TimeoutSeconds,
-		cfg.LLM.MaxRetries,
-		serverClient,
-	)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,8 +177,8 @@ func main() {
 		zap.String("grpc_port", fmt.Sprintf("%d", cfg.Server.GRPCPort)),
 	)
 
-	// Start false positive detection service
-	falsePositiveService.Start(ctx)
+	// Start AI rule auto-update service
+	ruleGenerationService.Start(ctx)
 
 	// Initialize handlers
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")

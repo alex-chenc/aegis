@@ -3,7 +3,7 @@
     v-model="store.drawerVisible"
     title="消息通知"
     direction="rtl"
-    size="400px"
+    size="480px"
     @close="handleClose"
   >
     <template #header>

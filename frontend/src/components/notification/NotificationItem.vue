@@ -14,14 +14,12 @@
         {{ notification.content }}
       </div>
     </el-tooltip>
-    <div v-if="notification.link" class="notification-actions">
-      <el-button link type="primary" @click="handleLink">
+    <div class="notification-actions">
+      <el-button v-if="notification.link" link type="primary" @click="handleLink">
         前往查看
         <el-icon class="el-icon--right"><ArrowRight /></el-icon>
       </el-button>
-    </div>
-    <div v-if="!notification.is_read" class="notification-mark-read">
-      <el-button link type="primary" size="small" @click="handleMarkRead">
+      <el-button v-if="!notification.is_read" link type="primary" @click="handleMarkRead">
         标为已读
       </el-button>
     </div>
@@ -155,11 +153,6 @@ function handleLink() {
   margin-top: 8px;
   display: flex;
   justify-content: flex-end;
-}
-
-.notification-mark-read {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
+  gap: 8px;
 }
 </style>
