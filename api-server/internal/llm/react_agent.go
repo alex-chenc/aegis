@@ -23,8 +23,8 @@ type AgentStep struct {
 type AgentResponse struct {
 	Content    string       `json:"content"`
 	Steps      []AgentStep  `json:"steps"`
-	ToolCalls  []*ToolCall  `json:"tool_calls"`
-	SessionID  string       `json:"session_id"`
+	ToolCalls  []*ToolCall `json:"tool_calls"`
+	SessionID  string      `json:"session_id"`
 }
 
 // ToolCall represents a tool call made by the agent
@@ -54,7 +54,7 @@ func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID st
 		llmClient:     llmClient,
 		toolExecutor:  toolExecutor,
 		maxIterations: 10,
-		sessionID:    sessionID,
+		sessionID:     sessionID,
 		steps:         make([]AgentStep, 0),
 	}
 }
@@ -92,79 +92,308 @@ func (a *ReActAgent) Invoke(ctx context.Context, userMessage string, history []*
 }
 
 // Stream executes with SSE streaming output
+// This implements the full ReAct loop: think -> action -> observe -> think -> ... -> final answer
 func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*AIMessage, writer *SSEWriter, context map[string]interface{}) error {
+	// Build initial prompt with full context
 	prompt := BuildReActPrompt(userMessage, history, context)
 
-	// Use streaming LLM call
-	stream, err := a.llmClient.ChatCompletionStreamWithMessages(ctx, prompt, 0.7)
-	if err != nil {
-		writer.WriteError(fmt.Sprintf("LLM stream failed: %v", err))
-		return err
-	}
-	defer stream.Close()
+	iteration := 0
+	maxIterations := a.maxIterations
 
-	currentStep := &AgentStep{}
-	buffer := ""
+	// ReAct loop: continue until we get a Final Answer or hit max iterations
+	for iteration < maxIterations {
+		iteration++
+		_zapLogger.Info("ReAct iteration started", zap.Int("iteration", iteration), zap.Int("max", maxIterations))
 
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
+		// Use streaming LLM call for this iteration
+		stream, err := a.llmClient.ChatCompletionStreamWithMessages(ctx, prompt, 0.7)
 		if err != nil {
-			writer.WriteError(fmt.Sprintf("stream error: %v", err))
+			writer.WriteError(fmt.Sprintf("LLM stream failed: %v", err))
 			return err
 		}
 
-		// DEBUG: Log chunk
-		_zapLogger.Info("stream chunk", zap.String("content", chunk.Content), zap.Bool("done", chunk.Done))
+		currentStep := &AgentStep{}
+		buffer := ""
+		pendingThinking := ""
+		hasAction := false
+		actionExecuted := false
 
-		buffer += chunk.Content
-
-		// Try to parse a complete step
-		if step, done := a.tryParseStep(buffer); done {
-			currentStep = step
-
-			if step.Action != "" {
-				// Send tool call event
-				callID := generateCallID()
-				writer.WriteToolCall(step.Action, callID, step.ActionInput)
-
-				// Execute tool
-				start := time.Now()
-				result, err := a.toolExecutor.Execute(ctx, step.Action, step.ActionInput)
-				elapsed := time.Since(start).Milliseconds()
-
-				if err != nil {
-					writer.WriteToolError(callID, err.Error())
-					currentStep.Observation = fmt.Sprintf("Error: %v", err)
-				} else {
-					writer.WriteToolResult(callID, result, elapsed)
-					currentStep.Observation = a.formatObservation(result, nil)
+		// Process streaming response
+		for {
+			chunk, err := stream.Recv()
+			if err == io.EOF {
+				// Stream ended - send accumulated thinking
+				if pendingThinking != "" && !hasAction {
+					writer.WriteThinking(pendingThinking)
 				}
-
-				a.steps = append(a.steps, *currentStep)
-				currentStep = &AgentStep{}
-			} else if step.Thought != "" {
-				// Pure thought, send as thinking
-				writer.WriteThinking(step.Thought)
+				break
+			}
+			if err != nil {
+				writer.WriteError(fmt.Sprintf("stream error: %v", err))
+				stream.Close()
+				return err
 			}
 
-			buffer = ""
-		} else {
-			// Still parsing, send thinking
-			if buffer != "" {
-				writer.WriteThinking(buffer)
+			buffer += chunk.Content
+			pendingThinking += chunk.Content
+
+			// Try to parse a complete step
+			if step, done := a.tryParseStep(buffer); done {
+				hasAction = step.Action != "" || step.ActionInput != nil
+
+				// Check if step contains Final Answer - if so, skip action execution
+				if strings.Contains(buffer, "Final Answer:") {
+					// Flush any pending thinking
+					if pendingThinking != "" {
+						writer.WriteThinking(pendingThinking)
+					}
+					// Parse and return the final answer
+					_, finalAnswer := a.parseFinalAnswer(buffer)
+					if finalAnswer != "" {
+						writer.WriteContent(finalAnswer)
+					}
+					writer.WriteDone()
+					stream.Close()
+					return nil
+				}
+
+				if hasAction && !actionExecuted {
+					// Action found - flush thinking and execute
+					if pendingThinking != "" {
+						writer.WriteThinking(pendingThinking)
+						pendingThinking = ""
+					}
+
+					currentStep = step
+					actionName := strings.TrimSpace(step.Action)
+					if actionName == "" {
+						actionName = "InferredAction"
+					}
+
+					// Write tool call event
+					callID := generateCallID()
+					writer.WriteToolCall(actionName, callID, step.ActionInput)
+
+					// Execute tool
+					start := time.Now()
+					result, err := a.toolExecutor.Execute(ctx, actionName, step.ActionInput)
+					elapsed := time.Since(start).Milliseconds()
+
+					if err != nil {
+						writer.WriteToolError(callID, err.Error())
+						currentStep.Observation = fmt.Sprintf("Error: %v", err)
+					} else {
+						writer.WriteToolResult(callID, result, elapsed)
+						currentStep.Observation = a.formatObservation(result, nil)
+					}
+
+					a.steps = append(a.steps, *currentStep)
+					actionExecuted = true
+
+					// Add tool result to prompt for next iteration
+					prompt = append(prompt, Message{
+						Role:    "user",
+						Content: fmt.Sprintf("Observation: %s", currentStep.Observation),
+					})
+
+					currentStep = &AgentStep{}
+				} else if step.Thought != "" && !hasAction {
+					// Only thought, no action yet - accumulate
+					pendingThinking = step.Thought
+				}
+
+				buffer = ""
+			} else if chunk.Done || err != nil {
+				// Stream ending with incomplete buffer
+				if pendingThinking != "" && !hasAction {
+					writer.WriteThinking(pendingThinking)
+					pendingThinking = ""
+				}
+				break
+			} else if len(pendingThinking) >= 100 && !hasAction {
+				// Send periodic thinking updates to avoid choppy display
+				writer.WriteThinking(pendingThinking)
+				pendingThinking = ""
+			}
+		}
+
+		stream.Close()
+
+		// Check if we have a final answer (no action was executed in this iteration)
+		if !actionExecuted {
+			_, finalAnswer := a.parseFinalAnswer(buffer)
+			if finalAnswer != "" {
+				writer.WriteContent(finalAnswer)
+				writer.WriteDone()
+				return nil
+			}
+		}
+
+		// If we executed an action, continue to next iteration
+		_zapLogger.Info("ReAct iteration completed, continuing loop",
+			zap.Int("iteration", iteration),
+			zap.Bool("action_executed", actionExecuted))
+	}
+
+	// Max iterations reached
+	writer.WriteError("Maximum iterations reached without final answer")
+	writer.WriteDone()
+	return nil
+}
+
+// KnownTools lists all available tools that the agent can call
+var KnownTools = []string{
+	"GetProcessTree",
+	"GetNetworkConnections",
+	"GetOpenFiles",
+	"GetRunningProcesses",
+	"GetUserSessions",
+	"QueryHistoricalLogs",
+}
+
+// normalizeToolName attempts to match a tool name to a known tool
+// It handles partial matches, case variations, and common truncation patterns
+func normalizeToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	// Direct match
+	for _, tool := range KnownTools {
+		if tool == name {
+			return tool
+		}
+	}
+
+	// Case-insensitive match
+	lowerName := strings.ToLower(name)
+	for _, tool := range KnownTools {
+		if strings.ToLower(tool) == lowerName {
+			return tool
+		}
+	}
+
+	// Prefix match (handles truncated names like "Get" -> "GetProcessTree")
+	for _, tool := range KnownTools {
+		if strings.HasPrefix(strings.ToLower(tool), lowerName) {
+			return tool
+		}
+	}
+
+	// Substring match (handles cases like "ProcessTree" matching "GetProcessTree")
+	for _, tool := range KnownTools {
+		if strings.Contains(strings.ToLower(tool), lowerName) {
+			return tool
+		}
+	}
+
+	// Try to infer from common prefixes
+	switch {
+	case strings.HasPrefix(lowerName, "getprocess"):
+		return "GetProcessTree"
+	case strings.HasPrefix(lowerName, "getnetwork"):
+		return "GetNetworkConnections"
+	case strings.HasPrefix(lowerName, "getopen"):
+		return "GetOpenFiles"
+	case strings.HasPrefix(lowerName, "getrunning"):
+		return "GetRunningProcesses"
+	case strings.HasPrefix(lowerName, "getuser"):
+		return "GetUserSessions"
+	case strings.HasPrefix(lowerName, "query"):
+		return "QueryHistoricalLogs"
+	}
+
+	// No match found - return original
+	return name
+}
+
+// tryParseStep attempts to parse a complete step from the buffer
+func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
+	step := &AgentStep{}
+	lines := strings.Split(buffer, "\n")
+	foundAction := false
+	foundThought := false
+
+	// First, check if buffer contains a complete JSON object (no Thought:/Action: prefixes)
+	// This handles LLM output like: {"query": "...", "time_range": {...}}
+	trimmed := strings.TrimSpace(buffer)
+	if strings.HasPrefix(trimmed, "{") {
+		// Check if it's a complete JSON object (ends with })
+		if idx := strings.LastIndex(trimmed, "}"); idx >= 0 {
+			jsonStr := trimmed[:idx+1]
+			if json.Unmarshal([]byte(jsonStr), &step.ActionInput) == nil {
+				// JSON parsed successfully - infer tool name from keys
+				if _, hasQuery := step.ActionInput["query"]; hasQuery {
+					step.Action = "QueryHistoricalLogs"
+					return step, true
+				}
+				if _, hasPid := step.ActionInput["pid"]; hasPid {
+					step.Action = "GetProcessTree"
+					return step, true
+				}
+				if _, hasHostID := step.ActionInput["host_id"]; hasHostID {
+					step.Action = "GetRunningProcesses"
+					return step, true
+				}
+				if _, hasProcessName := step.ActionInput["process_name"]; hasProcessName {
+					step.Action = "GetOpenFiles"
+					return step, true
+				}
+				// Unknown JSON structure, treat as action input
+				return step, true
 			}
 		}
 	}
 
-	// Parse final answer
-	_, finalAnswer := a.parseFinalAnswer(buffer)
-	writer.WriteContent(finalAnswer)
-	writer.WriteDone()
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
 
-	return nil
+		if strings.HasPrefix(line, "Thought:") {
+			step.Thought = strings.TrimPrefix(line, "Thought:")
+			foundThought = true
+		} else if strings.HasPrefix(line, "Action:") {
+			step.Action = normalizeToolName(strings.TrimPrefix(line, "Action:"))
+			foundAction = true
+		} else if strings.HasPrefix(line, "Action Input:") {
+			inputStr := strings.TrimPrefix(line, "Action Input:")
+			var input map[string]interface{}
+			if err := json.Unmarshal([]byte(inputStr), &input); err == nil {
+				step.ActionInput = input
+			}
+			// If we already have Action set, we have a complete step
+			if foundAction && step.Action != "" {
+				return step, true
+			}
+		} else if strings.HasPrefix(line, "Observation:") {
+			step.Observation = strings.TrimPrefix(line, "Observation:")
+			return step, true
+		} else if strings.HasPrefix(line, "Final Answer:") {
+			return step, true
+		}
+	}
+
+	if foundAction && step.Action != "" {
+		return step, true
+	}
+
+	// If we have a thought and the buffer ends with "}", it might be JSON Action Input
+	if foundThought && foundAction && step.Action != "" {
+		// Try to parse remaining as JSON
+		remaining := strings.TrimSpace(buffer)
+		if idx := strings.LastIndex(remaining, "}"); idx >= 0 {
+			jsonStr := remaining[strings.Index(remaining, "{"):idx+1]
+			if jsonStr != "" {
+				var input map[string]interface{}
+				if err := json.Unmarshal([]byte(jsonStr), &input); err == nil {
+					step.ActionInput = input
+					return step, true
+				}
+			}
+		}
+	}
+
+	return nil, false
 }
 
 // parseReActOutput parses the ReAct format output from LLM
@@ -185,7 +414,7 @@ func (a *ReActAgent) parseReActOutput(content string) ([]AgentStep, string) {
 			currentStep = &AgentStep{}
 			currentStep.Thought = strings.TrimPrefix(line, "Thought:")
 		} else if strings.HasPrefix(line, "Action:") {
-			currentStep.Action = strings.TrimPrefix(line, "Action:")
+			currentStep.Action = normalizeToolName(strings.TrimPrefix(line, "Action:"))
 		} else if strings.HasPrefix(line, "Action Input:") {
 			inputStr := strings.TrimPrefix(line, "Action Input:")
 			var input map[string]interface{}
@@ -222,51 +451,49 @@ func (a *ReActAgent) parseReActOutput(content string) ([]AgentStep, string) {
 	return steps, finalAnswer
 }
 
-// tryParseStep attempts to parse a complete step from the buffer
-func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
-	step := &AgentStep{}
-	lines := strings.Split(buffer, "\n")
-	foundAction := false
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		if strings.HasPrefix(line, "Thought:") {
-			step.Thought = strings.TrimPrefix(line, "Thought:")
-		} else if strings.HasPrefix(line, "Action:") {
-			step.Action = strings.TrimPrefix(line, "Action:")
-			foundAction = true
-		} else if strings.HasPrefix(line, "Action Input:") {
-			inputStr := strings.TrimPrefix(line, "Action Input:")
-			var input map[string]interface{}
-			if err := json.Unmarshal([]byte(inputStr), &input); err == nil {
-				step.ActionInput = input
-			}
-		} else if strings.HasPrefix(line, "Observation:") {
-			step.Observation = strings.TrimPrefix(line, "Observation:")
-			return step, true
-		} else if strings.HasPrefix(line, "Final Answer:") {
-			return step, true
-		}
-	}
-
-	if foundAction && step.Action != "" {
-		return step, true
-	}
-
-	return nil, false
-}
-
-// parseFinalAnswer extracts the final answer from content
+// parseFinalAnswer extracts the final answer from content and parses attack_graph if present
 func (a *ReActAgent) parseFinalAnswer(content string) (*AgentStep, string) {
 	lines := strings.Split(content, "\n")
+	var finalAnswer string
+	var jsonPart string
+	inJsonBlock := false
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "Final Answer:") {
-			return nil, strings.TrimPrefix(line, "Final Answer:")
+			finalAnswer = strings.TrimPrefix(line, "Final Answer:")
+			// Check if Final Answer is immediately followed by JSON
+			if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(content, "Final Answer:")), "{") {
+				jsonPart = strings.TrimSpace(strings.TrimPrefix(content, "Final Answer:"))
+				inJsonBlock = true
+			}
+		} else if inJsonBlock {
+			jsonPart += "\n" + line
 		}
 	}
-	return nil, content
+
+	// If we have JSON, try to parse and pretty-print it
+	if jsonPart != "" {
+		// Try to find the JSON boundaries
+		jsonStr := strings.TrimSpace(jsonPart)
+		startIdx := strings.Index(jsonStr, "{")
+		endIdx := strings.LastIndex(jsonStr, "}")
+		if startIdx >= 0 && endIdx >= startIdx {
+			jsonStr = jsonStr[startIdx : endIdx+1]
+			// Validate JSON by trying to parse it
+			var jsonData map[string]interface{}
+			if err := json.Unmarshal([]byte(jsonStr), &jsonData); err == nil {
+				// Pretty print the JSON
+				prettyJSON, _ := json.MarshalIndent(jsonData, "", "  ")
+				return nil, string(prettyJSON)
+			}
+		}
+	}
+
+	if finalAnswer == "" {
+		finalAnswer = content
+	}
+	return nil, finalAnswer
 }
 
 // extractToolCalls extracts tool calls from steps

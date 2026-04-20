@@ -330,14 +330,25 @@ function disabledDate(time: Date) {
 }
 
 function showAIDenoiseDialog() {
-  const now = new Date()
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000)
-  aiDenoiseTimeRange.value = [
-    oneHourAgo.toISOString().slice(0, 19).replace('T', ' '),
-    now.toISOString().slice(0, 19).replace('T', ' ')
-  ]
-  aiDenoiseAutoDispose.value = false
-  aiDenoiseDialogVisible.value = true
+  // Check if user wants to use selected alerts or time range
+  if (selectedAlerts.value.length > 0) {
+    // User has selected alerts, navigate to AI Analysis page with selected alerts
+    const alertIds = selectedAlerts.value.map(a => a.alert_id)
+    router.push({
+      path: '/detection/ai-analysis',
+      query: { alert_ids: alertIds.join(',') }
+    })
+  } else {
+    // No selection, show dialog to select time range
+    const now = new Date()
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000)
+    aiDenoiseTimeRange.value = [
+      oneHourAgo.toISOString().slice(0, 19).replace('T', ' '),
+      now.toISOString().slice(0, 19).replace('T', ' ')
+    ]
+    aiDenoiseAutoDispose.value = false
+    aiDenoiseDialogVisible.value = true
+  }
 }
 
 async function startAIDenoise() {
@@ -349,7 +360,7 @@ async function startAIDenoise() {
   const [startTime, endTime] = aiDenoiseTimeRange.value
   const start = new Date(startTime)
   const end = new Date(endTime)
-  
+
   if (end.getTime() - start.getTime() > 24 * 60 * 60 * 1000) {
     ElMessage.warning('时间范围不能超过24小时')
     return
@@ -357,16 +368,15 @@ async function startAIDenoise() {
 
   aiDenoiseLoading.value = true
   try {
-    const result = await api.startLLMAggregation(
-      new Date(startTime).toISOString(),
-      new Date(endTime).toISOString(),
-      [],
-      aiDenoiseAutoDispose.value
-    )
+    // Navigate to AI Analysis page with time range
     aiDenoiseDialogVisible.value = false
-    aiDenoiseResult.value = result
-    aiDenoiseResultVisible.value = true
-    loadAlerts()
+    router.push({
+      path: '/detection/ai-analysis',
+      query: {
+        time_range_start: startTime,
+        time_range_end: endTime
+      }
+    })
   } catch (error: any) {
     ElMessage.error(error.message || 'AI降噪启动失败')
   } finally {

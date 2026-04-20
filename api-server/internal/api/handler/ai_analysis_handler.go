@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
+	pb "api-server/pkg/api/v1"
 	"api-server/internal/grpc"
 	"api-server/internal/llm"
 	"api-server/internal/repository"
@@ -384,82 +386,57 @@ func NewToolExecutor(serverClient *grpc.ServerClient) *ToolExecutor {
 func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string]interface{}) (interface{}, error) {
 	logger.Info("tool execution requested", zap.String("tool", tool), zap.Any("args", args))
 
-	// For now, return mock data since we need to implement gRPC forwarding
-	// TODO: Implement actual gRPC forwarding to agents via Server hub
-	return e.getMockToolResult(tool, args)
-}
-
-// getMockToolResult returns mock data for testing
-func (e *ToolExecutor) getMockToolResult(tool string, args map[string]interface{}) (interface{}, error) {
-	switch tool {
-	case "GetRunningProcesses":
-		return map[string]interface{}{
-			"status": "success",
-			"tool":  tool,
-			"processes": []map[string]interface{}{
-				{"pid": 1, "name": "systemd", "user": "root", "cmdline": "/sbin/init"},
-				{"pid": 123, "name": "sshd", "user": "root", "cmdline": "/usr/sbin/sshd"},
-				{"pid": 456, "name": "nginx", "user": "www-data", "cmdline": "/usr/sbin/nginx"},
-			},
-		}, nil
-	case "GetProcessTree":
-		pid := 1
-		if p, ok := args["pid"].(float64); ok {
-			pid = int(p)
+	// Try to forward to agent via gRPC
+	if e.serverClient != nil {
+		// Get host_id from args - required for routing to correct agent
+		hostID, ok := args["host_id"].(string)
+		if !ok || hostID == "" {
+			// No host_id means we can't route to a specific agent
+			// Return error instead of mock data so AI knows tool failed
+			return nil, fmt.Errorf("tool %s requires host_id parameter for routing to target agent", tool)
 		}
-		return map[string]interface{}{
-			"status": "success",
-			"tool":   tool,
-			"pid":    pid,
-			"tree": []map[string]interface{}{
-				{"pid": pid, "name": "systemd", "ppid": 0, "children": []map[string]interface{}{
-					{"pid": 123, "name": "sshd", "ppid": 1},
-					{"pid": 456, "name": "nginx", "ppid": 1},
-				}},
-			},
-		}, nil
-	case "GetNetworkConnections":
-		return map[string]interface{}{
-			"status": "success",
-			"tool":   tool,
-			"connections": []map[string]interface{}{
-				{"protocol": "tcp", "local_addr": "0.0.0.0:22", "remote_addr": "192.168.1.100:54321", "state": "ESTABLISHED"},
-				{"protocol": "tcp", "local_addr": "0.0.0.0:80", "remote_addr": "0.0.0.0:0", "state": "LISTEN"},
-			},
-		}, nil
-	case "GetOpenFiles":
-		return map[string]interface{}{
-			"status": "success",
-			"tool":   tool,
-			"files": []string{
-				"/etc/passwd",
-				"/etc/shadow",
-				"/var/log/syslog",
-			},
-		}, nil
-	case "GetUserSessions":
-		return map[string]interface{}{
-			"status": "success",
-			"tool":   tool,
-			"sessions": []map[string]interface{}{
-				{"user": "root", "tty": "pts/0", "from": "192.168.1.100", "login_time": "2026-04-17T10:00:00Z"},
-				{"user": "admin", "tty": "pts/1", "from": "192.168.1.101", "login_time": "2026-04-17T09:30:00Z"},
-			},
-		}, nil
-	case "QueryHistoricalLogs":
-		return map[string]interface{}{
-			"status": "success",
-			"tool":   tool,
-			"logs": []string{
-				"2026-04-17T10:00:00Z sshd[123]: Accepted publickey for root from 192.168.1.100",
-				"2026-04-17T09:45:00Z sudo: admin : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/bin systemctl status nginx",
-			},
-		}, nil
-	default:
-		return map[string]interface{}{
-			"status":  "error",
-			"tool":    tool,
-			"message": fmt.Sprintf("unknown tool: %s", tool),
-		}, nil
+
+		// Format tool call as command for the agent
+		argsJSON, _ := json.Marshal(args)
+		toolCmd := fmt.Sprintf("#TOOL:%s#%s", tool, string(argsJSON))
+
+		logger.Info("forwarding tool call to agent", zap.String("host_id", hostID), zap.String("tool", tool), zap.String("command", toolCmd))
+
+		// Forward command to agent via gRPC
+		taskID := fmt.Sprintf("tool_%d", time.Now().UnixNano())
+		resp, err := e.serverClient.ForwardCommand(ctx, &pb.ForwardCommandRequest{
+			TaskId:         taskID,
+			HostId:         hostID,
+			ScriptContent:  toolCmd,
+			TimeoutSeconds: 30,
+			TaskType:       "CHECK", // Agents handle #TOOL: commands in CHECK mode
+		})
+
+		if err != nil {
+			logger.Warn("gRPC forward failed, tool execution unavailable", zap.Error(err))
+			return nil, fmt.Errorf("failed to forward tool call to agent: %w", err)
+		}
+
+		if !resp.Success {
+			return nil, fmt.Errorf("agent rejected tool call: %s", resp.Message)
+		}
+
+		// Parse agent response
+		// Agent should return JSON with {success: true, data: {...}} or {success: false, error: "..."}
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(resp.Message), &result); err != nil {
+			return nil, fmt.Errorf("failed to parse agent response: %w", err)
+		}
+
+		if success, ok := result["success"].(bool); ok && !success {
+			return nil, fmt.Errorf("tool execution failed: %v", result["error"])
+		}
+
+		return result, nil
 	}
+
+	// No gRPC client available - return error instead of mock data
+	// This ensures the AI knows the tool failed and can reason accordingly
+	logger.Warn("ToolExecutor has no serverClient - returning error instead of mock data")
+	return nil, fmt.Errorf("tool execution unavailable: no connection to agent server (gRPC client not initialized)")
 }

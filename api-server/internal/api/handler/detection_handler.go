@@ -307,6 +307,52 @@ func (h *DetectionHandler) SyncBlockPolicies(c *gin.Context) {
 	})
 }
 
+func (h *DetectionHandler) DeleteBlockPolicy(c *gin.Context) {
+	mitreID := c.Param("mitre_id")
+	if mitreID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "mitre_id is required"})
+		return
+	}
+
+	// Delete all alerts associated with this MITRE ID
+	alertCount, err := h.alertRepo.DeleteByMitreID(mitreID)
+	if err != nil {
+		logger.Error("failed to delete alerts for mitre_id", zap.String("mitre_id", mitreID), zap.Error(err))
+		// Continue anyway - we'll still try to delete the rule and policy
+	} else {
+		logger.Info("deleted alerts for block policy", zap.String("mitre_id", mitreID), zap.Int("count", alertCount))
+	}
+
+	// Delete all rules associated with this MITRE ID
+	deletedRules, err := h.sigmaRuleRepo.DeleteByMitreID(mitreID)
+	if err != nil {
+		logger.Error("failed to delete rules for mitre_id", zap.String("mitre_id", mitreID), zap.Error(err))
+		// Continue anyway - we'll still try to delete the policy
+	} else {
+		logger.Info("deleted rules for block policy", zap.String("mitre_id", mitreID), zap.Int64("count", deletedRules))
+	}
+
+	// Delete the block policy
+	deleted, err := h.blockPolicyRepo.DeleteByMitreID(mitreID)
+	if err != nil {
+		logger.Error("failed to delete block policy", zap.String("mitre_id", mitreID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "block policy not found"})
+		return
+	}
+
+	logger.Info("block policy deleted", zap.String("mitre_id", mitreID))
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "block policy and associated rules/alerts deleted successfully",
+	})
+}
+
 func (h *DetectionHandler) NormalizeMitreIDs(c *gin.Context) {
 	ctx := c.Request.Context()
 

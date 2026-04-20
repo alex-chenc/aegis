@@ -60,6 +60,13 @@
         <el-table-column prop="updated_at" label="更新时间" width="160">
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
+        <el-table-column label="操作" width="100" align="center">
+          <template #default="{ row }">
+            <el-button size="small" type="danger" @click="handleDelete(row.mitre_id)">
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div class="pagination-container">
@@ -80,7 +87,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as api from '@/api/detection'
 
 const router = useRouter()
@@ -167,6 +174,27 @@ async function handleUpdateAction(mitreId: string, action: string) {
     ElMessage.success('阻断动作已更新')
   } catch (e: any) {
     ElMessage.error(e.message || '更新失败')
+  }
+}
+
+async function handleDelete(mitreId: string) {
+  try {
+    await ElMessageBox.confirm(
+      '删除该阻断策略将同时删除关联的规则和告警，是否继续？',
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    await api.deleteBlockPolicy(mitreId)
+    ElMessage.success('删除成功')
+    loadPolicies()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
+    }
   }
 }
 

@@ -92,7 +92,7 @@
               >
                 <div class="message-avatar">
                   <el-icon v-if="msg.role === 'user'" :size="20"><User /></el-icon>
-                  <el-icon v-else :size="20"><Robot /></el-icon>
+                  <el-icon v-else :size="20"><ChatDotRound /></el-icon>
                 </div>
                 <div class="message-content">
                   <!-- 用户消息 -->
@@ -102,10 +102,14 @@
 
                   <!-- AI 消息 -->
                   <div v-else class="ai-content">
+                    <!-- 错误信息 -->
+                    <div v-if="msg.isError" class="error-block">
+                      <pre>{{ msg.content }}</pre>
+                    </div>
                     <!-- 思考过程 -->
-                    <div v-if="msg.thinking" class="thinking-block">
+                    <div v-else-if="msg.thinking" class="thinking-block">
                       <div class="thinking-header">
-                        <el-icon><Thinking /></el-icon>
+                        <el-icon><Aim /></el-icon>
                         <span>AI 思考中</span>
                       </div>
                       <pre class="thinking-content">{{ msg.thinking }}</pre>
@@ -135,7 +139,7 @@
               <!-- 加载中 -->
               <div v-if="isLoading" class="message assistant loading">
                 <div class="message-avatar">
-                  <el-icon :size="20"><Robot /></el-icon>
+                  <el-icon :size="20"><ChatDotRound /></el-icon>
                 </div>
                 <div class="message-content">
                   <div class="loading-indicator">
@@ -169,10 +173,14 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Robot, Tools, Loading } from '@element-plus/icons-vue'
+import { User, ChatDotRound, Tools, Loading, Aim } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
-import { createAISession, sendMessage as sendMessageApi, createAISessionStream, type SSEEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, type SSEEvent } from '@/api/aiAnalysis'
+
+const route = useRoute()
+const router = useRouter()
 
 // Types
 interface Alert {
@@ -195,6 +203,7 @@ interface Message {
     args?: any
     result?: any
   }>
+  isError?: boolean
 }
 
 // State
@@ -254,12 +263,15 @@ async function startAnalysis() {
   }
 
   try {
+    // Convert time range to RFC3339 format for backend
+    const timeRangeFormatted = timeRange.value ? {
+      start: new Date(timeRange.value[0]).toISOString(),
+      end: new Date(timeRange.value[1]).toISOString()
+    } : undefined
+
     const response = await createAISession({
       alert_ids: selectedAlertIds.value,
-      time_range: timeRange.value ? {
-        start: timeRange.value[0],
-        end: timeRange.value[1]
-      } : undefined,
+      time_range: timeRangeFormatted,
       host_filter: hostFilter.value.length > 0 ? hostFilter.value : undefined
     })
 
@@ -267,21 +279,22 @@ async function startAnalysis() {
     messages.value = []
 
     ElMessage.success('AI 分析会话已创建')
+
+    // Automatically send initial analysis request
+    const initialMessage = `请分析这 ${selectedAlertIds.value.length} 个告警，判断是否为真实威胁，并进行攻击链路溯源。`
+    sendInitialMessage(initialMessage)
   } catch (error: any) {
     ElMessage.error(error.message || '创建 AI 分析会话失败')
   }
 }
 
-function sendMessage() {
-  if (!inputMessage.value.trim() || !sessionId.value || isLoading.value) return
-
-  const userMessage = inputMessage.value.trim()
-  inputMessage.value = ''
+function sendInitialMessage(message: string) {
+  if (!sessionId.value || isLoading.value) return
 
   // Add user message
   messages.value.push({
     role: 'user',
-    content: userMessage
+    content: message
   })
 
   scrollToBottom()
@@ -291,16 +304,41 @@ function sendMessage() {
   let currentThinking = ''
   let currentToolCalls: Message['toolCalls'] = []
 
+  // RAF-based smoother update timer
+  let rafId: number | null = null
+  let pendingThinking = ''
+
+  const flushThinking = () => {
+    if (pendingThinking !== currentThinking) {
+      currentThinking = pendingThinking
+      updateAssistantMessage(currentThinking, currentToolCalls)
+    }
+  }
+
+  const scheduleFlush = () => {
+    if (rafId) cancelAnimationFrame(rafId)
+    rafId = requestAnimationFrame(() => {
+      flushThinking()
+      rafId = null
+    })
+  }
+
   // Create SSE connection
-  const eventSource = createAISessionStream(sessionId.value, userMessage, (event: SSEEvent) => {
+  const eventSource = createAISessionStream(sessionId.value, message, (event: SSEEvent) => {
     switch (event.type) {
       case 'thinking':
-        currentThinking = (currentThinking + (event.content || '')).trim()
-        // Update or add thinking message
-        updateAssistantMessage(currentThinking, currentToolCalls)
+        // Accumulate thinking and schedule smooth UI update
+        pendingThinking = (pendingThinking + (event.content || '')).trim()
+        scheduleFlush()
         break
 
       case 'tool_call':
+        // Flush thinking before showing tool call
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        flushThinking()
         currentToolCalls = currentToolCalls || []
         currentToolCalls.push({
           call_id: event.call_id || '',
@@ -331,22 +369,173 @@ function sendMessage() {
         break
 
       case 'content':
-        // Final content received
-        updateAssistantMessage(currentThinking, currentToolCalls, event.content)
+        // Flush any pending thinking first
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        pendingThinking = ''
+        // Content replaces thinking + tool calls, final response
+        messages.value.push({
+          role: 'assistant',
+          content: event.content || '',
+          thinking: '',
+          toolCalls: []
+        })
+        isLoading.value = false
+        scrollToBottom()
         break
 
       case 'done':
-        // Ensure we have a final message
-        if (currentThinking || currentToolCalls?.length > 0) {
-          updateAssistantMessage(currentThinking, currentToolCalls)
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
         }
+        flushThinking()
         isLoading.value = false
         scrollToBottom()
         break
 
       case 'error':
         ElMessage.error(event.content || 'AI 分析出错')
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        // Add error as assistant message for visibility
+        messages.value.push({
+          role: 'assistant',
+          content: `AI 分析失败: ${event.content || '未知错误'}`,
+          isError: true
+        })
         isLoading.value = false
+        scrollToBottom()
+        break
+    }
+  })
+}
+
+function sendMessage() {
+  if (!inputMessage.value.trim() || !sessionId.value || isLoading.value) return
+
+  const userMessage = inputMessage.value.trim()
+  inputMessage.value = ''
+
+  // Add user message
+  messages.value.push({
+    role: 'user',
+    content: userMessage
+  })
+
+  scrollToBottom()
+  isLoading.value = true
+
+  // Track current thinking for SSE events
+  let currentThinking = ''
+  let currentToolCalls: Message['toolCalls'] = []
+
+  // RAF-based smoother update timer
+  let rafId: number | null = null
+  let pendingThinking = ''
+
+  const flushThinking = () => {
+    if (pendingThinking !== currentThinking) {
+      currentThinking = pendingThinking
+      updateAssistantMessage(currentThinking, currentToolCalls)
+    }
+  }
+
+  const scheduleFlush = () => {
+    if (rafId) cancelAnimationFrame(rafId)
+    rafId = requestAnimationFrame(() => {
+      flushThinking()
+      rafId = null
+    })
+  }
+
+  // Create SSE connection
+  const eventSource = createAISessionStream(sessionId.value, userMessage, (event: SSEEvent) => {
+    switch (event.type) {
+      case 'thinking':
+        // Accumulate thinking and schedule smooth UI update
+        pendingThinking = (pendingThinking + (event.content || '')).trim()
+        scheduleFlush()
+        break
+
+      case 'tool_call':
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        flushThinking()
+        currentToolCalls = currentToolCalls || []
+        currentToolCalls.push({
+          call_id: event.call_id || '',
+          tool: event.tool || '',
+          args: event.args
+        })
+        updateAssistantMessage(currentThinking, currentToolCalls)
+        break
+
+      case 'tool_result':
+        if (currentToolCalls) {
+          const lastCall = currentToolCalls[currentToolCalls.length - 1]
+          if (lastCall && lastCall.call_id === event.call_id) {
+            lastCall.result = event.result
+          }
+        }
+        updateAssistantMessage(currentThinking, currentToolCalls)
+        break
+
+      case 'tool_error':
+        if (currentToolCalls) {
+          const lastCall = currentToolCalls[currentToolCalls.length - 1]
+          if (lastCall && lastCall.call_id === event.call_id) {
+            lastCall.result = { error: event.error }
+          }
+        }
+        updateAssistantMessage(currentThinking, currentToolCalls)
+        break
+
+      case 'content':
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        pendingThinking = ''
+        messages.value.push({
+          role: 'assistant',
+          content: event.content || '',
+          thinking: '',
+          toolCalls: []
+        })
+        isLoading.value = false
+        scrollToBottom()
+        break
+
+      case 'done':
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        flushThinking()
+        isLoading.value = false
+        scrollToBottom()
+        break
+
+      case 'error':
+        ElMessage.error(event.content || 'AI 分析出错')
+        if (rafId) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        messages.value.push({
+          role: 'assistant',
+          content: `AI 分析失败: ${event.content || '未知错误'}`,
+          isError: true
+        })
+        isLoading.value = false
+        scrollToBottom()
         break
     }
   })
@@ -354,7 +543,7 @@ function sendMessage() {
 
 function updateAssistantMessage(thinking: string, toolCalls?: Message['toolCalls'], content?: string) {
   const lastMsg = messages.value[messages.value.length - 1]
-  if (lastMsg && lastMsg.role === 'assistant' && !content) {
+  if (lastMsg && lastMsg.role === 'assistant' && !content && !lastMsg.isError) {
     lastMsg.thinking = thinking
     lastMsg.toolCalls = toolCalls
   } else {
@@ -398,7 +587,28 @@ function severityLabel(severity: string) {
 
 // Init
 onMounted(() => {
-  loadAlerts()
+  // Check if we have query parameters from Alerts page
+  const alertIdsParam = route.query.alert_ids as string
+  const timeRangeStart = route.query.time_range_start as string
+  const timeRangeEnd = route.query.time_range_end as string
+
+  if (timeRangeStart && timeRangeEnd) {
+    // Set time range from query params
+    timeRange.value = [timeRangeStart, timeRangeEnd]
+  }
+
+  loadAlerts().then(() => {
+    // If alert_ids are provided, select them
+    if (alertIdsParam) {
+      const ids = alertIdsParam.split(',')
+      selectedAlertIds.value = ids
+
+      // Auto-start analysis with selected alerts
+      nextTick(() => {
+        startAnalysis()
+      })
+    }
+  })
 })
 </script>
 
@@ -512,6 +722,7 @@ onMounted(() => {
   border-radius: 4px;
   padding: 8px 12px;
   margin-bottom: 8px;
+  min-height: 60px;
 }
 
 .thinking-header {
@@ -526,8 +737,27 @@ onMounted(() => {
 .thinking-content {
   margin: 0;
   white-space: pre-wrap;
+  word-break: break-word;
   font-size: 13px;
   color: #606266;
+  max-height: 300px;
+  overflow-y: auto;
+  transition: opacity 0.1s ease;
+}
+
+.error-block {
+  background: #fef0f0;
+  border: 1px solid #fde2e2;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  color: #f56c6c;
+}
+
+.error-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 13px;
 }
 
 .tool-calls {

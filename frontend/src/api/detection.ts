@@ -25,6 +25,10 @@ export function updateBlockPolicy(mitreId: string, data: any): Promise<void> {
   return request.put(`/detection/block-policies/${mitreId}`, data)
 }
 
+export function deleteBlockPolicy(mitreId: string): Promise<void> {
+  return request.delete(`/detection/block-policies/${mitreId}`)
+}
+
 export function getRules(params: any): Promise<{ data: SigmaRule[]; total: number }> {
   return request.get('/detection/rules', { params })
 }

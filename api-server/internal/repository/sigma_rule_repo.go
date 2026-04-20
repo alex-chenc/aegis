@@ -174,6 +174,22 @@ func (r *SigmaRuleRepository) CountPendingByMitreID(mitreID string) (int64, erro
 	return count, err
 }
 
+// FindByMitreID 根据MITRE ID查找规则
+func (r *SigmaRuleRepository) FindByMitreID(mitreID string) (*model.SigmaRule, error) {
+	var rule model.SigmaRule
+	err := r.db.Where("mitre_id = ?", mitreID).First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+// DeleteByMitreID 根据MITRE ID删除规则
+func (r *SigmaRuleRepository) DeleteByMitreID(mitreID string) (int64, error) {
+	result := r.db.Where("mitre_id = ?", mitreID).Delete(&model.SigmaRule{})
+	return result.RowsAffected, result.Error
+}
+
 // FindByFileHash 根据文件hash查找规则（用于去重）
 func (r *SigmaRuleRepository) FindByFileHash(fileHash string) (*model.SigmaRule, error) {
 	var rule model.SigmaRule

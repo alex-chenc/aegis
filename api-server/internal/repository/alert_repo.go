@@ -368,6 +368,12 @@ func (r *AlertRepository) DeleteByRuleID(ruleID string) (int, error) {
 	return int(result.RowsAffected), result.Error
 }
 
+// DeleteByMitreID deletes all alerts associated with a MITRE ID
+func (r *AlertRepository) DeleteByMitreID(mitreID string) (int, error) {
+	result := r.db.Where("mitre_id = ?", mitreID).Delete(&model.Alert{})
+	return int(result.RowsAffected), result.Error
+}
+
 func (r *AlertRepository) NormalizeMitreIDs(ctx context.Context) (int, error) {
 	var alerts []model.Alert
 	if err := r.db.Where("mitre_id IS NOT NULL AND mitre_id != ''").Find(&alerts).Error; err != nil {

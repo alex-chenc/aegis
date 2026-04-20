@@ -190,6 +190,7 @@ func (r *Router) Setup() {
 			detection.POST("/block-policies/sync", r.detectionHandler.SyncBlockPolicies)
 			detection.POST("/block-policies/normalize", r.detectionHandler.NormalizeMitreIDs)
 			detection.PUT("/block-policies/:mitre_id", r.detectionHandler.UpdateBlockPolicy)
+			detection.DELETE("/block-policies/:mitre_id", r.detectionHandler.DeleteBlockPolicy)
 
 			detection.GET("/attack-matrix", r.detectionHandler.GetAttackMatrix)
 

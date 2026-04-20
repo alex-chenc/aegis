@@ -286,7 +286,7 @@
       </div>
 
       <template #footer>
-        <el-button @click="importVisible = false">关闭</el-button>
+        <el-button @click="closeImportDialog">关闭</el-button>
         <el-button type="primary" :loading="importLoading" :disabled="selectedFiles.length === 0" @click="handleImport">
           开始导入 ({{ selectedFiles.length }} 个文件)
         </el-button>
@@ -304,7 +304,7 @@ import { useDetectionStore } from '@/store/detection'
 import type { SigmaRule } from '@/types'
 import { SeverityLabels, RuleStatusLabels } from '@/types'
 import * as api from '@/api/detection'
-import type { UploadRawFile } from 'element-plus'
+import type { UploadRawFile, UploadInstance } from 'element-plus'
 import AIConfigPanel from '@/components/detection/AIConfigPanel.vue'
 
 const route = useRoute()
@@ -347,6 +347,7 @@ const aiGenerateResult = ref<{
 
 const importVisible = ref(false)
 const importLoading = ref(false)
+const uploadRef = ref<UploadInstance | null>(null)
 const selectedFiles = ref<UploadRawFile[]>([])
 const importError = ref('')
 const importResult = ref<{
@@ -566,21 +567,39 @@ function showImportDialog() {
   selectedFiles.value = []
   importResult.value = null
   importError.value = ''
+  // Clear the el-upload component's internal file list to prevent previously selected files from reappearing
+  if (uploadRef.value) {
+    uploadRef.value.clearFiles()
+  }
   importVisible.value = true
 }
 
 function handleFileChange(file: UploadRawFile, fileList: UploadRawFile[]) {
-  selectedFiles.value = fileList
+  // Use spread operator to create a new array for proper reactivity
+  selectedFiles.value = [...fileList]
 }
 
 function handleFileRemove(file: UploadRawFile, fileList: UploadRawFile[]) {
-  selectedFiles.value = fileList
+  // Use spread operator to create a new array for proper reactivity
+  selectedFiles.value = [...fileList]
 }
 
 function handleImportDialogClose() {
   selectedFiles.value = []
   importResult.value = null
   importError.value = ''
+}
+
+function closeImportDialog() {
+  // Clear the el-upload component's internal file list
+  if (uploadRef.value) {
+    uploadRef.value.clearFiles()
+  }
+  // Reset state
+  selectedFiles.value = []
+  importResult.value = null
+  importError.value = ''
+  importVisible.value = false
 }
 
 async function handleImport() {
@@ -621,7 +640,9 @@ async function handleImport() {
       } catch (error: any) {
         totalFailedCount++
         allFailedFiles.push(fileItem.name)
-        ElMessage.warning(`文件 ${fileItem.name} 上传失败: ${error.message}`)
+        // Extract error message from axios error response
+        const errorMsg = error.response?.data?.message || error.message || '上传失败'
+        ElMessage.warning(`文件 ${fileItem.name} 上传失败: ${errorMsg}`)
       }
     }
 
@@ -642,8 +663,10 @@ async function handleImport() {
     }
     loadRules()
   } catch (error: any) {
-    importError.value = error.message || '导入失败'
-    ElMessage.error(error.message || '导入失败')
+    // Extract error message from axios error response
+    const errorMsg = error.response?.data?.message || error.message || '导入失败'
+    importError.value = errorMsg
+    ElMessage.error(errorMsg)
   } finally {
     importLoading.value = false
   }
