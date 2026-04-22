@@ -703,69 +703,140 @@ func (e *Executor) readLogFile(path string, start, end time.Time, filter string)
 ### 3.1 Proto定义
 
 ```protobuf
-// agent.proto
+// agent.proto V5.6
+
+// RegisterRequest 新增 callback_port
+message RegisterRequest {
+    string host_id = 1;
+    AssetInfo asset_info = 2;
+    string auth_token = 3;
+    int32 callback_port = 4;  // V5.6新增: Agent回调端口
+}
 
 service AgentService {
     rpc Register(RegisterRequest) returns (RegisterResponse);
     rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-    rpc ExecuteCommand(stream CommandRequest) returns (stream CommandResponse);
-    rpc ExecuteTool(ToolRequest) returns (ToolResponse);  // V5.6新增
+    rpc ExecuteCommand(stream CommandRequest) returns (stream CommandRequest);
+    rpc ExecuteTool(ToolRequest) returns (ToolResponse);  // V5.6: Server回调调用
+    rpc CollectSoftwareList(SoftwareListRequest) returns (SoftwareListResponse);  // V5.6新增
     rpc ReportEvent(ReportEventRequest) returns (ReportEventResponse);
     rpc UpdateRules(RuleUpdateRequest) returns (RuleUpdateResponse);
+    rpc ExecuteBlockCommand(BlockCommand) returns (BlockResponse);  // V5.6新增
 }
 
-// V5.6新增: 工具调用接口
+// V5.6工具调用消息
 message ToolRequest {
     string call_id = 1;
     string host_id = 2;
     string tool = 3;              // 工具名称: GetProcessTree, GetNetworkConnections, etc.
-    string arguments = 4;          // JSON格式参数
-    int32 timeout_seconds = 5;    // 超时时间，默认30秒
+    string params_json = 4;      // V5.6: JSON格式参数
 }
 
 message ToolResponse {
     string call_id = 1;
     bool success = 2;
-    string result = 3;            // JSON格式结果
+    string result_json = 3;       // V5.6: JSON格式结果
     string error = 4;
-    int64 execution_time_ms = 5;
 }
 ```
 
-### 3.2 Agent端实现
+### 3.2 Agent回调服务器设计 (V5.6新增)
+
+Agent启动时同时运行两个gRPC服务:
+1. **主连接客户端**: 连接到Server的Agent Hub (19090)，用于命令流
+2. **回调服务器**: 在端口19095监听，供Server回调执行工具
 
 ```go
-// agent/internal/grpc_server.go
+// agent/internal/client/client.go
 
-package internal
+const CallbackPort = 19095  // Agent回调服务器端口
 
-import (
-    "context"
-    "encoding/json"
-    "fmt"
+type Client struct {
+    // ... 主连接字段 ...
+    callbackServer *grpc.Server  // 回调gRPC服务器
+    callbackPort   int32
+}
 
-    "agent/internal/tool"
-    pb "agent/pkg/api/v1"
-)
+// Agent启动时注册回调端口
+func (c *Client) register() error {
+    resp, err := c.client.Register(c.ctx, &pb.RegisterRequest{
+        HostId:       c.hostID,
+        AssetInfo:    toProtoAsset(assetInfo),
+        AuthToken:    c.authToken,
+        CallbackPort: CallbackPort,  // V5.6: 告知Server回调端口
+    })
+    // ...
+}
 
-// ExecuteTool 处理工具调用请求
-func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
-    logger.Info("tool request received",
-        zap.String("call_id", req.CallId),
-        zap.String("tool", req.Tool),
-    )
+// 启动回调服务器供Server调用
+func (c *Client) startCallbackServer() error {
+    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", CallbackPort))
+    if err != nil {
+        return fmt.Errorf("failed to listen on callback port %d: %w", CallbackPort, err)
+    }
+
+    c.callbackServer = grpc.NewServer()
+    pb.RegisterAgentServiceServer(c.callbackServer, c)  // Client实现AgentServiceServer接口
+
+    go func() {
+        logger.Info("Agent callback server starting", zap.Int("port", CallbackPort))
+        c.callbackServer.Serve(lis)
+    }()
+
+    return nil
+}
+
+// 清理时停止回调服务器
+func (c *Client) cleanup() {
+    // ... 其他清理 ...
+    c.StopCallbackServer()  // V5.6: 停止回调服务器
+}
+```
+
+### 3.3 ExecuteTool实现
+
+```go
+// Agent通过回调服务器处理工具调用请求
+func (c *Client) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
+    logger.Info("Tool call received", zap.String("call_id", req.CallId), zap.String("tool", req.Tool))
 
     // 解析参数
-    var args map[string]interface{}
-    if req.Arguments != "" {
-        if err := json.Unmarshal([]byte(req.Arguments), &args); err != nil {
-            return &pb.ToolResponse{
-                CallId:  req.CallId,
-                Success: false,
-                Error:   fmt.Sprintf("failed to parse arguments: %v", err),
-            }, nil
-        }
+    var params map[string]interface{}
+    if err := json.Unmarshal([]byte(req.ParamsJson), &params); err != nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   fmt.Sprintf("failed to parse params: %v", err),
+        }, nil
     }
+
+    // 执行工具
+    result, err := c.toolManager.Execute(req.Tool, params)
+    if err != nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   err.Error(),
+        }, nil
+    }
+
+    // 返回结果
+    resultJSON, err := json.Marshal(result)
+    if err != nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   fmt.Sprintf("failed to marshal result: %v", err),
+        }, nil
+    }
+
+    return &pb.ToolResponse{
+        CallId:     req.CallId,
+        Success:    true,
+        ResultJson: string(resultJSON),
+    }, nil
+}
+```
 
     // 执行工具
     result := s.toolExecutor.Execute(req.Tool, args)

@@ -277,35 +277,127 @@ func (s *GRPCServer) SendRuleUpdateToHost(hostID uuid.UUID, update *pb.RuleUpdat
 | `GetUserSessions` | `host_id` | 会话列表 | 获取登录用户会话 |
 | `QueryHistoricalLogs` | `host_id`, `start_time`, `end_time`, `filter` | 日志条目 | 查询历史日志 |
 
-### 4.2 工具执行协议
+### 4.2 工具执行协议 (V5.6 Callback机制)
+
+**问题**: 传统的Agent→Server单向gRPC流无法直接响应Server→Agent的工具调用请求
+
+**解决方案**: Agent在注册时携带回调端口，启动回调gRPC服务器供Server调用
 
 ```protobuf
-// agent_comm.proto
+// agent_comm.proto V5.6新增
 
+// RegisterRequest 新增 callback_port 字段
+message RegisterRequest {
+    string host_id = 1;
+    AssetInfo asset_info = 2;
+    string auth_token = 3;
+    int32 callback_port = 4;  // V5.6新增: Agent回调端口，默认19095
+}
+
+// AgentService 服务定义
+service AgentService {
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    rpc ExecuteCommand(stream CommandRequest) returns (stream CommandRequest);
+    rpc ExecuteTool(ToolRequest) returns (ToolResponse);  // Server通过回调连接调用
+    // ...
+}
+
+// V5.6新增: 工具请求/响应消息
 message ToolRequest {
     string call_id = 1;        // 调用唯一ID
     string host_id = 2;        // 目标主机ID
     string tool = 3;           // 工具名称
-    string arguments = 4;       // JSON格式参数
-    int32 timeout_seconds = 5;  // 超时时间
+    string params_json = 4;   // JSON格式参数 (V5.6改为params_json)
 }
 
 message ToolResponse {
-    string call_id = 1;        // 对应请求的call_id
-    bool success = 2;           // 是否成功
-    string result = 3;          // JSON格式结果
-    string error = 4;           // 错误信息
-    int64 execution_time_ms = 5; // 执行耗时
-}
-
-service AgentService {
-    rpc ExecuteCommand(stream CommandRequest) returns (stream CommandResponse);
-    rpc ExecuteTool(ToolRequest) returns (ToolResponse);  // V5.6新增
-    rpc ReportEvent(ReportEventRequest) returns (ReportEventResponse);
+    string call_id = 1;
+    bool success = 2;
+    string result_json = 3;    // JSON格式结果 (V5.6改为result_json)
+    string error = 4;
 }
 ```
 
-### 4.3 Agent工具执行器
+### 4.3 工具执行流程 (V5.6 Callback模式)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    V5.6 工具执行Callback流程                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. Agent启动时                                                              │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ Agent在注册时携带 callback_port=19095                                │    │
+│     │ 启动回调gRPC服务器在19095端口监听                                    │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ↓                                          │
+│  2. Agent注册                                                                │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ RegisterRequest: {                                                 │    │
+│     │   host_id: "host-123",                                             │    │
+│     │   callback_port: 19095,                                           │    │
+│     │ }                                                                  │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ↓                                          │
+│  3. Server存储回调地址                                                        │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ callbackPorts[hostID] = 19095                                      │    │
+│     │ 创建到 Agent:19095 的gRPC连接                                       │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  4. AI分析工具调用请求                                                        │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ LLM决定: 调用 GetProcessTree(host_id, pid)                          │    │
+│     │ ToolCall: { call_id: "call_xxx", tool: "GetProcessTree",          │    │
+│     │            args: { host_id: "host-123", pid: 12345 } }             │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ↓                                          │
+│  5. API Server → Server ExecuteTool (gRPC)                                  │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ ToolExecuteRequest: {                                             │    │
+│     │   call_id: "call_xxx",                                            │    │
+│     │   host_id: "host-123",        ← 精确指定目标主机                   │    │
+│     │   tool: "GetProcessTree",                                           │    │
+│     │   arguments: "{\"pid\":12345}"                                     │    │
+│     │ }                                                                  │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ↓                                          │
+│  6. Server → Agent CallbackServer (新建立的gRPC连接)                          │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ ToolRequest: {                                                    │    │
+│     │   call_id: "call_xxx",                                            │    │
+│     │   host_id: "host-123",                                            │    │
+│     │   tool: "GetProcessTree",                                         │    │
+│     │   params_json: "{\"pid\":12345}"                                  │    │
+│     │ }                                                                  │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ↓                                          │
+│  7. Agent执行工具并返回结果                                                   │
+│     ┌────────────────────────────────────────────────────────────────────┐    │
+│     │ ToolResponse: {                                                    │    │
+│     │   call_id: "call_xxx",                                            │    │
+│     │   success: true,                                                  │    │
+│     │   result_json: "{进程树JSON...}"                                   │    │
+│     │ }                                                                  │    │
+│     └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.4 服务端口映射 (V5.6)
+
+| 服务 | Agent Hub | API Server | Agent回调 |
+|------|-----------|------------|-----------|
+| Server | 19090 | 19094 | - |
+| Agent | client→19090 | - | 19095 (callback) |
+| API Server | - | 19093 (client) | - |
+
+### 4.5 Agent工具执行器
 
 ```go
 // agent/internal/tool_executor.go

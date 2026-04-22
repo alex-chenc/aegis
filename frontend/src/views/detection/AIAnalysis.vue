@@ -106,13 +106,14 @@
                     <div v-if="msg.isError" class="error-block">
                       <pre>{{ msg.content }}</pre>
                     </div>
-                    <!-- 思考过程 -->
+                    <!-- 思考过程 - 流式显示 -->
                     <div v-else-if="msg.thinking" class="thinking-block">
                       <div class="thinking-header">
                         <el-icon><Aim /></el-icon>
                         <span>AI 思考中</span>
+                        <span class="thinking-cursor" v-if="isLoading"></span>
                       </div>
-                      <pre class="thinking-content">{{ msg.thinking }}</pre>
+                      <div class="thinking-content" ref="thinkingContentRef">{{ msg.thinking }}</div>
                     </div>
 
                     <!-- 工具调用 -->
@@ -121,23 +122,29 @@
                         <div class="tool-call-header">
                           <el-icon><Tools /></el-icon>
                           <span>调用工具: {{ call.tool }}</span>
+                          <el-icon class="is-loading" v-if="!call.result && !call.error"><Loading /></el-icon>
+                          <el-icon color="#67c23a" v-else-if="call.result"><Check /></el-icon>
+                          <el-icon color="#f56c6c" v-else-if="call.error"><CircleClose /></el-icon>
                         </div>
                         <div class="tool-call-result" v-if="call.result">
                           <pre>{{ typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2) }}</pre>
+                        </div>
+                        <div class="tool-call-error" v-if="call.error">
+                          <pre>{{ call.error }}</pre>
                         </div>
                       </div>
                     </div>
 
                     <!-- 最终回复 -->
-                    <div v-if="msg.content" class="final-content">
+                    <div v-if="msg.content && !msg.thinking" class="final-content">
                       <pre>{{ msg.content }}</pre>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- 加载中 -->
-              <div v-if="isLoading" class="message assistant loading">
+              <!-- 加载中指示器 -->
+              <div v-if="isLoading && (!messages.length || !messages[messages.length - 1]?.thinking)" class="message assistant loading">
                 <div class="message-avatar">
                   <el-icon :size="20"><ChatDotRound /></el-icon>
                 </div>
@@ -175,7 +182,7 @@
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, ChatDotRound, Tools, Loading, Aim } from '@element-plus/icons-vue'
+import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { createAISession, createAISessionStream, type SSEEvent } from '@/api/aiAnalysis'
 
@@ -288,30 +295,19 @@ async function startAnalysis() {
   }
 }
 
-function sendInitialMessage(message: string) {
-  if (!sessionId.value || isLoading.value) return
-
-  // Add user message
-  messages.value.push({
-    role: 'user',
-    content: message
-  })
-
-  scrollToBottom()
-  isLoading.value = true
-
-  // Track current thinking for SSE events
+function createSSEHandler(message: string) {
   let currentThinking = ''
-  let currentToolCalls: Message['toolCalls'] = []
-
-  // RAF-based smoother update timer
   let rafId: number | null = null
   let pendingThinking = ''
+  // Track if thinking was already flushed as its own bubble (to prevent duplicates)
+  let thinkingFlushedAsBubble = false
+  // Map to track tool call indices for quick lookup (avoids race condition)
+  const toolCallIndexMap: Record<string, number> = {}
 
   const flushThinking = () => {
     if (pendingThinking !== currentThinking) {
       currentThinking = pendingThinking
-      updateAssistantMessage(currentThinking, currentToolCalls)
+      updateAssistantMessage(currentThinking, undefined)
     }
   }
 
@@ -323,59 +319,81 @@ function sendInitialMessage(message: string) {
     })
   }
 
-  // Create SSE connection
-  const eventSource = createAISessionStream(sessionId.value, message, (event: SSEEvent) => {
+  const cleanup = () => {
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+  }
+
+  const eventSource = createAISessionStream(sessionId.value!, message, (event: SSEEvent) => {
     switch (event.type) {
       case 'thinking':
-        // Accumulate thinking and schedule smooth UI update
         pendingThinking = (pendingThinking + (event.content || '')).trim()
         scheduleFlush()
         break
 
       case 'tool_call':
-        // Flush thinking before showing tool call
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
+        cleanup()
         flushThinking()
-        currentToolCalls = currentToolCalls || []
-        currentToolCalls.push({
-          call_id: event.call_id || '',
-          tool: event.tool || '',
-          args: event.args
+        // Push thinking to its own bubble first, but only if not already done
+        if (currentThinking && !thinkingFlushedAsBubble) {
+          messages.value.push({
+            role: 'assistant',
+            content: '',
+            thinking: currentThinking,
+            toolCalls: []
+          })
+          thinkingFlushedAsBubble = true
+        }
+        // Push a new bubble for the tool call
+        messages.value.push({
+          role: 'assistant',
+          content: '',
+          thinking: '',
+          toolCalls: [{
+            call_id: event.call_id || '',
+            tool: event.tool || '',
+            args: event.args
+          }]
         })
-        updateAssistantMessage(currentThinking, currentToolCalls)
+        // Track the index of this tool call bubble for fast lookup
+        if (event.call_id) {
+          toolCallIndexMap[event.call_id] = messages.value.length - 1
+        }
+        currentThinking = ''
+        pendingThinking = ''
         break
 
       case 'tool_result':
-        if (currentToolCalls) {
-          const lastCall = currentToolCalls[currentToolCalls.length - 1]
-          if (lastCall && lastCall.call_id === event.call_id) {
-            lastCall.result = event.result
+        // Find the tool call bubble using the map (fast lookup)
+        if (event.call_id && event.result !== undefined) {
+          const idx = toolCallIndexMap[event.call_id]
+          if (idx !== undefined && messages.value[idx]) {
+            const msg = messages.value[idx]
+            if (msg.toolCalls && msg.toolCalls.length > 0) {
+              msg.toolCalls[0].result = event.result
+            }
           }
         }
-        updateAssistantMessage(currentThinking, currentToolCalls)
         break
 
       case 'tool_error':
-        if (currentToolCalls) {
-          const lastCall = currentToolCalls[currentToolCalls.length - 1]
-          if (lastCall && lastCall.call_id === event.call_id) {
-            lastCall.result = { error: event.error }
+        // Find the tool call bubble using the map (fast lookup)
+        if (event.call_id && event.error) {
+          const idx = toolCallIndexMap[event.call_id]
+          if (idx !== undefined && messages.value[idx]) {
+            const msg = messages.value[idx]
+            if (msg.toolCalls && msg.toolCalls.length > 0) {
+              msg.toolCalls[0].error = event.error
+            }
           }
         }
-        updateAssistantMessage(currentThinking, currentToolCalls)
         break
 
       case 'content':
-        // Flush any pending thinking first
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
+        cleanup()
         pendingThinking = ''
-        // Content replaces thinking + tool calls, final response
         messages.value.push({
           role: 'assistant',
           content: event.content || '',
@@ -387,22 +405,18 @@ function sendInitialMessage(message: string) {
         break
 
       case 'done':
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
+        cleanup()
+        // Only flush thinking if it hasn't been flushed as its own bubble yet
+        if (!thinkingFlushedAsBubble) {
+          flushThinking()
         }
-        flushThinking()
         isLoading.value = false
         scrollToBottom()
         break
 
       case 'error':
         ElMessage.error(event.content || 'AI 分析出错')
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
-        // Add error as assistant message for visibility
+        cleanup()
         messages.value.push({
           role: 'assistant',
           content: `AI 分析失败: ${event.content || '未知错误'}`,
@@ -413,6 +427,21 @@ function sendInitialMessage(message: string) {
         break
     }
   })
+
+  return eventSource
+}
+
+function sendInitialMessage(message: string) {
+  if (!sessionId.value || isLoading.value) return
+
+  messages.value.push({
+    role: 'user',
+    content: message
+  })
+
+  scrollToBottom()
+  isLoading.value = true
+  createSSEHandler(message)
 }
 
 function sendMessage() {
@@ -421,7 +450,6 @@ function sendMessage() {
   const userMessage = inputMessage.value.trim()
   inputMessage.value = ''
 
-  // Add user message
   messages.value.push({
     role: 'user',
     content: userMessage
@@ -429,121 +457,14 @@ function sendMessage() {
 
   scrollToBottom()
   isLoading.value = true
-
-  // Track current thinking for SSE events
-  let currentThinking = ''
-  let currentToolCalls: Message['toolCalls'] = []
-
-  // RAF-based smoother update timer
-  let rafId: number | null = null
-  let pendingThinking = ''
-
-  const flushThinking = () => {
-    if (pendingThinking !== currentThinking) {
-      currentThinking = pendingThinking
-      updateAssistantMessage(currentThinking, currentToolCalls)
-    }
-  }
-
-  const scheduleFlush = () => {
-    if (rafId) cancelAnimationFrame(rafId)
-    rafId = requestAnimationFrame(() => {
-      flushThinking()
-      rafId = null
-    })
-  }
-
-  // Create SSE connection
-  const eventSource = createAISessionStream(sessionId.value, userMessage, (event: SSEEvent) => {
-    switch (event.type) {
-      case 'thinking':
-        // Accumulate thinking and schedule smooth UI update
-        pendingThinking = (pendingThinking + (event.content || '')).trim()
-        scheduleFlush()
-        break
-
-      case 'tool_call':
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
-        flushThinking()
-        currentToolCalls = currentToolCalls || []
-        currentToolCalls.push({
-          call_id: event.call_id || '',
-          tool: event.tool || '',
-          args: event.args
-        })
-        updateAssistantMessage(currentThinking, currentToolCalls)
-        break
-
-      case 'tool_result':
-        if (currentToolCalls) {
-          const lastCall = currentToolCalls[currentToolCalls.length - 1]
-          if (lastCall && lastCall.call_id === event.call_id) {
-            lastCall.result = event.result
-          }
-        }
-        updateAssistantMessage(currentThinking, currentToolCalls)
-        break
-
-      case 'tool_error':
-        if (currentToolCalls) {
-          const lastCall = currentToolCalls[currentToolCalls.length - 1]
-          if (lastCall && lastCall.call_id === event.call_id) {
-            lastCall.result = { error: event.error }
-          }
-        }
-        updateAssistantMessage(currentThinking, currentToolCalls)
-        break
-
-      case 'content':
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
-        pendingThinking = ''
-        messages.value.push({
-          role: 'assistant',
-          content: event.content || '',
-          thinking: '',
-          toolCalls: []
-        })
-        isLoading.value = false
-        scrollToBottom()
-        break
-
-      case 'done':
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
-        flushThinking()
-        isLoading.value = false
-        scrollToBottom()
-        break
-
-      case 'error':
-        ElMessage.error(event.content || 'AI 分析出错')
-        if (rafId) {
-          cancelAnimationFrame(rafId)
-          rafId = null
-        }
-        messages.value.push({
-          role: 'assistant',
-          content: `AI 分析失败: ${event.content || '未知错误'}`,
-          isError: true
-        })
-        isLoading.value = false
-        scrollToBottom()
-        break
-    }
-  })
+  createSSEHandler(userMessage)
 }
 
 function updateAssistantMessage(thinking: string, toolCalls?: Message['toolCalls'], content?: string) {
   const lastMsg = messages.value[messages.value.length - 1]
-  if (lastMsg && lastMsg.role === 'assistant' && !content && !lastMsg.isError) {
+  // Only update the last message if it's empty (no content and no toolCalls) and no error
+  // Otherwise push a new message to create a new bubble
+  if (lastMsg && lastMsg.role === 'assistant' && !content && !lastMsg.isError && !lastMsg.content && (!lastMsg.toolCalls || lastMsg.toolCalls.length === 0)) {
     lastMsg.thinking = thinking
     lastMsg.toolCalls = toolCalls
   } else {
@@ -710,6 +631,9 @@ onMounted(() => {
 .message.assistant .message-content {
   background: white;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  min-height: 40px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .user-content {
@@ -722,16 +646,33 @@ onMounted(() => {
   border-radius: 4px;
   padding: 8px 12px;
   margin-bottom: 8px;
-  min-height: 60px;
+  min-height: 40px;
+  box-sizing: border-box;
 }
 
 .thinking-header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: #409eff;
   font-size: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.thinking-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: #409eff;
+  margin-left: 4px;
+  animation: blink 1s infinite;
+  vertical-align: middle;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .thinking-content {
@@ -739,10 +680,11 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
-  color: #606266;
-  max-height: 300px;
-  overflow-y: auto;
-  transition: opacity 0.1s ease;
+  color: #303133;
+  line-height: 1.6;
+  max-height: none;
+  overflow-y: visible;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 .error-block {
@@ -789,6 +731,22 @@ onMounted(() => {
 }
 
 .tool-call-result pre {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-call-error {
+  background: #fef0f0;
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 4px;
+  color: #f56c6c;
+}
+
+.tool-call-error pre {
   margin: 0;
   font-size: 12px;
   white-space: pre-wrap;

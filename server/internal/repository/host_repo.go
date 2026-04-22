@@ -24,7 +24,7 @@ func (r *HostRepository) Upsert(host *model.Host) error {
 	result := r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "ip_address"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"hostname", "os_type", "agent_version", "last_heartbeat_at", "updated_at",
+			"hostname", "os_version", "agent_version", "last_heartbeat_at", "updated_at",
 		}),
 	}).Create(host)
 

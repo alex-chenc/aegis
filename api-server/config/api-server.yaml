@@ -7,7 +7,7 @@ server:
 
 # gRPC Client Configuration (connect to Server service)
 grpc:
-  server_address: "server:19090"
+  server_address: "server:19094"
 
 # Database Configuration
 database:

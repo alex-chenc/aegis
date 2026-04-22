@@ -1,7 +1,7 @@
 ---
 name: aegis-build-test
 description: Aegis 系统构建测试技能 - agent/server/dc/api-server 构建部署和 gRPC 数据流测试
-version: 1.0.0
+version: 1.1.0
 source: manual-creation
 ---
 
@@ -9,13 +9,20 @@ source: manual-creation
 
 本技能用于 AI 学习 Aegis 系统架构、构建部署流程和 API 测试。
 
-## 服务端口
+## 服务端口总览
 
-| 服务 | HTTP 端口 | gRPC 端口 |
-|------|-----------|-----------|
-| api-server | 8082 | 19093 |
-| server | - | 19090, 19094 |
-| dc | - | 19092 |
+| 服务 | HTTP 端口 | gRPC 端口 | 容器名 |
+|------|-----------|-----------|--------|
+| api-server | 8082 | 19093 | aegis-api-server |
+| server | - | 19090, 19094 | aegis-server |
+| dc | - | 19092 | aegis-dc |
+| frontend | 8081 | - | aegis-frontend |
+| postgres | 5432 | - | aegis-postgres |
+| redis | 6379 | - | aegis-redis |
+| minio | 9000/9001 | - | aegis-minio |
+| kafka | 29092 | - | aegis-kafka |
+
+---
 
 ## 一、AI 必读文档
 
@@ -30,50 +37,174 @@ cat aegis_system_design_v5.5/frontend_detailed_design_v5.5_complete.md
 cat aegis_system_design_v5.5/database_structure_design_v5.5_complete.md
 ```
 
+---
+
 ## 二、构建命令
 
-### Agent
+### 单组件镜像构建
+
+适用于：修改单个服务代码后快速构建部署
+
 ```bash
-cd agent && make all && make upload
+# 仅构建单个服务镜像（不启动）
+docker compose build <service>
+
+# 构建并启动单个服务（会重建容器）
+docker compose up -d --build <service>
+
+# 可用服务: api-server, server, dc, frontend
 ```
 
-### API Server
+**示例：修改 api-server 后快速部署**
 ```bash
+docker compose up -d --build api-server
+docker compose logs -f api-server   # 查看日志确认启动
+```
+
+### 完整组件构建
+
+```bash
+# API Server
 cd api-server && make build
-```
 
-### Server
-```bash
+# Server
 cd server && make build
-```
 
-### DC
-```bash
+# DC
 cd dc && make build
+
+# Agent（包含 eBPF 编译）
+cd agent && make all
 ```
 
-### Docker 构建并启动
+---
+
+## 三、服务管理命令
+
+### 3.1 基础生命周期管理
+
 ```bash
-docker compose up -d --build
+# 启动/停止/重启单个服务
+docker compose start <service>
+docker compose stop <service>
+docker compose restart <service>
+
+# 重建并重启（代码修改后使用）
+docker compose up -d --build <service>
 ```
 
-## 三、Agent 卸载重装
+### 3.2 日志与状态查看
 
 ```bash
-# 1. 构建并上传
+# 查看实时日志
+docker compose logs -f <service>
+
+# 查看服务状态
+docker compose ps
+
+# 检查服务健康
+docker compose exec <service> wget --spider -q localhost:<port>/health 2>/dev/null && echo "OK" || echo "FAIL"
+```
+
+### 3.3 完整栈管理
+
+```bash
+# 启动/停止所有服务
+docker compose up -d
+docker compose down
+
+# 停止并清除数据卷（慎用！）
+docker compose down -v
+
+# 重新构建所有镜像
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## 四、服务健康检查矩阵
+
+| 服务 | 检查命令 | 期望输出 |
+|------|---------|---------|
+| api-server | `curl -s http://localhost:8082/health` | `{"status":"ok"}` |
+| server | `nc -z localhost 19090 && echo OK` | `OK` |
+| dc | `nc -z localhost 19092 && echo OK` | `OK` |
+| postgres | `pg_isready -U aegis_user -d aegis_db` | `accepting connections` |
+| redis | `redis-cli -a <password> ping` | `PONG` |
+| minio | `mc ready local` | `OK` |
+
+---
+
+## 五、Agent 包上传到 MINIO
+
+### 5.1 环境变量配置
+
+MINIO 服务地址: `http://localhost:9000`
+MINIO Console: `http://localhost:9001` (minio_admin / a_third_strong_secret_password)
+
+在 `.env` 文件中配置：
+```bash
+MINIO_ACCESS_KEY=minio_admin
+MINIO_SECRET_KEY=a_third_strong_secret_password
+```
+
+### 5.2 上传 Agent 包
+
+```bash
+# 1. 设置环境变量
+export MINIO_ENDPOINT=localhost:9000
+export MINIO_ACCESS_KEY=minio_admin
+export MINIO_SECRET_KEY=a_third_strong_secret_password
+
+# 2. 构建并上传（一次性完成）
 cd agent && make all && make upload
 
-# 2. 卸载
-sudo /opt/aegis-agent/uninstall.sh
-
-# 3. 重新安装
-curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
-
-# 4. 验证
-sudo systemctl status aegis-agent
+# 3. 验证上传
+# 访问 http://localhost:9001 → agent-artifacts bucket
 ```
 
-## 四、API 测试 (curl)
+### 5.3 远程 MINIO 服务器
+
+```bash
+MINIO_ENDPOINT=<server>:9000 \
+MINIO_ACCESS_KEY=<your_key> \
+MINIO_SECRET_KEY=<your_secret> \
+make upload
+```
+
+### 5.4 Agent 卸载重装完整流程
+
+#### 开发机：构建并上传
+```bash
+cd agent && make all && make upload
+```
+
+#### 目标机：卸载旧 Agent
+```bash
+sudo /opt/aegis-agent/uninstall.sh
+```
+
+#### 目标机：重新安装
+```bash
+curl -sSL http://<API_SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
+```
+
+#### 验证
+```bash
+# 检查服务状态
+sudo systemctl status aegis-agent
+
+# 查看实时日志
+sudo journalctl -u aegis-agent -f
+
+# 检查进程
+ps aux | grep aegis-agent
+```
+
+---
+
+## 六、API 测试 (curl)
 
 ### 健康检查
 ```bash
@@ -87,15 +218,74 @@ curl -X POST http://localhost:8082/api/v1/vulnerability/scan \
   -d '{"host_id":1,"scan_type":"full"}'
 ```
 
-## 五、数据流测试
+---
+
+## 七、数据流测试检查点
 
 ```
 Agent → Server (19090) → Kafka → DC (19092) → PostgreSQL
 ```
 
-**测试检查点:**
-1. Agent 是否能连接 Server (端口 19090)
-2. Server 是否发送消息到 Kafka topic `aegis.security.events`
-3. DC 是否消费 Kafka 消息
-4. 数据是否正确存储到 PostgreSQL
+**测试步骤：**
+1. Agent 是否连接 Server: `docker compose logs server | grep agent`
+2. Kafka 消息: `docker compose exec kafka kafka-console-consumer --topic aegis.security.events --from-beginning`
+3. DC 处理: `docker compose logs dc`
+4. 数据库写入: `docker compose exec postgres psql -U aegis_user -d aegis_db -c "SELECT COUNT(*) FROM alerts;"`
+
+---
+
+## 八、常见问题排查
+
+### 8.1 服务启动失败
+```bash
+# 1. 查看详细日志
+docker compose logs <service>
+
+# 2. 检查端口占用
+netstat -tlnp | grep <port>
+
+# 3. 检查依赖服务是否就绪
+docker compose ps
+```
+
+### 8.2 Agent 无法连接 Server
+```bash
+# 1. 检查 Server gRPC 端口
+docker compose exec server nc -z localhost 19090
+
+# 2. 检查 Agent 日志
+sudo journalctl -u aegis-agent | grep -i error
+
+# 3. 验证网络连通性
+telnet <server_ip> 19090
+```
+
+### 8.3 MINIO 上传失败
+```bash
+# 1. 验证 MINIO 服务
+docker compose ps minio
+
+# 2. 检查凭证
+mc alias list
+
+# 3. 手动测试上传
+mc cp dist/aegis-agent.tar.gz local/agent-artifacts/
+```
+
+---
+
+## 九、Docker 构建并启动
+
+### 完整栈
+```bash
+docker compose up -d --build
+```
+
+### 单服务迭代开发
+```bash
+# 修改代码后快速重建
+docker compose up -d --build <service>
+
+# 查看日志
+docker compose logs -f <service>
 ```

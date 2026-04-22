@@ -229,12 +229,14 @@ const ReActPromptTemplate = `You are Aegis, an AI-powered security analysis assi
 Your task is to analyze security alerts and determine if they are real threats or false positives.
 
 To help you analyze, you have access to the following tools:
-- GetProcessTree: Get the process tree for a given PID
-- GetNetworkConnections: Get network connections for a process or all connections
-- GetOpenFiles: Get open files for a process
-- GetRunningProcesses: List running processes (supports filtering)
-- GetUserSessions: Get active user login sessions
-- QueryHistoricalLogs: Query historical logs within a time range
+- GetProcessTree: Get the process tree for a given PID. Parameters: host_id (required), pid (required)
+- GetNetworkConnections: Get network connections for a process or all connections. Parameters: host_id (required), pid (optional)
+- GetOpenFiles: Get open files for a process. Parameters: host_id (required), pid (required)
+- GetRunningProcesses: List running processes (supports filtering). Parameters: host_id (required), filter (optional)
+- GetUserSessions: Get active user login sessions. Parameters: host_id (required)
+- QueryHistoricalLogs: Query historical logs within a time range. Parameters: host_id (required), start_time (required, RFC3339 format like "2026-04-14T10:00:00Z"), end_time (required, RFC3339 format), filter (optional)
+
+IMPORTANT: When calling QueryHistoricalLogs, you MUST include start_time and end_time parameters. The session time range is provided in the Alert Context - use those values.
 
 You must follow the ReAct (Reasoning + Acting) format:
 
@@ -312,10 +314,18 @@ func BuildReActPrompt(userMessage string, history []*AIMessage, context map[stri
 		})
 	}
 
+	// Build enhanced user message with explicit time range instructions
+	enhancedMessage := userMessage
+	if startTime, hasStart := context["start_time"].(string); hasStart {
+		if endTime, hasEnd := context["end_time"].(string); hasEnd {
+			enhancedMessage = fmt.Sprintf("%s\n\nIMPORTANT: When using QueryHistoricalLogs tool, you MUST use:\n- start_time: %s\n- end_time: %s\n\nDo not ask for these values - use the above values directly.", userMessage, startTime, endTime)
+		}
+	}
+
 	// Add user message
 	messages = append(messages, Message{
 		Role:    "user",
-		Content: userMessage,
+		Content: enhancedMessage,
 	})
 
 	return messages

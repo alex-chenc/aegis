@@ -209,6 +209,47 @@ func (s *APIServerToServerImpl) ForwardCommand(ctx context.Context, req *pb.Forw
 	}, nil
 }
 
+// ExecuteTool synchronously executes a tool on an agent and waits for the result
+func (s *APIServerToServerImpl) ExecuteTool(ctx context.Context, req *pb.ToolExecuteRequest) (*pb.ToolExecuteResponse, error) {
+	logger.Info("ExecuteTool request received",
+		zap.String("call_id", req.CallId),
+		zap.String("host_id", req.HostId),
+		zap.String("tool", req.Tool),
+	)
+
+	// Convert ToolExecuteRequest to ToolRequest for the internal call
+	toolReq := &pb.ToolRequest{
+		CallId:    req.CallId,
+		HostId:    req.HostId,
+		Tool:      req.Tool,
+		ParamsJson: req.Arguments,
+	}
+
+	// Call the internal ExecuteTool which forwards to the agent
+	toolResp, err := s.grpcServer.ExecuteTool(ctx, toolReq)
+	if err != nil {
+		logger.Error("ExecuteTool failed",
+			zap.Error(err),
+			zap.String("call_id", req.CallId),
+			zap.String("host_id", req.HostId),
+		)
+		return &pb.ToolExecuteResponse{
+			CallId:  req.CallId,
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	// Convert ToolResponse to ToolExecuteResponse
+	return &pb.ToolExecuteResponse{
+		CallId:         toolResp.CallId,
+		Success:        toolResp.Success,
+		Result:         toolResp.ResultJson,
+		Error:          toolResp.Error,
+		ExecutionTimeMs: 0, // Internal tool response doesn't have execution time
+	}, nil
+}
+
 // UpdateAgentRules updates the Sigma rules on agents
 func (s *APIServerToServerImpl) UpdateAgentRules(ctx context.Context, req *pb.UpdateAgentRulesRequest) (*pb.UpdateAgentRulesResponse, error) {
 	if len(req.Rules) == 0 {

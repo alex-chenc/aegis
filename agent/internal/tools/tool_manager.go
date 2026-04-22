@@ -20,25 +20,25 @@ func NewToolManager() *ToolManager {
 
 func (m *ToolManager) Execute(tool string, params map[string]interface{}) (interface{}, error) {
 	switch tool {
-	case "get_process_tree":
+	case "GetProcessTree":
 		pid, err := toInt(params["pid"])
 		if err != nil {
 			return nil, err
 		}
 		return m.GetProcessTree(pid)
-	case "get_network_connections":
+	case "GetNetworkConnections":
 		pid, err := toInt(params["pid"])
 		if err != nil {
 			return nil, err
 		}
 		return m.GetNetworkConnections(pid)
-	case "get_file_info":
+	case "GetFileInfo":
 		filePath, ok := params["file_path"].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid file_path parameter")
 		}
 		return m.GetFileInfo(filePath)
-	case "read_file_content":
+	case "ReadFileContent":
 		filePath, ok := params["file_path"].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid file_path parameter")
@@ -50,18 +50,26 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			}
 		}
 		return m.ReadFileContent(filePath, maxSize)
-	case "get_user_info":
+	case "GetUserInfo":
 		username, ok := params["username"].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid username parameter")
 		}
 		return m.GetUserInfo(username)
-	case "execute_command":
+	case "ExecuteCommand":
 		command, ok := params["command"].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid command parameter")
 		}
 		return m.ExecuteCommand(command)
+	case "QueryHistoricalLogs":
+		return m.QueryHistoricalLogs(params)
+	case "GetOpenFiles":
+		return m.GetOpenFiles(params)
+	case "GetRunningProcesses":
+		return m.GetRunningProcesses(params)
+	case "GetUserSessions":
+		return m.GetUserSessions(params)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", tool)
 	}

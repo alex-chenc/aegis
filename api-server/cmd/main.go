@@ -162,7 +162,7 @@ func main() {
 	// AI Analysis Services
 	// Note: VectorService needs a valid LLM API key for embeddings, initialized lazily
 	vectorService := service.NewVectorService(db, nil)
-	aiAnalysisHandler := handler.NewAIAnalysisHandler(configRepo, vectorService, serverClient)
+	aiAnalysisHandler := handler.NewAIAnalysisHandler(alertRepo, configRepo, vectorService, serverClient)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())

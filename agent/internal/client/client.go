@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis-agent/internal/asset"
@@ -21,20 +23,27 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const CallbackPort = 19095 // Port for Server to call back to Agent
+
 type Client struct {
-	serverAddr    string
-	authToken     string
-	hostID        string
-	executor      *executor.Executor
-	toolManager   *tools.ToolManager
-	ruleLoader    *sigma.Loader
-	blocker       *blocker.Blocker
-	conn          *grpc.ClientConn
-	client        pb.AgentServiceClient
-	stream        pb.AgentService_ExecuteCommandClient
-	ctx           context.Context
-	cancel        context.CancelFunc
-	heartbeatDone chan struct{}
+	pb.UnimplementedAgentServiceServer // Must embed for forward compatibility
+	serverAddr     string
+	authToken      string
+	hostID         string
+	executor       *executor.Executor
+	toolManager    *tools.ToolManager
+	ruleLoader     *sigma.Loader
+	blocker        *blocker.Blocker
+	conn           *grpc.ClientConn
+	client         pb.AgentServiceClient
+	stream         pb.AgentService_ExecuteCommandClient
+	ctx            context.Context
+	cancel         context.CancelFunc
+	heartbeatDone  chan struct{}
+	callbackServer *grpc.Server
+	callbackLis    net.Listener
+	callbackPort   int32
+	mu             sync.RWMutex
 }
 
 func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.ToolManager, ruleLoader *sigma.Loader, blockerInst *blocker.Blocker) *Client {
@@ -47,6 +56,7 @@ func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.T
 		ruleLoader:    ruleLoader,
 		blocker:       blockerInst,
 		heartbeatDone: make(chan struct{}),
+		callbackPort:  CallbackPort,
 	}
 }
 
@@ -75,6 +85,11 @@ func (c *Client) Run() error {
 }
 
 func (c *Client) connect() error {
+	// Start callback gRPC server first (Server will call back to this)
+	if err := c.startCallbackServer(); err != nil {
+		return fmt.Errorf("failed to start callback server: %w", err)
+	}
+
 	var err error
 	c.conn, err = grpc.NewClient(c.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -93,16 +108,62 @@ func (c *Client) connect() error {
 	return nil
 }
 
+// startCallbackServer starts a gRPC server for Server to call back with tool execution results
+func (c *Client) startCallbackServer() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Find an available port
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", CallbackPort))
+	if err != nil {
+		return fmt.Errorf("failed to listen on callback port %d: %w", CallbackPort, err)
+	}
+
+	c.callbackLis = lis
+	c.callbackServer = grpc.NewServer()
+	pb.RegisterAgentServiceServer(c.callbackServer, c)
+
+	go func() {
+		logger.Info("Agent callback server starting", zap.Int("port", CallbackPort))
+		if err := c.callbackServer.Serve(lis); err != nil {
+			logger.Error("Callback server error", zap.Error(err))
+		}
+	}()
+
+	logger.Info("Agent callback server started", zap.String("addr", lis.Addr().String()))
+	return nil
+}
+
+// StopCallbackServer stops the callback server
+func (c *Client) StopCallbackServer() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.callbackServer != nil {
+		c.callbackServer.GracefulStop()
+		c.callbackServer = nil
+	}
+	if c.callbackLis != nil {
+		c.callbackLis.Close()
+		c.callbackLis = nil
+	}
+}
+
 func (c *Client) register() error {
 	assetInfo, err := asset.Collect()
 	if err != nil {
 		return err
 	}
 
+	c.mu.RLock()
+	callbackPort := c.callbackPort
+	c.mu.RUnlock()
+
 	resp, err := c.client.Register(c.ctx, &pb.RegisterRequest{
-		HostId:    c.hostID,
-		AssetInfo: toProtoAsset(assetInfo),
-		AuthToken: c.authToken,
+		HostId:       c.hostID,
+		AssetInfo:    toProtoAsset(assetInfo),
+		AuthToken:    c.authToken,
+		CallbackPort: callbackPort,
 	})
 	if err != nil {
 		return err
@@ -360,6 +421,8 @@ func (c *Client) cleanup() {
 	if c.conn != nil {
 		c.conn.Close()
 	}
+	// Stop callback server on cleanup/reconnect - prevents port binding conflicts
+	c.StopCallbackServer()
 }
 
 func (c *Client) requestRuleSync() {
@@ -402,6 +465,7 @@ func (c *Client) requestRuleSync() {
 
 func (c *Client) Close() {
 	logger.Info("Closing client...")
+	c.StopCallbackServer()
 	c.cleanup()
 	logger.Info("Client closed")
 }
@@ -530,5 +594,99 @@ func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (
 	return &pb.BlockResponse{
 		CommandId: cmd.CommandId,
 		Success:   true,
+	}, nil
+}
+
+// ExecuteBlockCommand is an alias for HandleBlockCommand to implement AgentServiceServer interface
+func (c *Client) ExecuteBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (*pb.BlockResponse, error) {
+	return c.HandleBlockCommand(ctx, cmd)
+}
+
+// ExecuteTool is an alias for HandleToolCall to implement AgentServiceServer interface
+func (c *Client) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
+	return c.HandleToolCall(ctx, req)
+}
+
+// gRPC Server methods implementing AgentServiceServer interface
+
+func (c *Client) CollectSoftwareList(ctx context.Context, req *pb.SoftwareListRequest) (*pb.SoftwareListResponse, error) {
+	_ = ctx
+	logger.Info("CollectSoftwareList request received")
+
+	result, err := c.toolManager.Execute("ListInstalledSoftware", nil)
+	if err != nil {
+		return &pb.SoftwareListResponse{
+			SoftwareList: []*pb.SoftwareInfo{},
+		}, nil
+	}
+
+	// Convert result to SoftwareInfo array
+	softwareList := []*pb.SoftwareInfo{}
+	if results, ok := result.([]interface{}); ok {
+		for _, r := range results {
+			if m, ok := r.(map[string]interface{}); ok {
+				info := &pb.SoftwareInfo{}
+				if name, ok := m["name"].(string); ok {
+					info.Name = name
+				}
+				if version, ok := m["version"].(string); ok {
+					info.Version = version
+				}
+				if pkgMgr, ok := m["package_manager"].(string); ok {
+					info.PackageManager = pkgMgr
+				}
+				if arch, ok := m["architecture"].(string); ok {
+					info.Architecture = arch
+				}
+				softwareList = append(softwareList, info)
+			}
+		}
+	}
+
+	return &pb.SoftwareListResponse{
+		SoftwareList: softwareList,
+	}, nil
+}
+
+func (c *Client) ReportEvent(ctx context.Context, req *pb.ReportEventRequest) (*pb.ReportEventResponse, error) {
+	_ = ctx
+	if err := c.ReportEvents(req.Events); err != nil {
+		return &pb.ReportEventResponse{
+			Success:        false,
+			ReceivedCount:  0,
+		}, err
+	}
+	return &pb.ReportEventResponse{
+		Success:       true,
+		ReceivedCount: int32(len(req.Events)),
+	}, nil
+}
+
+// Stub implementations for AgentServiceServer interface (used only for callback server)
+// The Server will only call ExecuteTool on the callback connection
+
+func (c *Client) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	return &pb.RegisterResponse{
+		Success: false,
+		Message: "Agent does not accept Register calls on callback server",
+	}, nil
+}
+
+func (c *Client) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	return &pb.HeartbeatResponse{
+		Success: false,
+		Message: "Agent does not accept Heartbeat calls on callback server",
+	}, nil
+}
+
+func (c *Client) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer) error {
+	// Agent doesn't accept commands via callback server - commands come through the main connection
+	return nil
+}
+
+func (c *Client) UpdateRules(ctx context.Context, req *pb.RuleUpdateRequest) (*pb.RuleUpdateResponse, error) {
+	return &pb.RuleUpdateResponse{
+		Success:     false,
+		LoadedCount: 0,
 	}, nil
 }

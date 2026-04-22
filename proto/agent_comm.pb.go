@@ -112,6 +112,7 @@ type RegisterRequest struct {
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	AssetInfo     *AssetInfo             `protobuf:"bytes,2,opt,name=asset_info,json=assetInfo,proto3" json:"asset_info,omitempty"`
 	AuthToken     string                 `protobuf:"bytes,3,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
+	CallbackPort  int32                  `protobuf:"varint,4,opt,name=callback_port,json=callbackPort,proto3" json:"callback_port,omitempty"` // Agent's gRPC callback port for Server to call back
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -165,6 +166,13 @@ func (x *RegisterRequest) GetAuthToken() string {
 		return x.AuthToken
 	}
 	return ""
+}
+
+func (x *RegisterRequest) GetCallbackPort() int32 {
+	if x != nil {
+		return x.CallbackPort
+	}
+	return 0
 }
 
 // RegisterResponse 注册响应
@@ -1497,13 +1505,14 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\n" +
 	"os_version\x18\x04 \x01(\tR\tosVersion\x12\x12\n" +
 	"\x04arch\x18\x05 \x01(\tR\x04arch\x12#\n" +
-	"\ragent_version\x18\x06 \x01(\tR\fagentVersion\"\x82\x01\n" +
+	"\ragent_version\x18\x06 \x01(\tR\fagentVersion\"\xa7\x01\n" +
 	"\x0fRegisterRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x127\n" +
 	"\n" +
 	"asset_info\x18\x02 \x01(\v2\x18.agent_comm.v1.AssetInfoR\tassetInfo\x12\x1d\n" +
 	"\n" +
-	"auth_token\x18\x03 \x01(\tR\tauthToken\"_\n" +
+	"auth_token\x18\x03 \x01(\tR\tauthToken\x12#\n" +
+	"\rcallback_port\x18\x04 \x01(\x05R\fcallbackPort\"_\n" +
 	"\x10RegisterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x18\n" +
@@ -1612,7 +1621,7 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\vReportEvent\x12!.agent_comm.v1.ReportEventRequest\x1a\".agent_comm.v1.ReportEventResponse\x12F\n" +
 	"\vExecuteTool\x12\x1a.agent_comm.v1.ToolRequest\x1a\x1b.agent_comm.v1.ToolResponse\x12R\n" +
 	"\vUpdateRules\x12 .agent_comm.v1.RuleUpdateRequest\x1a!.agent_comm.v1.RuleUpdateResponse\x12P\n" +
-	"\x13ExecuteBlockCommand\x12\x1b.agent_comm.v1.BlockCommand\x1a\x1c.agent_comm.v1.BlockResponseB\x1cZ\x1aaegis-system/pkg/api/v1;pbb\x06proto3"
+	"\x13ExecuteBlockCommand\x12\x1b.agent_comm.v1.BlockCommand\x1a\x1c.agent_comm.v1.BlockResponseB\x16Z\x14server/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_proto_agent_comm_proto_rawDescOnce sync.Once

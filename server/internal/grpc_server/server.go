@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type TaskResultCallback func(taskID uuid.UUID, stdout, stderr string, exitCode int, status string)
@@ -40,17 +41,20 @@ type GRPCServer struct {
 	redisClient        *storage.RedisClient
 	kafkaProducer      *queue.KafkaProducer
 	agentConnections   sync.Map
+	callbackPorts      sync.Map // hostID -> callback port
 	port               int
 	taskResultCallback TaskResultCallback
 }
 
 type AgentConnection struct {
-	HostID uuid.UUID
-	Stream pb.AgentService_ExecuteCommandServer
-	Client pb.AgentServiceClient
-	Ctx    context.Context
-	Cancel context.CancelFunc
-	Inbox  chan *pb.CommandExecute
+	HostID         uuid.UUID
+	Stream         pb.AgentService_ExecuteCommandServer
+	Client         pb.AgentServiceClient // nil - not used for callback
+	CallbackClient pb.AgentServiceClient // gRPC client to agent's callback server
+	CallbackConn   *grpc.ClientConn     // the underlying connection (must close on reconnect)
+	Ctx            context.Context
+	Cancel         context.CancelFunc
+	Inbox          chan *pb.CommandExecute
 }
 
 func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, kafkaProducer *queue.KafkaProducer, port int) *GRPCServer {
@@ -203,7 +207,17 @@ func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb
 		zap.String("host_id", hostID.String()),
 		zap.String("ip", req.AssetInfo.IpAddress),
 		zap.String("hostname", req.AssetInfo.Hostname),
+		zap.Int32("callback_port", req.CallbackPort),
 	)
+
+	// Store callback port for this agent
+	if req.CallbackPort > 0 {
+		s.callbackPorts.Store(hostID.String(), int(req.CallbackPort))
+		logger.Info("agent callback port stored",
+			zap.String("host_id", hostID.String()),
+			zap.Int32("callback_port", req.CallbackPort),
+		)
+	}
 
 	go s.pushRulesToAgent(hostID)
 
@@ -286,6 +300,10 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				if connection.Cancel != nil {
 					connection.Cancel()
 				}
+				// Close callback connection to agent to prevent leaks
+				if connection.CallbackConn != nil {
+					connection.CallbackConn.Close()
+				}
 			}
 			return err
 		}
@@ -295,13 +313,45 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 			// Agent 发送命令执行请求
 			if r.Execute != nil {
 				hostID, _ = uuid.Parse(r.Execute.HostId)
+
+				// Look up callback port and create callback client to agent
+				var callbackClient pb.AgentServiceClient
+				var callbackConn *grpc.ClientConn
+				if cbPort, ok := s.callbackPorts.Load(hostID.String()); ok {
+					agentIP := ""
+					if host, err := s.hostRepo.FindByID(hostID); err == nil && host != nil {
+						agentIP = host.IPAddress
+					}
+					if agentIP == "" {
+						agentIP = "127.0.0.1" // fallback
+					}
+					callbackAddr := fmt.Sprintf("%s:%d", agentIP, cbPort.(int))
+					var err error
+					callbackConn, err = grpc.NewClient(callbackAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+					if err != nil {
+						logger.Error("failed to create callback connection to agent",
+							zap.Stringer("host_id", hostID),
+							zap.String("addr", callbackAddr),
+							zap.Error(err),
+						)
+					} else {
+						callbackClient = pb.NewAgentServiceClient(callbackConn)
+						logger.Info("agent callback client created",
+							zap.Stringer("host_id", hostID),
+							zap.String("addr", callbackAddr),
+						)
+					}
+				}
+
 				connection = &AgentConnection{
-					HostID: hostID,
-					Stream: stream,
-					Client: nil,
-					Ctx:    ctx,
-					Cancel: cancel,
-					Inbox:  inbox,
+					HostID:         hostID,
+					Stream:         stream,
+					Client:         nil,
+					CallbackClient: callbackClient,
+					CallbackConn:   callbackConn,
+					Ctx:            ctx,
+					Cancel:         cancel,
+					Inbox:          inbox,
 				}
 
 				s.agentConnections.Store(hostID, connection)
@@ -594,15 +644,15 @@ func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.
 	}
 
 	agentConn := conn.(*AgentConnection)
-	if agentConn.Client == nil {
+	if agentConn.CallbackClient == nil {
 		return &pb.ToolResponse{
 			CallId:  req.CallId,
 			Success: false,
-			Error:   "agent callback client not available",
+			Error:   "agent callback client not available (not registered with callback port)",
 		}, nil
 	}
 
-	resp, callErr := agentConn.Client.ExecuteTool(ctx, req)
+	resp, callErr := agentConn.CallbackClient.ExecuteTool(ctx, req)
 	if callErr != nil {
 		return &pb.ToolResponse{
 			CallId:  req.CallId,

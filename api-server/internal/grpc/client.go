@@ -114,3 +114,14 @@ func (c *ServerClient) CollectSoftware(ctx context.Context, hostID string) (*Sof
 		Error:        "",
 	}, nil
 }
+
+// ExecuteTool synchronously executes a tool on an agent and waits for the result
+func (c *ServerClient) ExecuteTool(ctx context.Context, callID, hostID, tool, arguments string, timeoutSeconds int32) (*pb.ToolExecuteResponse, error) {
+	return c.client.ExecuteTool(ctx, &pb.ToolExecuteRequest{
+		CallId:         callID,
+		HostId:         hostID,
+		Tool:           tool,
+		Arguments:      arguments,
+		TimeoutSeconds: timeoutSeconds,
+	})
+}

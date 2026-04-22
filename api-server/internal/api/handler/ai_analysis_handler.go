@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	pb "api-server/pkg/api/v1"
 	"api-server/internal/grpc"
 	"api-server/internal/llm"
 	"api-server/internal/repository"
@@ -21,6 +20,7 @@ import (
 )
 
 type AIAnalysisHandler struct {
+	alertRepo     *repository.AlertRepository
 	configRepo     *repository.ConfigRepository
 	vectorService  *service.VectorService
 	serverClient  *grpc.ServerClient
@@ -31,6 +31,7 @@ type AIAnalysisHandler struct {
 type AISSESion struct {
 	SessionID     string
 	AlertIDs      []string
+	HostIDs       []string  // Extracted from alerts for tool routing
 	HostFilter    []string
 	TimeRange     *TimeRange
 	InitialQuery  string
@@ -81,8 +82,9 @@ type SimilarCaseResponse struct {
 	SimilarCases []service.SimilarAnalysis `json:"similar_cases"`
 }
 
-func NewAIAnalysisHandler(configRepo *repository.ConfigRepository, vectorService *service.VectorService, serverClient *grpc.ServerClient) *AIAnalysisHandler {
+func NewAIAnalysisHandler(alertRepo *repository.AlertRepository, configRepo *repository.ConfigRepository, vectorService *service.VectorService, serverClient *grpc.ServerClient) *AIAnalysisHandler {
 	return &AIAnalysisHandler{
+		alertRepo:     alertRepo,
 		configRepo:    configRepo,
 		vectorService: vectorService,
 		serverClient:  serverClient,
@@ -114,6 +116,30 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
+	// Look up alerts to extract host_ids for tool routing
+	var hostIDs []string
+	if h.alertRepo != nil && len(req.AlertIDs) > 0 {
+		alerts, err := h.alertRepo.FindByIDs(req.AlertIDs)
+		if err != nil {
+			logger.Warn("failed to look up alerts for host_ids", zap.Error(err))
+		} else {
+			// Extract unique host_ids from alerts
+			hostIDSet := make(map[string]bool)
+			for _, alert := range alerts {
+				if alert.HostID.String() != "00000000-0000-0000-0000-000000000000" {
+					hostIDSet[alert.HostID.String()] = true
+				}
+			}
+			for hostID := range hostIDSet {
+				hostIDs = append(hostIDs, hostID)
+			}
+			logger.Info("extracted host_ids from alerts",
+				zap.Int("alert_count", len(alerts)),
+				zap.Int("host_count", len(hostIDs)),
+				zap.Strings("host_ids", hostIDs))
+		}
+	}
+
 	// Create LLM client
 	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 3)
 
@@ -122,6 +148,7 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 	session := &AISSESion{
 		SessionID:     sessionID,
 		AlertIDs:      req.AlertIDs,
+		HostIDs:      hostIDs,
 		HostFilter:    req.HostFilter,
 		TimeRange:     req.TimeRange,
 		InitialQuery:  "",
@@ -138,7 +165,8 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 
 	logger.Info("AI analysis session created",
 		zap.String("session_id", sessionID),
-		zap.Int("alert_count", len(req.AlertIDs)))
+		zap.Int("alert_count", len(req.AlertIDs)),
+		zap.Int("host_count", len(hostIDs)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -182,7 +210,7 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 
 	// Initialize ReAct agent if not exists
 	if session.ReActAgent == nil {
-		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient), sessionID)
+		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID)
 	}
 
 	// Build context for the session
@@ -224,7 +252,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 
 	// Initialize ReAct agent if not exists
 	if session.ReActAgent == nil {
-		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient), sessionID)
+		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID)
 	}
 
 	// Build context
@@ -360,11 +388,18 @@ func (h *AIAnalysisHandler) buildSessionContext(session *AISSESion) map[string]i
 	if len(session.AlertIDs) > 0 {
 		context["alert_ids"] = session.AlertIDs
 	}
+	if len(session.HostIDs) > 0 {
+		context["host_ids"] = session.HostIDs
+	}
 	if len(session.HostFilter) > 0 {
 		context["host_filter"] = session.HostFilter
 	}
 	if session.TimeRange != nil {
+		// Provide time range in multiple formats for clarity
 		context["time_range"] = session.TimeRange
+		// Also provide as separate fields for easier extraction by LLM
+		context["start_time"] = session.TimeRange.Start.Format(time.RFC3339)
+		context["end_time"] = session.TimeRange.End.Format(time.RFC3339)
 	}
 
 	return context
@@ -372,71 +407,150 @@ func (h *AIAnalysisHandler) buildSessionContext(session *AISSESion) map[string]i
 
 // ToolExecutor implements llm.ToolExecutor for ReAct agent
 type ToolExecutor struct {
-	serverClient *grpc.ServerClient
+	serverClient   *grpc.ServerClient
+	defaultHostIDs []string  // Fallback host_ids from session
 }
 
 // NewToolExecutor creates a new tool executor with gRPC client
-func NewToolExecutor(serverClient *grpc.ServerClient) *ToolExecutor {
+func NewToolExecutor(serverClient *grpc.ServerClient, defaultHostIDs []string) *ToolExecutor {
 	return &ToolExecutor{
-		serverClient: serverClient,
+		serverClient:   serverClient,
+		defaultHostIDs: defaultHostIDs,
 	}
 }
 
 // Execute executes a tool call by forwarding to the agent via gRPC
 func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string]interface{}) (interface{}, error) {
-	logger.Info("tool execution requested", zap.String("tool", tool), zap.Any("args", args))
+	logger.Info("tool execution requested", zap.String("tool", tool), zap.Any("args", args), zap.Strings("default_hosts", e.defaultHostIDs))
 
 	// Try to forward to agent via gRPC
 	if e.serverClient != nil {
-		// Get host_id from args - required for routing to correct agent
-		hostID, ok := args["host_id"].(string)
-		if !ok || hostID == "" {
-			// No host_id means we can't route to a specific agent
-			// Return error instead of mock data so AI knows tool failed
-			return nil, fmt.Errorf("tool %s requires host_id parameter for routing to target agent", tool)
+		// Ensure args is not nil
+		if args == nil {
+			args = make(map[string]interface{})
 		}
 
-		// Format tool call as command for the agent
-		argsJSON, _ := json.Marshal(args)
-		toolCmd := fmt.Sprintf("#TOOL:%s#%s", tool, string(argsJSON))
+		// Normalize parameter names: convert camelCase to snake_case for agent compatibility
+		normalizedArgs := normalizeArgs(args)
 
-		logger.Info("forwarding tool call to agent", zap.String("host_id", hostID), zap.String("tool", tool), zap.String("command", toolCmd))
+		// Get host_id from args, or use first default host_id if available
+		hostID, ok := normalizedArgs["host_id"].(string)
+		if !ok || hostID == "" {
+			// Use first available host_id from session as default
+			if len(e.defaultHostIDs) > 0 {
+				hostID = e.defaultHostIDs[0]
+				normalizedArgs["host_id"] = hostID
+				logger.Info("using default host_id from session", zap.String("host_id", hostID))
+			} else {
+				// No host_id available - return error
+				return nil, fmt.Errorf("tool %s requires host_id parameter for routing to target agent, but no host_id was provided in args and no default host_id available from session", tool)
+			}
+		}
 
-		// Forward command to agent via gRPC
-		taskID := fmt.Sprintf("tool_%d", time.Now().UnixNano())
-		resp, err := e.serverClient.ForwardCommand(ctx, &pb.ForwardCommandRequest{
-			TaskId:         taskID,
-			HostId:         hostID,
-			ScriptContent:  toolCmd,
-			TimeoutSeconds: 30,
-			TaskType:       "CHECK", // Agents handle #TOOL: commands in CHECK mode
-		})
+		// For QueryHistoricalLogs, ensure time parameters are provided
+		if tool == "QueryHistoricalLogs" {
+			// Check for top-level start_time/end_time OR nested time_range object
+			_, hasStartTime := normalizedArgs["start_time"]
+			_, hasEndTime := normalizedArgs["end_time"]
 
+			// Also check for nested time_range: {start: ..., end: ...}
+			if timeRange, ok := normalizedArgs["time_range"].(map[string]interface{}); ok {
+				if startTime, ok := timeRange["start"].(string); ok && startTime != "" {
+					normalizedArgs["start_time"] = startTime
+					hasStartTime = true
+				}
+				if endTime, ok := timeRange["end"].(string); ok && endTime != "" {
+					normalizedArgs["end_time"] = endTime
+					hasEndTime = true
+				}
+			}
+
+			if !hasStartTime {
+				return nil, fmt.Errorf("QueryHistoricalLogs requires start_time parameter in RFC3339 format (e.g., '2026-04-14T10:00:00Z')")
+			}
+			if !hasEndTime {
+				return nil, fmt.Errorf("QueryHistoricalLogs requires end_time parameter in RFC3339 format (e.g., '2026-04-14T11:00:00Z')")
+			}
+		}
+
+		// Format arguments as JSON
+		argsJSON, err := json.Marshal(normalizedArgs)
 		if err != nil {
-			logger.Warn("gRPC forward failed, tool execution unavailable", zap.Error(err))
-			return nil, fmt.Errorf("failed to forward tool call to agent: %w", err)
+			return nil, fmt.Errorf("failed to marshal tool arguments: %w", err)
+		}
+
+		// Generate call ID for tracking
+		callID := fmt.Sprintf("tool_%d", time.Now().UnixNano())
+
+		logger.Info("executing tool via ExecuteTool", zap.String("host_id", hostID), zap.String("tool", tool), zap.String("call_id", callID))
+
+		// Execute tool synchronously and wait for result
+		resp, err := e.serverClient.ExecuteTool(ctx, callID, hostID, tool, string(argsJSON), 60)
+		if err != nil {
+			logger.Error("ExecuteTool RPC failed", zap.Error(err), zap.String("call_id", callID))
+			return nil, fmt.Errorf("failed to execute tool via agent: %w", err)
 		}
 
 		if !resp.Success {
-			return nil, fmt.Errorf("agent rejected tool call: %s", resp.Message)
+			logger.Warn("tool execution returned error", zap.String("error", resp.Error), zap.String("call_id", callID))
+			return nil, fmt.Errorf("tool execution failed: %s", resp.Error)
 		}
 
-		// Parse agent response
-		// Agent should return JSON with {success: true, data: {...}} or {success: false, error: "..."}
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(resp.Message), &result); err != nil {
-			return nil, fmt.Errorf("failed to parse agent response: %w", err)
+		logger.Info("tool execution succeeded", zap.String("result", resp.Result), zap.Int64("exec_time_ms", resp.ExecutionTimeMs), zap.String("call_id", callID))
+
+		// Parse the result JSON if present
+		if resp.Result != "" {
+			var result interface{}
+			if err := json.Unmarshal([]byte(resp.Result), &result); err != nil {
+				// If not JSON, return as string
+				return resp.Result, nil
+			}
+			return result, nil
 		}
 
-		if success, ok := result["success"].(bool); ok && !success {
-			return nil, fmt.Errorf("tool execution failed: %v", result["error"])
-		}
-
-		return result, nil
+		return nil, nil
 	}
 
 	// No gRPC client available - return error instead of mock data
 	// This ensures the AI knows the tool failed and can reason accordingly
 	logger.Warn("ToolExecutor has no serverClient - returning error instead of mock data")
 	return nil, fmt.Errorf("tool execution unavailable: no connection to agent server (gRPC client not initialized)")
+}
+
+// normalizeArgs converts camelCase keys to snake_case for agent compatibility
+func normalizeArgs(args map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Mapping of common camelCase to snake_case
+	camelToSnake := map[string]string{
+		"hostId":        "host_id",
+		"startTime":     "start_time",
+		"endTime":       "end_time",
+		"processName":   "process_name",
+		"commandLine":   "command_line",
+		"filePath":      "file_path",
+		"maxSize":       "max_size",
+		"filter":        "filter",
+		"callId":        "call_id",
+		"timeRange":     "time_range",
+		"alertIds":      "alert_ids",
+		"hostFilter":    "host_filter",
+		"pageSize":      "page_size",
+		"page":          "page",
+		"sessionId":     "session_id",
+		"ruleId":        "rule_id",
+		"alertId":       "alert_id",
+		"userId":        "user_id",
+		"processId":     "process_id",
+	}
+
+	for k, v := range args {
+		if snakeKey, ok := camelToSnake[k]; ok {
+			result[snakeKey] = v
+		} else {
+			result[k] = v
+		}
+	}
+
+	return result
 }

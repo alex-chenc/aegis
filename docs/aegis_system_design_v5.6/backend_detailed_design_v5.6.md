@@ -769,9 +769,122 @@ func (s *GRPCServer) waitForToolResult(callID string) (string, error) {
 
 ---
 
-## 6. Agent端工具执行
+## 6. Server端工具调用 (V5.6 Callback模式)
 
-### 6.1 Agent工具执行器
+### 6.1 Server端ExecuteTool实现 (V5.6 Callback模式)
+
+```go
+// server/internal/grpc_server/server.go V5.6
+
+// AgentConnection 新增CallbackClient和CallbackConn字段
+type AgentConnection struct {
+    HostID         uuid.UUID
+    Stream         pb.AgentService_ExecuteCommandServer
+    Client         pb.AgentServiceClient  // nil - 单向调用不用
+    CallbackClient pb.AgentServiceClient  // V5.6: Agent回调客户端
+    CallbackConn   *grpc.ClientConn       // V5.6: 回调连接(需关闭)
+    // ...
+}
+
+// ExecuteTool 通过回调连接调用Agent工具
+func (s *GRPCServer) ExecuteTool(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
+    logger.Info("tool call received",
+        zap.String("call_id", req.CallId),
+        zap.String("host_id", req.HostId),
+        zap.String("tool", req.Tool),
+    )
+
+    hostID, err := parseHostID(req.HostId)
+    if err != nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   "invalid host id",
+        }, nil
+    }
+
+    conn, ok := s.agentConnections.Load(hostID)
+    if !ok {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   "agent not connected",
+        }, nil
+    }
+
+    agentConn := conn.(*AgentConnection)
+
+    // V5.6: 通过回调客户端直接调用Agent的ExecuteTool
+    if agentConn.CallbackClient == nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   "agent callback client not available (not registered with callback port)",
+        }, nil
+    }
+
+    resp, err := agentConn.CallbackClient.ExecuteTool(ctx, req)
+    if err != nil {
+        return &pb.ToolResponse{
+            CallId:  req.CallId,
+            Success: false,
+            Error:   err.Error(),
+        }, nil
+    }
+
+    return resp, nil
+}
+
+// Register时存储回调端口并创建回调连接
+func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+    // ... 原有注册逻辑 ...
+
+    // V5.6: 存储回调端口
+    if req.CallbackPort > 0 {
+        s.callbackPorts.Store(hostID.String(), int(req.CallbackPort))
+    }
+
+    return &pb.RegisterResponse{
+        Success: true,
+        HostId:  hostID.String(),
+    }, nil
+}
+
+// ExecuteCommand流处理时创建回调连接
+func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer) error {
+    for {
+        req, err := stream.Recv()
+        if err != nil {
+            // 清理连接
+            if connection != nil {
+                s.agentConnections.Delete(hostID)
+                if connection.Cancel != nil {
+                    connection.Cancel()
+                }
+                // V5.6: 关闭回调连接防止泄露
+                if connection.CallbackConn != nil {
+                    connection.CallbackConn.Close()
+                }
+            }
+            return err
+        }
+        // ...
+    }
+}
+```
+
+### 6.2 连接管理 (V5.6新增)
+
+Server使用`sync.Map`存储每个Agent的回调端口:
+- `callbackPorts sync.Map // hostID -> callback port`
+
+断开连接时关闭回调连接释放资源。
+
+---
+
+## 7. Agent端工具执行
+
+### 7.1 Agent工具执行器
 
 ```go
 // agent/internal/tool_executor.go

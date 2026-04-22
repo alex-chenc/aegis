@@ -15,19 +15,22 @@ option go_package = "api-server/pkg/api/v1;pb";
 service APIServerToServer {
     // ForwardCommand 转发命令到Agent
     rpc ForwardCommand(ForwardCommandRequest) returns (ForwardCommandResponse);
-    
+
+    // ExecuteTool 同步执行工具并等待结果
+    rpc ExecuteTool(ToolExecuteRequest) returns (ToolExecuteResponse);
+
     // GetAgentStatus 获取单个Agent状态
     rpc GetAgentStatus(GetAgentStatusRequest) returns (GetAgentStatusResponse);
-    
+
     // ListConnectedAgents 列出所有已连接的Agent
     rpc ListConnectedAgents(ListConnectedAgentsRequest) returns (ListConnectedAgentsResponse);
-    
+
     // HealthCheck 健康检查
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
-    
+
     // UpdateAgentRules 更新Agent的Sigma规则
     rpc UpdateAgentRules(UpdateAgentRulesRequest) returns (UpdateAgentRulesResponse);
-    
+
     // ExecuteBlockCommand 执行阻断命令
     rpc ExecuteBlockCommand(ExecuteBlockCommandRequest) returns (ExecuteBlockCommandResponse);
 
@@ -52,6 +55,26 @@ message ForwardCommandResponse {
     bool success = 1;
     string message = 2;
     string task_id = 3;
+}
+
+// ============================================================
+// ExecuteTool - 同步执行工具并等待结果
+// ============================================================
+
+message ToolExecuteRequest {
+    string call_id = 1;
+    string host_id = 2;           // 目标主机ID
+    string tool = 3;              // 工具名称
+    string arguments = 4;         // JSON格式参数
+    int32 timeout_seconds = 5;    // 超时时间（秒）
+}
+
+message ToolExecuteResponse {
+    string call_id = 1;
+    bool success = 2;
+    string result = 3;            // JSON格式结果
+    string error = 4;
+    int64 execution_time_ms = 5;  // 执行时间
 }
 
 // ============================================================

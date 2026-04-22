@@ -314,6 +314,7 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 	lines := strings.Split(buffer, "\n")
 	foundAction := false
 	foundThought := false
+	foundActionInput := false
 
 	// First, check if buffer contains a complete JSON object (no Thought:/Action: prefixes)
 	// This handles LLM output like: {"query": "...", "time_range": {...}}
@@ -360,9 +361,10 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 			var input map[string]interface{}
 			if err := json.Unmarshal([]byte(inputStr), &input); err == nil {
 				step.ActionInput = input
+				foundActionInput = true
 			}
-			// If we already have Action set, we have a complete step
-			if foundAction && step.Action != "" {
+			// Only return complete step if we have both Action and ActionInput
+			if foundAction && step.Action != "" && foundActionInput {
 				return step, true
 			}
 		} else if strings.HasPrefix(line, "Observation:") {
@@ -373,7 +375,8 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 		}
 	}
 
-	if foundAction && step.Action != "" {
+	// Only return true for Action if we have BOTH Action and ActionInput
+	if foundAction && step.Action != "" && foundActionInput {
 		return step, true
 	}
 
