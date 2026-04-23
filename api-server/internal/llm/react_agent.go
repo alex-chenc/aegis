@@ -49,11 +49,14 @@ type ReActAgent struct {
 }
 
 // NewReActAgent creates a new ReAct agent
-func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID string) *ReActAgent {
+func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID string, maxIterations int) *ReActAgent {
+	if maxIterations <= 0 {
+		maxIterations = 15 // default value
+	}
 	return &ReActAgent{
 		llmClient:     llmClient,
 		toolExecutor:  toolExecutor,
-		maxIterations: 10,
+		maxIterations: maxIterations,
 		sessionID:     sessionID,
 		steps:         make([]AgentStep, 0),
 	}
@@ -91,9 +94,21 @@ func (a *ReActAgent) Invoke(ctx context.Context, userMessage string, history []*
 	}, nil
 }
 
+// StreamWriter is an interface for SSE streaming output
+type StreamWriter interface {
+	Write(event SSEEvent) error
+	WriteThinking(content string) error
+	WriteToolCall(tool, callID string, args interface{}) error
+	WriteToolResult(callID string, result interface{}, timeMs int64) error
+	WriteToolError(callID, errMsg string) error
+	WriteContent(content string) error
+	WriteDone() error
+	WriteError(errMsg string) error
+}
+
 // Stream executes with SSE streaming output
 // This implements the full ReAct loop: think -> action -> observe -> think -> ... -> final answer
-func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*AIMessage, writer *SSEWriter, context map[string]interface{}) error {
+func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*AIMessage, writer StreamWriter, context map[string]interface{}) error {
 	// Build initial prompt with full context
 	prompt := BuildReActPrompt(userMessage, history, context)
 

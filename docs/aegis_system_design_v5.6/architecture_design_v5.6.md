@@ -565,4 +565,147 @@ GRPC_ADDR="${EXTERNAL_IP}:19090"    # Server Agent Hub端口 (agent_hub_port)
 
 ---
 
+---
+
+## 9. AI分析工具调用流程 (V5.6)
+
+### 9.1 完整数据流
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      AI分析工具调用完整数据流                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. 用户发起AI分析请求                                                         │
+│     Frontend → API Server: POST /api/v1/detection/alerts/ai-analysis/session   │
+│                                    ↓                                          │
+│  2. 创建会话，提取 host_ids                                                   │
+│     API Server 从告警中提取 host_id，建立会话上下文                            │
+│                                    ↓                                          │
+│  3. SSE流式分析请求                                                            │
+│     Frontend → API Server: GET /stream?message=分析这个告警                      │
+│                                    ↓                                          │
+│  4. ReAct Agent 推理                                                           │
+│     API Server: LLM分析 → 决定调用工具                                         │
+│                                    ↓                                          │
+│  5. 工具调用 (V5.6关键流程)                                                    │
+│     ┌─────────────────────────────────────────────────────────────────────┐   │
+│     │ API Server → Server: ExecuteTool(call_id, host_id, tool, args)        │   │
+│     │                                    ↓                                  │   │
+│     │ Server → Agent: CommandRequest(Execute, script=#TOOL:GetProcessTree#...)   │   │
+│     │                                    ↓                                  │   │
+│     │ Agent 执行工具，读取 /proc/ 等系统文件                                  │   │
+│     │                                    ↓                                  │   │
+│     │ Agent → Server: CommandResult(result)                                   │   │
+│     │                                    ↓                                  │   │
+│     │ Server → API Server: ToolResponse(result)                              │   │
+│     └─────────────────────────────────────────────────────────────────────┘   │
+│                                    ↓                                          │
+│  6. 工具结果反馈                                                              │
+│     API Server: 工具结果作为 Observation → LLM继续推理                           │
+│                                    ↓                                          │
+│  7. 最终结论                                                                 │
+│     LLM 输出 Final Answer → SSE: content + done                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 API Server 工具执行器
+
+**核心组件**: `api-server/internal/api/handler/ai_analysis_handler.go`
+
+| 组件 | 说明 |
+|------|------|
+| `ToolExecutor` | 实现 `llm.ToolExecutor` 接口，通过 gRPC 调用 Server |
+| `AISSESion` | AI会话结构，包含 HostIDs、TimeRange 等上下文 |
+| `buildSessionContext` | 构建会话上下文，提供 start_time/end_time |
+
+**关键参数规范化**:
+- `camelCase` → `snake_case`: hostId → host_id, startTime → start_time
+- 支持嵌套 `time_range: {start, end}` 对象的自动提取
+
+### 9.3 ReAct Agent 解析流程
+
+**文件**: `api-server/internal/llm/react_agent.go`
+
+```
+LLM流式输出
+    ↓
+tryParseStep() 解析
+    ↓
+必须同时满足: foundAction && foundActionInput
+    ↓
+才执行工具（防止 ActionInput 为 null 时执行）
+```
+
+**SSE事件流**:
+```json
+{"type": "thinking", "content": "我需要分析..."}
+{"type": "tool_call", "tool": "QueryHistoricalLogs", "args": {...}}
+{"type": "tool_result", "result": {...}, "time_ms": 85}
+{"type": "thinking", "content": "基于结果分析..."}
+{"type": "content", "content": "最终结论..."}
+{"type": "done"}
+```
+
+### 9.4 已知问题与解决方案
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| "start_time is required" | LLM未正确传递时间参数 | 在Prompt和用户消息中明确指定时间参数 |
+| 重复消息 | thinking被多次发送 | 使用 `thinkingFlushedAsBubble` 标志防止重复 |
+| "Maximum iterations" | LLM未输出Final Answer | 优化Prompt，增加迭代次数限制处理 |
+
+---
+
+## 10. V5.6 Update (2026-04-23) - 新增功能
+
+### 10.1 AI分析会话管理
+
+| API端点 | 方法 | 说明 |
+|--------|------|------|
+| `/api/v1/detection/alerts/ai-analysis/sessions` | GET | 获取会话列表（支持分页） |
+| `/api/v1/detection/alerts/ai-analysis/{session_id}/history` | GET | 获取会话历史消息 |
+| `/api/v1/detection/alerts/ai-analysis/{session_id}` | DELETE | 删除会话及关联消息 |
+
+### 10.2 前端会话持久化
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    前端会话恢复流程                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  1. 页面加载 (onMounted)                                       │
+│         ↓                                                    │
+│  2. 检查 localStorage[CURRENT_SESSION_KEY]                     │
+│         ↓                                                    │
+│  3. 如存在：读取savedSessionId，恢复会话                      │
+│         ↓                                                    │
+│  4. loadConversation() 从localStorage恢复消息                  │
+│                                                              │
+│  保存时机：                                                   │
+│  - startAnalysis() 创建会话时保存sessionId                     │
+│  - watch(messages) 监听变化自动保存                           │
+│  - 切换历史会话时清除当前会话缓存                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 10.3 统一响应格式
+
+所有API响应统一格式：
+
+```json
+// 成功
+{
+  "success": true,
+  "data": { ... }
+}
+
+// 失败
+{
+  "success": false,
+  "message": "错误信息"
+}
+```
+
 **文档结束**

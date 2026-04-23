@@ -225,9 +225,12 @@ func (r *Router) Setup() {
 
 			// AI Analysis endpoints (directly on detection to avoid route conflicts)
 			detection.POST("/alerts/ai-analysis/session", r.aiAnalysisHandler.CreateSession)
+			detection.GET("/alerts/ai-analysis/sessions", r.aiAnalysisHandler.GetSessionList)
 			detection.GET("/alerts/ai-analysis/:session_id/stream", r.aiAnalysisHandler.StreamMessage)
 			detection.POST("/alerts/ai-analysis/:session_id/message", r.aiAnalysisHandler.SendMessage)
 			detection.GET("/alerts/ai-analysis/:session_id/history", r.aiAnalysisHandler.GetSessionHistory)
+			detection.DELETE("/alerts/ai-analysis/:session_id", r.aiAnalysisHandler.DeleteSession)
+			detection.POST("/alerts/ai-analysis/:session_id/conclusion", r.aiAnalysisHandler.ApplyConclusion)
 			detection.POST("/alerts/ai-analysis/similar", r.aiAnalysisHandler.FindSimilarCases)
 			detection.POST("/alerts/ai-analysis/rag-context", r.aiAnalysisHandler.GetRAGContext)
 		}

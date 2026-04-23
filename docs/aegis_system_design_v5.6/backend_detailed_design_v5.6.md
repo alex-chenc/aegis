@@ -348,9 +348,10 @@ type AIAnalysisService struct {
 }
 
 type CreateSessionRequest struct {
-    AlertIDs     []string    `json:"alert_ids"`
-    TimeRange    *TimeRange  `json:"time_range"`
-    HostFilter   []string    `json:"host_filter"`
+    AlertIDs      []string    `json:"alert_ids"`
+    TimeRange     *TimeRange  `json:"time_range"`
+    HostFilter    []string    `json:"host_filter"`
+    MaxIterations int        `json:"max_iterations"` // 最大ReAct迭代次数，默认15
 }
 
 type TimeRange struct {
@@ -458,12 +459,17 @@ func (s *AIAnalysisService) ApplyConclusion(sessionID string, conclusions []Aler
 ```go
 // api-server/internal/service/llm/react_agent.go
 
+// ToolExecutor 执行工具的接口
+type ToolExecutor interface {
+    Execute(ctx context.Context, tool string, args map[string]interface{}) (interface{}, error)
+}
+
 type ReActAgent struct {
-    llmClient     *llm.Client
-    memory        *Memory
-    toolManager   *ToolManager
-    vectorService *VectorService  // RAG增强
+    llmClient     *LLMClient
+    toolExecutor  ToolExecutor
     maxIterations int
+    sessionID     string
+    steps         []AgentStep
 }
 
 type AgentStep struct {
@@ -478,88 +484,100 @@ type AgentResponse struct {
     Steps      []AgentStep `json:"steps"`       // 思考过程
     ToolCalls  []*ToolCall `json:"tool_calls"`
     SessionID  string       `json:"session_id"`
-    AttackGraph *AttackGraph `json:"attack_graph"` // 溯源图
+}
+
+// SSEWriter 流式输出接口
+type SSEWriter interface {
+    WriteThinking(content string) error
+    WriteToolCall(tool, callID string, args interface{}) error
+    WriteToolResult(callID string, result interface{}, timeMs int64) error
+    WriteContent(content string) error
+    WriteDone() error
 }
 
 // SSE 流式事件
 type SSEEvent struct {
-    Type    string      `json:"type"`    // thinking | tool_call | tool_result | content | done
+    Type    string      `json:"type"`    // thinking | tool_call | tool_result | content | done | error
     Content string      `json:"content"`
     Tool    string      `json:"tool,omitempty"`
     CallID  string      `json:"call_id,omitempty"`
     Args    interface{} `json:"args,omitempty"`
     Result  interface{} `json:"result,omitempty"`
     TimeMs  int64       `json:"time_ms,omitempty"`
+    Error   string      `json:"error,omitempty"`
 }
 
-func NewReActAgent(llmClient *llm.Client, memory *Memory, toolManager *ToolManager) *ReActAgent {
+func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID string, maxIterations int) *ReActAgent {
+    if maxIterations <= 0 {
+        maxIterations = 15 // 默认值
+    }
     return &ReActAgent{
         llmClient:     llmClient,
-        memory:        NewMemory(),
-        toolManager:   toolManager,
-        maxIterations: 10,
+        toolExecutor:   toolExecutor,
+        maxIterations: maxIterations,
+        sessionID:     sessionID,
     }
 }
 
-// Invoke 单轮对话（阻塞）
-func (a *ReActAgent) Invoke(userMessage string, history []*model.AIMessage) (*AgentResponse, error) {
-    // 1. 获取RAG上下文
-    ragContext, _ := a.vectorService.BuildRAGContext(ctx, userMessage, "")
+// Stream 流式执行（SSE）- 完整ReAct循环
+func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*AIMessage, writer *SSEWriter, context map[string]interface{}) error {
+    prompt := BuildReActPrompt(userMessage, history, context)
 
-    // 2. 构建ReAct格式Prompt
-    prompt := BuildReActPrompt(userMessage, history, a.memory.GetContext(), ragContext)
+    for iteration < a.maxIterations {
+        // 使用流式LLM调用
+        stream, err := a.llmClient.ChatCompletionStreamWithMessages(ctx, prompt, 0.7)
+        if err != nil {
+            writer.WriteError(fmt.Sprintf("LLM stream failed: %v", err))
+            return err
+        }
 
-    // 3. 调用LLM
-    response, err := a.llmClient.Chat(context.Background(), &llm.ChatRequest{
-        Model:    "claude-3-5-sonnet",
-        Messages: prompt,
-    })
-    if err != nil {
-        return nil, fmt.Errorf("LLM调用失败: %w", err)
-    }
+        // 处理流式响应，逐步解析 Thought/Action/Action Input
+        // 关键：只有同时具有 Action 和 ActionInput 时才执行工具
+        for {
+            chunk, err := stream.Recv()
+            if err == io.EOF {
+                break
+            }
 
-    // 4. 解析ReAct输出
-    steps, finalAnswer := a.parseReActOutput(response.Content)
+            // 尝试解析完整步骤
+            if step, done := a.tryParseStep(buffer); done {
+                // 必须同时有 Action 和 ActionInput 才执行
+                if step.Action != "" && step.ActionInput != nil && !actionExecuted {
+                    // 执行工具
+                    callID := generateCallID()
+                    writer.WriteToolCall(actionName, callID, step.ActionInput)
 
-    // 5. 执行工具调用循环
-    for i := range steps {
-        if steps[i].Action != "" {
-            result, err := a.toolManager.Execute(ctx, steps[i].Action, steps[i].ActionInput)
-            steps[i].Observation = a.formatObservation(result, err)
-            a.memory.AddStep(steps[i])
+                    result, err := a.toolExecutor.Execute(ctx, actionName, step.ActionInput)
+                    // ...
+                }
+            }
+        }
+
+        // 检查是否需要继续循环
+        if !actionExecuted {
+            // 解析 Final Answer
+            return nil
         }
     }
 
-    // 6. 解析attack_graph JSON
-    attackGraph := a.parseAttackGraph(finalAnswer)
-
-    // 7. 更新记忆
-    a.memory.AddMessage("user", userMessage)
-    a.memory.AddMessage("assistant", finalAnswer)
-
-    return &AgentResponse{
-        Content:     finalAnswer,
-        Steps:       steps,
-        ToolCalls:   a.extractToolCalls(steps),
-        SessionID:   a.memory.GetSessionID(),
-        AttackGraph: attackGraph,
-    }, nil
+    writer.WriteError("Maximum iterations reached without final answer")
+    return nil
 }
 
-// Stream 流式执行（SSE）
-func (a *ReActAgent) Stream(ctx context.Context, userMessage string, writer SSEWriter) error {
-    // 实现SSE流式输出，逐步发送 thinking -> tool_call -> tool_result -> content -> done
+// tryParseStep 解析ReAct格式的步骤
+// 关键：必须同时找到 Action 和 ActionInput 才返回 true
+func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
+    // 解析 Thought/Action/Action Input 行
+    // 只有 foundAction && foundActionInput 才返回 true
 }
 
-// parseReActOutput 解析ReAct格式输出
-func (a *ReActAgent) parseReActOutput(content string) ([]AgentStep, string) {
-    // 解析 Thought/Action/Observation 循环
-    // 提取 Final Answer JSON
-}
-
-// parseAttackGraph 从Final Answer中解析attack_graph JSON
-func (a *ReActAgent) parseAttackGraph(finalAnswer string) *AttackGraph {
-    // 解析JSON中的attack_graph字段
+// BuildReActPrompt 构建ReAct提示词
+// 在用户消息中明确包含 start_time 和 end_time
+func BuildReActPrompt(userMessage string, history []*AIMessage, context map[string]interface{}) []Message {
+    // 1. 添加系统提示词模板
+    // 2. 添加历史消息
+    // 3. 添加上下文（包含 time_range 的 start_time/end_time）
+    // 4. 在用户消息中明确指定时间参数
 }
 ```
 
@@ -1149,5 +1167,250 @@ message ToolResponse {
 - 失败文件单独显示错误信息
 
 ---
+
+---
+
+## 附录：V5.6 AI分析功能Bug修复说明
+
+### 1. Bug修复记录 (2026-04-22)
+
+#### 1.1 Bug #1: 重复消息问题
+
+**问题描述**: AI分析时出现重复的思考消息
+
+**根本原因**: 
+- `createSSEHandler` 函数中，当收到 `tool_call` 事件时，思考内容被同时发送到两个消息气泡
+- `pendingThinking` 没有被正确清空，导致后续思考内容与之前的重复
+
+**修复方案**:
+```javascript
+// 添加 thinkingFlushedAsBubble 标志，防止重复
+let thinkingFlushedAsBubble = false
+
+case 'tool_call':
+    cleanup()
+    flushThinking()
+    if (currentThinking && !thinkingFlushedAsBubble) {
+        messages.value.push({
+            role: 'assistant',
+            content: '',
+            thinking: currentThinking,
+            toolCalls: []
+        })
+        thinkingFlushedAsBubble = true
+    }
+```
+
+#### 1.2 Bug #2: "start_time is required" 错误
+
+**问题描述**: 使用 QueryHistoricalLogs 工具时报错 "start_time is required"
+
+**根本原因**:
+1. ReAct Agent 在解析 LLM 输出时，在只看到 "Action:" 时就立即执行工具，此时 ActionInput 尚未解析
+2. LLM 输出的时间参数格式为嵌套对象 `time_range: {start: ..., end: ...}`，但代码期望顶层 `start_time`, `end_time`
+3. LLM 没有正确使用会话中提供的 time_range 参数
+
+**修复方案**:
+1. **prompts.go**: 增强提示词，明确告知 LLM 必须包含 start_time 和 end_time 参数
+2. **react_agent.go**: 修改 `tryParseStep` 函数，必须同时有 Action 和 ActionInput 才执行工具
+```go
+// 修复前
+if foundAction && step.Action != "" {
+    return step, true
+}
+
+// 修复后
+if foundAction && step.Action != "" && foundActionInput {
+    return step, true
+}
+```
+3. **ai_analysis_handler.go**: 
+   - 支持嵌套 `time_range` 对象，自动提取 `start_time` 和 `end_time`
+   - 在用户消息中直接提供时间参数值
+
+#### 1.3 Bug #3: "Maximum iterations reached" 问题
+
+**问题描述**: ReAct Agent 达到最大迭代次数仍未输出 Final Answer
+
+**根本原因**:
+- LLM 在多轮工具调用后未能正确输出 "Final Answer:" 标记
+- 工具执行循环后没有继续推理给出最终结论
+- 默认 maxIterations=10 不够用
+
+**优化方案**:
+- 将 `maxIterations` 默认值调整为 15
+- 支持通过 API 参数配置 maxIterations (1-50)
+- 前端 AIAnalysis.vue 添加最大轮数配置输入框
+- 在达到最大迭代后返回中间推理结果而不是错误
+- 添加更详细的 ReAct Prompt 指导 LLM 正确输出格式
+
+### 2. API Server ToolExecutor 实现
+
+**文件**: `api-server/internal/api/handler/ai_analysis_handler.go`
+
+```go
+type ToolExecutor struct {
+    serverClient   *grpc.ServerClient
+    defaultHostIDs []string  // 从会话中提取的 host_ids
+}
+
+// Execute 执行工具调用
+func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string]interface{}) (interface{}, error) {
+    // 1. 参数规范化：camelCase -> snake_case
+    normalizedArgs := normalizeArgs(args)
+
+    // 2. 自动填充 host_id（如果未提供）
+    if hostID == "" && len(e.defaultHostIDs) > 0 {
+        hostID = e.defaultHostIDs[0]
+    }
+
+    // 3. QueryHistoricalLogs 特殊处理：支持嵌套 time_range
+    if tool == "QueryHistoricalLogs" {
+        if tr, ok := normalizedArgs["time_range"].(map[string]interface{}); ok {
+            if start, ok := tr["start"].(string); ok {
+                normalizedArgs["start_time"] = start
+            }
+        }
+    }
+
+    // 4. 调用 Server gRPC ExecuteTool
+    resp, err := e.serverClient.ExecuteTool(ctx, callID, hostID, tool, argsJSON, 60)
+}
+```
+
+### 3. ReAct Agent Stream 流程
+
+```
+用户消息 → 构建Prompt(包含time_range) → LLM流式响应
+    ↓
+解析 Thought/Action/Action Input
+    ↓
+等待 ActionInput 完整后执行工具（关键修复）
+    ↓
+工具结果作为 Observation 反馈给 LLM
+    ↓
+继续推理或输出 Final Answer
+    ↓
+发送 content + done 事件
+```
+
+---
+
+## 10. V5.6 Update (2026-04-23) - 新增API端点
+
+### 10.1 AI分析会话管理API
+
+#### 获取会话列表（支持分页）
+
+```
+GET /api/v1/detection/alerts/ai-analysis/sessions
+```
+
+**请求参数：**
+| 参数 | 类型 | 必填 | 说明 |
+|-----|------|-----|------|
+| page | int | 否 | 页码，默认1 |
+| page_size | int | 否 | 每页数量，默认10 |
+| status | string | 否 | 过滤状态：active/completed |
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": {
+    "sessions": [
+      {
+        "id": "uuid",
+        "session_id": "uuid",
+        "alert_ids": ["uuid"],
+        "status": "active",
+        "max_iterations": 15,
+        "message_count": 5,
+        "created_at": "2026-04-23T10:00:00Z"
+      }
+    ],
+    "total": 100,
+    "page": 1,
+    "page_size": 10
+  }
+}
+```
+
+#### 获取会话历史
+
+```
+GET /api/v1/detection/alerts/ai-analysis/{session_id}/history
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "data": {
+    "session_id": "uuid",
+    "messages": [
+      {
+        "role": "user",
+        "content": "用户消息",
+        "thinking": "",
+        "created_at": "2026-04-23T10:00:00Z"
+      },
+      {
+        "role": "assistant",
+        "content": "AI回复内容",
+        "thinking": "AI思考过程",
+        "created_at": "2026-04-23T10:00:01Z"
+      }
+    ]
+  }
+}
+```
+
+#### 删除会话
+
+```
+DELETE /api/v1/detection/alerts/ai-analysis/{session_id}
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "session deleted"
+}
+```
+
+### 10.2 SSE流式响应事件
+
+ReAct Agent通过SSE流式输出以下事件：
+
+| 事件类型 | 说明 | 字段 |
+|---------|------|------|
+| thinking | AI思考内容 | content |
+| tool_call | 工具调用 | tool, call_id, args |
+| tool_result | 工具执行结果 | call_id, result, time_ms |
+| tool_error | 工具执行错误 | call_id, error |
+| content | 最终回复内容 | content |
+| done | 流式结束 | - |
+| error | 错误 | content |
+
+### 10.3 数据模型更新
+
+#### AIMessage 新增字段
+
+```go
+type AIMessage struct {
+    ID          uuid.UUID `gorm:"type:uuid;primaryKey"`
+    SessionID   string    `gorm:"type:varchar(100);index"`
+    MessageID   string    `gorm:"type:varchar(100);uniqueIndex"`
+    Role        string    `gorm:"type:varchar(20)"`
+    Content     string    `gorm:"type:text"`
+    Thinking    string    `gorm:"type:text"`    // 新增：AI思考过程
+    ToolCalls   JSONB     `gorm:"type:jsonb"`
+    ToolResults JSONB     `gorm:"type:jsonb"`
+    Steps       JSONB     `gorm:"type:jsonb"`  // 新增：完整推理步骤
+    CreatedAt   time.Time
+}
+```
 
 **文档结束**

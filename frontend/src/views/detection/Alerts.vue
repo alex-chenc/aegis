@@ -22,7 +22,6 @@
           </template>
         </el-input>
         <el-button type="primary" @click="loadAlerts">查询</el-button>
-        <el-button type="warning" @click="showAIDenoiseDialog">AI降噪</el-button>
         <el-button type="danger" :disabled="selectedAlerts.length === 0" @click="handleBatchDelete">
           批量删除 ({{ selectedAlerts.length }})
         </el-button>
@@ -144,52 +143,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="aiDenoiseDialogVisible" title="AI降噪" width="500px">
-      <el-form label-width="100px">
-        <el-form-item label="时间范围">
-          <el-date-picker
-            v-model="aiDenoiseTimeRange"
-            type="datetimerange"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            format="YYYY-MM-DD HH:mm"
-            value-format="YYYY-MM-DDTHH:mm:ss"
-            :disabled-date="disabledDate"
-          />
-        </el-form-item>
-        <el-form-item label="自动处置">
-          <el-switch v-model="aiDenoiseAutoDispose" />
-          <span class="form-hint">开启后，AI判定的告警将自动执行处置</span>
-        </el-form-item>
-        <el-alert type="info" :closable="false" show-icon>
-          <template #title>
-            时间范围最大为24小时，请选择合理的时间范围进行AI降噪分析
-          </template>
-        </el-alert>
-      </el-form>
-      <template #footer>
-        <el-button @click="aiDenoiseDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="aiDenoiseLoading" @click="startAIDenoise">
-          开始降噪
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="aiDenoiseResultVisible" title="AI降噪结果" width="600px">
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="聚合ID">{{ aiDenoiseResult?.aggregation_id }}</el-descriptions-item>
-        <el-descriptions-item label="状态">{{ aiDenoiseResult?.status }}</el-descriptions-item>
-        <el-descriptions-item label="事件数量">{{ aiDenoiseResult?.event_count }}</el-descriptions-item>
-        <el-descriptions-item label="告警数量">{{ aiDenoiseResult?.alert_count }}</el-descriptions-item>
-        <el-descriptions-item label="AI判定">{{ aiDenoiseResult?.ai_judged_count }}</el-descriptions-item>
-        <el-descriptions-item label="自动处置">{{ aiDenoiseResult?.auto_dispose_count }}</el-descriptions-item>
-      </el-descriptions>
-      <template #footer>
-        <el-button type="primary" @click="aiDenoiseResultVisible = false">确定</el-button>
-      </template>
-    </el-dialog>
-  </div>
+    </div>
 </template>
 
 <script setup lang="ts">
@@ -218,12 +172,6 @@ const selectedAlert = ref<Alert | null>(null)
 const blockDialogVisible = ref(false)
 const blockAction = ref('kill_process')
 const blockTargetAlert = ref<Alert | null>(null)
-const aiDenoiseDialogVisible = ref(false)
-const aiDenoiseTimeRange = ref<[string, string] | null>(null)
-const aiDenoiseAutoDispose = ref(false)
-const aiDenoiseLoading = ref(false)
-const aiDenoiseResultVisible = ref(false)
-const aiDenoiseResult = ref<any>(null)
 const selectedAlerts = ref<Alert[]>([])
 
 function handleSelectionChange(selection: Alert[]) {
@@ -322,65 +270,6 @@ async function handleBatchDelete() {
     loadAlerts()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.message || '删除失败')
-  }
-}
-
-function disabledDate(time: Date) {
-  return time.getTime() > Date.now() || time.getTime() < Date.now() - 24 * 60 * 60 * 1000
-}
-
-function showAIDenoiseDialog() {
-  // Check if user wants to use selected alerts or time range
-  if (selectedAlerts.value.length > 0) {
-    // User has selected alerts, navigate to AI Analysis page with selected alerts
-    const alertIds = selectedAlerts.value.map(a => a.alert_id)
-    router.push({
-      path: '/detection/ai-analysis',
-      query: { alert_ids: alertIds.join(',') }
-    })
-  } else {
-    // No selection, show dialog to select time range
-    const now = new Date()
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000)
-    aiDenoiseTimeRange.value = [
-      oneHourAgo.toISOString().slice(0, 19).replace('T', ' '),
-      now.toISOString().slice(0, 19).replace('T', ' ')
-    ]
-    aiDenoiseAutoDispose.value = false
-    aiDenoiseDialogVisible.value = true
-  }
-}
-
-async function startAIDenoise() {
-  if (!aiDenoiseTimeRange.value || aiDenoiseTimeRange.value.length !== 2) {
-    ElMessage.warning('请选择时间范围')
-    return
-  }
-
-  const [startTime, endTime] = aiDenoiseTimeRange.value
-  const start = new Date(startTime)
-  const end = new Date(endTime)
-
-  if (end.getTime() - start.getTime() > 24 * 60 * 60 * 1000) {
-    ElMessage.warning('时间范围不能超过24小时')
-    return
-  }
-
-  aiDenoiseLoading.value = true
-  try {
-    // Navigate to AI Analysis page with time range
-    aiDenoiseDialogVisible.value = false
-    router.push({
-      path: '/detection/ai-analysis',
-      query: {
-        time_range_start: startTime,
-        time_range_end: endTime
-      }
-    })
-  } catch (error: any) {
-    ElMessage.error(error.message || 'AI降噪启动失败')
-  } finally {
-    aiDenoiseLoading.value = false
   }
 }
 

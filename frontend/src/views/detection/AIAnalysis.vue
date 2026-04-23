@@ -28,6 +28,9 @@
                 <el-option v-for="host in hosts" :key="host" :label="host" :value="host" />
               </el-select>
             </el-form-item>
+            <el-form-item label="最大轮数">
+              <el-input-number v-model="maxIterations" :min="1" :max="50" size="default" />
+            </el-form-item>
           </el-form>
 
           <el-table
@@ -66,9 +69,11 @@
           <template #header>
             <div class="card-header">
               <span>AI 安全分析助手</span>
-              <el-tag v-if="sessionId" type="success" size="small">
-                会话ID: {{ sessionId }}
-              </el-tag>
+              <div class="header-actions">
+                <el-button size="small" @click="showSessionHistory">
+                  历史会话
+                </el-button>
+              </div>
             </div>
           </template>
 
@@ -106,37 +111,54 @@
                     <div v-if="msg.isError" class="error-block">
                       <pre>{{ msg.content }}</pre>
                     </div>
-                    <!-- 思考过程 - 流式显示 -->
-                    <div v-else-if="msg.thinking" class="thinking-block">
-                      <div class="thinking-header">
+
+<!-- Thought 独立显示 -->
+                    <div v-if="msg.thought" class="thought-block">
+                      <div class="block-header">
                         <el-icon><Aim /></el-icon>
-                        <span>AI 思考中</span>
-                        <span class="thinking-cursor" v-if="isLoading"></span>
+                        <span>Thought</span>
                       </div>
-                      <div class="thinking-content" ref="thinkingContentRef">{{ msg.thinking }}</div>
+                      <div class="thought-text">{{ msg.thought }}</div>
                     </div>
 
-                    <!-- 工具调用 -->
-                    <div v-if="msg.toolCalls && msg.toolCalls.length > 0" class="tool-calls">
-                      <div v-for="call in msg.toolCalls" :key="call.call_id" class="tool-call-item">
-                        <div class="tool-call-header">
-                          <el-icon><Tools /></el-icon>
-                          <span>调用工具: {{ call.tool }}</span>
-                          <el-icon class="is-loading" v-if="!call.result && !call.error"><Loading /></el-icon>
-                          <el-icon color="#67c23a" v-else-if="call.result"><Check /></el-icon>
-                          <el-icon color="#f56c6c" v-else-if="call.error"><CircleClose /></el-icon>
-                        </div>
-                        <div class="tool-call-result" v-if="call.result">
-                          <pre>{{ typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2) }}</pre>
-                        </div>
-                        <div class="tool-call-error" v-if="call.error">
-                          <pre>{{ call.error }}</pre>
-                        </div>
+                    <!-- Action 独立显示 -->
+                    <div v-if="msg.action" class="action-block">
+                      <div class="block-header">
+                        <el-icon><Tools /></el-icon>
+                        <span>Action: {{ msg.action }}</span>
+                      </div>
+                    </div>
+
+                    <!-- Action Input 独立显示 -->
+                    <div v-if="msg.actionInput" class="action-input-block">
+                      <div class="block-header">
+                        <el-icon><Edit /></el-icon>
+                        <span>Action Input</span>
+                      </div>
+                      <div class="block-content">
+                        <pre>{{ typeof msg.actionInput === 'string' ? msg.actionInput : JSON.stringify(msg.actionInput, null, 2) }}</pre>
+                      </div>
+                    </div>
+
+                    <!-- Observation 独立显示 -->
+                    <div v-if="msg.observation" class="observation-block">
+                      <div class="block-header">
+                        <el-icon><View /></el-icon>
+                        <span>Observation</span>
+                        <el-icon class="is-loading" v-if="msg.isLoading"><Loading /></el-icon>
+                        <el-icon color="#67c23a" v-else-if="msg.observation"><Check /></el-icon>
+                        <el-icon color="#f56c6c" v-else-if="msg.observationError"><CircleClose /></el-icon>
+                      </div>
+                      <div class="block-content" v-if="msg.observationError">
+                        <pre class="error-text">{{ msg.observationError }}</pre>
+                      </div>
+                      <div class="block-content" v-else>
+                        <pre>{{ typeof msg.observation === 'string' ? msg.observation : JSON.stringify(msg.observation, null, 2) }}</pre>
                       </div>
                     </div>
 
                     <!-- 最终回复 -->
-                    <div v-if="msg.content && !msg.thinking" class="final-content">
+                    <div v-if="msg.content && !msg.thought" class="final-content">
                       <pre>{{ msg.content }}</pre>
                     </div>
                   </div>
@@ -144,7 +166,7 @@
               </div>
 
               <!-- 加载中指示器 -->
-              <div v-if="isLoading && (!messages.length || !messages[messages.length - 1]?.thinking)" class="message assistant loading">
+              <div v-if="isLoading && (!messages.length || !messages[messages.length - 1]?.thought)" class="message assistant loading">
                 <div class="message-avatar">
                   <el-icon :size="20"><ChatDotRound /></el-icon>
                 </div>
@@ -172,19 +194,90 @@
               </el-button>
             </div>
           </div>
+
+          <!-- 溯源图展示区域 -->
+          <el-card v-if="attackGraph" class="attack-graph-card" style="margin-top: 16px;">
+            <template #header>
+              <div class="card-header">
+                <span>攻击溯源图</span>
+                <el-button size="small" type="danger" @click="attackGraph = null">
+                  关闭
+                </el-button>
+              </div>
+            </template>
+            <AttackGraph :graph-data="attackGraph" />
+          </el-card>
         </el-card>
+
+        <!-- 历史会话对话框 -->
+        <el-dialog v-model="sessionHistoryVisible" title="历史会话" width="800px">
+          <el-table
+            v-loading="sessionListLoading"
+            :data="sessionList"
+            border
+            stripe
+            @row-click="handleSelectSession"
+            style="cursor: pointer;"
+          >
+            <el-table-column prop="session_id" label="会话ID" width="200" />
+            <el-table-column prop="alert_ids" label="关联告警" width="120">
+              <template #default="{ row }">
+                {{ Array.isArray(row.alert_ids) ? row.alert_ids.length : 0 }} 个
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">
+                  {{ row.status === 'active' ? '进行中' : '已结束' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="max_iterations" label="最大轮数" width="100" />
+            <el-table-column prop="message_count" label="消息数" width="80" />
+            <el-table-column prop="created_at" label="创建时间" width="180">
+              <template #default="{ row }">
+                {{ formatTime(row.created_at) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="150" fixed="right">
+              <template #default="{ row }">
+                <div style="display: flex; gap: 8px; justify-content: center;">
+                  <el-button size="small" type="primary" @click.stop="loadSession(row)">
+                    加载
+                  </el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteSessionById(row)">
+                    删除
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination
+            v-if="sessionTotal > sessionPageSize"
+            layout="prev, pager, next"
+            :total="sessionTotal"
+            :page-size="sessionPageSize"
+            :current-page="sessionPage"
+            @current-change="handleSessionPageChange"
+            style="margin-top: 16px; text-align: center;"
+          />
+          <template #footer>
+            <el-button @click="sessionHistoryVisible = false">关闭</el-button>
+          </template>
+        </el-dialog>
       </el-col>
     </el-row>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose } from '@element-plus/icons-vue'
+import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
-import { createAISession, createAISessionStream, type SSEEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
+import AttackGraph from '@/components/AttackGraph.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -203,7 +296,11 @@ interface Alert {
 interface Message {
   role: 'user' | 'assistant'
   content: string
-  thinking?: string
+  thought?: string
+  action?: string
+  actionInput?: any
+  observation?: any
+  observationError?: string
   toolCalls?: Array<{
     call_id: string
     tool: string
@@ -211,6 +308,43 @@ interface Message {
     result?: any
   }>
   isError?: boolean
+  isLoading?: boolean
+}
+
+// AttackGraph types
+interface GraphNode {
+  id: string
+  type: string
+  label: string
+  detail: string
+  properties: Record<string, any>
+  severity: string
+}
+
+interface GraphEdge {
+  id: string
+  source: string
+  target: string
+  type: string
+  label: string
+  properties: Record<string, any>
+}
+
+interface TimelineEvent {
+  timestamp: string
+  event: string
+  nodeIds: string[]
+}
+
+interface AttackGraph {
+  graphId: string
+  title: string
+  summary: string
+  threatLevel: string
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  timeline: TimelineEvent[]
+  recommendations: string[]
 }
 
 // State
@@ -224,9 +358,81 @@ const timeRange = ref<[string, string] | null>(null)
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const inputMessage = ref('')
+const attackGraph = ref<AttackGraph | null>(null)
+const finalAnswerContent = ref<string>('')
 const isLoading = ref(false)
+const maxIterations = ref(15)
 const messageListRef = ref<HTMLElement | null>(null)
 const alertTableRef = ref<any>(null)
+const currentEventSource = ref<EventSource | null>(null)
+
+// LocalStorage keys
+const CURRENT_SESSION_KEY = 'aegis_current_session_id'
+const savedSessionId = ref<string | null>(null)
+const getStorageKey = () => `aegis_ai_session_${savedSessionId.value}`
+
+// Save current session ID to a fixed key for page reload recovery
+function saveCurrentSessionId() {
+  if (sessionId.value) {
+    localStorage.setItem(CURRENT_SESSION_KEY, sessionId.value)
+  }
+}
+
+// Load current session ID from localStorage
+function loadCurrentSessionId(): string | null {
+  return localStorage.getItem(CURRENT_SESSION_KEY)
+}
+
+// Clear current session ID
+function clearCurrentSessionId() {
+  localStorage.removeItem(CURRENT_SESSION_KEY)
+}
+
+// Save current conversation to localStorage
+function saveConversation() {
+  if (savedSessionId.value && messages.value.length > 0) {
+    try {
+      const data = {
+        messages: messages.value,
+        attackGraph: attackGraph.value,
+        finalAnswerContent: finalAnswerContent.value,
+        maxIterations: maxIterations.value,
+        savedAt: new Date().toISOString()
+      }
+      localStorage.setItem(getStorageKey(), JSON.stringify(data))
+    } catch (e) {
+      // Handle localStorage quota exceeded silently
+      console.warn('Failed to save conversation to localStorage:', e)
+    }
+  }
+}
+
+// Load conversation from localStorage
+function loadConversation(): boolean {
+  if (!savedSessionId.value) return false
+  const stored = localStorage.getItem(getStorageKey())
+  if (stored) {
+    try {
+      const data = JSON.parse(stored)
+      messages.value = data.messages || []
+      attackGraph.value = data.attackGraph || null
+      finalAnswerContent.value = data.finalAnswerContent || ''
+      maxIterations.value = data.maxIterations || 15
+      return true
+    } catch (e) {
+      console.error('Failed to load conversation from localStorage:', e)
+    }
+  }
+  return false
+}
+
+// Clear saved conversation from localStorage
+function clearSavedConversation() {
+  if (savedSessionId.value) {
+    localStorage.removeItem(getStorageKey())
+  }
+  savedSessionId.value = null
+}
 
 // Computed
 const filteredAlerts = computed(() => {
@@ -263,6 +469,109 @@ function handleTimeRangeChange() {
   // Time range is optional for filtering
 }
 
+function formatTime(timestamp: string): string {
+  if (!timestamp) return '-'
+  return new Date(timestamp).toLocaleString('zh-CN')
+}
+
+// Session history functions
+const sessionHistoryVisible = ref(false)
+const sessionListLoading = ref(false)
+const sessionList = ref<SessionListItem[]>([])
+const sessionTotal = ref(0)
+const sessionPage = ref(1)
+const sessionPageSize = ref(10)
+
+async function loadSessionList(page: number = 1) {
+  sessionListLoading.value = true
+  sessionPage.value = page
+  try {
+    const response = await getSessionList(page, sessionPageSize.value)
+    sessionList.value = response.data?.sessions || response.sessions || []
+    sessionTotal.value = response.data?.total || response.total || 0
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载历史会话失败')
+  } finally {
+    sessionListLoading.value = false
+  }
+}
+
+function showSessionHistory() {
+  sessionHistoryVisible.value = true
+  loadSessionList(1)
+}
+
+function handleSessionPageChange(page: number) {
+  loadSessionList(page)
+}
+
+async function deleteSessionById(session: SessionListItem) {
+  try {
+    await deleteSession(session.session_id)
+    ElMessage.success('会话已删除')
+    loadSessionList(sessionPage.value)
+  } catch (error: any) {
+    ElMessage.error(error.message || '删除会话失败')
+  }
+}
+
+interface SessionListItem {
+  id: string
+  session_id: string
+  alert_ids: string[]
+  host_ids: string[]
+  status: string
+  max_iterations: number
+  message_count: number
+  created_at: string
+}
+
+async function loadSession(session: SessionListItem) {
+  // Guard against double execution
+  if (sessionId.value === session.session_id && messages.value.length > 0) {
+    sessionHistoryVisible.value = false
+    return
+  }
+
+  // Clear current session ID when switching to history session
+  clearCurrentSessionId()
+  clearSavedConversation()
+
+  // Set savedSessionId for localStorage key stability
+  savedSessionId.value = session.session_id
+  sessionId.value = session.session_id
+  sessionHistoryVisible.value = false
+  messages.value = []
+  finalAnswerContent.value = ''
+  attackGraph.value = null
+  maxIterations.value = session.max_iterations || 15
+
+  // Load messages from history
+  try {
+    const response = await getSessionHistory(session.session_id)
+    // Backend returns {success: true, data: {session_id, messages}}
+    const msgs = response.data?.messages || response.messages || []
+    if (msgs.length > 0) {
+      messages.value = msgs.map((msg: any) => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content || '',
+        thought: msg.thinking || '',
+        action: '',
+        actionInput: null,
+        observation: null
+      }))
+    }
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载会话消息失败')
+  }
+
+  ElMessage.success('已加载会话')
+}
+
+function handleSelectSession(row: SessionListItem) {
+  loadSession(row)
+}
+
 async function startAnalysis() {
   if (selectedAlertIds.value.length === 0) {
     ElMessage.warning('请先选择要分析的告警')
@@ -279,42 +588,78 @@ async function startAnalysis() {
     const response = await createAISession({
       alert_ids: selectedAlertIds.value,
       time_range: timeRangeFormatted,
-      host_filter: hostFilter.value.length > 0 ? hostFilter.value : undefined
+      host_filter: hostFilter.value.length > 0 ? hostFilter.value : undefined,
+      max_iterations: maxIterations.value
     })
 
+    // Clear any saved conversation for previous session
+    clearSavedConversation()
+
+    // Set savedSessionId for localStorage key stability
+    savedSessionId.value = response.session_id
     sessionId.value = response.session_id
     messages.value = []
 
-    ElMessage.success('AI 分析会话已创建')
+    // Save current session ID for page reload recovery
+    saveCurrentSessionId()
 
-    // Automatically send initial analysis request
-    const initialMessage = `请分析这 ${selectedAlertIds.value.length} 个告警，判断是否为真实威胁，并进行攻击链路溯源。`
-    sendInitialMessage(initialMessage)
+    // Try to load saved conversation if exists
+    if (!loadConversation()) {
+      ElMessage.success('AI 分析会话已创建')
+
+      // Automatically send initial analysis request
+      const initialMessage = `请分析这 ${selectedAlertIds.value.length} 个告警，判断是否为真实威胁，并进行攻击链路溯源。`
+      sendInitialMessage(initialMessage)
+    } else {
+      ElMessage.success('已恢复会话')
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '创建 AI 分析会话失败')
   }
 }
 
 function createSSEHandler(message: string) {
-  let currentThinking = ''
   let rafId: number | null = null
-  let pendingThinking = ''
-  // Track if thinking was already flushed as its own bubble (to prevent duplicates)
-  let thinkingFlushedAsBubble = false
-  // Map to track tool call indices for quick lookup (avoids race condition)
-  const toolCallIndexMap: Record<string, number> = {}
+  let pendingThought = ''
+  let thoughtMsgIndex: number = -1 // Index of the thought message in messages array
+  const sentThoughts = new Set<string>() // Deduplicate sent thoughts
+  // Track current action for association with observation
+  let currentAction = ''
+  let currentCallId = ''
+  let currentArgs: any = null
 
-  const flushThinking = () => {
-    if (pendingThinking !== currentThinking) {
-      currentThinking = pendingThinking
-      updateAssistantMessage(currentThinking, undefined)
+  const flushThought = () => {
+    if (!pendingThought) return
+
+    // Guard: skip if we've already sent this exact thought content
+    if (sentThoughts.has(pendingThought)) {
+      pendingThought = '' // Clear to prevent re-sending
+      return
     }
+
+    if (thoughtMsgIndex >= 0 && thoughtMsgIndex < messages.value.length) {
+      // Update existing thought message instead of creating new one
+      messages.value[thoughtMsgIndex].thought = pendingThought
+    } else {
+      // Create new thought message and record its index
+      thoughtMsgIndex = messages.value.length
+      messages.value.push({
+        role: 'assistant',
+        thought: pendingThought,
+        action: '',
+        actionInput: null,
+        observation: null
+      })
+    }
+    sentThoughts.add(pendingThought)
+    pendingThought = ''
+    scrollToBottom()
   }
 
   const scheduleFlush = () => {
     if (rafId) cancelAnimationFrame(rafId)
     rafId = requestAnimationFrame(() => {
-      flushThinking()
+      flushThought()
       rafId = null
     })
   }
@@ -329,86 +674,107 @@ function createSSEHandler(message: string) {
   const eventSource = createAISessionStream(sessionId.value!, message, (event: SSEEvent) => {
     switch (event.type) {
       case 'thinking':
-        pendingThinking = (pendingThinking + (event.content || '')).trim()
+        pendingThought = (pendingThought + (event.content || '')).trim()
         scheduleFlush()
         break
 
       case 'tool_call':
         cleanup()
-        flushThinking()
-        // Push thinking to its own bubble first, but only if not already done
-        if (currentThinking && !thinkingFlushedAsBubble) {
-          messages.value.push({
-            role: 'assistant',
-            content: '',
-            thinking: currentThinking,
-            toolCalls: []
-          })
-          thinkingFlushedAsBubble = true
+        // Mark current pending thought as sent before flush to prevent re-sending
+        if (pendingThought) {
+          sentThoughts.add(pendingThought)
+          pendingThought = ''
         }
-        // Push a new bubble for the tool call
+        // Flush any remaining (should be empty now)
+        flushThought()
+        // Reset thoughtMsgIndex so next thought creates a NEW message
+        thoughtMsgIndex = -1
+        // Store the action info
+        currentAction = event.tool || ''
+        currentCallId = event.call_id || ''
+        currentArgs = event.args
+        // Push a message with Action and Action Input
         messages.value.push({
           role: 'assistant',
-          content: '',
-          thinking: '',
-          toolCalls: [{
-            call_id: event.call_id || '',
-            tool: event.tool || '',
-            args: event.args
-          }]
+          thought: '',
+          action: currentAction,
+          actionInput: currentArgs,
+          observation: null,
+          isLoading: true
         })
-        // Track the index of this tool call bubble for fast lookup
-        if (event.call_id) {
-          toolCallIndexMap[event.call_id] = messages.value.length - 1
-        }
-        currentThinking = ''
-        pendingThinking = ''
+        scrollToBottom()
         break
 
       case 'tool_result':
-        // Find the tool call bubble using the map (fast lookup)
-        if (event.call_id && event.result !== undefined) {
-          const idx = toolCallIndexMap[event.call_id]
-          if (idx !== undefined && messages.value[idx]) {
-            const msg = messages.value[idx]
-            if (msg.toolCalls && msg.toolCalls.length > 0) {
-              msg.toolCalls[0].result = event.result
+        // Find the latest loading observation message and update it
+        if (event.call_id) {
+          // Find message with matching call_id or the most recent loading message
+          for (let i = messages.value.length - 1; i >= 0; i--) {
+            const msg = messages.value[i]
+            if (msg.action && msg.isLoading) {
+              msg.observation = event.result
+              msg.isLoading = false
+              break
             }
           }
         }
+        scrollToBottom()
         break
 
       case 'tool_error':
-        // Find the tool call bubble using the map (fast lookup)
-        if (event.call_id && event.error) {
-          const idx = toolCallIndexMap[event.call_id]
-          if (idx !== undefined && messages.value[idx]) {
-            const msg = messages.value[idx]
-            if (msg.toolCalls && msg.toolCalls.length > 0) {
-              msg.toolCalls[0].error = event.error
-            }
+        // Find the latest loading observation message and update it with error
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const msg = messages.value[i]
+          if (msg.action && msg.isLoading) {
+            msg.observationError = event.error || 'Tool execution failed'
+            msg.isLoading = false
+            break
           }
         }
+        scrollToBottom()
         break
 
       case 'content':
         cleanup()
-        pendingThinking = ''
-        messages.value.push({
-          role: 'assistant',
-          content: event.content || '',
-          thinking: '',
-          toolCalls: []
-        })
+        pendingThought = ''
+        // Append to last message if exists, otherwise create new one
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.thought && !lastMsg.action && !lastMsg.observation) {
+          // Append to existing assistant message
+          lastMsg.content += event.content || ''
+        } else {
+          messages.value.push({
+            role: 'assistant',
+            content: event.content || '',
+            thought: '',
+            action: '',
+            actionInput: null,
+            observation: null
+          })
+        }
+        // Store final answer content for attack graph parsing
+        if (event.content) {
+          finalAnswerContent.value += event.content
+        }
         isLoading.value = false
         scrollToBottom()
         break
 
       case 'done':
         cleanup()
-        // Only flush thinking if it hasn't been flushed as its own bubble yet
-        if (!thinkingFlushedAsBubble) {
-          flushThinking()
+        // Parse attack_graph from final answer
+        if (finalAnswerContent.value) {
+          try {
+            const jsonMatch = finalAnswerContent.value.match(/\{[\s\S]*"attack_graph"[\s\S]*\}/)
+            if (jsonMatch) {
+              const data = JSON.parse(jsonMatch[0])
+              if (data.attack_graph) {
+                attackGraph.value = data.attack_graph
+              }
+            }
+          } catch (e) {
+            console.error('Failed to parse attack graph:', e)
+          }
         }
         isLoading.value = false
         scrollToBottom()
@@ -434,6 +800,12 @@ function createSSEHandler(message: string) {
 function sendInitialMessage(message: string) {
   if (!sessionId.value || isLoading.value) return
 
+  // Close previous EventSource if exists
+  if (currentEventSource.value) {
+    currentEventSource.value.close()
+    currentEventSource.value = null
+  }
+
   messages.value.push({
     role: 'user',
     content: message
@@ -441,11 +813,17 @@ function sendInitialMessage(message: string) {
 
   scrollToBottom()
   isLoading.value = true
-  createSSEHandler(message)
+  currentEventSource.value = createSSEHandler(message)
 }
 
 function sendMessage() {
   if (!inputMessage.value.trim() || !sessionId.value || isLoading.value) return
+
+  // Close previous EventSource if exists
+  if (currentEventSource.value) {
+    currentEventSource.value.close()
+    currentEventSource.value = null
+  }
 
   const userMessage = inputMessage.value.trim()
   inputMessage.value = ''
@@ -457,25 +835,7 @@ function sendMessage() {
 
   scrollToBottom()
   isLoading.value = true
-  createSSEHandler(userMessage)
-}
-
-function updateAssistantMessage(thinking: string, toolCalls?: Message['toolCalls'], content?: string) {
-  const lastMsg = messages.value[messages.value.length - 1]
-  // Only update the last message if it's empty (no content and no toolCalls) and no error
-  // Otherwise push a new message to create a new bubble
-  if (lastMsg && lastMsg.role === 'assistant' && !content && !lastMsg.isError && !lastMsg.content && (!lastMsg.toolCalls || lastMsg.toolCalls.length === 0)) {
-    lastMsg.thinking = thinking
-    lastMsg.toolCalls = toolCalls
-  } else {
-    messages.value.push({
-      role: 'assistant',
-      content: content || '',
-      thinking: thinking,
-      toolCalls: toolCalls
-    })
-  }
-  scrollToBottom()
+  currentEventSource.value = createSSEHandler(userMessage)
 }
 
 function scrollToBottom() {
@@ -506,6 +866,16 @@ function severityLabel(severity: string) {
   return map[severity] || severity
 }
 
+// Auto-save conversation when messages change
+watch(messages, () => {
+  saveConversation()
+}, { deep: true })
+
+// Cleanup on unmount
+onBeforeUnmount(() => {
+  clearSavedConversation()
+})
+
 // Init
 onMounted(() => {
   // Check if we have query parameters from Alerts page
@@ -528,6 +898,18 @@ onMounted(() => {
       nextTick(() => {
         startAnalysis()
       })
+    } else {
+      // Try to restore session from localStorage after page reload
+      const savedId = loadCurrentSessionId()
+      if (savedId) {
+        savedSessionId.value = savedId
+        sessionId.value = savedId
+        if (loadConversation()) {
+          nextTick(() => {
+            ElMessage.success('已恢复之前的会话')
+          })
+        }
+      }
     }
   })
 })
@@ -548,6 +930,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .filter-form {
@@ -617,10 +1005,11 @@ onMounted(() => {
 }
 
 .message-content {
-  max-width: 80%;
+  max-width: 100%;
   padding: 12px 16px;
   border-radius: 8px;
   word-break: break-word;
+  overflow: visible;
 }
 
 .message.user .message-content {
@@ -634,6 +1023,8 @@ onMounted(() => {
   min-height: 40px;
   width: 100%;
   box-sizing: border-box;
+  overflow: visible;
+  display: block;
 }
 
 .user-content {
@@ -685,6 +1076,137 @@ onMounted(() => {
   max-height: none;
   overflow-y: visible;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Thought block - 独立显示AI思考过程 */
+.thought-block {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #0ea5e9;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.thought-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #0ea5e9;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.thought-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.thought-text {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.6;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Action block - 独立显示工具调用 */
+.action-block {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.action-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Action Input block - 独立显示工具参数 */
+.action-input-block {
+  background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%);
+  border: 1px solid #a855f7;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.action-input-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #7e22ce;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.action-input-block .block-content {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.action-input-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: #1e293b;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Observation block - 独立显示工具执行结果 */
+.observation-block {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid #22c55e;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.observation-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #15803d;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.observation-block .block-content {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.observation-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: #1e293b;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .error-block {
@@ -756,6 +1278,13 @@ onMounted(() => {
 
 .final-content {
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.final-content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .loading-indicator {

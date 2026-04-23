@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"api-server/internal/grpc"
 	"api-server/internal/llm"
+	"api-server/internal/model"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
@@ -24,6 +26,8 @@ type AIAnalysisHandler struct {
 	configRepo     *repository.ConfigRepository
 	vectorService  *service.VectorService
 	serverClient  *grpc.ServerClient
+	sessionRepo   *repository.AISessionRepository
+	messageRepo   *repository.AIMessageRepository
 	sessions       map[string]*AISSESion
 	sessionsMutex  sync.RWMutex
 }
@@ -37,9 +41,82 @@ type AISSESion struct {
 	InitialQuery  string
 	Status        string
 	CreatedAt     time.Time
+	MaxIterations int       // Maximum ReAct iterations
 	Messages      []*llm.AIMessage
 	LLMClient     *llm.LLMClient
 	ReActAgent    *llm.ReActAgent
+}
+
+// SSEResponseCollector collects SSE content events to build the full AI response
+type SSEResponseCollector struct {
+	content string
+}
+
+func (c *SSEResponseCollector) WriteContent(chunk string) error {
+	c.content += chunk
+	return nil
+}
+
+func (c *SSEResponseCollector) GetContent() string {
+	return c.content
+}
+
+// collectingSSEWriter wraps SSEWriter to also collect content for persistence
+type collectingSSEWriter struct {
+	writer    *llm.SSEWriter
+	collector *SSEResponseCollector
+}
+
+func (w *collectingSSEWriter) Write(event llm.SSEEvent) error {
+	// Collect content events
+	if event.Type == "content" {
+		w.collector.WriteContent(event.Content)
+	}
+	// Write to actual SSE writer
+	return w.writer.Write(event)
+}
+
+func (w *collectingSSEWriter) WriteThinking(content string) error {
+	return w.writer.WriteThinking(content)
+}
+
+func (w *collectingSSEWriter) WriteToolCall(tool, callID string, args interface{}) error {
+	return w.writer.WriteToolCall(tool, callID, args)
+}
+
+func (w *collectingSSEWriter) WriteToolResult(callID string, result interface{}, timeMs int64) error {
+	return w.writer.WriteToolResult(callID, result, timeMs)
+}
+
+func (w *collectingSSEWriter) WriteToolError(callID, errMsg string) error {
+	return w.writer.WriteToolError(callID, errMsg)
+}
+
+func (w *collectingSSEWriter) WriteContent(content string) error {
+	// First collect the content
+	w.collector.WriteContent(content)
+	// Then write to SSE writer
+	return w.writer.WriteContent(content)
+}
+
+func (w *collectingSSEWriter) WriteDone() error {
+	return w.writer.WriteDone()
+}
+
+func (w *collectingSSEWriter) WriteError(errMsg string) error {
+	return w.writer.WriteError(errMsg)
+}
+
+func (w *collectingSSEWriter) Flush() {
+	w.writer.Flush()
+}
+
+// truncate truncates a string to a maximum length
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 type TimeRange struct {
@@ -48,9 +125,10 @@ type TimeRange struct {
 }
 
 type CreateSessionRequest struct {
-	AlertIDs   []string   `json:"alert_ids"`
-	TimeRange  *TimeRange `json:"time_range"`
-	HostFilter []string   `json:"host_filter"`
+	AlertIDs      []string   `json:"alert_ids"`
+	TimeRange     *TimeRange `json:"time_range"`
+	HostFilter    []string   `json:"host_filter"`
+	MaxIterations int        `json:"max_iterations"`
 }
 
 type CreateSessionResponse struct {
@@ -82,12 +160,31 @@ type SimilarCaseResponse struct {
 	SimilarCases []service.SimilarAnalysis `json:"similar_cases"`
 }
 
-func NewAIAnalysisHandler(alertRepo *repository.AlertRepository, configRepo *repository.ConfigRepository, vectorService *service.VectorService, serverClient *grpc.ServerClient) *AIAnalysisHandler {
+type AlertConclusion struct {
+	AlertID string `json:"alert_id"`
+	Action  string `json:"action"`  // mark_false_positive, confirm_threat, generate_rule
+	Summary string `json:"summary"` // AI分析摘要
+}
+
+type ApplyConclusionRequest struct {
+	Conclusions []AlertConclusion `json:"conclusions"`
+}
+
+func NewAIAnalysisHandler(
+	alertRepo *repository.AlertRepository,
+	configRepo *repository.ConfigRepository,
+	vectorService *service.VectorService,
+	serverClient *grpc.ServerClient,
+	sessionRepo *repository.AISessionRepository,
+	messageRepo *repository.AIMessageRepository,
+) *AIAnalysisHandler {
 	return &AIAnalysisHandler{
 		alertRepo:     alertRepo,
 		configRepo:    configRepo,
 		vectorService: vectorService,
 		serverClient:  serverClient,
+		sessionRepo:   sessionRepo,
+		messageRepo:   messageRepo,
 		sessions:      make(map[string]*AISSESion),
 	}
 }
@@ -154,6 +251,7 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 		InitialQuery:  "",
 		Status:        "active",
 		CreatedAt:     time.Now(),
+		MaxIterations: req.MaxIterations,
 		Messages:      make([]*llm.AIMessage, 0),
 		LLMClient:     llmClient,
 		ReActAgent:    nil,
@@ -162,6 +260,29 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 	h.sessionsMutex.Lock()
 	h.sessions[sessionID] = session
 	h.sessionsMutex.Unlock()
+
+	// Persist session to database
+	if h.sessionRepo != nil {
+		timeRangeJSON := model.JSONB{}
+		if req.TimeRange != nil {
+			timeRangeJSON = model.JSONB{
+				"start": req.TimeRange.Start,
+				"end":   req.TimeRange.End,
+			}
+		}
+		dbSession := &model.AISession{
+			SessionID:     sessionID,
+			AlertIDs:      model.StringArray(req.AlertIDs),
+			HostIDs:       model.StringArray(hostIDs),
+			HostFilter:    model.StringArray(req.HostFilter),
+			TimeRange:     timeRangeJSON,
+			Status:        "active",
+			MaxIterations: req.MaxIterations,
+		}
+		if err := h.sessionRepo.Create(dbSession); err != nil {
+			logger.Warn("failed to persist session", zap.Error(err))
+		}
+	}
 
 	logger.Info("AI analysis session created",
 		zap.String("session_id", sessionID),
@@ -205,25 +326,74 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	c.Header("Transfer-Encoding", "chunked")
 	c.Header("X-Accel-Buffering", "no")
 
-	// Create SSE writer
+	// Create SSE writer and response collector
 	sseWriter := llm.NewSSEWriter(c.Writer)
+	responseCollector := &SSEResponseCollector{}
+
+	// Create a wrapper that captures content while writing SSE
+	collectingWriter := &collectingSSEWriter{
+		writer:    sseWriter,
+		collector: responseCollector,
+	}
 
 	// Initialize ReAct agent if not exists
 	if session.ReActAgent == nil {
-		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID)
+		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID, session.MaxIterations)
 	}
 
 	// Build context for the session
 	context := h.buildSessionContext(session)
 
-	// Stream the response
+	logger.Info("StreamMessage: calling ReActAgent.Stream", zap.String("session_id", sessionID))
+
+	// Stream the response - use collectingWriter instead of sseWriter
 	ctx := c.Request.Context()
-	if err := session.ReActAgent.Stream(ctx, message, session.Messages, sseWriter, context); err != nil {
+	if err := session.ReActAgent.Stream(ctx, message, session.Messages, collectingWriter, context); err != nil {
 		logger.Error("stream error", zap.Error(err), zap.String("session_id", sessionID))
 		sseWriter.WriteError(fmt.Sprintf("stream error: %v", err))
 	}
+	logger.Info("StreamMessage: ReActAgent.Stream returned", zap.String("session_id", sessionID))
 
-	// Add user message to history
+	// Get the full AI response content
+	aiResponseContent := responseCollector.GetContent()
+	logger.Info("AI response collected", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
+
+	// Persist user message to database
+	if h.messageRepo != nil {
+		userMsg := &model.AIMessage{
+			SessionID: sessionID,
+			MessageID: uuid.New().String(),
+			Role:      "user",
+			Content:   message,
+		}
+		if err := h.messageRepo.Create(userMsg); err != nil {
+			logger.Warn("failed to persist user message", zap.Error(err))
+		}
+		h.sessionRepo.IncrementMessageCount(sessionID)
+
+		// Persist AI response using the collected content from SSE stream
+		if aiResponseContent != "" {
+			aiMsg := &model.AIMessage{
+				SessionID: sessionID,
+				MessageID: uuid.New().String(),
+				Role:      "assistant",
+				Content:   aiResponseContent,
+			}
+			if err := h.messageRepo.Create(aiMsg); err != nil {
+				logger.Warn("failed to persist AI response", zap.Error(err))
+			} else {
+				logger.Info("persisted AI response", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
+				h.sessionRepo.IncrementMessageCount(sessionID)
+			}
+			// Also add AI response to in-memory session history for conversation continuity
+			session.Messages = append(session.Messages, &llm.AIMessage{
+				Role:    "assistant",
+				Content: aiResponseContent,
+			})
+		}
+	}
+
+	// Add user message to in-memory session history (for conversation continuity)
 	session.Messages = append(session.Messages, &llm.AIMessage{
 		Role:    "user",
 		Content: message,
@@ -252,7 +422,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 
 	// Initialize ReAct agent if not exists
 	if session.ReActAgent == nil {
-		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID)
+		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID, session.MaxIterations)
 	}
 
 	// Build context
@@ -363,6 +533,23 @@ func (h *AIAnalysisHandler) GetRAGContext(c *gin.Context) {
 func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 	sessionID := c.Param("session_id")
 
+	// Try to read from database first
+	if h.messageRepo != nil {
+		messages, err := h.messageRepo.FindBySessionID(sessionID)
+		if err == nil && len(messages) > 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"data": gin.H{
+					"session_id": sessionID,
+					"messages":   messages,
+				},
+			})
+			return
+		}
+		logger.Warn("no messages found in DB or error, falling back to memory", zap.Error(err))
+	}
+
+	// Fallback to memory
 	h.sessionsMutex.RLock()
 	session, exists := h.sessions[sessionID]
 	h.sessionsMutex.RUnlock()
@@ -378,6 +565,121 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 			"session_id": sessionID,
 			"messages":   session.Messages,
 		},
+	})
+}
+
+// GetSessionList gets the list of sessions with pagination
+// GET /api/v1/detection/alerts/ai-analysis/sessions
+func (h *AIAnalysisHandler) GetSessionList(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	status := c.Query("status")
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	if h.sessionRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session repository not available"})
+		return
+	}
+
+	sessions, total, err := h.sessionRepo.FindList(page, pageSize, status)
+	if err != nil {
+		logger.Error("failed to get session list", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get session list"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"sessions": sessions,
+			"total":    total,
+			"page":     page,
+			"page_size": pageSize,
+		},
+	})
+}
+
+// DeleteSession deletes a session and its messages
+// DELETE /api/v1/detection/alerts/ai-analysis/{session_id}
+func (h *AIAnalysisHandler) DeleteSession(c *gin.Context) {
+	sessionID := c.Param("session_id")
+
+	// Delete from database first
+	if h.sessionRepo != nil {
+		if err := h.sessionRepo.Delete(sessionID); err != nil {
+			logger.Error("failed to delete session from DB", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete session"})
+			return
+		}
+	}
+
+	// Remove from memory after DB delete succeeds
+	h.sessionsMutex.Lock()
+	delete(h.sessions, sessionID)
+	h.sessionsMutex.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "session deleted",
+	})
+}
+
+// ApplyConclusion applies AI analysis conclusions to alerts
+// POST /api/v1/detection/alerts/ai-analysis/{session_id}/conclusion
+func (h *AIAnalysisHandler) ApplyConclusion(c *gin.Context) {
+	sessionID := c.Param("session_id")
+
+	var req ApplyConclusionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	h.sessionsMutex.RLock()
+	session, exists := h.sessions[sessionID]
+	h.sessionsMutex.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
+
+	// Apply conclusions to each alert
+	for _, conclusion := range req.Conclusions {
+		summary := conclusion.Summary
+		if summary == "" {
+			summary = fmt.Sprintf("AI分析判定: %s", conclusion.Action)
+		}
+
+		switch conclusion.Action {
+		case "mark_false_positive":
+			if h.alertRepo != nil {
+				h.alertRepo.UpdateLLMSummary(conclusion.AlertID, fmt.Sprintf("AI判定为误报：%s", summary))
+			}
+		case "confirm_threat":
+			if h.alertRepo != nil {
+				h.alertRepo.MarkAIJudged(conclusion.AlertID, summary)
+			}
+		case "generate_rule":
+			// TODO: Generate rule from alert
+			logger.Info("generate_rule not implemented yet", zap.String("alert_id", conclusion.AlertID))
+		}
+	}
+
+	// Update session status
+	session.Status = "completed"
+
+	logger.Info("applied conclusions", zap.String("session_id", sessionID), zap.Int("count", len(req.Conclusions)))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("已应用 %d 个结论", len(req.Conclusions)),
 	})
 }
 

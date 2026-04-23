@@ -16,7 +16,7 @@ V5.6版本前端主要新增以下功能：
 |------|---------|------|
 | Sigma规则上传 | `/detection/rules` | 支持上传Sigma规则YAML/ZIP文件 |
 | AI规则配置 | `/detection/rules` → AI配置Tab | 配置AI规则更新功能 |
-| AI降噪多轮分析 | `/detection/alerts` | 多选告警+时间范围+多轮对话 |
+| AI分析多轮对话 | `/detection/ai-analysis` | 多选告警+时间范围+多轮对话+溯源图 |
 | 工具调用展示 | 嵌入在AI分析面板 | 展示AI调用的工具及结果 |
 
 ---
@@ -289,7 +289,7 @@ const testRuleGeneration = async () => {
   <div class="ai-analysis-panel">
     <!-- 头部 -->
     <div class="panel-header">
-      <span class="title">AI降噪分析</span>
+      <span class="title">AI安全分析助手</span>
       <el-button link @click="clearSession">
         <el-icon><Close /></el-icon>
         清除
@@ -305,6 +305,8 @@ const testRuleGeneration = async () => {
         <el-option label="最近24小时" value="24h" />
         <el-option label="自定义" value="custom" />
       </el-select>
+      <el-input-number v-model="maxIterations" :min="1" :max="50" size="small" style="width: 120px" />
+      <span>最大轮数</span>
       <el-button type="primary" size="small" @click="startAnalysis">
         开始分析
       </el-button>
@@ -418,6 +420,10 @@ interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  thinking?: string      // AI思考过程
+  action?: string        // 工具名称
+  actionInput?: any      // 工具参数
+  observation?: string   // 工具执行结果
   toolCalls?: ToolCall[]
   toolResults?: ToolResult[]
 }
@@ -768,13 +774,65 @@ export const updateAIRuleConfig = (config: AIConfig) => {
 // 创建分析会话
 export const createAnalysisSession = (params: {
   alert_ids: string[]
-  time_range: { start: string; end: string }
+  time_range?: { start: string; end: string }
   host_filter?: string[]
+  max_iterations?: number
 }) => {
   return api.post('/api/v1/detection/alerts/ai-analysis/session', params)
 }
 
-// 发送消息
+// 获取会话列表（支持分页）
+export const getSessionList = (page: number = 1, pageSize: number = 10, status?: string) => {
+  return api.get(`/api/v1/detection/alerts/ai-analysis/sessions?page=${page}&page_size=${pageSize}${status ? `&status=${status}` : ''}`)
+}
+
+// 获取会话历史消息
+export const getSessionHistory = (sessionId: string) => {
+  return api.get(`/api/v1/detection/alerts/ai-analysis/${sessionId}/history`)
+}
+
+// 删除会话
+export const deleteSession = (sessionId: string) => {
+  return api.delete(`/api/v1/detection/alerts/ai-analysis/${sessionId}`)
+}
+
+// SSE流式发送消息（V5.6新增）
+export const createAISessionStream = (
+  sessionId: string,
+  message: string,
+  onEvent: (event: SSEEvent) => void
+) => {
+  const encodedMessage = encodeURIComponent(message)
+  const eventSource = new EventSource(
+    `/api/v1/detection/alerts/ai-analysis/${sessionId}/stream?message=${encodedMessage}`
+  )
+
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data) as SSEEvent
+    onEvent(data)
+    if (data.type === 'done' || data.type === 'error') {
+      eventSource.close()
+    }
+  }
+
+  return eventSource
+}
+
+// SSE事件类型
+export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'content' | 'done' | 'error'
+
+export interface SSEEvent {
+  type: SSEEventType
+  content?: string
+  tool?: string
+  call_id?: string
+  args?: Record<string, any>
+  result?: any
+  time_ms?: number
+  error?: string
+}
+
+// 发送消息（非流式）
 export const sendAnalysisMessage = (sessionId: string, content: string) => {
   return api.post(
     `/api/v1/detection/alerts/ai-analysis/${sessionId}/message`,
@@ -920,6 +978,98 @@ export const useAIAnalysisStore = defineStore('aiAnalysis', {
   --tool-error-color: #ef4444;
 }
 ```
+
+---
+
+## 7. V5.6 Update (2026-04-23)
+
+### 7.1 AI分析页面重构
+
+V5.6版本对AI分析页面进行了以下更新：
+
+#### 7.1.1 Bug修复
+
+| Bug | 描述 | 修复方案 |
+|-----|------|---------|
+| Thought内容重复 | AI思考内容在多个对话框内重复出现 | 修改 `flushThought` 函数判断条件，避免空内容被推送 |
+| 状态标签多余 | 历史会话对话框中显示"进行中"状态标签 | 移除状态标签显示 |
+| 结论文本溢出 | 最终结论输出文字超出对话框 | 添加CSS样式 `word-break: break-word` |
+| 历史加载不完整 | 加载历史会话时只显示用户消息，LLM回答丢失 | 修复 `response.data.messages` 访问路径 |
+
+#### 7.1.2 新增功能
+
+| 功能 | 描述 | 实现方式 |
+|-----|------|---------|
+| 会话持久化 | 页面刷新后保持当前对话 | 使用 localStorage 保存会话ID和消息内容 |
+| 历史会话分页 | 历史会话列表支持分页 | 使用 `el-pagination` 组件 |
+| 会话删除 | 支持删除历史会话 | 新增 `deleteSession` API |
+
+#### 7.1.3 会话持久化实现
+
+```typescript
+// localStorage keys
+const CURRENT_SESSION_KEY = 'aegis_current_session_id'
+
+// 保存当前会话ID
+function saveCurrentSessionId() {
+  localStorage.setItem(CURRENT_SESSION_KEY, sessionId.value)
+}
+
+// 页面加载时恢复会话
+onMounted(() => {
+  const savedId = localStorage.getItem(CURRENT_SESSION_KEY)
+  if (savedId) {
+    savedSessionId.value = savedId
+    sessionId.value = savedId
+    loadConversation() // 从localStorage恢复消息
+  }
+})
+
+// 自动保存消息变化
+watch(messages, () => {
+  saveConversation()
+}, { deep: true })
+```
+
+#### 7.1.4 SSE流式交互
+
+```typescript
+// SSE事件类型
+type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'content' | 'done' | 'error'
+
+interface SSEEvent {
+  type: SSEEventType
+  content?: string
+  tool?: string
+  call_id?: string
+  args?: Record<string, any>
+  result?: any
+  time_ms?: number
+  error?: string
+}
+```
+
+### 7.2 API响应格式统一
+
+所有API响应统一使用以下格式：
+
+```typescript
+// 成功响应
+{
+  success: true,
+  data: { ... }
+}
+
+// 错误响应
+{
+  success: false,
+  message: "错误信息"
+}
+```
+
+前端API拦截器处理：
+- 提取 `data` 字段返回
+- 统一错误处理和提示
 
 ---
 

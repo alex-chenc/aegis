@@ -98,14 +98,22 @@ export function sendMessage(sessionId: string, data: SendMessageRequest): Promis
 }
 
 export function getSessionHistory(sessionId: string): Promise<{
-  session_id: string
-  messages: Array<{
-    role: string
-    content: string
-    created_at?: string
-  }>
+  success: boolean
+  data: {
+    session_id: string
+    messages: Array<{
+      role: string
+      content: string
+      thinking?: string
+      created_at?: string
+    }>
+  }
 }> {
   return request.get(`/detection/alerts/ai-analysis/${sessionId}/history`)
+}
+
+export function deleteSession(sessionId: string): Promise<{ success: boolean; message: string }> {
+  return request.delete(`/detection/alerts/ai-analysis/${sessionId}`)
 }
 
 export function findSimilarCases(data: SimilarCaseRequest): Promise<SimilarCaseResponse> {
@@ -114,6 +122,54 @@ export function findSimilarCases(data: SimilarCaseRequest): Promise<SimilarCaseR
 
 export function getRAGContext(data: RAGContextRequest): Promise<RAGContextResponse> {
   return request.post('/detection/alerts/ai-analysis/rag-context', data)
+}
+
+export interface SessionListItem {
+  id: string
+  session_id: string
+  alert_ids: string[]
+  host_ids: string[]
+  host_filter: string[]
+  status: string
+  max_iterations: number
+  message_count: number
+  tool_call_count: number
+  created_at: string
+  updated_at: string
+  concluded_at?: string
+  conclusion?: Record<string, any>
+}
+
+export interface SessionListResponse {
+  sessions: SessionListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export function getSessionList(page: number = 1, pageSize: number = 20, status?: string): Promise<SessionListResponse> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize)
+  })
+  if (status) {
+    params.append('status', status)
+  }
+  return request.get(`/detection/alerts/ai-analysis/sessions?${params.toString()}`)
+}
+
+export interface AlertConclusion {
+  alert_id: string
+  action: 'mark_false_positive' | 'confirm_threat' | 'generate_rule'
+  summary: string
+}
+
+export interface ApplyConclusionRequest {
+  conclusions: AlertConclusion[]
+}
+
+export function applyConclusions(sessionId: string, conclusions: AlertConclusion[]): Promise<{ success: boolean; message: string }> {
+  return request.post(`/detection/alerts/ai-analysis/${sessionId}/conclusion`, { conclusions })
 }
 
 // SSE Streaming function
