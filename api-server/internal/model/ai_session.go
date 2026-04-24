@@ -29,20 +29,20 @@ func (s *StringArray) Scan(value interface{}) error {
 
 // AISession AI分析会话
 type AISession struct {
-	ID            uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	SessionID     string     `gorm:"type:varchar(100);uniqueIndex;not null" json:"session_id"`
+	ID            uuid.UUID   `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	SessionID     string      `gorm:"type:varchar(100);uniqueIndex;not null" json:"session_id"`
 	AlertIDs      StringArray `gorm:"type:jsonb" json:"alert_ids"`
 	HostIDs       StringArray `gorm:"type:jsonb" json:"host_ids"`
 	HostFilter    StringArray `gorm:"type:jsonb" json:"host_filter"`
-	TimeRange     JSONB      `gorm:"type:jsonb" json:"time_range,omitempty"`
-	Status        string     `gorm:"type:varchar(20);default:active" json:"status"`
-	MaxIterations int        `gorm:"default:15" json:"max_iterations"`
-	MessageCount  int        `gorm:"default:0" json:"message_count"`
-	ToolCallCount int        `gorm:"default:0" json:"tool_call_count"`
-	CreatedAt     time.Time  `gorm:"default:now()" json:"created_at"`
-	UpdatedAt     time.Time  `gorm:"default:now()" json:"updated_at"`
-	ConcludedAt   *time.Time `json:"concluded_at,omitempty"`
-	Conclusion    JSONB      `gorm:"type:jsonb" json:"conclusion,omitempty"`
+	TimeRange     JSONB       `gorm:"type:jsonb" json:"time_range,omitempty"`
+	Status        string      `gorm:"type:varchar(20);default:active" json:"status"`
+	MaxIterations int         `gorm:"default:15" json:"max_iterations"`
+	MessageCount  int         `gorm:"default:0" json:"message_count"`
+	ToolCallCount int         `gorm:"default:0" json:"tool_call_count"`
+	CreatedAt     time.Time   `gorm:"default:now()" json:"created_at"`
+	UpdatedAt     time.Time   `gorm:"default:now()" json:"updated_at"`
+	ConcludedAt   *time.Time  `json:"concluded_at,omitempty"`
+	Conclusion    JSONB       `gorm:"type:jsonb" json:"conclusion,omitempty"`
 }
 
 func (AISession) TableName() string {
@@ -53,7 +53,7 @@ func (AISession) TableName() string {
 type AIMessage struct {
 	ID          uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	SessionID   string    `gorm:"type:varchar(100);index;not null" json:"session_id"`
-	MessageID   string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"message_id"`
+	MessageID   string    `gorm:"type:varchar(100);uniqueIndex;not null;default:gen_random_uuid()::text" json:"message_id"`
 	Role        string    `gorm:"type:varchar(20);not null" json:"role"`
 	Content     string    `gorm:"type:text" json:"content"`
 	Thinking    string    `gorm:"type:text" json:"thinking,omitempty"`

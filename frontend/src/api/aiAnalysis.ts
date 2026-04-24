@@ -8,6 +8,7 @@ export interface CreateSessionRequest {
     end: string
   }
   host_filter?: string[]
+  max_iterations?: number
 }
 
 export interface CreateSessionResponse {
@@ -105,6 +106,9 @@ export function getSessionHistory(sessionId: string): Promise<{
       role: string
       content: string
       thinking?: string
+      tool_calls?: { items?: ToolCall[] } | ToolCall[]
+      tool_results?: { items?: any[] } | any[]
+      steps?: { items?: AgentStep[] } | AgentStep[]
       created_at?: string
     }>
   }
@@ -198,6 +202,10 @@ export function createAISessionStream(
 
   eventSource.onerror = (error) => {
     console.error('SSE error:', error)
+    onEvent({
+      type: 'error',
+      content: 'AI 分析连接中断，请稍后重试或查看服务日志'
+    })
     eventSource.close()
   }
 

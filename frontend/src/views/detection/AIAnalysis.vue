@@ -29,7 +29,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="最大轮数">
-              <el-input-number v-model="maxIterations" :min="1" :max="50" size="default" />
+              <el-input-number v-model="maxIterations" :min="1" :max="20" size="default" />
             </el-form-item>
           </el-form>
 
@@ -295,9 +295,10 @@ interface Alert {
 
 interface Message {
   role: 'user' | 'assistant'
-  content: string
+  content?: string
   thought?: string
   action?: string
+  callId?: string
   actionInput?: any
   observation?: any
   observationError?: string
@@ -552,14 +553,7 @@ async function loadSession(session: SessionListItem) {
     // Backend returns {success: true, data: {session_id, messages}}
     const msgs = response.data?.messages || response.messages || []
     if (msgs.length > 0) {
-      messages.value = msgs.map((msg: any) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content || '',
-        thought: msg.thinking || '',
-        action: '',
-        actionInput: null,
-        observation: null
-      }))
+      messages.value = rebuildMessagesFromHistory(msgs)
     }
   } catch (error: any) {
     ElMessage.error(error.message || '加载会话消息失败')
@@ -570,6 +564,88 @@ async function loadSession(session: SessionListItem) {
 
 function handleSelectSession(row: SessionListItem) {
   loadSession(row)
+}
+
+function unwrapHistoryItems<T = any>(value: any): T[] {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (Array.isArray(value.items)) return value.items
+  return []
+}
+
+function findToolResult(toolResults: any[], callId?: string) {
+  if (!callId) return null
+  return toolResults.find(item => item?.call_id === callId) || null
+}
+
+function rebuildMessagesFromHistory(historyMessages: any[]): Message[] {
+  const rebuilt: Message[] = []
+
+  historyMessages.forEach((msg) => {
+    if (msg.role === 'user') {
+      rebuilt.push({
+        role: 'user',
+        content: msg.content || ''
+      })
+      return
+    }
+
+    const steps = unwrapHistoryItems<any>(msg.steps)
+    const toolCalls = unwrapHistoryItems<any>(msg.tool_calls)
+    const toolResults = unwrapHistoryItems<any>(msg.tool_results)
+
+    if (steps.length > 0) {
+      steps.forEach((step) => {
+        if (step.thought) {
+          rebuilt.push({
+            role: 'assistant',
+            thought: step.thought,
+            content: ''
+          })
+        }
+        if (step.action || step.action_input || step.observation) {
+          rebuilt.push({
+            role: 'assistant',
+            content: '',
+            action: step.action || '',
+            actionInput: step.action_input || null,
+            observation: step.observation || null
+          })
+        }
+      })
+    } else {
+      if (msg.thinking) {
+        rebuilt.push({
+          role: 'assistant',
+          thought: msg.thinking,
+          content: ''
+        })
+      }
+
+      toolCalls.forEach((call) => {
+        const result = findToolResult(toolResults, call.call_id)
+        rebuilt.push({
+          role: 'assistant',
+          content: '',
+          action: call.tool || '',
+          callId: call.call_id,
+          actionInput: call.args || call.arguments || null,
+          observation: result?.result || null,
+          observationError: result?.error || ''
+        })
+      })
+    }
+
+    if (msg.content) {
+      rebuilt.push({
+        role: 'assistant',
+        content: msg.content
+      })
+      finalAnswerContent.value += msg.content
+    }
+  })
+
+  return rebuilt
 }
 
 async function startAnalysis() {
@@ -620,39 +696,68 @@ async function startAnalysis() {
 
 function createSSEHandler(message: string) {
   let rafId: number | null = null
-  let pendingThought = ''
+  let currentThought = ''
   let thoughtMsgIndex: number = -1 // Index of the thought message in messages array
-  const sentThoughts = new Set<string>() // Deduplicate sent thoughts
+  let lastCompletedThought = ''
   // Track current action for association with observation
   let currentAction = ''
   let currentCallId = ''
   let currentArgs: any = null
 
-  const flushThought = () => {
-    if (!pendingThought) return
+  const normalizeThought = (value: string) => value.replace(/\s+/g, ' ').trim()
 
-    // Guard: skip if we've already sent this exact thought content
-    if (sentThoughts.has(pendingThought)) {
-      pendingThought = '' // Clear to prevent re-sending
-      return
+  const mergeThoughtChunk = (chunk: string) => {
+    if (!chunk.trim()) return false
+    const nextChunk = chunk
+
+    const normalizedChunk = normalizeThought(nextChunk)
+    const normalizedCurrent = normalizeThought(currentThought)
+
+    if (!normalizedCurrent && normalizedChunk === lastCompletedThought) {
+      return false
     }
 
+    if (!normalizedCurrent) {
+      currentThought = nextChunk
+      return true
+    }
+
+    if (normalizedChunk === normalizedCurrent || normalizedCurrent.endsWith(normalizedChunk)) {
+      return false
+    }
+
+    if (normalizedChunk.startsWith(normalizedCurrent)) {
+      currentThought = nextChunk
+    } else {
+      currentThought += nextChunk
+    }
+
+    return true
+  }
+
+  const flushThought = (complete = false) => {
+    const thought = currentThought.trim()
+    if (!thought) return
+
     if (thoughtMsgIndex >= 0 && thoughtMsgIndex < messages.value.length) {
-      // Update existing thought message instead of creating new one
-      messages.value[thoughtMsgIndex].thought = pendingThought
+      messages.value[thoughtMsgIndex].thought = thought
     } else {
       // Create new thought message and record its index
       thoughtMsgIndex = messages.value.length
       messages.value.push({
         role: 'assistant',
-        thought: pendingThought,
+        thought,
+        content: '',
         action: '',
         actionInput: null,
         observation: null
       })
     }
-    sentThoughts.add(pendingThought)
-    pendingThought = ''
+    if (complete) {
+      lastCompletedThought = normalizeThought(thought)
+      currentThought = ''
+      thoughtMsgIndex = -1
+    }
     scrollToBottom()
   }
 
@@ -674,21 +779,14 @@ function createSSEHandler(message: string) {
   const eventSource = createAISessionStream(sessionId.value!, message, (event: SSEEvent) => {
     switch (event.type) {
       case 'thinking':
-        pendingThought = (pendingThought + (event.content || '')).trim()
-        scheduleFlush()
+        if (mergeThoughtChunk(event.content || '')) {
+          scheduleFlush()
+        }
         break
 
       case 'tool_call':
         cleanup()
-        // Mark current pending thought as sent before flush to prevent re-sending
-        if (pendingThought) {
-          sentThoughts.add(pendingThought)
-          pendingThought = ''
-        }
-        // Flush any remaining (should be empty now)
-        flushThought()
-        // Reset thoughtMsgIndex so next thought creates a NEW message
-        thoughtMsgIndex = -1
+        flushThought(true)
         // Store the action info
         currentAction = event.tool || ''
         currentCallId = event.call_id || ''
@@ -696,8 +794,10 @@ function createSSEHandler(message: string) {
         // Push a message with Action and Action Input
         messages.value.push({
           role: 'assistant',
+          content: '',
           thought: '',
           action: currentAction,
+          callId: currentCallId,
           actionInput: currentArgs,
           observation: null,
           isLoading: true
@@ -707,15 +807,13 @@ function createSSEHandler(message: string) {
 
       case 'tool_result':
         // Find the latest loading observation message and update it
-        if (event.call_id) {
-          // Find message with matching call_id or the most recent loading message
-          for (let i = messages.value.length - 1; i >= 0; i--) {
-            const msg = messages.value[i]
-            if (msg.action && msg.isLoading) {
-              msg.observation = event.result
-              msg.isLoading = false
-              break
-            }
+        // Find message with matching call_id or the most recent loading message
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const msg = messages.value[i]
+          if (msg.action && msg.isLoading && (!event.call_id || msg.callId === event.call_id)) {
+            msg.observation = event.result
+            msg.isLoading = false
+            break
           }
         }
         scrollToBottom()
@@ -725,7 +823,7 @@ function createSSEHandler(message: string) {
         // Find the latest loading observation message and update it with error
         for (let i = messages.value.length - 1; i >= 0; i--) {
           const msg = messages.value[i]
-          if (msg.action && msg.isLoading) {
+          if (msg.action && msg.isLoading && (!event.call_id || msg.callId === event.call_id)) {
             msg.observationError = event.error || 'Tool execution failed'
             msg.isLoading = false
             break
@@ -736,12 +834,12 @@ function createSSEHandler(message: string) {
 
       case 'content':
         cleanup()
-        pendingThought = ''
+        flushThought(true)
         // Append to last message if exists, otherwise create new one
         const lastMsg = messages.value[messages.value.length - 1]
         if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.thought && !lastMsg.action && !lastMsg.observation) {
           // Append to existing assistant message
-          lastMsg.content += event.content || ''
+          lastMsg.content = (lastMsg.content || '') + (event.content || '')
         } else {
           messages.value.push({
             role: 'assistant',
@@ -762,6 +860,9 @@ function createSSEHandler(message: string) {
 
       case 'done':
         cleanup()
+        flushThought(true)
+        currentEventSource.value?.close()
+        currentEventSource.value = null
         // Parse attack_graph from final answer
         if (finalAnswerContent.value) {
           try {
@@ -783,6 +884,10 @@ function createSSEHandler(message: string) {
       case 'error':
         ElMessage.error(event.content || 'AI 分析出错')
         cleanup()
+        currentEventSource.value?.close()
+        currentEventSource.value = null
+        currentThought = ''
+        thoughtMsgIndex = -1
         messages.value.push({
           role: 'assistant',
           content: `AI 分析失败: ${event.content || '未知错误'}`,
@@ -1006,6 +1111,8 @@ onMounted(() => {
 
 .message-content {
   max-width: 100%;
+  min-width: 0;
+  flex: 1;
   padding: 12px 16px;
   border-radius: 8px;
   word-break: break-word;
@@ -1085,8 +1192,9 @@ onMounted(() => {
   border-radius: 8px;
   padding: 12px 16px;
   margin-bottom: 12px;
-  max-height: 300px;
+  max-height: clamp(180px, 42vh, 520px);
   overflow-y: auto;
+  transition: max-height 0.3s ease-out;
 }
 
 .thought-block .block-header {
@@ -1117,7 +1225,7 @@ onMounted(() => {
   font-size: 13px;
   color: #1e293b;
   line-height: 1.6;
-  max-height: 220px;
+  max-height: clamp(120px, 34vh, 420px);
   overflow-y: auto;
 }
 
@@ -1170,7 +1278,7 @@ onMounted(() => {
   word-break: break-word;
   font-size: 12px;
   color: #1e293b;
-  max-height: 200px;
+  max-height: clamp(96px, 26vh, 260px);
   overflow-y: auto;
 }
 
@@ -1205,7 +1313,7 @@ onMounted(() => {
   word-break: break-word;
   font-size: 12px;
   color: #1e293b;
-  max-height: 300px;
+  max-height: clamp(120px, 36vh, 360px);
   overflow-y: auto;
 }
 

@@ -53,6 +53,7 @@ export interface InstallCommand {
 
 export interface LLMConfig {
   api_key_masked: string
+  provider: string
   base_url: string
   model_name: string
   is_active: boolean

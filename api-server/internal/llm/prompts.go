@@ -239,6 +239,9 @@ To help you analyze, you have access to the following tools:
 IMPORTANT: When calling QueryHistoricalLogs, you MUST include start_time and end_time parameters. The session time range is provided in the Alert Context - use those values.
 
 You must follow the ReAct (Reasoning + Acting) format:
+Do NOT output markdown plans, prose-only analysis, or standalone JSON tool parameters.
+Before the final answer, every investigation step MUST use Action and Action Input.
+For the first investigation step, prefer QueryHistoricalLogs when alert context contains host_id and time range.
 
 Format:
 Thought: [your reasoning about what to do next]

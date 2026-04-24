@@ -124,9 +124,11 @@ type ChatStreamResponse struct {
 
 // ChatStream handles streaming responses from LLM
 type ChatStream struct {
-	resp    *http.Response
-	reader  *bufio.Reader
-	done    bool
+	resp            *http.Response
+	reader          *bufio.Reader
+	done            bool
+	contentBuffer   string
+	reasoningBuffer string
 }
 
 // NewChatStream creates a new chat stream
@@ -163,35 +165,87 @@ func (s *ChatStream) Recv() (*ChatStreamResponse, error) {
 	// Remove "data: " prefix if present
 	line = strings.TrimPrefix(line, "data: ")
 
-	var chunk struct {
+	var openAIChunk struct {
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningDetails []struct {
+					Text string `json:"text"`
+				} `json:"reasoning_details"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 
-	if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-		// Skip malformed JSON, continue reading
+	if err := json.Unmarshal([]byte(line), &openAIChunk); err == nil && len(openAIChunk.Choices) > 0 {
+		content := s.deltaText(openAIChunk.Choices[0].Delta.Content, &s.contentBuffer)
+		for _, detail := range openAIChunk.Choices[0].Delta.ReasoningDetails {
+			content += s.deltaText(detail.Text, &s.reasoningBuffer)
+		}
+
+		resp := &ChatStreamResponse{
+			Content: content,
+		}
+
+		if openAIChunk.Choices[0].FinishReason == "stop" || err == io.EOF {
+			s.done = true
+			resp.Done = true
+		}
+
+		return resp, nil
+	}
+
+	var anthropicChunk struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		} `json:"delta"`
+	}
+
+	if err := json.Unmarshal([]byte(line), &anthropicChunk); err != nil {
 		return s.Recv()
 	}
 
-	if len(chunk.Choices) == 0 {
+	if anthropicChunk.Type == "message_stop" {
 		s.done = true
 		return nil, io.EOF
 	}
 
-	resp := &ChatStreamResponse{
-		Content: chunk.Choices[0].Delta.Content,
+	var content string
+	if anthropicChunk.Type == "content_block_delta" {
+		switch anthropicChunk.Delta.Type {
+		case "text_delta":
+			content = anthropicChunk.Delta.Text
+		case "thinking_delta":
+			content = anthropicChunk.Delta.Thinking
+		}
 	}
 
-	if chunk.Choices[0].FinishReason == "stop" || err == io.EOF {
+	resp := &ChatStreamResponse{
+		Content: content,
+	}
+
+	if err == io.EOF {
 		s.done = true
 		resp.Done = true
 	}
 
 	return resp, nil
+}
+
+func (s *ChatStream) deltaText(text string, buffer *string) string {
+	if text == "" {
+		return ""
+	}
+	if *buffer != "" && strings.HasPrefix(text, *buffer) {
+		delta := strings.TrimPrefix(text, *buffer)
+		*buffer = text
+		return delta
+	}
+	*buffer += text
+	return text
 }
 
 // Close closes the stream

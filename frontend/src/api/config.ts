@@ -8,7 +8,7 @@ export function getLLMConfig(): Promise<LLMConfig> {
   })
 }
 
-export function saveLLMConfig(data: { api_key: string; base_url: string; model_name: string }) {
+export function saveLLMConfig(data: { api_key: string; provider: string; base_url: string; model_name: string }) {
   return request<any, void>({
     url: '/config/llm',
     method: 'post',
@@ -16,7 +16,7 @@ export function saveLLMConfig(data: { api_key: string; base_url: string; model_n
   })
 }
 
-export function testLLMConnection(data: { api_key: string; base_url: string; model_name: string }) {
+export function testLLMConnection(data: { api_key: string; provider: string; base_url: string; model_name: string }) {
   return request<any, void>({
     url: '/config/llm/test',
     method: 'post',

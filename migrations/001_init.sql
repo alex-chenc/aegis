@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS llm_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     api_key_encrypted TEXT NOT NULL,
     api_key_masked VARCHAR(50) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'dashscope',
     base_url VARCHAR(500) NOT NULL,
     model_name VARCHAR(100) NOT NULL DEFAULT 'qwen-plus',
     is_active BOOLEAN NOT NULL DEFAULT true,
@@ -64,8 +65,8 @@ CREATE TRIGGER update_llm_configs_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- 插入默认配置
-INSERT INTO llm_configs (api_key_encrypted, api_key_masked, base_url, model_name, is_active)
-VALUES ('', '未配置', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', true)
+INSERT INTO llm_configs (api_key_encrypted, api_key_masked, provider, base_url, model_name, is_active)
+VALUES ('', '未配置', 'dashscope', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', true)
 ON CONFLICT DO NOTHING;
 
 -- ============================================================

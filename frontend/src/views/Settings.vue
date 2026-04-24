@@ -16,11 +16,21 @@
         style="margin-bottom: 20px"
       >
         <p>LLM 配置仅通过本页面进行设置，配置文件中的相关配置已禁用。</p>
-        <p>推荐使用 DeepSeek：Base URL 为 <code>https://api.deepseek.com/v1</code>，模型为 <code>deepseek-chat</code></p>
-        <p>或使用阿里云百炼：Base URL 为 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code></p>
+        <p>选择厂商后会自动填入推荐 Base URL 和模型名称；仍可按实际服务手动调整。</p>
       </el-alert>
       
       <el-form :model="form" label-width="120px">
+        <el-form-item label="模型厂商">
+          <el-radio-group v-model="form.provider" class="provider-selector" @change="handleProviderChange">
+            <el-radio-button
+              v-for="provider in providerOptions"
+              :key="provider.value"
+              :label="provider.value"
+            >
+              {{ provider.label }}
+            </el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="API Key">
           <el-input 
             v-model="form.api_key" 
@@ -36,10 +46,10 @@
           </el-input>
         </el-form-item>
         <el-form-item label="Base URL">
-          <el-input v-model="form.base_url" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+          <el-input v-model="form.base_url" :placeholder="selectedProvider?.baseURL || 'https://api.example.com/v1'" />
         </el-form-item>
         <el-form-item label="模型名称">
-          <el-input v-model="form.model_name" placeholder="qwen-plus" />
+          <el-input v-model="form.model_name" :placeholder="selectedProvider?.modelName || 'model-name'" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="saveConfig" :loading="saving">保存配置</el-button>
@@ -73,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, View, Hide } from '@element-plus/icons-vue'
 import { useConfigStore } from '@/store/config'
@@ -82,17 +92,69 @@ import { getFullAPIKey } from '@/api/config'
 import type { InstallCommand } from '@/types'
 
 const configStore = useConfigStore()
+const providerOptions = [
+  {
+    value: 'deepseek',
+    label: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    modelName: 'deepseek-chat'
+  },
+  {
+    value: 'dashscope',
+    label: '阿里云百炼',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelName: 'qwen-plus'
+  },
+  {
+    value: 'minimax',
+    label: 'MiniMax',
+    baseURL: 'https://api.minimaxi.com/anthropic',
+    modelName: 'MiniMax-M2.7'
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    modelName: 'gpt-4o-mini'
+  },
+  {
+    value: 'custom',
+    label: '自定义',
+    baseURL: '',
+    modelName: ''
+  }
+]
+
 const form = ref({
   api_key: '',
+  provider: 'deepseek',
   base_url: 'https://api.deepseek.com/v1',
   model_name: 'deepseek-chat'
 })
+const selectedProvider = computed(() => providerOptions.find((item) => item.value === form.value.provider))
 const installCommand = ref('')
 const installInfo = ref<InstallCommand | null>(null)
 const saving = ref(false)
 const testing = ref(false)
 const apiKeyVisible = ref(false)
 const originalApiKey = ref('')
+
+const inferProvider = (baseURL: string) => {
+  const url = baseURL.toLowerCase()
+  if (url.includes('deepseek')) return 'deepseek'
+  if (url.includes('dashscope') || url.includes('aliyuncs')) return 'dashscope'
+  if (url.includes('minimaxi') || url.includes('minimax')) return 'minimax'
+  if (url.includes('openai')) return 'openai'
+  return 'custom'
+}
+
+const handleProviderChange = () => {
+  const provider = selectedProvider.value
+  if (!provider || provider.value === 'custom') return
+
+  form.value.base_url = provider.baseURL
+  form.value.model_name = provider.modelName
+}
 
 const saveConfig = async () => {
   // 检查是否为 masked API Key
@@ -108,7 +170,7 @@ const saveConfig = async () => {
 
   saving.value = true
   try {
-    await configStore.saveLLMConfig(form.value.api_key, form.value.base_url, form.value.model_name)
+    await configStore.saveLLMConfig(form.value.api_key, form.value.provider, form.value.base_url, form.value.model_name)
     originalApiKey.value = form.value.api_key
     ElMessage.success('配置保存成功')
   } catch (e: any) {
@@ -135,7 +197,7 @@ const testConnection = async () => {
       originalApiKey.value = apiKeyToUse  // 缓存真正的 key
     }
     
-    await configStore.testConnection(apiKeyToUse, form.value.base_url, form.value.model_name)
+    await configStore.testConnection(apiKeyToUse, form.value.provider, form.value.base_url, form.value.model_name)
     ElMessage.success('连接测试成功')
   } catch (e: any) {
     ElMessage.error(e.message || '连接测试失败')
@@ -219,6 +281,7 @@ onMounted(async () => {
   try {
     await configStore.fetchLLMConfig()
     if (configStore.llmConfig) {
+      form.value.provider = configStore.llmConfig.provider || inferProvider(configStore.llmConfig.base_url)
       form.value.base_url = configStore.llmConfig.base_url
       form.value.model_name = configStore.llmConfig.model_name
       form.value.api_key = configStore.llmConfig.api_key_masked || ''
@@ -239,5 +302,16 @@ onMounted(async () => {
 }
 .cursor-pointer {
   cursor: pointer;
+}
+
+.provider-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-selector :deep(.el-radio-button__inner) {
+  border-radius: 6px;
+  min-width: 92px;
 }
 </style>

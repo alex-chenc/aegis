@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,33 +24,47 @@ import (
 
 type AIAnalysisHandler struct {
 	alertRepo     *repository.AlertRepository
-	configRepo     *repository.ConfigRepository
-	vectorService  *service.VectorService
+	configRepo    *repository.ConfigRepository
+	vectorService *service.VectorService
 	serverClient  *grpc.ServerClient
 	sessionRepo   *repository.AISessionRepository
 	messageRepo   *repository.AIMessageRepository
-	sessions       map[string]*AISSESion
-	sessionsMutex  sync.RWMutex
+	sessions      map[string]*AISSESion
+	sessionsMutex sync.RWMutex
 }
 
 type AISSESion struct {
 	SessionID     string
 	AlertIDs      []string
-	HostIDs       []string  // Extracted from alerts for tool routing
+	HostIDs       []string // Extracted from alerts for tool routing
 	HostFilter    []string
 	TimeRange     *TimeRange
 	InitialQuery  string
 	Status        string
 	CreatedAt     time.Time
-	MaxIterations int       // Maximum ReAct iterations
+	MaxIterations int // Maximum ReAct iterations
 	Messages      []*llm.AIMessage
 	LLMClient     *llm.LLMClient
 	ReActAgent    *llm.ReActAgent
 }
 
+const (
+	defaultAnalysisMaxIterations = 15
+	analysisMaxIterationsLimit   = 20
+	maxToolResultEventBytes      = 20000
+	maxToolResultArrayItems      = 20
+	maxToolResultStringBytes     = 800
+)
+
 // SSEResponseCollector collects SSE content events to build the full AI response
 type SSEResponseCollector struct {
-	content string
+	content        string
+	thinking       string
+	pendingThought string
+	toolCalls      []map[string]interface{}
+	toolResults    []map[string]interface{}
+	steps          []llm.AgentStep
+	currentStep    *llm.AgentStep
 }
 
 func (c *SSEResponseCollector) WriteContent(chunk string) error {
@@ -57,8 +72,205 @@ func (c *SSEResponseCollector) WriteContent(chunk string) error {
 	return nil
 }
 
+func (c *SSEResponseCollector) WriteThinking(content string) {
+	c.thinking += content
+	c.pendingThought += content
+}
+
+func (c *SSEResponseCollector) WriteToolCall(tool, callID string, args interface{}) {
+	c.toolCalls = append(c.toolCalls, map[string]interface{}{
+		"call_id": callID,
+		"tool":    tool,
+		"args":    args,
+	})
+	c.currentStep = &llm.AgentStep{
+		Thought:     strings.TrimSpace(c.pendingThought),
+		Action:      tool,
+		ActionInput: toStringMap(args),
+	}
+	c.pendingThought = ""
+}
+
+func (c *SSEResponseCollector) WriteToolResult(callID string, result interface{}, timeMs int64) {
+	observation := formatCollectedPayload(result)
+	c.toolResults = append(c.toolResults, map[string]interface{}{
+		"call_id": callID,
+		"result":  result,
+		"time_ms": timeMs,
+	})
+	c.finishCurrentStep(observation)
+}
+
+func (c *SSEResponseCollector) WriteToolError(callID, errMsg string) {
+	c.toolResults = append(c.toolResults, map[string]interface{}{
+		"call_id": callID,
+		"error":   errMsg,
+	})
+	c.finishCurrentStep("Error: " + errMsg)
+}
+
 func (c *SSEResponseCollector) GetContent() string {
 	return c.content
+}
+
+func (c *SSEResponseCollector) GetThinking() string {
+	return c.thinking
+}
+
+func (c *SSEResponseCollector) GetToolCalls() []map[string]interface{} {
+	return c.toolCalls
+}
+
+func (c *SSEResponseCollector) GetToolResults() []map[string]interface{} {
+	return c.toolResults
+}
+
+func (c *SSEResponseCollector) GetSteps() []llm.AgentStep {
+	return c.steps
+}
+
+func (c *SSEResponseCollector) ToolCallsJSONB() model.JSONB {
+	if len(c.toolCalls) == 0 {
+		return nil
+	}
+	return model.JSONB{"items": c.toolCalls}
+}
+
+func (c *SSEResponseCollector) ToolResultsJSONB() model.JSONB {
+	if len(c.toolResults) == 0 {
+		return nil
+	}
+	return model.JSONB{"items": c.toolResults}
+}
+
+func (c *SSEResponseCollector) StepsJSONB() model.JSONB {
+	if len(c.steps) == 0 {
+		return nil
+	}
+	return model.JSONB{"items": c.steps}
+}
+
+func (c *SSEResponseCollector) HasAssistantTrace() bool {
+	return c.content != "" || c.thinking != "" || len(c.toolCalls) > 0 || len(c.toolResults) > 0 || len(c.steps) > 0
+}
+
+func (c *SSEResponseCollector) finishCurrentStep(observation string) {
+	if c.currentStep == nil {
+		c.currentStep = &llm.AgentStep{
+			Thought: strings.TrimSpace(c.pendingThought),
+		}
+		c.pendingThought = ""
+	}
+	c.currentStep.Observation = observation
+	c.steps = append(c.steps, *c.currentStep)
+	c.currentStep = nil
+}
+
+func toStringMap(value interface{}) map[string]interface{} {
+	if value == nil {
+		return nil
+	}
+	if typed, ok := value.(map[string]interface{}); ok {
+		return typed
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func formatCollectedPayload(value interface{}) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(data)
+}
+
+func normalizeAnalysisMaxIterations(value int) int {
+	if value <= 0 {
+		return defaultAnalysisMaxIterations
+	}
+	if value > analysisMaxIterationsLimit {
+		return analysisMaxIterationsLimit
+	}
+	return value
+}
+
+func compactToolResultPayload(value interface{}) interface{} {
+	data, err := json.Marshal(value)
+	if err == nil && len(data) <= maxToolResultEventBytes {
+		return value
+	}
+
+	compact := compactJSONValue(value, 0)
+	if data, err := json.Marshal(compact); err == nil && len(data) <= maxToolResultEventBytes {
+		return compact
+	}
+
+	preview := formatCollectedPayload(value)
+	originalBytes := len(preview)
+	if len(preview) > maxToolResultEventBytes {
+		preview = preview[:maxToolResultEventBytes]
+	}
+	return map[string]interface{}{
+		"truncated":           true,
+		"original_size_bytes": originalBytes,
+		"preview":             preview,
+		"notice":              "tool result was too large and was truncated for UI/history display",
+	}
+}
+
+func compactJSONValue(value interface{}, depth int) interface{} {
+	if depth > 6 {
+		return map[string]interface{}{
+			"truncated": true,
+			"notice":    "nested value omitted",
+		}
+	}
+
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed)+1)
+		for k, v := range typed {
+			out[k] = compactJSONValue(v, depth+1)
+		}
+		out["truncated"] = true
+		out["notice"] = "large tool result compacted for UI/history display"
+		return out
+	case []interface{}:
+		limit := len(typed)
+		if limit > maxToolResultArrayItems {
+			limit = maxToolResultArrayItems
+		}
+		out := make([]interface{}, 0, limit+1)
+		for i := 0; i < limit; i++ {
+			out = append(out, compactJSONValue(typed[i], depth+1))
+		}
+		if len(typed) > limit {
+			out = append(out, map[string]interface{}{
+				"truncated":       true,
+				"omitted_items":   len(typed) - limit,
+				"displayed_items": limit,
+			})
+		}
+		return out
+	case string:
+		if len(typed) > maxToolResultStringBytes {
+			return typed[:maxToolResultStringBytes] + fmt.Sprintf("\n... [truncated %d bytes for UI/history display]", len(typed)-maxToolResultStringBytes)
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 // collectingSSEWriter wraps SSEWriter to also collect content for persistence
@@ -77,18 +289,23 @@ func (w *collectingSSEWriter) Write(event llm.SSEEvent) error {
 }
 
 func (w *collectingSSEWriter) WriteThinking(content string) error {
+	w.collector.WriteThinking(content)
 	return w.writer.WriteThinking(content)
 }
 
 func (w *collectingSSEWriter) WriteToolCall(tool, callID string, args interface{}) error {
+	w.collector.WriteToolCall(tool, callID, args)
 	return w.writer.WriteToolCall(tool, callID, args)
 }
 
 func (w *collectingSSEWriter) WriteToolResult(callID string, result interface{}, timeMs int64) error {
-	return w.writer.WriteToolResult(callID, result, timeMs)
+	displayResult := compactToolResultPayload(result)
+	w.collector.WriteToolResult(callID, displayResult, timeMs)
+	return w.writer.WriteToolResult(callID, displayResult, timeMs)
 }
 
 func (w *collectingSSEWriter) WriteToolError(callID, errMsg string) error {
+	w.collector.WriteToolError(callID, errMsg)
 	return w.writer.WriteToolError(callID, errMsg)
 }
 
@@ -142,11 +359,11 @@ type SendMessageRequest struct {
 }
 
 type SendMessageResponse struct {
-	MessageID  string              `json:"message_id"`
-	Role      string              `json:"role"`
-	Content   string              `json:"content"`
-	ToolCalls []*llm.ToolCall     `json:"tool_calls,omitempty"`
-	Steps     []llm.AgentStep     `json:"steps,omitempty"`
+	MessageID string          `json:"message_id"`
+	Role      string          `json:"role"`
+	Content   string          `json:"content"`
+	ToolCalls []*llm.ToolCall `json:"tool_calls,omitempty"`
+	Steps     []llm.AgentStep `json:"steps,omitempty"`
 }
 
 type SimilarCaseRequest struct {
@@ -245,13 +462,13 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 	session := &AISSESion{
 		SessionID:     sessionID,
 		AlertIDs:      req.AlertIDs,
-		HostIDs:      hostIDs,
+		HostIDs:       hostIDs,
 		HostFilter:    req.HostFilter,
 		TimeRange:     req.TimeRange,
 		InitialQuery:  "",
 		Status:        "active",
 		CreatedAt:     time.Now(),
-		MaxIterations: req.MaxIterations,
+		MaxIterations: normalizeAnalysisMaxIterations(req.MaxIterations),
 		Messages:      make([]*llm.AIMessage, 0),
 		LLMClient:     llmClient,
 		ReActAgent:    nil,
@@ -277,7 +494,7 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 			HostFilter:    model.StringArray(req.HostFilter),
 			TimeRange:     timeRangeJSON,
 			Status:        "active",
-			MaxIterations: req.MaxIterations,
+			MaxIterations: normalizeAnalysisMaxIterations(req.MaxIterations),
 		}
 		if err := h.sessionRepo.Create(dbSession); err != nil {
 			logger.Warn("failed to persist session", zap.Error(err))
@@ -315,8 +532,15 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	h.sessionsMutex.RUnlock()
 
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-		return
+		var err error
+		session, err = h.restoreSessionFromDB(sessionID)
+		if err != nil {
+			logger.Warn("failed to restore AI session for stream",
+				zap.String("session_id", sessionID),
+				zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
 	}
 
 	// Set SSE headers
@@ -328,6 +552,17 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 
 	// Create SSE writer and response collector
 	sseWriter := llm.NewSSEWriter(c.Writer)
+	defer func() {
+		if r := recover(); r != nil {
+			errMsg := fmt.Sprintf("AI analysis stream interrupted: %v", r)
+			logger.Error("AI analysis stream panic recovered",
+				zap.Any("error", r),
+				zap.String("session_id", sessionID))
+			_ = sseWriter.WriteError(errMsg)
+			_ = sseWriter.WriteDone()
+		}
+	}()
+
 	responseCollector := &SSEResponseCollector{}
 
 	// Create a wrapper that captures content while writing SSE
@@ -369,35 +604,47 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 		if err := h.messageRepo.Create(userMsg); err != nil {
 			logger.Warn("failed to persist user message", zap.Error(err))
 		}
-		h.sessionRepo.IncrementMessageCount(sessionID)
+		if h.sessionRepo != nil {
+			h.sessionRepo.IncrementMessageCount(sessionID)
+		}
 
-		// Persist AI response using the collected content from SSE stream
-		if aiResponseContent != "" {
+		// Persist AI response and the complete ReAct trace collected from the SSE stream.
+		if responseCollector.HasAssistantTrace() {
 			aiMsg := &model.AIMessage{
-				SessionID: sessionID,
-				MessageID: uuid.New().String(),
-				Role:      "assistant",
-				Content:   aiResponseContent,
+				SessionID:   sessionID,
+				MessageID:   uuid.New().String(),
+				Role:        "assistant",
+				Content:     aiResponseContent,
+				Thinking:    responseCollector.GetThinking(),
+				ToolCalls:   responseCollector.ToolCallsJSONB(),
+				ToolResults: responseCollector.ToolResultsJSONB(),
+				Steps:       responseCollector.StepsJSONB(),
 			}
 			if err := h.messageRepo.Create(aiMsg); err != nil {
 				logger.Warn("failed to persist AI response", zap.Error(err))
 			} else {
 				logger.Info("persisted AI response", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
-				h.sessionRepo.IncrementMessageCount(sessionID)
+				if h.sessionRepo != nil {
+					h.sessionRepo.IncrementMessageCount(sessionID)
+					for range responseCollector.GetToolCalls() {
+						h.sessionRepo.IncrementToolCallCount(sessionID)
+					}
+				}
 			}
-			// Also add AI response to in-memory session history for conversation continuity
-			session.Messages = append(session.Messages, &llm.AIMessage{
-				Role:    "assistant",
-				Content: aiResponseContent,
-			})
 		}
 	}
 
-	// Add user message to in-memory session history (for conversation continuity)
+	// Add messages to in-memory session history in the same order users saw them.
 	session.Messages = append(session.Messages, &llm.AIMessage{
 		Role:    "user",
 		Content: message,
 	})
+	if aiResponseContent != "" {
+		session.Messages = append(session.Messages, &llm.AIMessage{
+			Role:    "assistant",
+			Content: aiResponseContent,
+		})
+	}
 }
 
 // SendMessage handles regular (non-streaming) message sending
@@ -416,8 +663,15 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 	h.sessionsMutex.RUnlock()
 
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-		return
+		var err error
+		session, err = h.restoreSessionFromDB(sessionID)
+		if err != nil {
+			logger.Warn("failed to restore AI session for message",
+				zap.String("session_id", sessionID),
+				zap.Error(err))
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
 	}
 
 	// Initialize ReAct agent if not exists
@@ -452,7 +706,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": SendMessageResponse{
-			MessageID:  uuid.New().String(),
+			MessageID: uuid.New().String(),
 			Role:      "assistant",
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
@@ -522,7 +776,7 @@ func (h *AIAnalysisHandler) GetRAGContext(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"context":     ragContext,
+			"context":    ragContext,
 			"case_count": caseCount,
 		},
 	})
@@ -597,9 +851,9 @@ func (h *AIAnalysisHandler) GetSessionList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"sessions": sessions,
-			"total":    total,
-			"page":     page,
+			"sessions":  sessions,
+			"total":     total,
+			"page":      page,
 			"page_size": pageSize,
 		},
 	})
@@ -683,6 +937,119 @@ func (h *AIAnalysisHandler) ApplyConclusion(c *gin.Context) {
 	})
 }
 
+func (h *AIAnalysisHandler) restoreSessionFromDB(sessionID string) (*AISSESion, error) {
+	if h.sessionRepo == nil || h.configRepo == nil {
+		return nil, fmt.Errorf("session restore dependencies unavailable")
+	}
+
+	dbSession, err := h.sessionRepo.FindBySessionID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := h.configRepo.GetActive()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM config: %w", err)
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt API key: %w", err)
+	}
+
+	maxIterations := normalizeAnalysisMaxIterations(dbSession.MaxIterations)
+
+	session := &AISSESion{
+		SessionID:     dbSession.SessionID,
+		AlertIDs:      []string(dbSession.AlertIDs),
+		HostIDs:       []string(dbSession.HostIDs),
+		HostFilter:    []string(dbSession.HostFilter),
+		TimeRange:     restoreTimeRange(dbSession.TimeRange),
+		Status:        dbSession.Status,
+		CreatedAt:     dbSession.CreatedAt,
+		MaxIterations: maxIterations,
+		Messages:      h.restoreLLMMessages(sessionID),
+		LLMClient:     llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 3),
+		ReActAgent:    nil,
+	}
+
+	h.sessionsMutex.Lock()
+	defer h.sessionsMutex.Unlock()
+	if existing, ok := h.sessions[sessionID]; ok {
+		return existing, nil
+	}
+	h.sessions[sessionID] = session
+
+	logger.Info("restored AI analysis session from DB",
+		zap.String("session_id", sessionID),
+		zap.Int("history_messages", len(session.Messages)))
+
+	return session, nil
+}
+
+func (h *AIAnalysisHandler) restoreLLMMessages(sessionID string) []*llm.AIMessage {
+	if h.messageRepo == nil {
+		return make([]*llm.AIMessage, 0)
+	}
+
+	dbMessages, err := h.messageRepo.FindBySessionID(sessionID)
+	if err != nil {
+		logger.Warn("failed to restore AI message history",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+		return make([]*llm.AIMessage, 0)
+	}
+
+	messages := make([]*llm.AIMessage, 0, len(dbMessages))
+	for _, msg := range dbMessages {
+		content := strings.TrimSpace(msg.Content)
+		if content == "" && msg.Role == "assistant" {
+			content = strings.TrimSpace(msg.Thinking)
+		}
+		if content == "" {
+			continue
+		}
+		if len(content) > 12000 {
+			content = content[:12000] + "\n... [restored history truncated]"
+		}
+		messages = append(messages, &llm.AIMessage{
+			Role:    msg.Role,
+			Content: content,
+		})
+	}
+
+	return messages
+}
+
+func restoreTimeRange(value model.JSONB) *TimeRange {
+	if len(value) == 0 {
+		return nil
+	}
+
+	start, okStart := parseJSONBTime(value["start"])
+	end, okEnd := parseJSONBTime(value["end"])
+	if !okStart || !okEnd {
+		return nil
+	}
+
+	return &TimeRange{Start: start, End: end}
+}
+
+func parseJSONBTime(value interface{}) (time.Time, bool) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, true
+	case string:
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return parsed, true
+	default:
+		return time.Time{}, false
+	}
+}
+
 // buildSessionContext builds the context map for a session
 func (h *AIAnalysisHandler) buildSessionContext(session *AISSESion) map[string]interface{} {
 	context := make(map[string]interface{})
@@ -710,7 +1077,7 @@ func (h *AIAnalysisHandler) buildSessionContext(session *AISSESion) map[string]i
 // ToolExecutor implements llm.ToolExecutor for ReAct agent
 type ToolExecutor struct {
 	serverClient   *grpc.ServerClient
-	defaultHostIDs []string  // Fallback host_ids from session
+	defaultHostIDs []string // Fallback host_ids from session
 }
 
 // NewToolExecutor creates a new tool executor with gRPC client
@@ -825,25 +1192,25 @@ func normalizeArgs(args map[string]interface{}) map[string]interface{} {
 
 	// Mapping of common camelCase to snake_case
 	camelToSnake := map[string]string{
-		"hostId":        "host_id",
-		"startTime":     "start_time",
-		"endTime":       "end_time",
-		"processName":   "process_name",
-		"commandLine":   "command_line",
-		"filePath":      "file_path",
-		"maxSize":       "max_size",
-		"filter":        "filter",
-		"callId":        "call_id",
-		"timeRange":     "time_range",
-		"alertIds":      "alert_ids",
-		"hostFilter":    "host_filter",
-		"pageSize":      "page_size",
-		"page":          "page",
-		"sessionId":     "session_id",
-		"ruleId":        "rule_id",
-		"alertId":       "alert_id",
-		"userId":        "user_id",
-		"processId":     "process_id",
+		"hostId":      "host_id",
+		"startTime":   "start_time",
+		"endTime":     "end_time",
+		"processName": "process_name",
+		"commandLine": "command_line",
+		"filePath":    "file_path",
+		"maxSize":     "max_size",
+		"filter":      "filter",
+		"callId":      "call_id",
+		"timeRange":   "time_range",
+		"alertIds":    "alert_ids",
+		"hostFilter":  "host_filter",
+		"pageSize":    "page_size",
+		"page":        "page",
+		"sessionId":   "session_id",
+		"ruleId":      "rule_id",
+		"alertId":     "alert_id",
+		"userId":      "user_id",
+		"processId":   "process_id",
 	}
 
 	for k, v := range args {

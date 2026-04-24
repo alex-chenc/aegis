@@ -111,6 +111,7 @@ func (r *ConfigRepository) Upsert(cfg *model.LLMConfig, apiKey string) error {
 
 	logger.Info("LLM config upserted successfully",
 		zap.String("id", cfg.ID.String()),
+		zap.String("provider", cfg.Provider),
 		zap.String("base_url", cfg.BaseURL),
 		zap.String("model_name", cfg.ModelName),
 	)

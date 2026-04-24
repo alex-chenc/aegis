@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"api-server/internal/llm"
@@ -30,8 +31,87 @@ func NewConfigHandler(configRepo *repository.ConfigRepository, encryptionKey str
 
 type LLMConfigRequest struct {
 	APIKey    string `json:"api_key"`
+	Provider  string `json:"provider"`
 	BaseURL   string `json:"base_url"`
 	ModelName string `json:"model_name"`
+}
+
+type llmProviderPreset struct {
+	Provider     string
+	DefaultURL   string
+	DefaultModel string
+}
+
+var llmProviderPresets = map[string]llmProviderPreset{
+	"deepseek": {
+		Provider:     "deepseek",
+		DefaultURL:   "https://api.deepseek.com/v1",
+		DefaultModel: "deepseek-chat",
+	},
+	"dashscope": {
+		Provider:     "dashscope",
+		DefaultURL:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		DefaultModel: "qwen-plus",
+	},
+	"minimax": {
+		Provider:     "minimax",
+		DefaultURL:   "https://api.minimaxi.com/anthropic",
+		DefaultModel: "MiniMax-M2.7",
+	},
+	"openai": {
+		Provider:     "openai",
+		DefaultURL:   "https://api.openai.com/v1",
+		DefaultModel: "gpt-4o-mini",
+	},
+	"custom": {
+		Provider:     "custom",
+		DefaultURL:   "https://api.deepseek.com/v1",
+		DefaultModel: "deepseek-chat",
+	},
+}
+
+func normalizeLLMConfigRequest(req *LLMConfigRequest) {
+	req.Provider = normalizeLLMProvider(req.Provider, req.BaseURL)
+	preset := llmProviderPresets[req.Provider]
+
+	if req.BaseURL == "" {
+		req.BaseURL = preset.DefaultURL
+	}
+	if req.ModelName == "" {
+		req.ModelName = preset.DefaultModel
+	}
+}
+
+func normalizeLLMProvider(provider, baseURL string) string {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if _, ok := llmProviderPresets[normalized]; ok {
+		return normalized
+	}
+
+	base := strings.ToLower(baseURL)
+	switch {
+	case strings.Contains(base, "deepseek"):
+		return "deepseek"
+	case strings.Contains(base, "dashscope") || strings.Contains(base, "aliyuncs"):
+		return "dashscope"
+	case strings.Contains(base, "minimaxi") || strings.Contains(base, "minimax"):
+		return "minimax"
+	case strings.Contains(base, "openai"):
+		return "openai"
+	default:
+		return "custom"
+	}
+}
+
+func displayLLMProvider(provider, baseURL string) string {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if normalized == "" || normalized == "custom" {
+		inferred := normalizeLLMProvider("", baseURL)
+		if inferred != "custom" {
+			return inferred
+		}
+	}
+	return normalizeLLMProvider(provider, baseURL)
 }
 
 func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
@@ -50,6 +130,7 @@ func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
 		"message": "success",
 		"data": gin.H{
 			"api_key_masked": config.APIKeyMasked,
+			"provider":       displayLLMProvider(config.Provider, config.BaseURL),
 			"base_url":       config.BaseURL,
 			"model_name":     config.ModelName,
 			"is_active":      config.IsActive,
@@ -76,16 +157,11 @@ func (h *ConfigHandler) SaveLLMConfig(c *gin.Context) {
 		return
 	}
 
-	if req.BaseURL == "" {
-		req.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	}
-
-	if req.ModelName == "" {
-		req.ModelName = "qwen-plus"
-	}
+	normalizeLLMConfigRequest(&req)
 
 	config := &model.LLMConfig{
 		ID:           uuid.New(),
+		Provider:     req.Provider,
 		BaseURL:      req.BaseURL,
 		ModelName:    req.ModelName,
 		IsActive:     true,
@@ -103,6 +179,7 @@ func (h *ConfigHandler) SaveLLMConfig(c *gin.Context) {
 
 	logger.Info("LLM config saved successfully",
 		zap.String("id", config.ID.String()),
+		zap.String("provider", config.Provider),
 		zap.String("base_url", config.BaseURL),
 		zap.String("model_name", config.ModelName),
 	)
@@ -112,6 +189,7 @@ func (h *ConfigHandler) SaveLLMConfig(c *gin.Context) {
 		"message": "config saved successfully",
 		"data": gin.H{
 			"api_key_masked": config.APIKeyMasked,
+			"provider":       config.Provider,
 			"base_url":       config.BaseURL,
 			"model_name":     config.ModelName,
 		},
@@ -137,13 +215,7 @@ func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 		return
 	}
 
-	if req.BaseURL == "" {
-		req.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	}
-
-	if req.ModelName == "" {
-		req.ModelName = "qwen-plus"
-	}
+	normalizeLLMConfigRequest(&req)
 
 	client := llm.NewLLMClient(req.APIKey, req.BaseURL, req.ModelName, 30, 1)
 
@@ -161,6 +233,7 @@ func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 	}
 
 	logger.Info("LLM connection test successful",
+		zap.String("provider", req.Provider),
 		zap.String("base_url", req.BaseURL),
 		zap.String("model_name", req.ModelName),
 	)
@@ -170,6 +243,7 @@ func (h *ConfigHandler) TestLLMConnection(c *gin.Context) {
 		"message": "connection successful",
 		"data": gin.H{
 			"status":     "ok",
+			"provider":   req.Provider,
 			"model_name": req.ModelName,
 		},
 	})

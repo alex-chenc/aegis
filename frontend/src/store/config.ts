@@ -4,6 +4,7 @@ import { getLLMConfig, saveLLMConfig, testLLMConnection, getInstallCommand, getF
 interface ConfigState {
   llmConfig: {
     api_key_masked: string
+    provider: string
     base_url: string
     model_name: string
     is_active: boolean
@@ -34,13 +35,13 @@ export const useConfigStore = defineStore('config', {
       }
     },
 
-    async saveLLMConfig(apiKey: string, baseURL: string, modelName: string) {
-      await saveLLMConfig({ api_key: apiKey, base_url: baseURL, model_name: modelName })
+    async saveLLMConfig(apiKey: string, provider: string, baseURL: string, modelName: string) {
+      await saveLLMConfig({ api_key: apiKey, provider, base_url: baseURL, model_name: modelName })
       await this.fetchLLMConfig()
     },
 
-    async testConnection(apiKey: string, baseURL: string, modelName: string) {
-      await testLLMConnection({ api_key: apiKey, base_url: baseURL, model_name: modelName })
+    async testConnection(apiKey: string, provider: string, baseURL: string, modelName: string) {
+      await testLLMConnection({ api_key: apiKey, provider, base_url: baseURL, model_name: modelName })
     },
 
     async fetchInstallCommand() {

@@ -21,10 +21,10 @@ type AgentStep struct {
 
 // AgentResponse represents the agent's response
 type AgentResponse struct {
-	Content    string       `json:"content"`
-	Steps      []AgentStep  `json:"steps"`
-	ToolCalls  []*ToolCall `json:"tool_calls"`
-	SessionID  string      `json:"session_id"`
+	Content   string      `json:"content"`
+	Steps     []AgentStep `json:"steps"`
+	ToolCalls []*ToolCall `json:"tool_calls"`
+	SessionID string      `json:"session_id"`
 }
 
 // ToolCall represents a tool call made by the agent
@@ -47,6 +47,8 @@ type ReActAgent struct {
 	sessionID     string
 	steps         []AgentStep
 }
+
+const maxObservationChars = 12000
 
 // NewReActAgent creates a new ReAct agent
 func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID string, maxIterations int) *ReActAgent {
@@ -242,6 +244,13 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 				writer.WriteDone()
 				return nil
 			}
+			prompt = append(prompt, Message{
+				Role:    "assistant",
+				Content: buffer,
+			}, Message{
+				Role:    "user",
+				Content: "Your previous response did not follow the required ReAct format and no tool was executed. Continue the investigation by outputting exactly one tool call using this format:\nThought: ...\nAction: QueryHistoricalLogs\nAction Input: {\"host_id\":\"...\",\"start_time\":\"...\",\"end_time\":\"...\",\"filter\":\"...\"}\nDo not provide the final answer until after observations are returned.",
+			})
 		}
 
 		// If we executed an action, continue to next iteration
@@ -331,34 +340,12 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 	foundThought := false
 	foundActionInput := false
 
-	// First, check if buffer contains a complete JSON object (no Thought:/Action: prefixes)
-	// This handles LLM output like: {"query": "...", "time_range": {...}}
-	trimmed := strings.TrimSpace(buffer)
-	if strings.HasPrefix(trimmed, "{") {
-		// Check if it's a complete JSON object (ends with })
-		if idx := strings.LastIndex(trimmed, "}"); idx >= 0 {
-			jsonStr := trimmed[:idx+1]
-			if json.Unmarshal([]byte(jsonStr), &step.ActionInput) == nil {
-				// JSON parsed successfully - infer tool name from keys
-				if _, hasQuery := step.ActionInput["query"]; hasQuery {
-					step.Action = "QueryHistoricalLogs"
-					return step, true
-				}
-				if _, hasPid := step.ActionInput["pid"]; hasPid {
-					step.Action = "GetProcessTree"
-					return step, true
-				}
-				if _, hasHostID := step.ActionInput["host_id"]; hasHostID {
-					step.Action = "GetRunningProcesses"
-					return step, true
-				}
-				if _, hasProcessName := step.ActionInput["process_name"]; hasProcessName {
-					step.Action = "GetOpenFiles"
-					return step, true
-				}
-				// Unknown JSON structure, treat as action input
-				return step, true
-			}
+	// First, check if buffer contains a complete JSON object that describes a tool input.
+	if input, ok := extractJSONActionInput(buffer); ok {
+		step.ActionInput = input
+		if action := inferToolFromInput(input); action != "" {
+			step.Action = action
+			return step, true
 		}
 	}
 
@@ -400,8 +387,9 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 		// Try to parse remaining as JSON
 		remaining := strings.TrimSpace(buffer)
 		if idx := strings.LastIndex(remaining, "}"); idx >= 0 {
-			jsonStr := remaining[strings.Index(remaining, "{"):idx+1]
-			if jsonStr != "" {
+			start := strings.Index(remaining, "{")
+			if start >= 0 && start <= idx {
+				jsonStr := remaining[start : idx+1]
 				var input map[string]interface{}
 				if err := json.Unmarshal([]byte(jsonStr), &input); err == nil {
 					step.ActionInput = input
@@ -412,6 +400,93 @@ func (a *ReActAgent) tryParseStep(buffer string) (*AgentStep, bool) {
 	}
 
 	return nil, false
+}
+
+func extractJSONActionInput(content string) (map[string]interface{}, bool) {
+	candidates := extractJSONObjectCandidates(content)
+	for _, candidate := range candidates {
+		var input map[string]interface{}
+		if err := json.Unmarshal([]byte(candidate), &input); err == nil && len(input) > 0 {
+			return input, true
+		}
+	}
+	return nil, false
+}
+
+func extractJSONObjectCandidates(content string) []string {
+	var candidates []string
+	for searchFrom := 0; searchFrom < len(content); {
+		start := strings.Index(content[searchFrom:], "{")
+		if start < 0 {
+			break
+		}
+		start += searchFrom
+
+		depth := 0
+		inString := false
+		escaped := false
+		for i := start; i < len(content); i++ {
+			ch := content[i]
+			if inString {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+
+			switch ch {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					candidates = append(candidates, content[start:i+1])
+					searchFrom = i + 1
+					i = len(content)
+				}
+			}
+		}
+		if searchFrom <= start {
+			break
+		}
+	}
+	return candidates
+}
+
+func inferToolFromInput(input map[string]interface{}) string {
+	if _, hasQuery := input["query"]; hasQuery {
+		return "QueryHistoricalLogs"
+	}
+	if _, hasStart := input["start_time"]; hasStart {
+		if _, hasEnd := input["end_time"]; hasEnd {
+			return "QueryHistoricalLogs"
+		}
+	}
+	if _, hasFilter := input["filter"]; hasFilter {
+		if _, hasHostID := input["host_id"]; hasHostID {
+			return "QueryHistoricalLogs"
+		}
+	}
+	if _, hasPid := input["pid"]; hasPid {
+		return "GetProcessTree"
+	}
+	if _, hasProcessName := input["process_name"]; hasProcessName {
+		return "GetOpenFiles"
+	}
+	if _, hasHostID := input["host_id"]; hasHostID {
+		return "GetRunningProcesses"
+	}
+	return ""
 }
 
 // parseReActOutput parses the ReAct format output from LLM
@@ -508,9 +583,6 @@ func (a *ReActAgent) parseFinalAnswer(content string) (*AgentStep, string) {
 		}
 	}
 
-	if finalAnswer == "" {
-		finalAnswer = content
-	}
 	return nil, finalAnswer
 }
 
@@ -535,7 +607,11 @@ func (a *ReActAgent) formatObservation(result interface{}, err error) string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 	data, _ := json.Marshal(result)
-	return string(data)
+	observation := string(data)
+	if len(observation) <= maxObservationChars {
+		return observation
+	}
+	return observation[:maxObservationChars] + fmt.Sprintf("\n... [truncated %d chars; refine the next tool query/filter if more detail is needed]", len(observation)-maxObservationChars)
 }
 
 // GetSteps returns the steps taken so far
