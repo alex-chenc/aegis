@@ -38,6 +38,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	if err := ensureDetectionRuntimeSchema(db); err != nil {
+		logger.Error("failed to ensure detection runtime schema", zap.Error(err))
+		return nil, fmt.Errorf("failed to ensure detection runtime schema: %w", err)
+	}
+
 	logger.Info("database connected successfully",
 		zap.String("host", cfg.Host),
 		zap.Int("port", cfg.Port),
@@ -45,4 +50,53 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	return db, nil
+}
+
+func detectionRuntimeSchemaStatements() []string {
+	return []string{
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ppid INTEGER DEFAULT 0`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line TEXT`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree JSONB`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS judgment_source VARCHAR(20) DEFAULT 'system'`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS block_status VARCHAR(20) DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS block_message TEXT DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS llm_disposal_strategy TEXT DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id VARCHAR(128) DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_title VARCHAR(255) DEFAULT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_judgment_source ON alerts(judgment_source)`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_block_status ON alerts(block_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id)`,
+		`CREATE TABLE IF NOT EXISTS runtime_events (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			event_id VARCHAR(64) UNIQUE NOT NULL,
+			host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+			event_type VARCHAR(32) NOT NULL,
+			event_data JSONB NOT NULL,
+			matched_rule_id VARCHAR(128),
+			rule_title VARCHAR(255),
+			mitre_id VARCHAR(20),
+			severity VARCHAR(16),
+			pid INTEGER,
+			command_line TEXT,
+			process_name VARCHAR(255),
+			timestamp BIGINT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			aggregated BOOLEAN DEFAULT FALSE
+		)`,
+		`ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS process_name VARCHAR(255)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_host_time ON runtime_events(host_id, timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_aggregated ON runtime_events(aggregated)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(event_type)`,
+	}
+}
+
+func ensureDetectionRuntimeSchema(db *gorm.DB) error {
+	for _, statement := range detectionRuntimeSchemaStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

@@ -18,6 +18,7 @@ type RuntimeEvent struct {
 	Severity      string    `gorm:"type:varchar(16)" json:"severity"`
 	PID           int       `gorm:"column:pid" json:"pid"`
 	CommandLine   string    `gorm:"type:text" json:"command_line"`
+	ProcessName   string    `gorm:"type:varchar(255)" json:"process_name"`
 	Timestamp     int64     `gorm:"not null;index" json:"timestamp"`
 	CreatedAt     time.Time `gorm:"default:now()" json:"created_at"`
 	Aggregated    bool      `gorm:"default:false;index" json:"aggregated"`

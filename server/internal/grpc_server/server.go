@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"gorm.io/gorm"
 )
 
 type TaskResultCallback func(taskID uuid.UUID, stdout, stderr string, exitCode int, status string)
@@ -51,7 +52,7 @@ type AgentConnection struct {
 	Stream         pb.AgentService_ExecuteCommandServer
 	Client         pb.AgentServiceClient // nil - not used for callback
 	CallbackClient pb.AgentServiceClient // gRPC client to agent's callback server
-	CallbackConn   *grpc.ClientConn     // the underlying connection (must close on reconnect)
+	CallbackConn   *grpc.ClientConn      // the underlying connection (must close on reconnect)
 	Ctx            context.Context
 	Cancel         context.CancelFunc
 	Inbox          chan *pb.CommandExecute
@@ -454,6 +455,12 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		logger.Error("invalid host_id in ReportEvent", zap.String("host_id", req.HostId), zap.Error(err))
 		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
 	}
+	if err := s.ensureHostRecordForEvent(ctx, hostID); err != nil {
+		logger.Error("failed to ensure host record for events",
+			zap.String("host_id", req.HostId),
+			zap.Error(err))
+		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
+	}
 
 	for _, event := range req.Events {
 		if s.kafkaProducer != nil {
@@ -482,7 +489,7 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 				eventDataJSON = []byte("{}")
 			}
 			runtimeEvent := &model.RuntimeEvent{
-				EventID:        event.EventId,
+				EventID:       event.EventId,
 				HostID:        hostID,
 				EventType:     event.EventType,
 				EventData:     string(eventDataJSON),
@@ -491,6 +498,7 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 				Severity:      event.Severity,
 				PID:           int(event.Pid),
 				CommandLine:   event.CommandLine,
+				ProcessName:   event.ProcessName,
 				Timestamp:     event.Timestamp,
 				Aggregated:    false,
 			}
@@ -549,13 +557,14 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		return
 	}
 
+	processTree := normalizeJSONBText(event.ProcessTree)
 	alert := &model.Alert{
 		AlertID:        "ALT-" + uuid.New().String()[:8],
 		HostID:         hostID,
 		PID:            int(event.Pid),
 		PPID:           int(event.Ppid),
 		CommandLine:    event.CommandLine,
-		ProcessTree:    event.ProcessTree,
+		ProcessTree:    processTree,
 		MitreID:        strings.ToUpper(event.MitreId),
 		Severity:       event.Severity,
 		DedupeKey:      dedupeKey,
@@ -587,6 +596,42 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 	if s.wsBroadcaster != nil {
 		s.wsBroadcaster.BroadcastAlert(alert)
 	}
+}
+
+func (s *GRPCServer) ensureHostRecordForEvent(ctx context.Context, hostID uuid.UUID) error {
+	if s.hostRepo == nil {
+		return nil
+	}
+	if _, err := s.hostRepo.FindByID(hostID); err == nil {
+		return nil
+	} else if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+
+	host := &model.Host{
+		ID:              hostID,
+		IPAddress:       "event-only-" + hostID.String(),
+		Hostname:        "agent-" + hostID.String()[:8],
+		OSType:          "unknown",
+		AgentVersion:    "unknown",
+		LastHeartbeatAt: time.Now(),
+	}
+	if err := s.hostRepo.Upsert(host); err != nil {
+		return err
+	}
+	if s.redisClient != nil {
+		sessionKey := fmt.Sprintf("agent:session:%s", hostID.String())
+		_ = s.redisClient.Client().Set(ctx, sessionKey, "active", 0).Err()
+	}
+	return nil
+}
+
+func normalizeJSONBText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !json.Valid([]byte(value)) {
+		return "{}"
+	}
+	return value
 }
 
 func (s *GRPCServer) checkAutoActions(alert *model.Alert) {

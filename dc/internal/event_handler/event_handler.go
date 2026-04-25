@@ -2,10 +2,12 @@ package event_handler
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"time"
 
-	"dc/internal/alert_generator"
 	"dc/internal/aggregator"
+	"dc/internal/alert_generator"
 	"dc/internal/llm_analyzer"
 	"dc/internal/model"
 	"dc/internal/repository"
@@ -16,11 +18,11 @@ import (
 )
 
 type EventHandler struct {
-	logger       *zap.Logger
-	repo         *repository.RuntimeEventRepository
-	llmAnalyzer  *llm_analyzer.LLMAnalyzer
-	alertGen     *alert_generator.AlertGenerator
-	aggregator   *aggregator.Aggregator
+	logger      *zap.Logger
+	repo        *repository.RuntimeEventRepository
+	llmAnalyzer *llm_analyzer.LLMAnalyzer
+	alertGen    *alert_generator.AlertGenerator
+	aggregator  *aggregator.Aggregator
 }
 
 func NewEventHandler(
@@ -57,6 +59,7 @@ func (h *EventHandler) Handle(event map[string]interface{}) error {
 
 	eventType, _ := event["event_type"].(string)
 	eventData, _ := event["event_data"].(string)
+	eventData = normalizeEventDataJSON(eventData)
 	matchedRuleID, _ := event["matched_rule_id"].(string)
 	mitreID, _ := event["mitre_id"].(string)
 	severity, _ := event["severity"].(string)
@@ -132,4 +135,12 @@ func (h *EventHandler) Handle(event map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+func normalizeEventDataJSON(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !json.Valid([]byte(value)) {
+		return "{}"
+	}
+	return value
 }

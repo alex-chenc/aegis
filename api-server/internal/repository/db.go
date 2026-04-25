@@ -56,6 +56,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ensure detection enhancement schema: %w", err)
 	}
 
+	if err := ensureSigmaRuleEnhancementSchema(db); err != nil {
+		logger.Error("failed to ensure sigma rule enhancement schema", zap.Error(err))
+		return nil, fmt.Errorf("failed to ensure sigma rule enhancement schema: %w", err)
+	}
+
 	if err := ensureAIAnalysisTraceSchema(db); err != nil {
 		logger.Error("failed to ensure AI analysis trace schema", zap.Error(err))
 		return nil, fmt.Errorf("failed to ensure AI analysis trace schema: %w", err)
@@ -79,14 +84,69 @@ func detectionEnhancementSchemaStatements() []string {
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS llm_disposal_strategy TEXT DEFAULT NULL`,
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id VARCHAR(128) DEFAULT NULL`,
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_title VARCHAR(255) DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ppid INTEGER DEFAULT 0`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line TEXT`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree JSONB`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_judgment_source ON alerts(judgment_source)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_block_status ON alerts(block_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id)`,
+		`CREATE TABLE IF NOT EXISTS runtime_events (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			event_id VARCHAR(64) UNIQUE NOT NULL,
+			host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+			event_type VARCHAR(32) NOT NULL,
+			event_data JSONB NOT NULL,
+			matched_rule_id VARCHAR(128),
+			rule_title VARCHAR(255),
+			mitre_id VARCHAR(20),
+			severity VARCHAR(16),
+			pid INTEGER,
+			command_line TEXT,
+			process_name VARCHAR(255),
+			timestamp BIGINT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			aggregated BOOLEAN DEFAULT FALSE
+		)`,
+		`ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS process_name VARCHAR(255)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_host_time ON runtime_events(host_id, timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_aggregated ON runtime_events(aggregated)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(event_type)`,
 	}
 }
 
 func ensureDetectionEnhancementSchema(db *gorm.DB) error {
 	for _, statement := range detectionEnhancementSchemaStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func sigmaRuleEnhancementSchemaStatements() []string {
+	return []string{
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'upload'`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS file_name VARCHAR(255)`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64)`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS file_size INTEGER`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS parsed_at TIMESTAMP WITH TIME ZONE`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS parse_error TEXT`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS ai_generated BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS parent_rule_id VARCHAR(100)`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS generation_prompt TEXT`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS generation_context TEXT`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS approved_by VARCHAR(100)`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP WITH TIME ZONE`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS dispatch_hosts TEXT DEFAULT '[]'`,
+		`ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS dispatch_status VARCHAR(20) DEFAULT 'pending'`,
+		`CREATE INDEX IF NOT EXISTS idx_sigma_rules_file_hash ON sigma_rules(file_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_sigma_rules_ai_generated ON sigma_rules(ai_generated)`,
+	}
+}
+
+func ensureSigmaRuleEnhancementSchema(db *gorm.DB) error {
+	for _, statement := range sigmaRuleEnhancementSchemaStatements() {
 		if err := db.Exec(statement).Error; err != nil {
 			return err
 		}

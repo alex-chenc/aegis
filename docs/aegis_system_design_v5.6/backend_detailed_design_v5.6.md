@@ -1460,6 +1460,23 @@ SSE 事件顺序要求：
 3. 后端发送 `flowchart_image`，成功时包含 `result.url`，失败时包含 `error`。
 4. 后端发送 `done`，前端关闭 EventSource。
 
+### 10.4.1 Agent事件到AI溯源图的运行时约束
+
+为了保证“Sigma规则命中 -> 告警入库 -> AI分析 -> 溯源图输出”的端到端链路可复现，Server 处理 Agent 运行时事件时必须满足以下约束：
+
+1. `ReportEvent` 收到事件后先确保 `hosts.id = req.host_id` 存在；如果注册记录尚未落库，使用事件中的 `host_id` 创建兜底主机，避免 `runtime_events` 和 `alerts` 外键失败。
+2. `runtime_events` 表结构必须包含 DC 消费端写入的 `process_name` 字段，Server 和 DC 共享同一套运行时事件迁移。
+3. `alerts.process_tree` 是 JSONB 字段，空进程树必须保存为空值或合法 JSON，不能写入空字符串。
+4. AI 分析会话选择真实告警内部 UUID，后端从告警提取 `host_id`，后续 ReAct 工具调用只路由到相关 Agent。
+5. 最终页面验收必须使用真实 Agent 上报的告警，并在 SSE `done` 前看到 `flowchart_image` 或前端 SVG 兜底溯源图。
+
+2026-04-25 端到端验证记录：
+
+- SigmaHQ `linux/process_creation` 规则通过规则上传接口解析并激活。
+- 本机 Agent 上报真实进程事件后，`runtime_events` 与 `alerts` 均可落库，告警列表接口可查询到真实告警。
+- AI 分析 SSE 使用真实告警创建会话，先走文本模型分析，随后在 `done` 前输出 `flowchart_image` 事件。
+- 页面截图保存到 `docs/screenshots/ui-refresh/detection-ai-analysis.png` 和 `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png`。
+
 ### 10.5 数据模型更新
 
 #### AIMessage 新增字段

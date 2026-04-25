@@ -10,6 +10,11 @@ func TestDetectionEnhancementSchemaStatementsIncludeAlertDisplayColumns(t *testi
 
 	requiredFragments := []string{
 		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_title",
+		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ppid",
+		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line",
+		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree",
+		"CREATE TABLE IF NOT EXISTS runtime_events",
+		"process_name VARCHAR(255)",
 		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id",
 		"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS judgment_source",
 		"CREATE INDEX IF NOT EXISTS idx_alerts_rule_id",
@@ -18,6 +23,23 @@ func TestDetectionEnhancementSchemaStatementsIncludeAlertDisplayColumns(t *testi
 	for _, fragment := range requiredFragments {
 		if !strings.Contains(statements, fragment) {
 			t.Fatalf("expected detection enhancement schema to include %q", fragment)
+		}
+	}
+}
+
+func TestSigmaRuleEnhancementSchemaStatementsIncludeUploadColumns(t *testing.T) {
+	statements := strings.Join(sigmaRuleEnhancementSchemaStatements(), "\n")
+
+	requiredFragments := []string{
+		"ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS source",
+		"ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS file_hash",
+		"ALTER TABLE sigma_rules ADD COLUMN IF NOT EXISTS dispatch_hosts",
+		"CREATE INDEX IF NOT EXISTS idx_sigma_rules_file_hash",
+	}
+
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("expected sigma rule enhancement schema to include %q", fragment)
 		}
 	}
 }

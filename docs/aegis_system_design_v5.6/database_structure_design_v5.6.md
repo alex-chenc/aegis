@@ -279,6 +279,9 @@ CREATE INDEX IF NOT EXISTS idx_sigma_rules_dispatch_status ON sigma_rules(dispat
 
 ```sql
 -- 如果需要，添加以下字段
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ppid INTEGER DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line TEXT;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree JSONB;
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS analysis_session_id VARCHAR(100);
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_judgment TEXT;                  -- AI分析判断
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_confidence DECIMAL(5,2);       -- AI置信度
@@ -292,7 +295,42 @@ CREATE INDEX IF NOT EXISTS idx_alerts_analysis_session ON alerts(analysis_sessio
 CREATE INDEX IF NOT EXISTS idx_alerts_confirmed_threat ON alerts(confirmed_threat) WHERE confirmed_threat = TRUE;
 ```
 
-### 3.2 block_records表（可能需要添加字段）
+### 3.2 runtime_events表（Agent运行时事件）
+
+Agent 上报的命中事件必须先写入 `runtime_events`，再生成 `alerts`。`host_id` 必须能关联到 `hosts.id`；如果事件流先于注册记录到达，Server 需要按 `host_id` 创建兜底主机记录，避免运行时事件和告警因为外键失败丢失。
+
+```sql
+CREATE TABLE IF NOT EXISTS runtime_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id VARCHAR(64) UNIQUE NOT NULL,
+    host_id UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    event_type VARCHAR(32) NOT NULL,
+    event_data JSONB NOT NULL,
+    matched_rule_id VARCHAR(128),
+    rule_title VARCHAR(255),
+    mitre_id VARCHAR(20),
+    severity VARCHAR(16),
+    pid INTEGER,
+    command_line TEXT,
+    process_name VARCHAR(255),
+    timestamp BIGINT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    aggregated BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_events_host_time ON runtime_events(host_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_runtime_events_aggregated ON runtime_events(aggregated);
+CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(event_type);
+```
+
+运行时数据约束：
+
+1. `event_data` 和 `alerts.process_tree` 必须写入有效 JSON；空进程树应保存为 `NULL` 或 `{}`，禁止写入空字符串。
+2. `process_name` 是 DC 消费端和 Server 直写端共享字段，迁移必须覆盖两个服务启动路径。
+3. `alerts.rule_id` 保存 Sigma 规则 UUID，AI 分析按告警内部 UUID 选择样本，按 `host_id` 路由到对应 Agent 工具。
+4. `hosts` 表使用既有 `os_type` 字段保存 Agent 操作系统信息；Server、API Server、DC 模型禁止写入不存在的 `os_version` 列。
+
+### 3.3 block_records表（可能需要添加字段）
 
 ```sql
 -- 添加工具调用相关信息
