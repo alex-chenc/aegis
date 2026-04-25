@@ -51,6 +51,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)
 	}
 
+	if err := ensureDetectionEnhancementSchema(db); err != nil {
+		logger.Error("failed to ensure detection enhancement schema", zap.Error(err))
+		return nil, fmt.Errorf("failed to ensure detection enhancement schema: %w", err)
+	}
+
 	if err := ensureAIAnalysisTraceSchema(db); err != nil {
 		logger.Error("failed to ensure AI analysis trace schema", zap.Error(err))
 		return nil, fmt.Errorf("failed to ensure AI analysis trace schema: %w", err)
@@ -63,6 +68,31 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	return db, nil
+}
+
+func detectionEnhancementSchemaStatements() []string {
+	return []string{
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS judgment_source VARCHAR(20) DEFAULT 'system'`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS block_status VARCHAR(20) DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS block_message TEXT DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS llm_disposal_strategy TEXT DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id VARCHAR(128) DEFAULT NULL`,
+		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_title VARCHAR(255) DEFAULT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_judgment_source ON alerts(judgment_source)`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_block_status ON alerts(block_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id)`,
+	}
+}
+
+func ensureDetectionEnhancementSchema(db *gorm.DB) error {
+	for _, statement := range detectionEnhancementSchemaStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func ensureAIAnalysisTraceSchema(db *gorm.DB) error {
