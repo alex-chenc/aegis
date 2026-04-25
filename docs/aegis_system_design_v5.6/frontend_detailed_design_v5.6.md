@@ -1083,6 +1083,43 @@ AI 分析 SSE 新增 `flowchart_image` 事件。前端收到 `result.url` 后优
 
 前端 API：
 
+### 7.4 全局 UI 视觉升级方案
+
+V5.6 前端统一采用“安全运营指挥台”视觉系统，覆盖除业务图谱外的所有页面基础体验。改造目标不是单页换色，而是通过全局设计 token 与 Element Plus 组件覆写，让主机、基线、漏洞、异常检测、策略、规则、任务和系统配置页面共享同一套视觉语言。
+
+设计原则：
+
+| 维度 | 规范 |
+|------|------|
+| 产品气质 | 冷静、专业、高信息密度的安全运营控制台 |
+| 主色 | 深海军蓝 `#0b1220`、电光青 `#22d3ee`、行动蓝 `#2563eb` |
+| 背景 | 浅灰蓝渐变 + 微弱网格/光斑，避免纯灰后台模板感 |
+| 卡片 | 白色半透明、细边框、低阴影、12px 圆角 |
+| 表格 | 去重边框，强化行 hover、表头层次和状态徽章 |
+| 表单 | 明确 label、聚焦态边框、说明区与操作区分层 |
+| 动效 | 150-300ms，使用 transform/opacity，不阻塞交互 |
+| 可访问性 | 正文对比度不低于 4.5:1，按钮不只依赖图标 |
+
+全局样式文件：
+
+| 文件 | 职责 |
+|------|------|
+| `src/styles/aegis-theme.css` | CSS 变量、背景、Element Plus 组件覆写、通用页面类 |
+| `src/App.vue` | App Shell、侧边导航、顶部状态栏、内容舞台 |
+
+所有业务页面应优先复用全局类：
+
+| 类名 | 用途 |
+|------|------|
+| `.page-shell` | 页面根容器 |
+| `.page-hero` | 页面顶部标题/说明/操作区 |
+| `.aegis-card` | 业务卡片 |
+| `.metric-grid` / `.metric-card` | 指标卡片 |
+| `.status-pill` | 状态胶囊 |
+| `.aegis-toolbar` | 搜索、筛选、批量操作工具条 |
+
+截图归档要求：每次 UI 视觉调整完成后，将主要页面截图保存到 `docs/screenshots/ui-refresh/` 并随代码提交，用于评审和回归对比。
+
 ```typescript
 getImageModelConfig(): Promise<ImageModelConfig>
 saveImageModelConfig(data: ImageModelConfigRequest): Promise<void>

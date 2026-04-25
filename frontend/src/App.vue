@@ -2,15 +2,15 @@
   <el-container class="app-container">
     <el-aside width="220px" class="sidebar">
       <div class="logo">
-        <span class="logo-icon">🛡️</span>
-        <span class="logo-text">Aegis智能主机安全系统</span>
+        <span class="logo-mark"><el-icon><Lock /></el-icon></span>
+        <div class="logo-copy">
+          <span class="logo-text">Aegis</span>
+          <span class="logo-subtitle">主机安全指挥台</span>
+        </div>
       </div>
       <el-menu
         :default-active="activeMenu"
         :router="true"
-        background-color="#304156"
-        text-color="#bfcbd9"
-        active-text-color="#ffffff"
         class="sidebar-menu"
       >
         <el-menu-item index="/hosts">
@@ -82,13 +82,15 @@
       </el-menu>
 
       <div class="sidebar-footer">
-        <span class="version">v3.0</span>
+        <span class="status-dot" />
+        <span class="version">控制面在线 · v3.0</span>
       </div>
     </el-aside>
 
     <el-container>
       <el-header class="app-header">
         <div class="header-left">
+          <div class="route-kicker">Security Operations</div>
           <el-breadcrumb separator="/">
             <el-breadcrumb-item v-for="item in breadcrumbs" :key="item.path">
               {{ item.title }}
@@ -96,6 +98,10 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <div class="system-chip">
+            <span class="status-dot" />
+            API 正常
+          </div>
           <NotificationBell />
           <el-tooltip content="刷新" placement="bottom">
             <el-button :icon="Refresh" circle size="small" @click="handleRefresh" />
@@ -113,7 +119,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Lock } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 
 const route = useRoute()
@@ -146,42 +152,87 @@ function handleRefresh() {
 .app-container {
   height: 100vh;
   width: 100vw;
+  background:
+    linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 220px, transparent 220px),
+    radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
+    linear-gradient(135deg, #edf5ff, #f8fafc);
 }
 
 .sidebar {
-  background-color: #304156;
+  position: relative;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(34, 211, 238, 0.18), transparent 32%),
+    linear-gradient(180deg, #0b1220 0%, #111827 52%, #0f172a 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.sidebar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 26px 26px;
+  opacity: 0.5;
 }
 
 .logo {
-  height: 60px;
+  position: relative;
+  z-index: 1;
+  height: 72px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  background-color: #263445;
-  border-bottom: 1px solid #1f2d3d;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 
-.logo-icon {
-  font-size: 24px;
-  margin-right: 8px;
+.logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(34, 211, 238, 0.38);
+  border-radius: 14px;
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.1);
+  box-shadow: 0 10px 28px rgba(34, 211, 238, 0.16);
+}
+
+.logo-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .logo-text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 800;
   color: #fff;
+  letter-spacing: 0.04em;
+}
+
+.logo-subtitle {
+  color: rgba(226, 232, 240, 0.62);
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .sidebar-menu {
+  position: relative;
+  z-index: 1;
   flex: 1;
   border-right: none;
   overflow-y: auto;
+  background: transparent;
 }
 
 .sidebar-menu:not(.el-menu--collapse) {
@@ -189,32 +240,67 @@ function handleRefresh() {
 }
 
 .sidebar-footer {
-  height: 40px;
+  position: relative;
+  z-index: 1;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: #263445;
-  border-top: 1px solid #1f2d3d;
+  gap: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
 }
 
 .version {
   font-size: 12px;
-  color: #909399;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
 }
 
 .app-header {
-  background-color: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  height: 64px;
+  background: rgba(255, 255, 255, 0.72);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  height: 50px;
+  padding: 0 24px;
 }
 
 .header-left {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+}
+
+.route-kicker {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.system-chip {
+  display: inline-flex;
   align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: 999px;
+  color: #166534;
+  background: rgba(240, 253, 244, 0.82);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .header-right {
@@ -224,8 +310,12 @@ function handleRefresh() {
 }
 
 .app-main {
-  background-color: #f0f2f5;
-  padding: 20px;
+  position: relative;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(34, 211, 238, 0.12), transparent 24%),
+    radial-gradient(circle at 92% 0%, rgba(37, 99, 235, 0.1), transparent 22%),
+    linear-gradient(135deg, rgba(241, 247, 253, 0.96), rgba(248, 250, 252, 0.94));
+  padding: 24px;
   overflow-y: auto;
 }
 
@@ -235,18 +325,25 @@ function handleRefresh() {
 
 :deep(.el-menu-item),
 :deep(.el-sub-menu__title) {
-  height: 50px;
-  line-height: 50px;
+  height: 46px;
+  line-height: 46px;
+  margin: 4px 10px;
+  border-radius: 12px;
+  color: rgba(226, 232, 240, 0.78);
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
 }
 
 :deep(.el-menu-item:hover),
 :deep(.el-sub-menu__title:hover) {
-  background-color: #263445 !important;
+  background: rgba(34, 211, 238, 0.08) !important;
+  color: #f8fafc !important;
+  transform: translateX(2px);
 }
 
 :deep(.el-menu-item.is-active) {
-  background-color: #409EFF !important;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(8, 145, 178, 0.95)) !important;
   color: #ffffff !important;
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.3);
 }
 
 :deep(.el-menu-item.is-active .el-icon) {
@@ -259,24 +356,24 @@ function handleRefresh() {
 
 :deep(.el-sub-menu .el-menu-item) {
   min-width: 220px;
-  padding-left: 50px !important;
-  background-color: #1f2d3d !important;
+  padding-left: 44px !important;
+  background: rgba(15, 23, 42, 0.34) !important;
 }
 
 :deep(.el-sub-menu .el-menu-item:hover) {
-  background-color: #263445 !important;
+  background: rgba(34, 211, 238, 0.08) !important;
 }
 
 :deep(.el-sub-menu .el-menu-item.is-active) {
-  background-color: #409EFF !important;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(8, 145, 178, 0.95)) !important;
   color: #ffffff !important;
 }
 
 :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
-  color: #409EFF !important;
+  color: #67e8f9 !important;
 }
 
 :deep(.el-sub-menu.is-active > .el-sub-menu__title .el-icon) {
-  color: #409EFF !important;
+  color: #67e8f9 !important;
 }
 </style>

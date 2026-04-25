@@ -1,5 +1,10 @@
 <template>
-  <div class="settings">
+  <div class="settings page-shell">
+    <section class="page-hero settings-hero">
+      <h1>模型能力中心</h1>
+      <p>集中配置文本推理、图片生成与 Agent 安装入口。文本模型负责分析判断，图片模型负责报告图和溯源图输出。</p>
+    </section>
+
     <el-card>
       <template #header>
         <div class="card-header">
@@ -486,11 +491,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.settings-hero {
+  margin-bottom: 0;
 }
+
 .cursor-pointer {
   cursor: pointer;
 }
@@ -502,7 +506,15 @@ onMounted(async () => {
 }
 
 .provider-selector :deep(.el-radio-button__inner) {
-  border-radius: 6px;
+  border-radius: 999px;
   min-width: 92px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  font-weight: 650;
+}
+
+.provider-selector :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  border-color: transparent;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.22);
 }
 </style>
