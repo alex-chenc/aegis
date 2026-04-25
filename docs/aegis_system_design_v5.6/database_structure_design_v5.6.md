@@ -18,6 +18,7 @@ V5.6版本数据库主要新增以下表：
 | `ai_analysis_message` | AI分析消息表 |
 | `tool_execution_log` | 工具执行日志表 |
 | `sigma_rules` | Sigma规则表（增强） |
+| `image_model_configs` | 图片模型配置表 |
 
 ---
 
@@ -145,7 +146,36 @@ CREATE INDEX IF NOT EXISTS idx_attack_graph_threat ON attack_graph(threat_level)
 CREATE INDEX IF NOT EXISTS idx_attack_graph_vector ON attack_graph USING ivfflat(graph_vector vector_cosine_ops);
 ```
 
-### 2.4 tool_execution_log（工具执行日志表）
+### 2.4 image_model_configs（图片模型配置表 - 新增）
+
+```sql
+CREATE TABLE IF NOT EXISTS image_model_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_key_encrypted TEXT NOT NULL,
+    api_key_masked VARCHAR(50) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'minimax',
+    base_url VARCHAR(500) NOT NULL DEFAULT 'https://api.minimax.io/v1',
+    model_name VARCHAR(100) NOT NULL DEFAULT 'image-01',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    last_test_status VARCHAR(20),
+    last_test_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_model_configs_active
+    ON image_model_configs(is_active);
+```
+
+| 字段 | 说明 |
+|------|------|
+| api_key_encrypted | 使用与 LLM 配置相同的 AES-GCM 方式加密 |
+| api_key_masked | 前端展示用脱敏密钥 |
+| provider | 厂商标识，首期支持 `minimax`、`custom` |
+| base_url | API 根地址，MiniMax 默认为 `https://api.minimax.io/v1` |
+| model_name | 图片模型名称，MiniMax 默认为 `image-01` |
+
+### 2.5 tool_execution_log（工具执行日志表）
 
 ```sql
 -- 工具执行日志表

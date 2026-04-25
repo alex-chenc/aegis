@@ -277,6 +277,8 @@ func compactJSONValue(value interface{}, depth int) interface{} {
 type collectingSSEWriter struct {
 	writer    *llm.SSEWriter
 	collector *SSEResponseCollector
+	beforeDone func(content string) error
+	doneHandled bool
 }
 
 func (w *collectingSSEWriter) Write(event llm.SSEEvent) error {
@@ -317,6 +319,12 @@ func (w *collectingSSEWriter) WriteContent(content string) error {
 }
 
 func (w *collectingSSEWriter) WriteDone() error {
+	if w.beforeDone != nil && !w.doneHandled {
+		w.doneHandled = true
+		if err := w.beforeDone(w.collector.GetContent()); err != nil {
+			return err
+		}
+	}
 	return w.writer.WriteDone()
 }
 
@@ -569,6 +577,9 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	collectingWriter := &collectingSSEWriter{
 		writer:    sseWriter,
 		collector: responseCollector,
+		beforeDone: func(content string) error {
+			return h.writeFlowchartImageEvent(c.Request.Context(), sseWriter, content)
+		},
 	}
 
 	// Initialize ReAct agent if not exists
@@ -645,6 +656,68 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 			Content: aiResponseContent,
 		})
 	}
+}
+
+func (h *AIAnalysisHandler) writeFlowchartImageEvent(ctx context.Context, writer *llm.SSEWriter, finalContent string) error {
+	finalContent = strings.TrimSpace(finalContent)
+	if finalContent == "" {
+		return nil
+	}
+
+	config, err := h.configRepo.GetActiveImageModel()
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型配置不可用: " + err.Error(),
+		})
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型密钥解密失败: " + err.Error(),
+		})
+	}
+
+	req := ImageModelConfigRequest{
+		APIKey:    apiKey,
+		Provider:  config.Provider,
+		BaseURL:   config.BaseURL,
+		ModelName: config.ModelName,
+	}
+	normalizeImageModelConfigRequest(&req)
+
+	imageURL, err := generateImageModel(ctx, req, buildFlowchartImagePrompt(finalContent))
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型生成溯源图失败: " + err.Error(),
+		})
+	}
+	if imageURL == "" {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型未返回图片 URL",
+		})
+	}
+
+	return writer.Write(llm.SSEEvent{
+		Type: "flowchart_image",
+		Result: map[string]interface{}{
+			"url":        imageURL,
+			"provider":   req.Provider,
+			"model_name": req.ModelName,
+		},
+	})
+}
+
+func buildFlowchartImagePrompt(finalContent string) string {
+	const maxPromptContentBytes = 4000
+	if len(finalContent) > maxPromptContentBytes {
+		finalContent = finalContent[:maxPromptContentBytes]
+	}
+	return "请根据以下 AI 安全分析最终结论生成一张攻击溯源流程图。要求：白底，清晰的节点和箭头，突出攻击入口、执行过程、横向移动、影响范围和最终处置建议；不要生成写实人物；使用中文标签。\n\n" + finalContent
 }
 
 // SendMessage handles regular (non-streaming) message sending

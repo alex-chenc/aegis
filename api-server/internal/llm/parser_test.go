@@ -102,6 +102,16 @@ func TestParseFinalAnswerRequiresFinalAnswerMarker(t *testing.T) {
 	}
 }
 
+func TestParseFinalAnswerKeepsIncompleteJSONAfterMarker(t *testing.T) {
+	agent := NewReActAgent(nil, nil, "session-test", 1)
+
+	_, finalAnswer := agent.parseFinalAnswer("Final Answer:\n{\n  \"attack_graph\": {")
+
+	if !strings.Contains(finalAnswer, "attack_graph") {
+		t.Fatalf("expected incomplete final answer content to be preserved, got %q", finalAnswer)
+	}
+}
+
 func TestTryParseStepDoesNotPanicWhenClosingBracePrecedesActionInput(t *testing.T) {
 	agent := NewReActAgent(nil, nil, "session-test", 1)
 
@@ -120,6 +130,15 @@ Action Input:
 
 	if done {
 		t.Fatal("expected incomplete action input to remain pending")
+	}
+}
+
+func TestFinalAnswerReadyWaitsForBalancedJSON(t *testing.T) {
+	if finalAnswerReady("Final Answer:\n{\n  \"attack_graph\": {", false) {
+		t.Fatal("expected incomplete final answer JSON to remain pending")
+	}
+	if !finalAnswerReady("Final Answer:\n{\"attack_graph\":{\"nodes\":[]}}", false) {
+		t.Fatal("expected balanced final answer JSON to be ready")
 	}
 }
 

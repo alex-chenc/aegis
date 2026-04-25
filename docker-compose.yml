@@ -50,7 +50,7 @@ services:
       - "log_min_duration_statement=1000"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
       - "${DB_PORT:-5432}:5432"
     networks:

@@ -44,6 +44,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	if err := db.AutoMigrate(
 		&model.AIConfig{},
 		&model.LLMConfig{},
+		&model.ImageModelConfig{},
 		&model.Notification{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))

@@ -1,5 +1,5 @@
 import request from './index'
-import type { LLMConfig, InstallCommand } from '@/types'
+import type { LLMConfig, ImageModelConfig, InstallCommand } from '@/types'
 
 export function getLLMConfig(): Promise<LLMConfig> {
   return request<any, LLMConfig>({
@@ -24,6 +24,29 @@ export function testLLMConnection(data: { api_key: string; provider: string; bas
   })
 }
 
+export function getImageModelConfig(): Promise<ImageModelConfig> {
+  return request<any, ImageModelConfig>({
+    url: '/config/image-model',
+    method: 'get'
+  })
+}
+
+export function saveImageModelConfig(data: { api_key: string; provider: string; base_url: string; model_name: string }) {
+  return request<any, void>({
+    url: '/config/image-model',
+    method: 'post',
+    data
+  })
+}
+
+export function testImageModelConnection(data: { api_key: string; provider: string; base_url: string; model_name: string }) {
+  return request<any, void>({
+    url: '/config/image-model/test',
+    method: 'post',
+    data
+  })
+}
+
 export function getInstallCommand(): Promise<InstallCommand> {
   return request<any, InstallCommand>({
     url: '/agent/install-command',
@@ -33,6 +56,13 @@ export function getInstallCommand(): Promise<InstallCommand> {
 export function getFullAPIKey(): Promise<{ api_key: string }> {
   return request<any, { api_key: string }>({
     url: '/config/llm/full-key',
+    method: 'get'
+  })
+}
+
+export function getFullImageModelAPIKey(): Promise<{ api_key: string }> {
+  return request<any, { api_key: string }>({
+    url: '/config/image-model/full-key',
     method: 'get'
   })
 }

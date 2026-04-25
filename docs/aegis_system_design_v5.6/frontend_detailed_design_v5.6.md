@@ -1049,6 +1049,46 @@ interface SSEEvent {
 }
 ```
 
+#### 7.1.5 流程图图片输出
+
+AI分析页面必须在最终回复包含 `attack_graph` 时生成流程图图片。前端实现要求：
+
+| 要求 | 说明 |
+|------|------|
+| 稳定解析 | 支持纯 JSON、`Final Answer:` 前缀、Markdown fenced code block 和前后说明文字 |
+| 双视图 | 同时展示交互式 `AttackGraph` 与图片模型生成的流程图图片 |
+| 直接可见 | 图片在分析完成后自动出现，不要求用户复制 JSON 或手动刷新 |
+| 操作能力 | 提供下载图片按钮，失败时显示明确提示并使用本地 SVG 兜底 |
+| 可访问性 | 图片必须有 `alt` 文本，按钮必须有文字或可识别图标 |
+
+AI 分析 SSE 新增 `flowchart_image` 事件。前端收到 `result.url` 后优先展示图片模型生成结果；如果事件携带 `error`，前端展示告警提示，并使用 `attack_graph.nodes`、`attack_graph.edges` 和 `attack_graph.timeline` 生成 SVG 兜底图。
+
+### 7.3 系统配置页图片模型配置
+
+系统配置页拆分为两个模型配置区：
+
+| 配置区 | 用途 | 推荐默认配置 |
+|--------|------|-------------------|
+| 文本 LLM 配置 | 告警分析、规则生成、漏洞分析 | `MiniMax-M2.7` / `https://api.minimaxi.com/anthropic` |
+| 图片模型配置 | 流程图、报告图、后续图片生成能力 | `cogview-3-flash` / `https://open.bigmodel.cn/api/paas/v4` |
+
+图片模型配置表单字段：
+
+| 字段 | 说明 |
+|------|------|
+| provider | 厂商，支持 `minimax`、`zhipu` 和 `custom` |
+| api_key | 图片模型 API Key，保存后仅显示脱敏值 |
+| base_url | API 根地址 |
+| model_name | 图片模型名称 |
+
+前端 API：
+
+```typescript
+getImageModelConfig(): Promise<ImageModelConfig>
+saveImageModelConfig(data: ImageModelConfigRequest): Promise<void>
+testImageModelConnection(data: ImageModelConfigRequest): Promise<void>
+```
+
 ### 7.2 API响应格式统一
 
 所有API响应统一使用以下格式：

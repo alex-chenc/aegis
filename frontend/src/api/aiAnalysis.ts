@@ -75,7 +75,7 @@ export interface RAGContextResponse {
 }
 
 // SSE Event types for streaming
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'content' | 'done' | 'error'
+export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'content' | 'flowchart_image' | 'done' | 'error'
 
 export interface SSEEvent {
   type: SSEEventType

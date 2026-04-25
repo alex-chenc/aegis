@@ -60,6 +60,45 @@ func TestSSEResponseCollectorKeepsReActTrace(t *testing.T) {
 	}
 }
 
+func TestCollectingSSEWriterWritesFlowchartImageBeforeDone(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := &collectingSSEWriter{
+		writer:    llm.NewSSEWriter(recorder),
+		collector: &SSEResponseCollector{},
+		beforeDone: func(content string) error {
+			if content != "Final Answer: 已确认威胁" {
+				t.Fatalf("unexpected final content passed to image callback: %q", content)
+			}
+			return llm.NewSSEWriter(recorder).Write(llm.SSEEvent{
+				Type: "flowchart_image",
+				Result: map[string]interface{}{
+					"url": "https://example.test/trace.png",
+				},
+			})
+		},
+	}
+
+	if err := writer.WriteContent("Final Answer: 已确认威胁"); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+	if err := writer.WriteDone(); err != nil {
+		t.Fatalf("write done: %v", err)
+	}
+
+	body := recorder.Body.String()
+	imageIdx := strings.Index(body, `"type":"flowchart_image"`)
+	doneIdx := strings.Index(body, `"type":"done"`)
+	if imageIdx < 0 {
+		t.Fatalf("expected flowchart_image event in SSE body: %s", body)
+	}
+	if doneIdx < 0 {
+		t.Fatalf("expected done event in SSE body: %s", body)
+	}
+	if imageIdx > doneIdx {
+		t.Fatalf("expected flowchart_image before done, body: %s", body)
+	}
+}
+
 func TestCollectingSSEWriterCompactsLargeToolResult(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writer := &collectingSSEWriter{

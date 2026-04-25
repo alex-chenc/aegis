@@ -160,8 +160,11 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 
 				// Check if step contains Final Answer - if so, skip action execution
 				if strings.Contains(buffer, "Final Answer:") {
+					if !finalAnswerReady(buffer, chunk.Done) {
+						continue
+					}
 					// Flush any pending thinking
-					if pendingThinking != "" {
+					if pendingThinking != "" && !strings.Contains(pendingThinking, "Final Answer:") {
 						writer.WriteThinking(pendingThinking)
 					}
 					// Parse and return the final answer
@@ -227,7 +230,7 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 					pendingThinking = ""
 				}
 				break
-			} else if len(pendingThinking) >= 100 && !hasAction {
+			} else if len(pendingThinking) >= 100 && !hasAction && !strings.Contains(buffer, "Final Answer:") {
 				// Send periodic thinking updates to avoid choppy display
 				writer.WriteThinking(pendingThinking)
 				pendingThinking = ""
@@ -263,6 +266,65 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 	writer.WriteError("Maximum iterations reached without final answer")
 	writer.WriteDone()
 	return nil
+}
+
+func finalAnswerReady(buffer string, streamDone bool) bool {
+	idx := strings.Index(buffer, "Final Answer:")
+	if idx < 0 {
+		return false
+	}
+
+	answer := strings.TrimSpace(buffer[idx+len("Final Answer:"):])
+	if answer == "" {
+		return false
+	}
+	if !strings.HasPrefix(answer, "{") {
+		return streamDone
+	}
+	return hasBalancedJSONObject(answer)
+}
+
+func hasBalancedJSONObject(content string) bool {
+	depth := 0
+	inString := false
+	escaped := false
+	started := false
+
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+			started = true
+		case '}':
+			depth--
+			if started && depth == 0 {
+				return true
+			}
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+
+	return false
 }
 
 // KnownTools lists all available tools that the agent can call
@@ -580,6 +642,12 @@ func (a *ReActAgent) parseFinalAnswer(content string) (*AgentStep, string) {
 				prettyJSON, _ := json.MarshalIndent(jsonData, "", "  ")
 				return nil, string(prettyJSON)
 			}
+		}
+	}
+
+	if finalAnswer == "" {
+		if idx := strings.Index(content, "Final Answer:"); idx >= 0 {
+			finalAnswer = strings.TrimSpace(content[idx+len("Final Answer:"):])
 		}
 	}
 

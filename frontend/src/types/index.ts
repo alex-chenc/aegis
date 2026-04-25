@@ -59,6 +59,14 @@ export interface LLMConfig {
   is_active: boolean
 }
 
+export interface ImageModelConfig {
+  api_key_masked: string
+  provider: string
+  base_url: string
+  model_name: string
+  is_active: boolean
+}
+
 export interface Alert {
   id: string
   alert_id: string

@@ -196,16 +196,25 @@
           </div>
 
           <!-- 溯源图展示区域 -->
-          <el-card v-if="attackGraph" class="attack-graph-card" style="margin-top: 16px;">
+          <el-card v-if="attackGraph || flowchartImageUrl" class="attack-graph-card" style="margin-top: 16px;">
             <template #header>
               <div class="card-header">
                 <span>攻击溯源图</span>
-                <el-button size="small" type="danger" @click="attackGraph = null">
-                  关闭
-                </el-button>
+                <div class="header-actions">
+                  <el-button size="small" @click="downloadFlowchartImage">
+                    <el-icon><Download /></el-icon>
+                    下载流程图
+                  </el-button>
+                  <el-button size="small" type="danger" @click="closeFlowchart">
+                    关闭
+                  </el-button>
+                </div>
               </div>
             </template>
-            <AttackGraph :graph-data="attackGraph" />
+            <div v-if="flowchartImageUrl" class="flowchart-image-panel">
+              <img :src="flowchartImageUrl" :alt="flowchartImageAlt" class="flowchart-image" />
+            </div>
+            <AttackGraph v-if="attackGraph" :graph-data="attackGraph" />
           </el-card>
         </el-card>
 
@@ -274,10 +283,11 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit } from '@element-plus/icons-vue'
+import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
+import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
 
 const route = useRoute()
 const router = useRouter()
@@ -285,8 +295,8 @@ const router = useRouter()
 // Types
 interface Alert {
   id: string
-  hostname: string
-  rule_title: string
+  hostname?: string
+  rule_title?: string
   mitre_id: string
   severity: string
   status: string
@@ -312,42 +322,6 @@ interface Message {
   isLoading?: boolean
 }
 
-// AttackGraph types
-interface GraphNode {
-  id: string
-  type: string
-  label: string
-  detail: string
-  properties: Record<string, any>
-  severity: string
-}
-
-interface GraphEdge {
-  id: string
-  source: string
-  target: string
-  type: string
-  label: string
-  properties: Record<string, any>
-}
-
-interface TimelineEvent {
-  timestamp: string
-  event: string
-  nodeIds: string[]
-}
-
-interface AttackGraph {
-  graphId: string
-  title: string
-  summary: string
-  threatLevel: string
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  timeline: TimelineEvent[]
-  recommendations: string[]
-}
-
 // State
 const alerts = ref<Alert[]>([])
 const alertLoading = ref(false)
@@ -359,8 +333,9 @@ const timeRange = ref<[string, string] | null>(null)
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
 const inputMessage = ref('')
-const attackGraph = ref<AttackGraph | null>(null)
+const attackGraph = ref<AttackGraphData | null>(null)
 const finalAnswerContent = ref<string>('')
+const generatedFlowchartImageUrl = ref('')
 const isLoading = ref(false)
 const maxIterations = ref(15)
 const messageListRef = ref<HTMLElement | null>(null)
@@ -397,6 +372,7 @@ function saveConversation() {
         messages: messages.value,
         attackGraph: attackGraph.value,
         finalAnswerContent: finalAnswerContent.value,
+        generatedFlowchartImageUrl: generatedFlowchartImageUrl.value,
         maxIterations: maxIterations.value,
         savedAt: new Date().toISOString()
       }
@@ -418,6 +394,7 @@ function loadConversation(): boolean {
       messages.value = data.messages || []
       attackGraph.value = data.attackGraph || null
       finalAnswerContent.value = data.finalAnswerContent || ''
+      generatedFlowchartImageUrl.value = data.generatedFlowchartImageUrl || ''
       maxIterations.value = data.maxIterations || 15
       return true
     } catch (e) {
@@ -439,9 +416,19 @@ function clearSavedConversation() {
 const filteredAlerts = computed(() => {
   let result = alerts.value
   if (hostFilter.value.length > 0) {
-    result = result.filter(a => hostFilter.value.includes(a.hostname))
+    result = result.filter(a => Boolean(a.hostname) && hostFilter.value.includes(a.hostname as string))
   }
   return result
+})
+
+const flowchartImageUrl = computed(() => {
+  if (generatedFlowchartImageUrl.value) return generatedFlowchartImageUrl.value
+  if (!attackGraph.value) return ''
+  return buildAttackGraphSvgDataUrl(attackGraph.value)
+})
+
+const flowchartImageAlt = computed(() => {
+  return attackGraph.value ? `${attackGraph.value.title}流程图` : 'AI生成的攻击溯源流程图'
 })
 
 // Methods
@@ -453,7 +440,7 @@ async function loadAlerts() {
     alerts.value = response.data || []
 
     // Extract unique hosts
-    const hostSet = new Set(alerts.value.map(a => a.hostname))
+    const hostSet = new Set(alerts.value.map(a => a.hostname).filter(Boolean) as string[])
     hosts.value = Array.from(hostSet)
   } catch (error: any) {
     ElMessage.error(error.message || '加载告警失败')
@@ -488,8 +475,9 @@ async function loadSessionList(page: number = 1) {
   sessionPage.value = page
   try {
     const response = await getSessionList(page, sessionPageSize.value)
-    sessionList.value = response.data?.sessions || response.sessions || []
-    sessionTotal.value = response.data?.total || response.total || 0
+    const payload = (response as any).data || response
+    sessionList.value = payload.sessions || []
+    sessionTotal.value = payload.total || 0
   } catch (error: any) {
     ElMessage.error(error.message || '加载历史会话失败')
   } finally {
@@ -545,13 +533,15 @@ async function loadSession(session: SessionListItem) {
   messages.value = []
   finalAnswerContent.value = ''
   attackGraph.value = null
+  generatedFlowchartImageUrl.value = ''
   maxIterations.value = session.max_iterations || 15
 
   // Load messages from history
   try {
     const response = await getSessionHistory(session.session_id)
     // Backend returns {success: true, data: {session_id, messages}}
-    const msgs = response.data?.messages || response.messages || []
+    const payload = (response as any).data || response
+    const msgs = payload.messages || []
     if (msgs.length > 0) {
       messages.value = rebuildMessagesFromHistory(msgs)
     }
@@ -675,6 +665,9 @@ async function startAnalysis() {
     savedSessionId.value = response.session_id
     sessionId.value = response.session_id
     messages.value = []
+    finalAnswerContent.value = ''
+    attackGraph.value = null
+    generatedFlowchartImageUrl.value = ''
 
     // Save current session ID for page reload recovery
     saveCurrentSessionId()
@@ -858,23 +851,25 @@ function createSSEHandler(message: string) {
         scrollToBottom()
         break
 
+      case 'flowchart_image':
+        if (event.result?.url) {
+          generatedFlowchartImageUrl.value = event.result.url
+          ElMessage.success('图片模型已生成攻击溯源图')
+        } else if (event.error) {
+          ElMessage.warning(event.error)
+        }
+        scrollToBottom()
+        break
+
       case 'done':
         cleanup()
         flushThought(true)
         currentEventSource.value?.close()
         currentEventSource.value = null
-        // Parse attack_graph from final answer
         if (finalAnswerContent.value) {
-          try {
-            const jsonMatch = finalAnswerContent.value.match(/\{[\s\S]*"attack_graph"[\s\S]*\}/)
-            if (jsonMatch) {
-              const data = JSON.parse(jsonMatch[0])
-              if (data.attack_graph) {
-                attackGraph.value = data.attack_graph
-              }
-            }
-          } catch (e) {
-            console.error('Failed to parse attack graph:', e)
+          const parsedGraph = extractAttackGraph(finalAnswerContent.value)
+          if (parsedGraph) {
+            attackGraph.value = parsedGraph
           }
         }
         isLoading.value = false
@@ -915,6 +910,9 @@ function sendInitialMessage(message: string) {
     role: 'user',
     content: message
   })
+  finalAnswerContent.value = ''
+  attackGraph.value = null
+  generatedFlowchartImageUrl.value = ''
 
   scrollToBottom()
   isLoading.value = true
@@ -937,6 +935,9 @@ function sendMessage() {
     role: 'user',
     content: userMessage
   })
+  finalAnswerContent.value = ''
+  attackGraph.value = null
+  generatedFlowchartImageUrl.value = ''
 
   scrollToBottom()
   isLoading.value = true
@@ -949,6 +950,23 @@ function scrollToBottom() {
       messageListRef.value.scrollTop = messageListRef.value.scrollHeight
     }
   })
+}
+
+function downloadFlowchartImage() {
+  if (!flowchartImageUrl.value) return
+
+  const link = document.createElement('a')
+  link.href = flowchartImageUrl.value
+  const extension = generatedFlowchartImageUrl.value ? 'png' : 'svg'
+  link.download = `${attackGraph.value?.graphId || 'attack-graph'}.${extension}`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+function closeFlowchart() {
+  attackGraph.value = null
+  generatedFlowchartImageUrl.value = ''
 }
 
 function severityTagType(severity: string) {
@@ -1077,6 +1095,21 @@ onMounted(() => {
   padding: 16px;
   background: #f5f7fa;
   border-radius: 8px;
+}
+
+.flowchart-image-panel {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.flowchart-image {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
 }
 
 .message {

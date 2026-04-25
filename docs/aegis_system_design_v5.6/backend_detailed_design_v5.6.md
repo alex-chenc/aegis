@@ -1394,7 +1394,73 @@ ReAct Agent通过SSE流式输出以下事件：
 | done | 流式结束 | - |
 | error | 错误 | content |
 
-### 10.3 数据模型更新
+### 10.3 图片模型配置 API
+
+系统配置页将文本 LLM 与图片模型分开保存。文本 LLM 继续用于告警分析、规则生成和漏洞分析；图片模型用于后续报告图、流程图或图片生成能力接入。
+
+#### 获取图片模型配置
+
+```
+GET /api/v1/config/image-model
+```
+
+**响应：**
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "api_key_masked": "sk-c****xxxx",
+    "provider": "minimax",
+    "base_url": "https://api.minimax.io/v1",
+    "model_name": "image-01",
+    "is_active": true
+  }
+}
+```
+
+#### 保存图片模型配置
+
+```
+POST /api/v1/config/image-model
+```
+
+**请求：**
+```json
+{
+  "api_key": "sk-xxx",
+  "provider": "minimax",
+  "base_url": "https://api.minimax.io/v1",
+  "model_name": "image-01"
+}
+```
+
+内置图片模型厂商配置：
+
+| provider | base_url | model_name | endpoint |
+|----------|----------|------------|----------|
+| minimax | https://api.minimax.io/v1 | image-01 | POST /image_generation |
+| zhipu | https://open.bigmodel.cn/api/paas/v4 | cogview-3-flash | POST /images/generations |
+| custom | 用户自定义 | 用户自定义 | 按 provider 分支或自定义地址处理 |
+
+### 10.4 AI分析流程图输出契约
+
+AI分析最终回复必须继续输出 `attack_graph` JSON。后端持久化完整文本与工具轨迹，并在最终 `content` 输出后、SSE `done` 前，调用当前激活的图片模型生成攻击溯源图图片。
+
+| 输出 | 说明 |
+|------|------|
+| 交互式溯源图 | 使用 `AttackGraph` 组件展示节点、边、时间线和处置建议 |
+| 图片模型溯源图 | SSE 输出 `flowchart_image` 事件，`result.url` 为图片模型返回的图片 URL |
+| 本地 SVG 兜底 | 如果图片模型失败，前端仍可将 `attack_graph` 渲染为 SVG data URL |
+
+SSE 事件顺序要求：
+
+1. 文本 LLM 通过 `thinking`、`tool_call`、`tool_result` 和 `content` 完成分析。
+2. 后端根据最终 `content` 构造图片提示词，调用图片模型。
+3. 后端发送 `flowchart_image`，成功时包含 `result.url`，失败时包含 `error`。
+4. 后端发送 `done`，前端关闭 EventSource。
+
+### 10.5 数据模型更新
 
 #### AIMessage 新增字段
 
