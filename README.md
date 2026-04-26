@@ -70,13 +70,31 @@ Aegis 智能主机安全系统：新一代 AI 原生主机安全平台。系统�
 
 | 功能              | 说明                                                            |
 | :---------------- | :-------------------------------------------------------------- |
-| **eBPF事件采集**  | 基于 eBPF 实时采集进程执行等系统事（）件  （仅在CentOS9测试过） |
+| **eBPF事件采集**  | 基于 eBPF 实时采集进程执行等系统事件（仅在 CentOS 9 测试过） |
 | **Sigma规则匹配** | 内置 Sigma 规则库，在 Agent 端进行初筛                          |
 | **告警去重**      | 按 host+pid+mitre_id 自动去重，减少告警噪音                     |
 | **手动AI降噪**    | 用户选择时间范围后，手动触发 LLM 分析告警真实性                 |
 | **自动阻断**      | 支持按 MITRE ATT&CK 策略配置自动阻断开关                        |
 | **实时推送**      | WebSocket 实时推送告警到前端                                    |
 
+### AI 告警分析与溯源图 (V5.6新增)
+
+| 功能             | 说明                                                          |
+| :--------------- | :------------------------------------------------------------ |
+| **多告警分析**   | 支持选择多条告警并按时间范围、主机过滤条件发起 AI 分析        |
+| **流式推理展示** | 前端按 SSE 展示 Thought、Action、Observation 与最终结论        |
+| **攻击溯源图**   | 最终结论解析 `attack_graph` 后同时展示交互式图谱与流程图图片  |
+| **图片模型接入** | 系统配置页支持独立配置文本模型与图片模型，用于生成流程图图片  |
+| **中文截图稳定** | 前端统一使用 CJK 安全字体栈，截图归档避免中文或图谱节点乱码    |
+
+## 界面截图
+
+V5.6 UI 视觉刷新截图保存在 `docs/screenshots/ui-refresh/`，其中 AI 分析相关截图：
+
+| 页面 | 截图 |
+| :--- | :--- |
+| AI 分析页 | `docs/screenshots/ui-refresh/detection-ai-analysis.png` |
+| 攻击溯源图 | `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png` |
 
 ## 快速开始
 
@@ -85,13 +103,14 @@ Aegis 智能主机安全系统：新一代 AI 原生主机安全平台。系统�
 - Docker 20.10+
 - Docker Compose 2.0+
 - 2GB+ 可用内存
+- 生成中文 UI 截图时建议安装 `fonts-noto-cjk` 或 `fonts-wqy-microhei`
 
 ### 源码部署
 
 ```bash
 # 1. 克隆项目
 git clone <repository-url>
-cd ai-benchmark
+cd aegis
 
 # 2. 配置环境变量
 cp .env.example .env
@@ -101,7 +120,7 @@ vim .env
 docker compose up -d --build
 
 # 4. 验证服务
-curl http://localhost:8080/health
+curl http://localhost:8082/health
 ```
 
 浏览器访问 http://localhost:8081
@@ -131,20 +150,22 @@ curl http://localhost:8080/health
 在「系统配置」页面获取 Agent 安装命令，在目标服务器上执行：
 
 ```bash
-curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
+curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 ```
 
 
 ## 端口说明
 
-| 服务          | 端口 |
-| :------------ | :--- |
-| 前端          | 8081 |
-| 后端 HTTP API | 8080 |
-| 后端 gRPC     | 9090 |
-| PostgreSQL    | 5432 |
-| Redis         | 6379 |
-| MinIO API     | 9000 |
+| 服务 | 端口 |
+| :--- | :--- |
+| 前端 | 8081 |
+| API Server HTTP | 8082 |
+| API Server gRPC | 19093 |
+| Server gRPC | 19090 / 19094 |
+| DC gRPC | 19092 |
+| PostgreSQL | 5432 |
+| Redis | 6379 |
+| MinIO API | 9000 |
 | MinIO Console | 9001 |
 
 

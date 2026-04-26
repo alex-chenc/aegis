@@ -77,6 +77,24 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 | **Auto Blocking**        | Support configuring auto-block switch by MITRE ATT&CK policy                      |
 | **Real-time Push**       | WebSocket real-time push alerts to frontend                                       |
 
+### AI Alert Analysis & Attack Graph (V5.6 New)
+
+| Feature                    | Description                                                                 |
+| :------------------------- | :-------------------------------------------------------------------------- |
+| **Multi-alert Analysis**   | Select multiple alerts and start AI analysis with time range and host filters |
+| **Streaming Reasoning**    | Display Thought, Action, Observation, and final answer through SSE           |
+| **Attack Provenance Graph**| Parse `attack_graph` from the final answer and show both interactive graph and flowchart image |
+| **Image Model Integration**| Configure text LLM and image model separately on the system settings page    |
+| **Stable CJK Screenshots** | Use a CJK-safe font stack to prevent garbled Chinese text in archived screenshots |
+
+## Screenshots
+
+V5.6 UI refresh screenshots are stored in `docs/screenshots/ui-refresh/`. AI analysis screenshots:
+
+| Page | Screenshot |
+| :--- | :--------- |
+| AI Analysis | `docs/screenshots/ui-refresh/detection-ai-analysis.png` |
+| Attack Graph | `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png` |
 
 ## Quick Start
 
@@ -85,13 +103,14 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Docker 20.10+
 - Docker Compose 2.0+
 - 2GB+ available memory
+- Install `fonts-noto-cjk` or `fonts-wqy-microhei` when generating Chinese UI screenshots
 
 ### Source Code Deployment
 
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd ai-benchmark
+cd aegis
 
 # 2. Configure environment variables
 cp .env.example .env
@@ -101,7 +120,7 @@ vim .env
 docker compose up -d --build
 
 # 4. Verify service
-curl http://localhost:8080/health
+curl http://localhost:8082/health
 ```
 
 Visit http://localhost:8081 in your browser.
@@ -119,7 +138,7 @@ vim .env
 docker compose up -d
 
 # 4. Verify service
-curl http://localhost:8080/health
+curl http://localhost:8082/health
 ```
 
 Visit http://localhost:8081 in your browser.
@@ -138,18 +157,20 @@ For first-time use, configure the LLM service on the "System Configuration" page
 Get the Agent installation command from "System Configuration" page and execute on target server:
 
 ```bash
-curl -sSL http://<SERVER_IP>:8080/api/v1/agent/install.sh | sudo bash
+curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 ```
 
 
 ## Port Reference
 
-| Service          | Port |
-| :--------------- | :--- |
-| Frontend         | 8081 |
-| Backend HTTP API | 8080 |
-| Backend gRPC     | 9090 |
-| PostgreSQL       | 5432 |
-| Redis            | 6379 |
-| MinIO API        | 9000 |
-| MinIO Console    | 9001 |
+| Service | Port |
+| :------ | :--- |
+| Frontend | 8081 |
+| API Server HTTP | 8082 |
+| API Server gRPC | 19093 |
+| Server gRPC | 19090 / 19094 |
+| DC gRPC | 19092 |
+| PostgreSQL | 5432 |
+| Redis | 6379 |
+| MinIO API | 9000 |
+| MinIO Console | 9001 |
