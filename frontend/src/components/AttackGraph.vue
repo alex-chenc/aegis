@@ -183,6 +183,16 @@ const nodeColors: Record<string, string> = {
   malware: '#cc0000'
 }
 
+const nodeGlyphs: Record<string, string> = {
+  attacker: '攻',
+  victim: '靶',
+  process: '进',
+  file: '文',
+  network: '网',
+  command: '令',
+  malware: '毒'
+}
+
 // Threat level tag type
 const threatLevelType = computed(() => {
   const map: Record<string, string> = {
@@ -245,6 +255,7 @@ function initGraph() {
     .attr('width', width)
     .attr('height', height)
     .attr('viewBox', [0, 0, width, height])
+    .attr('font-family', 'var(--aegis-font-sans)')
 
   // Add zoom behavior
   const g = svg.append('g')
@@ -319,23 +330,14 @@ function initGraph() {
     .attr('stroke', '#fff')
     .attr('stroke-width', 2)
 
-  // Node emoji icons based on type
+  // Node type glyphs avoid missing color-emoji fonts in Linux screenshot environments.
   node.append('text')
     .attr('text-anchor', 'middle')
     .attr('dy', 5)
-    .attr('font-size', 16)
-    .text(d => {
-      const icons: Record<string, string> = {
-        attacker: '👿',
-        victim: '💀',
-        process: '⚙️',
-        file: '📄',
-        network: '🌐',
-        command: '💻',
-        malware: '🦠'
-      }
-      return icons[d.type] || '❓'
-    })
+    .attr('font-size', 14)
+    .attr('font-weight', 700)
+    .attr('fill', '#fff')
+    .text(d => nodeGlyphs[d.type] || '?')
 
   // Node labels (below circle)
   node.append('text')

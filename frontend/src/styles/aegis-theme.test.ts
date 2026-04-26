@@ -12,6 +12,14 @@ describe('aegis global visual system', () => {
     expect(theme).toContain('--aegis-risk-critical')
   })
 
+  it('defines CJK-safe typography tokens for UI screenshots', () => {
+    expect(theme).toContain('--aegis-font-sans')
+    expect(theme).toContain('--aegis-font-mono')
+    expect(theme).toContain('Noto Sans CJK SC')
+    expect(theme).toContain('WenQuanYi Micro Hei')
+    expect(theme).toContain('Noto Sans Mono CJK SC')
+  })
+
   it('provides reusable page and component primitives', () => {
     expect(theme).toContain('.page-shell')
     expect(theme).toContain('.page-hero')

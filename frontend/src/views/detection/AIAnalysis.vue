@@ -1215,7 +1215,7 @@ onMounted(() => {
   line-height: 1.6;
   max-height: none;
   overflow-y: visible;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--aegis-font-sans);
 }
 
 /* Thought block - 独立显示AI思考过程 */

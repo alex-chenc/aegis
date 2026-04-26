@@ -68,4 +68,11 @@ describe('attack graph output', () => {
     expect(decodeURIComponent(dataUrl)).toContain('bash')
     expect(decodeURIComponent(dataUrl)).toContain('外连')
   })
+
+  it('embeds a CJK-safe font stack in generated svg flowcharts', () => {
+    const decoded = decodeURIComponent(buildAttackGraphSvgDataUrl(graph))
+
+    expect(decoded).toContain('Noto Sans CJK SC')
+    expect(decoded).toContain('WenQuanYi Micro Hei')
+  })
 })

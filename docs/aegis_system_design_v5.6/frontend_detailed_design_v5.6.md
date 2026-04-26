@@ -1107,6 +1107,15 @@ V5.6 前端统一采用“安全运营指挥台”视觉系统，覆盖除业务
 | `src/styles/aegis-theme.css` | CSS 变量、背景、Element Plus 组件覆写、通用页面类 |
 | `src/App.vue` | App Shell、侧边导航、顶部状态栏、内容舞台 |
 
+字体与截图规范：
+
+| 要求 | 说明 |
+|------|------|
+| 中文字体 token | 全局必须通过 `--aegis-font-sans` 定义含 CJK 兜底的字体栈，优先覆盖 `Noto Sans CJK SC`、`Noto Sans SC`、`Source Han Sans SC`、`Microsoft YaHei`、`PingFang SC` 和 `WenQuanYi Micro Hei` |
+| 等宽字体 token | 代码、JSON、日志与进程树应通过 `--aegis-font-mono` 使用等宽字体，并保留 CJK 等宽兜底 |
+| 图谱字体 | `AttackGraph` 中的 SVG 文本必须显式使用 `--aegis-font-sans`，不能依赖浏览器默认 `sans-serif` |
+| 截图环境 | 生成 `docs/screenshots/ui-refresh/` 截图前，浏览器所在环境必须安装中文字体，例如 `fonts-noto-cjk` 或 `fonts-wqy-microhei` |
+
 所有业务页面应优先复用全局类：
 
 | 类名 | 用途 |

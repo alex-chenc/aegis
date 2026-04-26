@@ -133,6 +133,8 @@ function nodeColor(node: AttackGraphNode): string {
   return colors[node.type] || '#475569'
 }
 
+const SVG_FONT_STACK = '"Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "WenQuanYi Micro Hei", "Segoe UI", sans-serif'
+
 export function buildAttackGraphSvgDataUrl(graph: AttackGraphData): string {
   const width = 960
   const height = Math.max(360, 190 + graph.nodes.length * 82)
@@ -189,13 +191,13 @@ export function buildAttackGraphSvgDataUrl(graph: AttackGraphData): string {
           <path d="M0,0 L0,6 L9,3 z" fill="#334155" />
         </marker>
         <style>
-          .title { font: 700 28px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
-          .summary { font: 400 15px ui-sans-serif, system-ui, sans-serif; fill: #475569; }
-          .node-label { font: 700 13px ui-sans-serif, system-ui, sans-serif; fill: #ffffff; }
-          .node-type { font: 500 11px ui-sans-serif, system-ui, sans-serif; fill: rgba(255,255,255,.82); }
-          .edge-label { font: 600 12px ui-sans-serif, system-ui, sans-serif; fill: #1e293b; }
-          .timeline-title { font: 700 16px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
-          .timeline { font: 400 13px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+          .title { font: 700 28px ${SVG_FONT_STACK}; fill: #0f172a; }
+          .summary { font: 400 15px ${SVG_FONT_STACK}; fill: #475569; }
+          .node-label { font: 700 13px ${SVG_FONT_STACK}; fill: #ffffff; }
+          .node-type { font: 500 11px ${SVG_FONT_STACK}; fill: rgba(255,255,255,.82); }
+          .edge-label { font: 600 12px ${SVG_FONT_STACK}; fill: #1e293b; }
+          .timeline-title { font: 700 16px ${SVG_FONT_STACK}; fill: #0f172a; }
+          .timeline { font: 400 13px ${SVG_FONT_STACK}; fill: #334155; }
         </style>
       </defs>
       <rect width="100%" height="100%" rx="0" fill="#f8fafc" />
