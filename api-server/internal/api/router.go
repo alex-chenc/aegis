@@ -5,12 +5,15 @@ import (
 
 	"api-server/internal/api/handler"
 	"api-server/internal/api/middleware"
+	"api-server/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Router struct {
 	engine                 *gin.Engine
+	authService            *service.AuthService
+	authHandler            *handler.AuthHandler
 	configHandler          *handler.ConfigHandler
 	hostHandler            *handler.HostHandler
 	templateHandler        *handler.TemplateHandler
@@ -26,6 +29,8 @@ type Router struct {
 }
 
 func NewRouter(
+	authService *service.AuthService,
+	authHandler *handler.AuthHandler,
 	configHandler *handler.ConfigHandler,
 	hostHandler *handler.HostHandler,
 	templateHandler *handler.TemplateHandler,
@@ -40,6 +45,8 @@ func NewRouter(
 	aiAnalysisHandler *handler.AIAnalysisHandler,
 ) *Router {
 	return &Router{
+		authService:            authService,
+		authHandler:            authHandler,
 		configHandler:          configHandler,
 		hostHandler:            hostHandler,
 		templateHandler:        templateHandler,
@@ -63,6 +70,7 @@ func (r *Router) Setup() {
 	r.engine.Use(middleware.CORS())
 	r.engine.Use(middleware.RequestLogger())
 	r.engine.Use(middleware.Recovery())
+	r.engine.Use(middleware.AuthRequired(r.authService))
 
 	// 健康检查端点
 	r.engine.GET("/health", func(c *gin.Context) {
@@ -74,6 +82,11 @@ func (r *Router) Setup() {
 	// API v1 路由组
 	v1 := r.engine.Group("/api/v1")
 	{
+		auth := v1.Group("/auth")
+		{
+			r.authHandler.RegisterRoutes(auth)
+		}
+
 		// Debug route for AI analysis
 		v1.POST("/debug-ai-session", func(c *gin.Context) {
 			c.JSON(200, gin.H{"status": "debug ok"})

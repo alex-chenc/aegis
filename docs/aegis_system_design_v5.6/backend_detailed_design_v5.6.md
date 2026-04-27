@@ -18,8 +18,55 @@ V5.6后端主要新增以下功能：
 | LangChain Agent服务 | 多轮对话式AI分析 |
 | 工具调用服务 | AI调用Agent工具的能力 |
 | 单Host精确下发 | 所有命令精确下发到指定Agent |
+| 登录认证与首次改密 | 首次部署允许无账号密码进入，进入后强制设置账号密码，后续使用账号密码登录 |
 
 ---
+
+## 2.5 登录认证服务
+
+### 2.5.1 设计目标
+
+认证模块只解决控制台登录和首次初始化，不引入多角色权限系统。系统初始状态下没有可长期使用的默认账号密码，管理员可在登录页点击“首次进入”获得一次受限会话；受限会话只能访问当前用户信息、退出登录和修改账号密码接口。修改完成后，首次入口关闭，后续必须使用本次设置的账号密码登录。
+
+### 2.5.2 状态流
+
+```text
+未初始化
+  -> POST /api/v1/auth/bootstrap-login
+  -> force_password_change=true 的临时会话
+  -> POST /api/v1/auth/change-credentials
+  -> initialized=true / force_password_change=false
+  -> POST /api/v1/auth/login
+```
+
+### 2.5.3 API 设计
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/v1/auth/status` | 否 | 返回是否已初始化 |
+| POST | `/api/v1/auth/bootstrap-login` | 否 | 仅未初始化时允许首次进入 |
+| POST | `/api/v1/auth/login` | 否 | 使用已设置账号密码登录 |
+| GET | `/api/v1/auth/me` | 是 | 返回当前用户和是否强制改密 |
+| POST | `/api/v1/auth/change-credentials` | 是 | 设置或修改账号密码 |
+| POST | `/api/v1/auth/logout` | 是 | 删除当前会话 |
+
+### 2.5.4 鉴权策略
+
+- 客户端使用 `Authorization: Bearer <token>` 调用受保护 API。
+- 后端只保存 token 的 SHA-256 摘要，明文 token 只在登录响应中返回一次。
+- 密码使用 bcrypt 哈希保存。
+- `force_password_change=true` 的会话只允许访问 `/auth/me`、`/auth/change-credentials`、`/auth/logout`，其他业务 API 返回 `403`。
+- `/health`、`/api/v1/auth/*` 和 Agent 安装/下载脚本保持未鉴权，避免破坏 Agent 安装链路。
+- 前端路由守卫不能作为安全边界。即使用户手工修改 URL 或前端代码，后端仍必须拒绝未认证请求访问所有业务 API。
+
+### 2.5.5 验收测试
+
+- 未初始化时，`bootstrap-login` 返回 token 且 `force_password_change=true`。
+- 未初始化临时会话访问业务 API 返回 `403`。
+- 无 token 访问任意业务 API 返回 `401`，不能因为前端路由被绕过而返回业务数据。
+- 临时会话提交新账号密码后，`login` 可用新凭据成功登录。
+- 完成初始化后再次调用 `bootstrap-login` 返回 `403`。
+- 错误密码登录返回 `401`。
 
 ## 2. 新增服务模块
 

@@ -1,8 +1,11 @@
 <template>
-  <el-container class="app-container">
+  <router-view v-if="isAuthLayout" />
+  <el-container v-else class="app-container">
     <el-aside width="220px" class="sidebar">
       <div class="logo">
-        <span class="logo-mark"><el-icon><Lock /></el-icon></span>
+        <span class="logo-mark" aria-hidden="true">
+          <span class="brand-shield"></span>
+        </span>
         <div class="logo-copy">
           <span class="logo-text">Aegis</span>
           <span class="logo-subtitle">主机安全指挥台</span>
@@ -119,7 +122,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Lock } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 
 const route = useRoute()
@@ -141,6 +144,10 @@ const breadcrumbs = computed(() => {
   })
   
   return crumbs
+})
+
+const isAuthLayout = computed(() => {
+  return Boolean(route.meta.authLayout)
 })
 
 function handleRefresh() {
@@ -199,10 +206,19 @@ function handleRefresh() {
   width: 38px;
   height: 38px;
   border: 1px solid rgba(34, 211, 238, 0.38);
-  border-radius: 14px;
-  color: #67e8f9;
+  border-radius: 8px;
   background: rgba(34, 211, 238, 0.1);
   box-shadow: 0 10px 28px rgba(34, 211, 238, 0.16);
+}
+
+.brand-shield {
+  width: 24px;
+  height: 28px;
+  display: block;
+  background-image: url('/aegis-brand-source.png');
+  background-repeat: no-repeat;
+  background-size: 1916px 804px;
+  background-position: -23px -28px;
 }
 
 .logo-copy {

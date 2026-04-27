@@ -18,8 +18,61 @@ V5.6版本前端主要新增以下功能：
 | AI规则配置 | `/detection/rules` → AI配置Tab | 配置AI规则更新功能 |
 | AI分析多轮对话 | `/detection/ai-analysis` | 多选告警+时间范围+多轮对话+溯源图 |
 | 工具调用展示 | 嵌入在AI分析面板 | 展示AI调用的工具及结果 |
+| 登录认证 | `/login`、`/force-password-change` | 首次免密进入后强制设置账号密码，后续账号密码登录 |
 
 ---
+
+## 2.0 登录认证页面
+
+### 2.0.1 页面与路由
+
+```text
+/login
+  - 未初始化：展示“首次进入控制台”主操作
+  - 已初始化：展示账号、密码登录表单
+
+/force-password-change
+  - 仅 force_password_change=true 的会话可访问
+  - 设置管理员账号、新密码、确认密码
+```
+
+路由守卫规则：
+
+| 状态 | 访问登录页 | 访问改密页 | 访问业务页 |
+|------|------------|------------|------------|
+| 无 token | 允许 | 重定向 `/login` | 重定向 `/login` |
+| 临时 token | 重定向 `/force-password-change` | 允许 | 重定向 `/force-password-change` |
+| 正常 token | 重定向 `/hosts` | 重定向 `/hosts` | 允许 |
+
+### 2.0.2 UI 设计
+
+- 登录页采用安全控制台风格：左侧为产品识别和系统状态，右侧为登录表单。
+- 表单必须使用可见 label、密码显隐按钮、提交 loading、字段级校验错误。
+- 首次进入按钮仅在 `/auth/status` 返回 `initialized=false` 时展示。
+- 强制改密页不显示主导航，避免用户绕过改密流程。
+- 移动端表单宽度收敛到视口内，按钮高度不低于 44px。
+
+### 2.0.3 前端状态
+
+认证状态保存到 `localStorage`：
+
+```ts
+{
+  token: string,
+  username: string,
+  forcePasswordChange: boolean
+}
+```
+
+Axios 请求拦截器读取 token 并注入 `Authorization`；响应遇到 `401` 时清理本地认证状态并跳转 `/login`，遇到 `403` 且本地处于强制改密状态时跳转 `/force-password-change`。
+
+### 2.0.4 验收测试
+
+- 未初始化状态渲染“首次进入控制台”。
+- 已初始化状态渲染账号密码表单。
+- 首次进入成功后跳转 `/force-password-change`。
+- 改密成功后保存新会话状态并跳转 `/hosts`。
+- API 层登录、首次进入、改密调用路径和 payload 正确。
 
 ## 2. 页面结构
 

@@ -121,6 +121,7 @@ func main() {
 	llmAggregationRepo := repository.NewLLMAggregationRepository(db)
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
 	notificationRepo := repository.NewNotificationRepository(db)
+	authRepo := repository.NewAuthRepository(db)
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
@@ -151,6 +152,7 @@ func main() {
 
 	// Notification Service
 	notificationSvc := service.NewNotificationService(notificationRepo)
+	authService := service.NewAuthService(authRepo)
 
 	// V5.0 Runtime Detection Services
 	wsService := service.NewWebSocketService()
@@ -198,9 +200,10 @@ func main() {
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
 	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, sigmaRuleUploadService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService, aiRuleConfigService, ruleGenerationService)
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
+	authHandler := handler.NewAuthHandler(authService)
 
 	// Initialize HTTP router
-	router := api.NewRouter(configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler)
+	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler)
 	router.Setup()
 
 	// Start HTTP server

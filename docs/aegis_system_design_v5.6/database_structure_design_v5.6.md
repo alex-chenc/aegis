@@ -19,8 +19,56 @@ V5.6版本数据库主要新增以下表：
 | `tool_execution_log` | 工具执行日志表 |
 | `sigma_rules` | Sigma规则表（增强） |
 | `image_model_configs` | 图片模型配置表 |
+| `auth_users` | 控制台认证用户表 |
+| `auth_sessions` | 控制台登录会话表 |
 
 ---
+
+## 2.0 认证表设计
+
+### 2.0.1 auth_users（控制台认证用户表）
+
+```sql
+CREATE TABLE IF NOT EXISTS auth_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(64) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL DEFAULT '',
+    force_password_change BOOLEAN NOT NULL DEFAULT TRUE,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users(username);
+CREATE INDEX IF NOT EXISTS idx_auth_users_force_change ON auth_users(force_password_change);
+```
+
+约束说明：
+
+- 初始用户允许 `password_hash=''`，但必须同时满足 `force_password_change=true`。
+- 完成首次改密后，`password_hash` 必须写入 bcrypt 哈希，`force_password_change=false`。
+
+### 2.0.2 auth_sessions（控制台登录会话表）
+
+```sql
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash ON auth_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
+```
+
+会话策略：
+
+- token 明文只返回给客户端一次。
+- 数据库只存 SHA-256 摘要。
+- 过期会话不允许访问 API。
 
 ## 2. 新增表设计
 

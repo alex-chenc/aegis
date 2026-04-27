@@ -1,4 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getStoredAuth } from '@/utils/auth'
+import Login from '../views/Login.vue'
+import ForcePasswordChange from '../views/ForcePasswordChange.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Settings from '../views/Settings.vue'
 import Workbench from '../views/Workbench.vue'
@@ -12,6 +15,18 @@ import DetectionRules from '../views/detection/Rules.vue'
 import AIAnalysis from '../views/detection/AIAnalysis.vue'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: Login,
+    meta: { title: '登录认证', public: true, authLayout: true }
+  },
+  {
+    path: '/force-password-change',
+    name: 'ForcePasswordChange',
+    component: ForcePasswordChange,
+    meta: { title: '设置管理员凭据', authLayout: true, requiresAuth: true }
+  },
   {
     path: '/',
     redirect: '/hosts'
@@ -104,6 +119,28 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  const auth = getStoredAuth()
+
+  if (to.path === '/login' && auth) {
+    return auth.forcePasswordChange ? '/force-password-change' : '/hosts'
+  }
+
+  if (!to.meta.public && !auth) {
+    return '/login'
+  }
+
+  if (auth?.forcePasswordChange && to.path !== '/force-password-change') {
+    return '/force-password-change'
+  }
+
+  if (to.path === '/force-password-change' && auth && !auth.forcePasswordChange) {
+    return '/hosts'
+  }
+
+  return true
 })
 
 export default router

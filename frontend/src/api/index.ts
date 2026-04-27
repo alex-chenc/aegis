@@ -1,9 +1,18 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { clearStoredAuth, getAuthToken, getStoredAuth } from '@/utils/auth'
 
 const request = axios.create({
   baseURL: '/api/v1',
   timeout: 300000  // 5 分钟，用于 LLM 脚本生成
+})
+
+request.interceptors.request.use(config => {
+  const token = getAuthToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 request.interceptors.response.use(
@@ -31,8 +40,15 @@ request.interceptors.response.use(
         errorMsg = '服务器内部错误'
       } else if (status === 401) {
         errorMsg = '未授权'
+        clearStoredAuth()
+        if (window.location.pathname !== '/login') {
+          window.location.assign('/login')
+        }
       } else if (status === 403) {
         errorMsg = '禁止访问'
+        if (getStoredAuth()?.forcePasswordChange && window.location.pathname !== '/force-password-change') {
+          window.location.assign('/force-password-change')
+        }
       }
 
       ElMessage.error(errorMsg)
