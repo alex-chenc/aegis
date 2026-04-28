@@ -36,6 +36,9 @@ reachability:
 - If `curl http://localhost:8081/login` returns 200 but public-IP curl times out
   and Nginx has no access log for the request, the remaining fault domain is host
   firewall, cloud firewall, routing, NAT, or a public-IP hairpin limitation.
+- For Docker-published ports, `net.ipv4.ip_forward` must be `1`. If it is `0`,
+  public traffic can reach the host NIC but fail before it is forwarded to the
+  frontend container.
 
 ## Design
 
@@ -72,3 +75,13 @@ Runtime verification:
    - `docker compose ps frontend api-server` should show healthy containers.
    - `ss -tlnp | grep 8081` should show Docker listening on `0.0.0.0:8081`.
    - `iptables -t nat -S DOCKER` should include a DNAT rule for `--dport 8081`.
+   - `sysctl net.ipv4.ip_forward` should return `net.ipv4.ip_forward = 1`.
+
+Host-level remediation when public traffic reaches the NIC but the browser gets no
+response:
+
+```bash
+sysctl -w net.ipv4.ip_forward=1
+printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-aegis-docker-forward.conf
+sysctl --system
+```
