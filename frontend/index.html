@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <link rel="icon" type="image/svg+xml" href="/aegis-favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+      (function () {
+        var authPaths = ['/login', '/force-password-change']
+        var isAuthPath = authPaths.indexOf(window.location.pathname) !== -1
+        var viewport = document.querySelector('meta[name="viewport"]')
+        if (viewport && !isAuthPath) {
+          viewport.setAttribute('content', 'width=1280')
+        }
+      })()
+    </script>
     <title>Aegis智能主机安全系统</title>
   </head>
   <body>

@@ -118,7 +118,7 @@ async function handleLogin() {
       await router.replace('/force-password-change')
     } else {
       ElMessage.success('登录成功')
-      await router.replace('/hosts')
+      window.location.assign('/hosts')
     }
   } finally {
     submitting.value = false

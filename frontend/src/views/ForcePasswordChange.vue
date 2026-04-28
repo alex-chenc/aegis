@@ -46,13 +46,11 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { changeCredentials } from '@/api/auth'
 import { saveAuthSession } from '@/utils/auth'
 
-const router = useRouter()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const form = reactive({
@@ -96,7 +94,7 @@ async function handleSubmit() {
     })
     saveAuthSession(session)
     ElMessage.success('账号密码已设置')
-    await router.replace('/hosts')
+    window.location.assign('/hosts')
   } finally {
     submitting.value = false
   }
