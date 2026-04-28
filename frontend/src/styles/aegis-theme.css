@@ -20,6 +20,7 @@
   --aegis-radius-lg: 18px;
   --aegis-radius-md: 12px;
   --aegis-transition: 180ms ease;
+  --aegis-desktop-min-width: 1280px;
   --aegis-font-sans: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "WenQuanYi Micro Hei", "Segoe UI", sans-serif;
   --aegis-font-mono: "JetBrains Mono", "SFMono-Regular", "Consolas", "Liberation Mono", "Noto Sans Mono CJK SC", monospace;
 }
@@ -43,6 +44,7 @@ body {
     radial-gradient(circle at 88% 14%, rgba(37, 99, 235, 0.15), transparent 26%),
     linear-gradient(135deg, #edf5ff 0%, #f7fafc 45%, #eef4f8 100%);
   font-family: var(--aegis-font-sans);
+  overflow-x: auto;
 }
 
 .page-shell {

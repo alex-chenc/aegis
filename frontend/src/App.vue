@@ -181,8 +181,9 @@ watch(() => route.fullPath, () => {
 
 <style scoped>
 .app-container {
-  height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  min-width: var(--aegis-desktop-min-width);
+  width: max(100vw, var(--aegis-desktop-min-width));
   background:
     linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 220px, transparent 220px),
     radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
