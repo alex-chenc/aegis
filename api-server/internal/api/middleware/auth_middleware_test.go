@@ -68,3 +68,45 @@ func TestAuthRequiredRejectsForcedPasswordSessionForBusinessAPI(t *testing.T) {
 		t.Fatalf("expected 403 for forced password session, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestAuthRequiredAcceptsTokenFromQueryString(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authSvc := newMiddlewareTestAuthService(t)
+	session, err := authSvc.BootstrapLogin()
+	if err != nil {
+		t.Fatalf("expected bootstrap login: %v", err)
+	}
+	if _, err := authSvc.ChangeCredentials(session.Token, service.ChangeCredentialsInput{
+		Username:        "security-admin",
+		NewPassword:     "StrongerPassword123!",
+		ConfirmPassword: "StrongerPassword123!",
+	}); err != nil {
+		t.Fatalf("expected credential change: %v", err)
+	}
+	login, err := authSvc.Login("security-admin", "StrongerPassword123!")
+	if err != nil {
+		t.Fatalf("expected login: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(AuthRequired(authSvc))
+	router.GET("/api/v1/detection/alerts/ai-analysis/session-1/stream", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/detection/alerts/ai-analysis/session-1/stream?auth_token="+login.Token, nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with query token, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSanitizeRequestQueryRedactsAuthToken(t *testing.T) {
+	sanitized := sanitizeRequestQuery("message=hello&auth_token=secret-token")
+
+	if sanitized != "auth_token=%5BREDACTED%5D&message=hello" {
+		t.Fatalf("expected redacted auth token, got %q", sanitized)
+	}
+}

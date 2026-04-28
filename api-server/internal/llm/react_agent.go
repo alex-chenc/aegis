@@ -263,7 +263,7 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 	}
 
 	// Max iterations reached
-	writer.WriteError("Maximum iterations reached without final answer")
+	writer.WriteError("AI 已达到最大推理轮数，但仍未生成最终结论。请缩小告警范围、补充问题，或提高最大轮数后重试。")
 	writer.WriteDone()
 	return nil
 }

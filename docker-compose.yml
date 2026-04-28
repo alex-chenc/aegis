@@ -365,6 +365,7 @@ services:
       api-server:
         condition: service_healthy
     ports:
+      - "80:80"
       - "8081:80"
     networks:
       - aegis-network

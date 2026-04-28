@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -37,6 +38,9 @@ func AuthRequired(authService *service.AuthService) gin.HandlerFunc {
 		}
 
 		token := extractBearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			token = strings.TrimSpace(c.Query("auth_token"))
+		}
 		authCtx, err := authService.ValidateToken(token)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -96,7 +100,7 @@ func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := sanitizeRequestQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -135,4 +139,21 @@ func Recovery() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func sanitizeRequestQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return rawQuery
+	}
+
+	if values.Has("auth_token") {
+		values.Set("auth_token", "[REDACTED]")
+	}
+
+	return values.Encode()
 }

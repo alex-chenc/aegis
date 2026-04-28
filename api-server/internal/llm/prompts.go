@@ -285,13 +285,14 @@ Final Answer:
     "recommendations": ["[处置建议1]", "[处置建议2]", ...]
   },
   "conclusions": [
-    {"alert_id": "[告警ID]", "action": "[mark_false_positive/confirm_threat/generate_rule]"}
+    {"alert_id": "[告警ID]", "action": "[mark_false_positive/confirm_threat/generate_rule]", "summary": "[该告警的中文分析结论]"}
   ]
 }
 Remember:
 - Always include the host_id when calling tools
 - Be thorough in your investigation
 - Base your conclusions on evidence from tool results
+- All user-facing text fields must be in Simplified Chinese, including title, summary, node labels/details, edge labels, timeline events, recommendations, and conclusions.summary
 `
 
 // BuildReActPrompt builds the prompt for ReAct agent

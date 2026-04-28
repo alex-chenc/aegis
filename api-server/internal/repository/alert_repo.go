@@ -247,6 +247,23 @@ func (r *AlertRepository) UpdateLLMSummary(alertID string, summary string) error
 		}).Error
 }
 
+func (r *AlertRepository) UpdateAIAnalysisResult(alertID, summary, disposalStrategy string) error {
+	updates := map[string]interface{}{
+		"judgment_source": "ai",
+		"updated_at":      gorm.Expr("NOW()"),
+	}
+	if strings.TrimSpace(summary) != "" {
+		updates["llm_summary"] = strings.TrimSpace(summary)
+	}
+	if strings.TrimSpace(disposalStrategy) != "" {
+		updates["llm_disposal_strategy"] = strings.TrimSpace(disposalStrategy)
+	}
+
+	return r.db.Model(&model.Alert{}).
+		Where("alert_id = ?", alertID).
+		Updates(updates).Error
+}
+
 func (r *AlertRepository) DeleteByIDs(alertIDs []string) error {
 	if len(alertIDs) == 0 {
 		return nil

@@ -1,4 +1,5 @@
 import request from './index'
+import { getAuthToken } from '@/utils/auth'
 
 // AI Analysis Session types
 export interface CreateSessionRequest {
@@ -183,8 +184,9 @@ export function createAISessionStream(
   onEvent: (event: SSEEvent) => void
 ): EventSource {
   const encodedMessage = encodeURIComponent(message)
+  const token = encodeURIComponent(getAuthToken())
   const eventSource = new EventSource(
-    `/api/v1/detection/alerts/ai-analysis/${sessionId}/stream?message=${encodedMessage}`
+    `/api/v1/detection/alerts/ai-analysis/${sessionId}/stream?message=${encodedMessage}&auth_token=${token}`
   )
 
   eventSource.onmessage = (event) => {

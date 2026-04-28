@@ -196,7 +196,7 @@
           </div>
 
           <!-- 溯源图展示区域 -->
-          <el-card v-if="attackGraph || flowchartImageUrl" class="attack-graph-card" style="margin-top: 16px;">
+          <el-card v-if="attackGraph" class="attack-graph-card" style="margin-top: 16px;">
             <template #header>
               <div class="card-header">
                 <span>攻击溯源图</span>
@@ -211,10 +211,7 @@
                 </div>
               </div>
             </template>
-            <div v-if="flowchartImageUrl" class="flowchart-image-panel">
-              <img :src="flowchartImageUrl" :alt="flowchartImageAlt" class="flowchart-image" />
-            </div>
-            <AttackGraph v-if="attackGraph" :graph-data="attackGraph" />
+            <AttackGraph :graph-data="attackGraph" />
           </el-card>
         </el-card>
 
@@ -288,6 +285,7 @@ import { getAlerts } from '@/api/detection'
 import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
 import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
+import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 
 const route = useRoute()
 const router = useRouter()
@@ -295,6 +293,7 @@ const router = useRouter()
 // Types
 interface Alert {
   id: string
+  alert_id?: string
   hostname?: string
   rule_title?: string
   mitre_id: string
@@ -421,23 +420,28 @@ const filteredAlerts = computed(() => {
   return result
 })
 
-const flowchartImageUrl = computed(() => {
-  if (generatedFlowchartImageUrl.value) return generatedFlowchartImageUrl.value
-  if (!attackGraph.value) return ''
-  return buildAttackGraphSvgDataUrl(attackGraph.value)
-})
-
-const flowchartImageAlt = computed(() => {
-  return attackGraph.value ? `${attackGraph.value.title}流程图` : 'AI生成的攻击溯源流程图'
+const selectedAlerts = computed(() => {
+  const selectedIds = new Set(selectedAlertIds.value)
+  return alerts.value.filter(alert => selectedIds.has(alert.id))
 })
 
 // Methods
 async function loadAlerts() {
   alertLoading.value = true
   try {
-    const params: any = { page: 1, page_size: 100 }
-    const response = await getAlerts(params)
-    alerts.value = response.data || []
+    const firstPage = await getAlerts({ page: 1, pageSize: 200 })
+    const collectedAlerts = [...(firstPage.data || [])]
+    const total = firstPage.total || collectedAlerts.length
+
+    for (let page = 2; collectedAlerts.length < total; page++) {
+      const response = await getAlerts({ page, pageSize: 200 })
+      collectedAlerts.push(...(response.data || []))
+      if (!response.data?.length) {
+        break
+      }
+    }
+
+    alerts.value = collectedAlerts
 
     // Extract unique hosts
     const hostSet = new Set(alerts.value.map(a => a.hostname).filter(Boolean) as string[])
@@ -677,7 +681,17 @@ async function startAnalysis() {
       ElMessage.success('AI 分析会话已创建')
 
       // Automatically send initial analysis request
-      const initialMessage = `请分析这 ${selectedAlertIds.value.length} 个告警，判断是否为真实威胁，并进行攻击链路溯源。`
+      const initialMessage = buildInitialAnalysisMessage(
+        selectedAlerts.value.map(alert => ({
+          id: alert.alert_id || alert.id,
+          hostname: alert.hostname,
+          rule_title: alert.rule_title,
+          severity: alert.severity,
+          description: alert.description,
+          last_seen_at: alert.last_seen_at
+        })),
+        timeRange.value
+      )
       sendInitialMessage(initialMessage)
     } else {
       ElMessage.success('已恢复会话')
@@ -854,7 +868,6 @@ function createSSEHandler(message: string) {
       case 'flowchart_image':
         if (event.result?.url) {
           generatedFlowchartImageUrl.value = event.result.url
-          ElMessage.success('图片模型已生成攻击溯源图')
         } else if (event.error) {
           ElMessage.warning(event.error)
         }
@@ -877,7 +890,8 @@ function createSSEHandler(message: string) {
         break
 
       case 'error':
-        ElMessage.error(event.content || 'AI 分析出错')
+        const normalizedError = normalizeAIAnalysisErrorMessage(event.content || 'AI 分析出错')
+        ElMessage.error(normalizedError)
         cleanup()
         currentEventSource.value?.close()
         currentEventSource.value = null
@@ -885,7 +899,7 @@ function createSSEHandler(message: string) {
         thoughtMsgIndex = -1
         messages.value.push({
           role: 'assistant',
-          content: `AI 分析失败: ${event.content || '未知错误'}`,
+          content: `AI 分析失败: ${normalizedError}`,
           isError: true
         })
         isLoading.value = false
@@ -953,12 +967,11 @@ function scrollToBottom() {
 }
 
 function downloadFlowchartImage() {
-  if (!flowchartImageUrl.value) return
+  if (!attackGraph.value) return
 
   const link = document.createElement('a')
-  link.href = flowchartImageUrl.value
-  const extension = generatedFlowchartImageUrl.value ? 'png' : 'svg'
-  link.download = `${attackGraph.value?.graphId || 'attack-graph'}.${extension}`
+  link.href = buildAttackGraphSvgDataUrl(attackGraph.value)
+  link.download = `${attackGraph.value.graphId || 'attack-graph'}.svg`
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
@@ -1095,21 +1108,6 @@ onMounted(() => {
   padding: 16px;
   background: #f5f7fa;
   border-radius: 8px;
-}
-
-.flowchart-image-panel {
-  margin-bottom: 16px;
-  padding: 12px;
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.flowchart-image {
-  display: block;
-  width: 100%;
-  max-height: 420px;
-  object-fit: contain;
 }
 
 .message {

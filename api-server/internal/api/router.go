@@ -64,7 +64,7 @@ func NewRouter(
 
 // Setup 设置路由和中间件
 func (r *Router) Setup() {
-	r.engine = gin.Default()
+	r.engine = gin.New()
 
 	// 全局中间件
 	r.engine.Use(middleware.CORS())

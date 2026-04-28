@@ -1497,15 +1497,23 @@ AI分析最终回复必须继续输出 `attack_graph` JSON。后端持久化完�
 | 输出 | 说明 |
 |------|------|
 | 交互式溯源图 | 使用 `AttackGraph` 组件展示节点、边、时间线和处置建议 |
-| 图片模型溯源图 | SSE 输出 `flowchart_image` 事件，`result.url` 为图片模型返回的图片 URL |
+| 图片模型溯源图 | SSE 输出 `flowchart_image` 事件，`result.url` 为图片模型返回的图片 URL，作为调试/下载能力保留 |
+| 结构化溯源图 | 前端以 `attack_graph` 为唯一主展示视图，展示节点、边、时间线和处置建议 |
 | 本地 SVG 兜底 | 如果图片模型失败，前端仍可将 `attack_graph` 渲染为 SVG data URL |
 
 SSE 事件顺序要求：
 
 1. 文本 LLM 通过 `thinking`、`tool_call`、`tool_result` 和 `content` 完成分析。
-2. 后端根据最终 `content` 构造图片提示词，调用图片模型。
-3. 后端发送 `flowchart_image`，成功时包含 `result.url`，失败时包含 `error`。
-4. 后端发送 `done`，前端关闭 EventSource。
+2. 后端根据最终 `content` 解析 `attack_graph` 与 `conclusions`，并将每条告警的 AI 结论回写到告警表。
+3. 后端根据最终 `content` 构造图片提示词，调用图片模型。
+4. 后端发送 `flowchart_image`，成功时包含 `result.url`，失败时包含 `error`。
+5. 后端发送 `done`，前端关闭 EventSource。
+
+运行时约束补充：
+
+- `Alert Context` 不能只传 `alert_ids`；必须携带所选告警的真实快照字段，至少包括 `alert_id`、`host_id`、`hostname`、`rule_title`、`severity`、`status`、`description`、`process_tree`、`llm_summary`、`first_seen_at` 和 `last_seen_at`。
+- `Final Answer` 中的 `conclusions` 必须包含每条告警的 `alert_id`、`action` 和中文 `summary`，供告警详情页直接展示。
+- 当 `Final Answer` 缺少最终答案而仅耗尽迭代次数时，后端返回的错误语义应明确表示“达到最大推理轮数，尚未形成最终结论”，而不是通用连接异常。
 
 ### 10.4.1 Agent事件到AI溯源图的运行时约束
 

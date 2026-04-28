@@ -5,7 +5,7 @@
       <div class="header-left">
         <h3>{{ graphData.title }}</h3>
         <el-tag :type="threatLevelType" size="small">
-          {{ graphData.threatLevel?.toUpperCase() }}
+          {{ threatLevelLabel }}
         </el-tag>
       </div>
       <div class="header-right">
@@ -76,14 +76,14 @@
         <el-descriptions-item label="节点ID">{{ selectedNode.id }}</el-descriptions-item>
         <el-descriptions-item label="类型">
           <el-tag :type="nodeTypeTag(selectedNode.type)" size="small">
-            {{ selectedNode.type }}
+            {{ nodeTypeLabel(selectedNode.type) }}
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="标签" :span="2">{{ selectedNode.label }}</el-descriptions-item>
         <el-descriptions-item label="详情" :span="2">{{ selectedNode.detail }}</el-descriptions-item>
         <el-descriptions-item label="严重程度">
           <el-tag :type="severityTag(selectedNode.severity)" size="small">
-            {{ selectedNode.severity }}
+            {{ severityLabel(selectedNode.severity) }}
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="属性" :span="2">
@@ -100,7 +100,7 @@
       <el-descriptions v-if="selectedEdge" :column="1" border>
         <el-descriptions-item label="链路ID">{{ selectedEdge.id }}</el-descriptions-item>
         <el-descriptions-item label="链路类型">
-          <el-tag type="info">{{ selectedEdge.type }}</el-tag>
+          <el-tag type="info">{{ edgeTypeLabel(selectedEdge.type) }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="描述">{{ selectedEdge.label }}</el-descriptions-item>
         <el-descriptions-item label="源节点">{{ selectedEdge.source }}</el-descriptions-item>
@@ -193,6 +193,42 @@ const nodeGlyphs: Record<string, string> = {
   malware: '毒'
 }
 
+const threatLevelLabels: Record<string, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危'
+}
+
+const nodeTypeLabels: Record<string, string> = {
+  attacker: '攻击源',
+  victim: '受害主机',
+  process: '进程',
+  file: '文件',
+  network: '网络',
+  command: '命令',
+  malware: '恶意载荷'
+}
+
+const edgeTypeLabels: Record<string, string> = {
+  spawns: '派生',
+  connects: '连接',
+  reads: '读取',
+  writes: '写入',
+  executes: '执行',
+  downloads: '下载',
+  encrypts: '加密',
+  exfiltrates: '外传'
+}
+
+const severityLabels: Record<string, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  info: '信息'
+}
+
 // Threat level tag type
 const threatLevelType = computed(() => {
   const map: Record<string, string> = {
@@ -204,6 +240,8 @@ const threatLevelType = computed(() => {
   return map[props.graphData.threatLevel] || 'info'
 })
 
+const threatLevelLabel = computed(() => threatLevelLabels[props.graphData.threatLevel] || props.graphData.threatLevel || '未知')
+
 // Helper functions
 function severityTag(severity: string): string {
   const map: Record<string, string> = {
@@ -213,6 +251,10 @@ function severityTag(severity: string): string {
     low: 'success'
   }
   return map[severity] || 'info'
+}
+
+function severityLabel(severity: string): string {
+  return severityLabels[severity] || severity
 }
 
 function nodeTypeTag(type: string): string {
@@ -226,6 +268,14 @@ function nodeTypeTag(type: string): string {
     malware: 'danger'
   }
   return map[type] || 'info'
+}
+
+function nodeTypeLabel(type: string): string {
+  return nodeTypeLabels[type] || type
+}
+
+function edgeTypeLabel(type: string): string {
+  return edgeTypeLabels[type] || type
 }
 
 function formatTime(timestamp: string): string {

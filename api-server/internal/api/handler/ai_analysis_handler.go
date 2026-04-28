@@ -33,19 +33,47 @@ type AIAnalysisHandler struct {
 	sessionsMutex sync.RWMutex
 }
 
+type AlertContextSnapshot struct {
+	ID          string    `json:"id"`
+	AlertID     string    `json:"alert_id"`
+	HostID      string    `json:"host_id"`
+	Hostname    string    `json:"hostname"`
+	RuleTitle   string    `json:"rule_title"`
+	MitreID     string    `json:"mitre_id"`
+	Severity    string    `json:"severity"`
+	Status      string    `json:"status"`
+	Description string    `json:"description"`
+	ProcessTree string    `json:"process_tree,omitempty"`
+	LLMSummary  string    `json:"llm_summary,omitempty"`
+	FirstSeenAt time.Time `json:"first_seen_at"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+}
+
+type finalAnswerResult struct {
+	AttackGraph map[string]interface{} `json:"attack_graph"`
+	Conclusions []AlertConclusion      `json:"conclusions"`
+}
+
+type alertWriteback struct {
+	AlertID          string
+	Summary          string
+	DisposalStrategy string
+}
+
 type AISSESion struct {
-	SessionID     string
-	AlertIDs      []string
-	HostIDs       []string // Extracted from alerts for tool routing
-	HostFilter    []string
-	TimeRange     *TimeRange
-	InitialQuery  string
-	Status        string
-	CreatedAt     time.Time
-	MaxIterations int // Maximum ReAct iterations
-	Messages      []*llm.AIMessage
-	LLMClient     *llm.LLMClient
-	ReActAgent    *llm.ReActAgent
+	SessionID      string
+	AlertIDs       []string
+	AlertSnapshots []AlertContextSnapshot
+	HostIDs        []string // Extracted from alerts for tool routing
+	HostFilter     []string
+	TimeRange      *TimeRange
+	InitialQuery   string
+	Status         string
+	CreatedAt      time.Time
+	MaxIterations  int // Maximum ReAct iterations
+	Messages       []*llm.AIMessage
+	LLMClient      *llm.LLMClient
+	ReActAgent     *llm.ReActAgent
 }
 
 const (
@@ -205,6 +233,157 @@ func normalizeAnalysisMaxIterations(value int) int {
 	return value
 }
 
+func buildAlertSnapshots(alerts []model.Alert) []AlertContextSnapshot {
+	snapshots := make([]AlertContextSnapshot, 0, len(alerts))
+	for _, alert := range alerts {
+		hostID := ""
+		if alert.HostID != uuid.Nil {
+			hostID = alert.HostID.String()
+		}
+		snapshots = append(snapshots, AlertContextSnapshot{
+			ID:          alert.ID.String(),
+			AlertID:     alert.AlertID,
+			HostID:      hostID,
+			Hostname:    alert.Hostname,
+			RuleTitle:   alert.RuleTitle,
+			MitreID:     alert.MitreID,
+			Severity:    alert.Severity,
+			Status:      alert.Status,
+			Description: alert.Description,
+			ProcessTree: alert.ProcessTree,
+			LLMSummary:  alert.LLMSummary,
+			FirstSeenAt: alert.FirstSeenAt,
+			LastSeenAt:  alert.LastSeenAt,
+		})
+	}
+	return snapshots
+}
+
+func collectJSONObjectCandidates(content string) []string {
+	candidates := make([]string, 0)
+	depth := 0
+	start := -1
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && start >= 0 {
+				candidates = append(candidates, content[start:i+1])
+				start = -1
+			}
+		}
+	}
+
+	return candidates
+}
+
+func extractFinalAnswerResult(content string) (*finalAnswerResult, error) {
+	normalized := strings.ReplaceAll(content, "```json", "")
+	normalized = strings.ReplaceAll(normalized, "```", "")
+	for _, candidate := range collectJSONObjectCandidates(normalized) {
+		var result finalAnswerResult
+		if err := json.Unmarshal([]byte(candidate), &result); err != nil {
+			continue
+		}
+		if len(result.AttackGraph) == 0 && len(result.Conclusions) == 0 {
+			continue
+		}
+		return &result, nil
+	}
+
+	return nil, fmt.Errorf("no final answer JSON found")
+}
+
+func buildAlertWritebacks(session *AISSESion, result *finalAnswerResult) []alertWriteback {
+	if session == nil || result == nil {
+		return nil
+	}
+
+	disposalStrategy := strings.TrimSpace(strings.Join(attackGraphRecommendations(result.AttackGraph), "；"))
+	snapshotByAnyID := make(map[string]AlertContextSnapshot, len(session.AlertSnapshots)*2)
+	for _, snapshot := range session.AlertSnapshots {
+		if snapshot.ID != "" {
+			snapshotByAnyID[snapshot.ID] = snapshot
+		}
+		if snapshot.AlertID != "" {
+			snapshotByAnyID[snapshot.AlertID] = snapshot
+		}
+	}
+
+	writebacks := make([]alertWriteback, 0, len(result.Conclusions))
+	for _, conclusion := range result.Conclusions {
+		snapshot, ok := snapshotByAnyID[conclusion.AlertID]
+		if !ok || snapshot.AlertID == "" {
+			continue
+		}
+		summary := strings.TrimSpace(conclusion.Summary)
+		if summary == "" {
+			summary = strings.TrimSpace(attackGraphStringField(result.AttackGraph, "summary"))
+		}
+		writebacks = append(writebacks, alertWriteback{
+			AlertID:          snapshot.AlertID,
+			Summary:          summary,
+			DisposalStrategy: disposalStrategy,
+		})
+	}
+
+	return writebacks
+}
+
+func attackGraphStringField(graph map[string]interface{}, key string) string {
+	if graph == nil {
+		return ""
+	}
+	value, ok := graph[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func attackGraphRecommendations(graph map[string]interface{}) []string {
+	if graph == nil {
+		return nil
+	}
+
+	switch value := graph["recommendations"].(type) {
+	case []string:
+		return value
+	case []interface{}:
+		recommendations := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				recommendations = append(recommendations, strings.TrimSpace(text))
+			}
+		}
+		return recommendations
+	default:
+		return nil
+	}
+}
+
 func compactToolResultPayload(value interface{}) interface{} {
 	data, err := json.Marshal(value)
 	if err == nil && len(data) <= maxToolResultEventBytes {
@@ -275,9 +454,9 @@ func compactJSONValue(value interface{}, depth int) interface{} {
 
 // collectingSSEWriter wraps SSEWriter to also collect content for persistence
 type collectingSSEWriter struct {
-	writer    *llm.SSEWriter
-	collector *SSEResponseCollector
-	beforeDone func(content string) error
+	writer      *llm.SSEWriter
+	collector   *SSEResponseCollector
+	beforeDone  func(content string) error
 	doneHandled bool
 }
 
@@ -438,13 +617,15 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
-	// Look up alerts to extract host_ids for tool routing
+	// Look up alerts to extract host_ids and build real alert context for analysis
 	var hostIDs []string
+	var alertSnapshots []AlertContextSnapshot
 	if h.alertRepo != nil && len(req.AlertIDs) > 0 {
 		alerts, err := h.alertRepo.FindByIDs(req.AlertIDs)
 		if err != nil {
 			logger.Warn("failed to look up alerts for host_ids", zap.Error(err))
 		} else {
+			alertSnapshots = buildAlertSnapshots(alerts)
 			// Extract unique host_ids from alerts
 			hostIDSet := make(map[string]bool)
 			for _, alert := range alerts {
@@ -468,18 +649,19 @@ func (h *AIAnalysisHandler) CreateSession(c *gin.Context) {
 	sessionID := uuid.New().String()
 
 	session := &AISSESion{
-		SessionID:     sessionID,
-		AlertIDs:      req.AlertIDs,
-		HostIDs:       hostIDs,
-		HostFilter:    req.HostFilter,
-		TimeRange:     req.TimeRange,
-		InitialQuery:  "",
-		Status:        "active",
-		CreatedAt:     time.Now(),
-		MaxIterations: normalizeAnalysisMaxIterations(req.MaxIterations),
-		Messages:      make([]*llm.AIMessage, 0),
-		LLMClient:     llmClient,
-		ReActAgent:    nil,
+		SessionID:      sessionID,
+		AlertIDs:       req.AlertIDs,
+		AlertSnapshots: alertSnapshots,
+		HostIDs:        hostIDs,
+		HostFilter:     req.HostFilter,
+		TimeRange:      req.TimeRange,
+		InitialQuery:   "",
+		Status:         "active",
+		CreatedAt:      time.Now(),
+		MaxIterations:  normalizeAnalysisMaxIterations(req.MaxIterations),
+		Messages:       make([]*llm.AIMessage, 0),
+		LLMClient:      llmClient,
+		ReActAgent:     nil,
 	}
 
 	h.sessionsMutex.Lock()
@@ -604,6 +786,8 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	aiResponseContent := responseCollector.GetContent()
 	logger.Info("AI response collected", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
 
+	h.persistAnalysisOutcome(session, aiResponseContent)
+
 	// Persist user message to database
 	if h.messageRepo != nil {
 		userMsg := &model.AIMessage{
@@ -655,6 +839,46 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 			Role:    "assistant",
 			Content: aiResponseContent,
 		})
+	}
+}
+
+func (h *AIAnalysisHandler) persistAnalysisOutcome(session *AISSESion, finalContent string) {
+	if session == nil {
+		return
+	}
+
+	result, err := extractFinalAnswerResult(finalContent)
+	if err != nil {
+		logger.Warn("failed to parse AI final answer result",
+			zap.String("session_id", session.SessionID),
+			zap.Error(err))
+		return
+	}
+
+	session.Status = "completed"
+	if h.sessionRepo != nil {
+		var conclusionJSON model.JSONB
+		if payload, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = json.Unmarshal(payload, &conclusionJSON)
+			if updateErr := h.sessionRepo.UpdateConclusion(session.SessionID, conclusionJSON); updateErr != nil {
+				logger.Warn("failed to persist AI session conclusion",
+					zap.String("session_id", session.SessionID),
+					zap.Error(updateErr))
+			}
+		}
+	}
+
+	if h.alertRepo == nil {
+		return
+	}
+
+	for _, writeback := range buildAlertWritebacks(session, result) {
+		if err := h.alertRepo.UpdateAIAnalysisResult(writeback.AlertID, writeback.Summary, writeback.DisposalStrategy); err != nil {
+			logger.Warn("failed to persist AI analysis result to alert",
+				zap.String("session_id", session.SessionID),
+				zap.String("alert_id", writeback.AlertID),
+				zap.Error(err))
+		}
 	}
 }
 
@@ -1031,19 +1255,30 @@ func (h *AIAnalysisHandler) restoreSessionFromDB(sessionID string) (*AISSESion, 
 	}
 
 	maxIterations := normalizeAnalysisMaxIterations(dbSession.MaxIterations)
+	alertSnapshots := make([]AlertContextSnapshot, 0)
+	if h.alertRepo != nil && len(dbSession.AlertIDs) > 0 {
+		if alerts, alertErr := h.alertRepo.FindByIDs([]string(dbSession.AlertIDs)); alertErr != nil {
+			logger.Warn("failed to restore alert snapshots for AI session",
+				zap.String("session_id", sessionID),
+				zap.Error(alertErr))
+		} else {
+			alertSnapshots = buildAlertSnapshots(alerts)
+		}
+	}
 
 	session := &AISSESion{
-		SessionID:     dbSession.SessionID,
-		AlertIDs:      []string(dbSession.AlertIDs),
-		HostIDs:       []string(dbSession.HostIDs),
-		HostFilter:    []string(dbSession.HostFilter),
-		TimeRange:     restoreTimeRange(dbSession.TimeRange),
-		Status:        dbSession.Status,
-		CreatedAt:     dbSession.CreatedAt,
-		MaxIterations: maxIterations,
-		Messages:      h.restoreLLMMessages(sessionID),
-		LLMClient:     llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 3),
-		ReActAgent:    nil,
+		SessionID:      dbSession.SessionID,
+		AlertIDs:       []string(dbSession.AlertIDs),
+		AlertSnapshots: alertSnapshots,
+		HostIDs:        []string(dbSession.HostIDs),
+		HostFilter:     []string(dbSession.HostFilter),
+		TimeRange:      restoreTimeRange(dbSession.TimeRange),
+		Status:         dbSession.Status,
+		CreatedAt:      dbSession.CreatedAt,
+		MaxIterations:  maxIterations,
+		Messages:       h.restoreLLMMessages(sessionID),
+		LLMClient:      llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 3),
+		ReActAgent:     nil,
 	}
 
 	h.sessionsMutex.Lock()
@@ -1129,6 +1364,10 @@ func (h *AIAnalysisHandler) buildSessionContext(session *AISSESion) map[string]i
 
 	if len(session.AlertIDs) > 0 {
 		context["alert_ids"] = session.AlertIDs
+	}
+	if len(session.AlertSnapshots) > 0 {
+		context["alerts"] = session.AlertSnapshots
+		context["selected_alert_count"] = len(session.AlertSnapshots)
 	}
 	if len(session.HostIDs) > 0 {
 		context["host_ids"] = session.HostIDs
