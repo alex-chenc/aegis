@@ -15,6 +15,14 @@ export interface AnalysisHostLike {
   online?: boolean
 }
 
+export interface AnalysisAlertQuery {
+  page: number
+  pageSize: number
+  hostnames?: string
+  start_time?: string
+  end_time?: string
+}
+
 export function filterOnlineHostnames(hosts: AnalysisHostLike[]) {
   return Array.from(
     new Set(
@@ -29,6 +37,11 @@ function parseTime(value?: string) {
   if (!value) return null
   const time = Date.parse(value)
   return Number.isNaN(time) ? null : time
+}
+
+function toISOString(value: string | Date) {
+  const time = value instanceof Date ? value.getTime() : Date.parse(value)
+  return Number.isNaN(time) ? null : new Date(time).toISOString()
 }
 
 function isInTimeRange(alert: AnalysisAlertLike, timeRange?: [string, string] | null) {
@@ -55,6 +68,32 @@ export function filterAnalysisAlerts<T extends AnalysisAlertLike>(
     const hostMatched = !hasHostFilter || Boolean(alert.hostname && hostFilter.includes(alert.hostname))
     return hostMatched && isInTimeRange(alert, timeRange)
   })
+}
+
+export function buildAnalysisAlertQuery(
+  hostFilter: string[],
+  timeRange?: [string | Date, string | Date] | null,
+  page = 1,
+  pageSize = 200
+): AnalysisAlertQuery | null {
+  const hostnames = hostFilter.filter(Boolean)
+  const startTime = timeRange?.[0] ? toISOString(timeRange[0]) : null
+  const endTime = timeRange?.[1] ? toISOString(timeRange[1]) : null
+
+  if (hostnames.length === 0 && (!startTime || !endTime)) {
+    return null
+  }
+
+  const query: AnalysisAlertQuery = { page, pageSize }
+  if (hostnames.length > 0) {
+    query.hostnames = hostnames.join(',')
+  }
+  if (startTime && endTime) {
+    query.start_time = startTime
+    query.end_time = endTime
+  }
+
+  return query
 }
 
 export function pruneSelectedAlertIds<T extends AnalysisAlertLike>(selectedIds: string[], visibleAlerts: T[]) {

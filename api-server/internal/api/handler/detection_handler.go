@@ -26,21 +26,21 @@ import (
 )
 
 type DetectionHandler struct {
-	alertRepo            *repository.AlertRepository
-	blockRepo            *repository.BlockRepository
-	blockPolicyRepo      *repository.BlockPolicyRepository
-	sigmaRuleRepo        *repository.SigmaRuleRepository
-	toolCallRepo         *repository.ToolCallRepository
-	alertService         *service.AlertService
-	sigmaRuleService     *service.SigmaRuleService
+	alertRepo              *repository.AlertRepository
+	blockRepo              *repository.BlockRepository
+	blockPolicyRepo        *repository.BlockPolicyRepository
+	sigmaRuleRepo          *repository.SigmaRuleRepository
+	toolCallRepo           *repository.ToolCallRepository
+	alertService           *service.AlertService
+	sigmaRuleService       *service.SigmaRuleService
 	sigmaRuleUploadService *service.SigmaRuleUploadService
-	llmAggregationRepo   *repository.LLMAggregationRepository
-	runtimeEventRepo     *repository.RuntimeEventRepository
-	configRepo           *repository.ConfigRepository
-	serverClient         *grpcclient.ServerClient
-	wsService            *service.WebSocketService
-	aiRuleConfigService  *service.AIRuleConfigService
-	ruleGenService       *service.RuleGenerationService
+	llmAggregationRepo     *repository.LLMAggregationRepository
+	runtimeEventRepo       *repository.RuntimeEventRepository
+	configRepo             *repository.ConfigRepository
+	serverClient           *grpcclient.ServerClient
+	wsService              *service.WebSocketService
+	aiRuleConfigService    *service.AIRuleConfigService
+	ruleGenService         *service.RuleGenerationService
 }
 
 func NewDetectionHandler(
@@ -81,11 +81,24 @@ func NewDetectionHandler(
 
 func (h *DetectionHandler) ListAlerts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	pageSizeValue := c.DefaultQuery("pageSize", c.DefaultQuery("page_size", "20"))
+	pageSize, _ := strconv.Atoi(pageSizeValue)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
 
 	filters := make(map[string]interface{})
 	if v := c.Query("host_id"); v != "" {
 		filters["host_id"] = v
+	}
+	if hostnames := parseCSVQuery(c.Query("hostnames")); len(hostnames) > 0 {
+		filters["hostnames"] = hostnames
 	}
 	if v := c.Query("severity"); v != "" {
 		filters["severity"] = v
@@ -102,6 +115,12 @@ func (h *DetectionHandler) ListAlerts(c *gin.Context) {
 	if v := c.Query("block_status"); v != "" {
 		filters["block_status"] = v
 	}
+	if startTime, ok := parseAlertTime(c.Query("start_time")); ok {
+		filters["start_time"] = startTime
+	}
+	if endTime, ok := parseAlertTime(c.Query("end_time")); ok {
+		filters["end_time"] = endTime
+	}
 
 	alerts, total, err := h.alertRepo.List(page, pageSize, filters)
 	if err != nil {
@@ -111,6 +130,34 @@ func (h *DetectionHandler) ListAlerts(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"data": alerts, "total": total}})
+}
+
+func parseCSVQuery(value string) []string {
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func parseAlertTime(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 func (h *DetectionHandler) GetAlert(c *gin.Context) {
@@ -423,7 +470,7 @@ func (h *DetectionHandler) GetRule(c *gin.Context) {
 
 func (h *DetectionHandler) UpdateRuleStatus(c *gin.Context) {
 	var body struct {
-		Status         string   `json:"status" binding:"required"`
+		Status        string   `json:"status" binding:"required"`
 		TargetHostIDs []string `json:"target_host_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -1441,8 +1488,8 @@ func (h *DetectionHandler) GenerateTestRule(c *gin.Context) {
 
 	result, err := h.ruleGenService.GenerateTestRule(c.Request.Context(), &service.GenerateRuleRequest{
 		MitreID:      req.MitreID,
-		SampleAlerts:  req.SampleAlerts,
-		Conservatism:  req.Conservatism,
+		SampleAlerts: req.SampleAlerts,
+		Conservatism: req.Conservatism,
 	})
 
 	if err != nil {

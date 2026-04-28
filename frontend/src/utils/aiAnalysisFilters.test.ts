@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildAnalysisAlertQuery,
   buildAnalysisAlertSnapshot,
   filterAnalysisAlerts,
   filterOnlineHostnames,
@@ -51,6 +52,23 @@ describe('AI analysis alert filtering', () => {
 
   it('does not show any alerts until time range or host filter is set', () => {
     expect(filterAnalysisAlerts(alerts, [], null)).toEqual([])
+  })
+
+  it('does not build an alert query until time range or host filter is set', () => {
+    expect(buildAnalysisAlertQuery([], null)).toBeNull()
+  })
+
+  it('builds a backend-filtered alert query for time range and multiple hosts', () => {
+    expect(buildAnalysisAlertQuery(['host-a', 'host-b'], [
+      '2026-04-28T01:00:00Z',
+      '2026-04-28T02:00:00Z'
+    ])).toEqual({
+      page: 1,
+      pageSize: 200,
+      hostnames: 'host-a,host-b',
+      start_time: '2026-04-28T01:00:00.000Z',
+      end_time: '2026-04-28T02:00:00.000Z'
+    })
   })
 
   it('shows alerts when only host filter is set', () => {

@@ -7,7 +7,7 @@
           <template #header>
             <div class="card-header">
               <span>选择要分析的告警</span>
-              <el-button size="small" @click="loadAlerts">刷新</el-button>
+              <el-button size="small" @click="loadAlerts()">刷新</el-button>
             </div>
           </template>
 
@@ -296,7 +296,7 @@ import { createAISession, createAISessionStream, getSessionList, getSessionHisto
 import AttackGraph from '@/components/AttackGraph.vue'
 import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
-import { buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
+import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 
 const route = useRoute()
 const router = useRouter()
@@ -342,6 +342,7 @@ const hostFilter = ref<string[]>([])
 const hosts = ref<string[]>([])
 const timeRange = ref<[string, string] | null>(null)
 const analysisAlertSnapshot = ref<Alert[]>([])
+let alertLoadSeq = 0
 
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
@@ -456,32 +457,33 @@ async function loadHosts() {
 }
 
 async function loadAlerts(force = false) {
-  if (!force && !hasAlertSearchCondition.value) {
+  const query = buildAnalysisAlertQuery(hostFilter.value, timeRange.value)
+
+  if (!force && !query) {
+    alertLoadSeq += 1
     alerts.value = []
     selectedAlertIds.value = []
     alertLoading.value = false
     return
   }
 
+  const currentSeq = ++alertLoadSeq
   alertLoading.value = true
   try {
-    const firstPage = await getAlerts({ page: 1, pageSize: 200 })
-    const collectedAlerts = [...(firstPage.data || [])]
-    const total = firstPage.total || collectedAlerts.length
-
-    for (let page = 2; collectedAlerts.length < total; page++) {
-      const response = await getAlerts({ page, pageSize: 200 })
-      collectedAlerts.push(...(response.data || []))
-      if (!response.data?.length) {
-        break
-      }
+    const response = await getAlerts(query || { page: 1, pageSize: 200 })
+    if (currentSeq !== alertLoadSeq) {
+      return
     }
 
-    alerts.value = collectedAlerts
+    alerts.value = response.data || []
   } catch (error: any) {
-    ElMessage.error(error.message || '加载告警失败')
+    if (currentSeq === alertLoadSeq) {
+      ElMessage.error(error.message || '加载告警失败')
+    }
   } finally {
-    alertLoading.value = false
+    if (currentSeq === alertLoadSeq) {
+      alertLoading.value = false
+    }
   }
 }
 

@@ -74,12 +74,9 @@ func (r *AlertRepository) List(page, pageSize int, filters map[string]interface{
 		total  int64
 	)
 
-	countQuery := r.db.Model(&model.Alert{})
-	for key, val := range filters {
-		if val != nil && val != "" {
-			countQuery = countQuery.Where(key+" = ?", val)
-		}
-	}
+	countQuery := r.db.Table("alerts").
+		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id")
+	countQuery = applyAlertFilters(countQuery, filters)
 
 	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -102,11 +99,7 @@ func (r *AlertRepository) List(page, pageSize int, filters map[string]interface{
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id")
 
-	for key, val := range filters {
-		if val != nil && val != "" {
-			query = query.Where("alerts."+key+" = ?", val)
-		}
-	}
+	query = applyAlertFilters(query, filters)
 
 	err := query.Order("alerts.created_at DESC").
 		Offset((page - 1) * pageSize).
@@ -129,6 +122,41 @@ func (r *AlertRepository) List(page, pageSize int, filters map[string]interface{
 	}
 
 	return alerts, total, nil
+}
+
+func applyAlertFilters(query *gorm.DB, filters map[string]interface{}) *gorm.DB {
+	for key, val := range filters {
+		if isBlankAlertFilter(val) {
+			continue
+		}
+
+		switch key {
+		case "hostnames":
+			query = query.Where("hosts.hostname IN ?", val)
+		case "start_time":
+			query = query.Where("alerts.last_seen_at >= ?", val)
+		case "end_time":
+			query = query.Where("alerts.last_seen_at <= ?", val)
+		default:
+			query = query.Where("alerts."+key+" = ?", val)
+		}
+	}
+	return query
+}
+
+func isBlankAlertFilter(val interface{}) bool {
+	if val == nil {
+		return true
+	}
+
+	switch v := val.(type) {
+	case string:
+		return v == ""
+	case []string:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 func (r *AlertRepository) Resolve(alertID string) error {
