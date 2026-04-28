@@ -156,6 +156,17 @@ func TestNormalizeAnalysisMaxIterationsCapsRunawaySessions(t *testing.T) {
 	}
 }
 
+func TestIsPlaceholderToolValue(t *testing.T) {
+	for _, value := range []string{"", "...", "<host_id>", "[the host id]"} {
+		if !isPlaceholderToolValue(value) {
+			t.Fatalf("expected %q to be treated as placeholder", value)
+		}
+	}
+	if isPlaceholderToolValue("d5de931d-685a-4bca-92f2-8287b7f903bf") {
+		t.Fatal("expected real host id not to be treated as placeholder")
+	}
+}
+
 func TestBuildSessionContextIncludesAlertSnapshots(t *testing.T) {
 	handler := &AIAnalysisHandler{}
 	start := time.Date(2026, 4, 28, 1, 0, 0, 0, time.UTC)

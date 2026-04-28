@@ -1416,7 +1416,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, tool string, args map[string
 
 		// Get host_id from args, or use first default host_id if available
 		hostID, ok := normalizedArgs["host_id"].(string)
-		if !ok || hostID == "" {
+		if !ok || isPlaceholderToolValue(hostID) {
 			// Use first available host_id from session as default
 			if len(e.defaultHostIDs) > 0 {
 				hostID = e.defaultHostIDs[0]
@@ -1534,4 +1534,17 @@ func normalizeArgs(args map[string]interface{}) map[string]interface{} {
 	}
 
 	return result
+}
+
+func isPlaceholderToolValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	switch strings.ToLower(value) {
+	case "...", "your_host_id", "host_id", "<host_id>", "[host_id]", "[the host id]":
+		return true
+	default:
+		return strings.HasPrefix(value, "[") || strings.HasPrefix(value, "<")
+	}
 }

@@ -1288,6 +1288,8 @@ if foundAction && step.Action != "" && foundActionInput {
 - 将 `maxIterations` 默认值调整为 15
 - 支持通过 API 参数配置 maxIterations (1-100)
 - 当 maxIterations 设置超过 50 时，ReAct Agent 只允许最多 50 轮工具循环；第 50 轮后必须停止继续调用工具，并基于已有 Observation 强制输出 `Final Answer`。
+- 当模型连续两轮未输出有效工具调用也未输出 `Final Answer` 时，后端必须停止继续诱导工具调用，并基于已有上下文强制输出最终结论，避免 SSE 长时间挂起。
+- 模型输出的工具名或参数中如果包含 `...`、`[the action to take]`、`<host_id>` 等提示词占位符，不允许继续作为真实工具请求执行；`host_id` 占位符必须回退到会话中的真实主机 ID。
 - 前端 AIAnalysis.vue 添加最大轮数配置输入框
 - 在达到最大迭代后返回中间推理结果而不是错误
 - 添加更详细的 ReAct Prompt 指导 LLM 正确输出格式

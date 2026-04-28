@@ -164,6 +164,12 @@ func TestToolIterationLimitDoesNotForceFinalAnswerAtFiftyOrBelow(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolNameRejectsPromptPlaceholder(t *testing.T) {
+	if got := normalizeToolName("[the action to take, should be one of the available tools]"); got != "" {
+		t.Fatalf("expected placeholder tool name to be rejected, got %q", got)
+	}
+}
+
 func TestFormatObservationTruncatesLargeToolResultForPrompt(t *testing.T) {
 	agent := NewReActAgent(nil, nil, "session-test", 1)
 

@@ -51,6 +51,7 @@ type ReActAgent struct {
 const (
 	maxObservationChars             = 12000
 	forceFinalAnswerAfterIterations = 50
+	maxNoActionIterations           = 2
 )
 
 // NewReActAgent creates a new ReAct agent
@@ -120,6 +121,7 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 	iteration := 0
 	maxIterations := a.maxIterations
 	toolIterations, forceFinalAnswer := toolIterationLimit(maxIterations)
+	noActionIterations := 0
 
 	// ReAct loop: continue until we get a Final Answer or hit max iterations
 	for iteration < toolIterations {
@@ -251,13 +253,21 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 				writer.WriteDone()
 				return nil
 			}
+			noActionIterations++
+			if noActionIterations >= maxNoActionIterations {
+				_zapLogger.Info("forcing final answer after repeated no-action responses",
+					zap.Int("no_action_iterations", noActionIterations))
+				return a.writeForcedFinalAnswer(ctx, prompt, writer)
+			}
 			prompt = append(prompt, Message{
 				Role:    "assistant",
 				Content: buffer,
 			}, Message{
 				Role:    "user",
-				Content: "Your previous response did not follow the required ReAct format and no tool was executed. Continue the investigation by outputting exactly one tool call using this format:\nThought: ...\nAction: QueryHistoricalLogs\nAction Input: {\"host_id\":\"...\",\"start_time\":\"...\",\"end_time\":\"...\",\"filter\":\"...\"}\nDo not provide the final answer until after observations are returned.",
+				Content: "Your previous response did not follow the required ReAct format and no tool was executed. If the existing evidence is enough, output `Final Answer:` now. Otherwise output exactly one valid tool call using a real tool name from the tool list and real values from Alert Context. Never use placeholders such as `...`, `[the action to take]`, or example values.",
 			})
+		} else {
+			noActionIterations = 0
 		}
 
 		// If we executed an action, continue to next iteration
@@ -431,8 +441,8 @@ func normalizeToolName(name string) string {
 		return "QueryHistoricalLogs"
 	}
 
-	// No match found - return original
-	return name
+	// No match found.
+	return ""
 }
 
 // tryParseStep attempts to parse a complete step from the buffer

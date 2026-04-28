@@ -1126,6 +1126,12 @@ AI分析页面必须在最终回复包含 `attack_graph` 时生成流程图图�
 
 AI 分析 SSE 新增 `flowchart_image` 事件。前端可以接收并缓存 `result.url`，但页面主视图始终以 `attack_graph` 为准；如果事件携带 `error`，前端展示告警提示，并使用 `attack_graph.nodes`、`attack_graph.edges` 和 `attack_graph.timeline` 生成 SVG 兜底图。
 
+AI 分析 SSE 代理要求：
+
+- `/api/v1/detection/alerts/ai-analysis/{session_id}/stream` 必须作为长连接转发，Nginx 关闭 `proxy_buffering` 和 `proxy_cache`。
+- SSE 读写超时不低于 1800 秒，避免长轮次分析时浏览器收到误导性的“AI 分析连接中断”。
+- SSE 响应必须透传 `text/event-stream`，并设置 `X-Accel-Buffering: no`。
+
 AI 分析页面补充约束：
 
 - 左侧告警区必须展示真实告警列表，不允许用固定示例数据替代。
