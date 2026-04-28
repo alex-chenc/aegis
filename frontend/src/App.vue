@@ -153,6 +153,22 @@ const isAuthLayout = computed(() => {
   return Boolean(route.meta.authLayout)
 })
 
+function setViewportContent(content: string) {
+  const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
+  if (viewport) {
+    viewport.setAttribute('content', content)
+  }
+}
+
+function syncViewportForLayout() {
+  if (isAuthLayout.value) {
+    setViewportContent('width=device-width, initial-scale=1.0')
+    return
+  }
+
+  setViewportContent('width=1280')
+}
+
 function handleRefresh() {
   router.go(0)
 }
@@ -167,14 +183,17 @@ const idleLogout = createIdleLogout({
 })
 
 onMounted(() => {
+  syncViewportForLayout()
   idleLogout.start()
 })
 
 onBeforeUnmount(() => {
+  setViewportContent('width=device-width, initial-scale=1.0')
   idleLogout.stop()
 })
 
 watch(() => route.fullPath, () => {
+  syncViewportForLayout()
   idleLogout.refresh()
 }, { immediate: true })
 </script>
