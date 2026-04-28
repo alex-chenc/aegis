@@ -398,7 +398,7 @@ type CreateSessionRequest struct {
     AlertIDs      []string    `json:"alert_ids"`
     TimeRange     *TimeRange  `json:"time_range"`
     HostFilter    []string    `json:"host_filter"`
-    MaxIterations int        `json:"max_iterations"` // 最大ReAct迭代次数，默认15
+    MaxIterations int        `json:"max_iterations"` // 最大ReAct迭代次数，默认15，范围1-100；超过50时第50轮后强制输出Final Answer
 }
 
 type TimeRange struct {

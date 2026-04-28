@@ -368,6 +368,7 @@ const testRuleGeneration = async () => {
       </el-select>
       <el-input-number v-model="maxIterations" :min="1" :max="100" size="small" style="width: 120px" />
       <span>最大轮数</span>
+      <span class="hint">超过50轮时，后端会在第50轮后强制输出最终结论</span>
       <el-button type="primary" size="small" @click="startAnalysis">
         开始分析
       </el-button>
@@ -837,6 +838,7 @@ export const createAnalysisSession = (params: {
   alert_ids: string[]
   time_range?: { start: string; end: string }
   host_filter?: string[]
+  // 最大轮数范围1-100；超过50时后端第50轮后强制输出Final Answer
   max_iterations?: number
 }) => {
   return api.post('/api/v1/detection/alerts/ai-analysis/session', params)
