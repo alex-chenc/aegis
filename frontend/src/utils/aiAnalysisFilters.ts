@@ -32,8 +32,12 @@ export function filterAnalysisAlerts<T extends AnalysisAlertLike>(
   hostFilter: string[],
   timeRange?: [string, string] | null
 ) {
+  const hasHostFilter = hostFilter.length > 0
+  const hasTimeRange = Boolean(timeRange?.[0] && timeRange?.[1])
+  if (!hasHostFilter && !hasTimeRange) return []
+
   return alerts.filter(alert => {
-    const hostMatched = hostFilter.length === 0 || Boolean(alert.hostname && hostFilter.includes(alert.hostname))
+    const hostMatched = !hasHostFilter || Boolean(alert.hostname && hostFilter.includes(alert.hostname))
     return hostMatched && isInTimeRange(alert, timeRange)
   })
 }
