@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildAttackGraphSvgDataUrl, extractAttackGraph } from './attackGraph'
+import {
+  buildAttackGraphDisplayText,
+  buildAttackGraphSvgDataUrl,
+  extractAttackGraph,
+  extractAttackGraphFinalAnswer,
+  isLikelyAttackGraphFinalAnswer
+} from './attackGraph'
 
 const graph = {
   graphId: 'graph-test',
@@ -74,5 +80,34 @@ describe('attack graph output', () => {
 
     expect(decoded).toContain('Noto Sans CJK SC')
     expect(decoded).toContain('WenQuanYi Micro Hei')
+  })
+
+  it('builds a user-facing final answer instead of exposing raw attack_graph json', () => {
+    const content = JSON.stringify({
+      attack_graph: graph,
+      conclusions: [
+        {
+          alert_id: 'alert-1',
+          action: 'block',
+          summary: '确认存在反弹 Shell 行为，建议立即隔离主机。'
+        }
+      ]
+    }, null, 2)
+
+    const finalAnswer = extractAttackGraphFinalAnswer(content)
+    const displayText = finalAnswer ? buildAttackGraphDisplayText(finalAnswer) : ''
+
+    expect(finalAnswer?.graph.graphId).toBe('graph-test')
+    expect(displayText).toContain('分析已完成')
+    expect(displayText).toContain('反弹 Shell 攻击链路')
+    expect(displayText).toContain('确认存在反弹 Shell 行为')
+    expect(displayText).toContain('溯源图已在下方渲染')
+    expect(displayText).not.toContain('"nodes"')
+    expect(displayText).not.toContain('"attack_graph"')
+  })
+
+  it('detects streamed structured final answers before rendering raw json chunks', () => {
+    expect(isLikelyAttackGraphFinalAnswer('{\n  "attack_graph": {')).toBe(true)
+    expect(isLikelyAttackGraphFinalAnswer('普通中文最终结论')).toBe(false)
   })
 })

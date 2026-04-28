@@ -294,7 +294,13 @@ import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
 import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
-import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
+import {
+  buildAttackGraphDisplayText,
+  buildAttackGraphSvgDataUrl,
+  extractAttackGraphFinalAnswer,
+  isLikelyAttackGraphFinalAnswer,
+  type AttackGraphData
+} from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 
@@ -358,6 +364,7 @@ const currentEventSource = ref<EventSource | null>(null)
 
 // LocalStorage keys
 const CURRENT_SESSION_KEY = 'aegis_current_session_id'
+const STRUCTURED_FINAL_PENDING_TEXT = '正在整理最终结论与溯源图...'
 const savedSessionId = ref<string | null>(null)
 const getStorageKey = () => `aegis_ai_session_${savedSessionId.value}`
 
@@ -412,6 +419,7 @@ function loadConversation(): boolean {
       finalAnswerContent.value = data.finalAnswerContent || ''
       generatedFlowchartImageUrl.value = data.generatedFlowchartImageUrl || ''
       maxIterations.value = data.maxIterations || 15
+      applyStructuredFinalAnswer()
       return true
     } catch (e) {
       console.error('Failed to load conversation from localStorage:', e)
@@ -537,6 +545,48 @@ function handleSessionPageChange(page: number) {
   loadSessionList(page)
 }
 
+function isFinalAssistantMessage(msg?: Message) {
+  return Boolean(
+    msg &&
+      msg.role === 'assistant' &&
+      !msg.thought &&
+      !msg.action &&
+      !msg.observation &&
+      !msg.isError
+  )
+}
+
+function findLatestFinalAssistantMessageIndex() {
+  const index = messages.value.length - 1
+  return isFinalAssistantMessage(messages.value[index]) ? index : -1
+}
+
+function upsertFinalAssistantMessage(content: string, append = false) {
+  const index = findLatestFinalAssistantMessageIndex()
+  if (index >= 0) {
+    messages.value[index].content = append ? (messages.value[index].content || '') + content : content
+    return
+  }
+
+  messages.value.push({
+    role: 'assistant',
+    content,
+    thought: '',
+    action: '',
+    actionInput: null,
+    observation: null
+  })
+}
+
+function applyStructuredFinalAnswer(content = finalAnswerContent.value) {
+  const finalAnswer = extractAttackGraphFinalAnswer(content)
+  if (!finalAnswer) return false
+
+  attackGraph.value = finalAnswer.graph
+  upsertFinalAssistantMessage(buildAttackGraphDisplayText(finalAnswer))
+  return true
+}
+
 async function deleteSessionById(session: SessionListItem) {
   try {
     await deleteSession(session.session_id)
@@ -588,6 +638,7 @@ async function loadSession(session: SessionListItem) {
     const msgs = payload.messages || []
     if (msgs.length > 0) {
       messages.value = rebuildMessagesFromHistory(msgs)
+      applyStructuredFinalAnswer()
     }
   } catch (error: any) {
     ElMessage.error(error.message || '加载会话消息失败')
@@ -758,6 +809,7 @@ function createSSEHandler(message: string) {
   let currentAction = ''
   let currentCallId = ''
   let currentArgs: any = null
+  let structuredFinalCandidate = false
 
   const normalizeThought = (value: string) => value.replace(/\s+/g, ' ').trim()
 
@@ -890,24 +942,17 @@ function createSSEHandler(message: string) {
       case 'content':
         cleanup()
         flushThought(true)
-        // Append to last message if exists, otherwise create new one
-        const lastMsg = messages.value[messages.value.length - 1]
-        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.thought && !lastMsg.action && !lastMsg.observation) {
-          // Append to existing assistant message
-          lastMsg.content = (lastMsg.content || '') + (event.content || '')
-        } else {
-          messages.value.push({
-            role: 'assistant',
-            content: event.content || '',
-            thought: '',
-            action: '',
-            actionInput: null,
-            observation: null
-          })
-        }
         // Store final answer content for attack graph parsing
         if (event.content) {
           finalAnswerContent.value += event.content
+        }
+        structuredFinalCandidate = structuredFinalCandidate || isLikelyAttackGraphFinalAnswer(finalAnswerContent.value)
+        if (structuredFinalCandidate) {
+          if (!applyStructuredFinalAnswer()) {
+            upsertFinalAssistantMessage(STRUCTURED_FINAL_PENDING_TEXT)
+          }
+        } else {
+          upsertFinalAssistantMessage(event.content || '', true)
         }
         isLoading.value = false
         scrollToBottom()
@@ -927,11 +972,8 @@ function createSSEHandler(message: string) {
         flushThought(true)
         currentEventSource.value?.close()
         currentEventSource.value = null
-        if (finalAnswerContent.value) {
-          const parsedGraph = extractAttackGraph(finalAnswerContent.value)
-          if (parsedGraph) {
-            attackGraph.value = parsedGraph
-          }
+        if (!applyStructuredFinalAnswer() && structuredFinalCandidate) {
+          upsertFinalAssistantMessage(finalAnswerContent.value)
         }
         isLoading.value = false
         scrollToBottom()

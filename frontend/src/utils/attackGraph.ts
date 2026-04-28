@@ -33,6 +33,17 @@ export interface AttackGraphData {
   recommendations: string[]
 }
 
+export interface AttackGraphConclusion {
+  alert_id?: string
+  action?: string
+  summary?: string
+}
+
+export interface AttackGraphFinalAnswer {
+  graph: AttackGraphData
+  conclusions: AttackGraphConclusion[]
+}
+
 function stripMarkdownFences(content: string): string {
   return content.replace(/```(?:json)?/gi, '').replace(/```/g, '')
 }
@@ -90,7 +101,19 @@ function isAttackGraph(value: any): value is AttackGraphData {
   )
 }
 
-export function extractAttackGraph(content: string): AttackGraphData | null {
+function normalizeConclusions(value: any): AttackGraphConclusion[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      alert_id: typeof item.alert_id === 'string' ? item.alert_id : undefined,
+      action: typeof item.action === 'string' ? item.action : undefined,
+      summary: typeof item.summary === 'string' ? item.summary : undefined
+    }))
+}
+
+export function extractAttackGraphFinalAnswer(content: string): AttackGraphFinalAnswer | null {
   const normalized = stripMarkdownFences(content)
   const candidates = collectJSONObjectCandidates(normalized)
 
@@ -98,10 +121,16 @@ export function extractAttackGraph(content: string): AttackGraphData | null {
     try {
       const parsed = JSON.parse(candidate)
       if (isAttackGraph(parsed.attack_graph)) {
-        return parsed.attack_graph
+        return {
+          graph: parsed.attack_graph,
+          conclusions: normalizeConclusions(parsed.conclusions)
+        }
       }
       if (isAttackGraph(parsed)) {
-        return parsed
+        return {
+          graph: parsed,
+          conclusions: []
+        }
       }
     } catch {
       // Keep scanning later candidates.
@@ -109,6 +138,68 @@ export function extractAttackGraph(content: string): AttackGraphData | null {
   }
 
   return null
+}
+
+export function extractAttackGraph(content: string): AttackGraphData | null {
+  return extractAttackGraphFinalAnswer(content)?.graph || null
+}
+
+export function isLikelyAttackGraphFinalAnswer(content: string): boolean {
+  const normalized = stripMarkdownFences(content).trim()
+  if (!normalized) return false
+  if (normalized.includes('attack_graph')) return true
+  if (normalized.startsWith('Final Answer') && normalized.includes('{') && normalized.length < 512) return true
+  if (normalized.startsWith('{') && normalized.length < 256) return true
+  if (normalized.startsWith('{') && normalized.includes('"nodes"') && normalized.includes('"edges"')) return true
+  return false
+}
+
+const threatLevelLabels: Record<string, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  info: '信息'
+}
+
+const actionLabels: Record<string, string> = {
+  allow: '允许',
+  monitor: '监控',
+  investigate: '调查',
+  isolate: '隔离',
+  block: '阻断',
+  close: '关闭'
+}
+
+function formatList(items: string[], emptyText: string): string {
+  if (items.length === 0) return `- ${emptyText}`
+  return items.map((item, index) => `${index + 1}. ${item}`).join('\n')
+}
+
+export function buildAttackGraphDisplayText(finalAnswer: AttackGraphFinalAnswer): string {
+  const { graph, conclusions } = finalAnswer
+  const threatLevel = threatLevelLabels[graph.threatLevel] || graph.threatLevel || '未知'
+  const conclusionLines = conclusions.map((item) => {
+    const id = item.alert_id ? `告警 ${item.alert_id}` : '告警'
+    const action = item.action ? actionLabels[item.action] || item.action : '待确认'
+    const summary = item.summary || '未提供结论摘要'
+    return `${id}：${summary}（处置：${action}）`
+  })
+
+  return [
+    `分析已完成：${graph.title}`,
+    `风险等级：${threatLevel}`,
+    '',
+    `结论摘要：${graph.summary || 'AI 已生成攻击链路，请查看下方溯源图。'}`,
+    '',
+    '告警结论：',
+    formatList(conclusionLines, '本次最终结果未返回逐条告警结论，请以图谱摘要和处置建议为准。'),
+    '',
+    '处置建议：',
+    formatList(graph.recommendations || [], '暂无处置建议。'),
+    '',
+    '溯源图已在下方渲染，可打开节点和链路查看攻击过程。'
+  ].join('\n')
 }
 
 function escapeXML(value: string): string {
