@@ -148,8 +148,8 @@ func TestNormalizeAnalysisMaxIterationsCapsRunawaySessions(t *testing.T) {
 	if got := normalizeAnalysisMaxIterations(0); got != defaultAnalysisMaxIterations {
 		t.Fatalf("expected default iterations, got %d", got)
 	}
-	if got := normalizeAnalysisMaxIterations(999); got != analysisMaxIterationsLimit {
-		t.Fatalf("expected capped iterations, got %d", got)
+	if got := normalizeAnalysisMaxIterations(999); got != 100 {
+		t.Fatalf("expected capped iterations to 100, got %d", got)
 	}
 	if got := normalizeAnalysisMaxIterations(3); got != 3 {
 		t.Fatalf("expected explicit iterations to be preserved, got %d", got)

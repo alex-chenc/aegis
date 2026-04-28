@@ -48,7 +48,10 @@ type ReActAgent struct {
 	steps         []AgentStep
 }
 
-const maxObservationChars = 12000
+const (
+	maxObservationChars             = 12000
+	forceFinalAnswerAfterIterations = 50
+)
 
 // NewReActAgent creates a new ReAct agent
 func NewReActAgent(llmClient *LLMClient, toolExecutor ToolExecutor, sessionID string, maxIterations int) *ReActAgent {
@@ -116,9 +119,10 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 
 	iteration := 0
 	maxIterations := a.maxIterations
+	toolIterations, forceFinalAnswer := toolIterationLimit(maxIterations)
 
 	// ReAct loop: continue until we get a Final Answer or hit max iterations
-	for iteration < maxIterations {
+	for iteration < toolIterations {
 		iteration++
 		_zapLogger.Info("ReAct iteration started", zap.Int("iteration", iteration), zap.Int("max", maxIterations))
 
@@ -262,8 +266,45 @@ func (a *ReActAgent) Stream(ctx context.Context, userMessage string, history []*
 			zap.Bool("action_executed", actionExecuted))
 	}
 
+	if forceFinalAnswer {
+		return a.writeForcedFinalAnswer(ctx, prompt, writer)
+	}
+
 	// Max iterations reached
 	writer.WriteError("AI 已达到最大推理轮数，但仍未生成最终结论。请缩小告警范围、补充问题，或提高最大轮数后重试。")
+	writer.WriteDone()
+	return nil
+}
+
+func toolIterationLimit(maxIterations int) (int, bool) {
+	if maxIterations > forceFinalAnswerAfterIterations {
+		return forceFinalAnswerAfterIterations, true
+	}
+	return maxIterations, false
+}
+
+func (a *ReActAgent) writeForcedFinalAnswer(ctx context.Context, prompt []Message, writer StreamWriter) error {
+	prompt = append(prompt, Message{
+		Role:    "user",
+		Content: "已达到第 50 轮强制总结阈值。禁止继续调用任何工具，禁止输出 Action 或 Action Input。必须基于已有 Observation 直接输出中文最终结论，并以 `Final Answer:` 开头；如果证据不足，也要明确说明已确认事实、证据不足点、风险判断和建议处置。",
+	})
+
+	resp, err := a.llmClient.ChatCompletionWithMessages(ctx, prompt, 0.3)
+	if err != nil {
+		writer.WriteError(fmt.Sprintf("forced final answer failed: %v", err))
+		writer.WriteDone()
+		return err
+	}
+
+	_, finalAnswer := a.parseFinalAnswer(resp)
+	if finalAnswer == "" {
+		finalAnswer = strings.TrimSpace(resp)
+	}
+	if finalAnswer == "" {
+		finalAnswer = "AI 已达到 50 轮强制总结阈值，但模型未返回可展示结论。"
+	}
+
+	writer.WriteContent(finalAnswer)
 	writer.WriteDone()
 	return nil
 }

@@ -29,7 +29,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="最大轮数">
-              <el-input-number v-model="maxIterations" :min="1" :max="20" size="default" />
+              <el-input-number v-model="maxIterations" :min="1" :max="100" size="default" />
             </el-form-item>
           </el-form>
 

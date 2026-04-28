@@ -142,6 +142,28 @@ func TestFinalAnswerReadyWaitsForBalancedJSON(t *testing.T) {
 	}
 }
 
+func TestToolIterationLimitForcesFinalAnswerAfterFiftyWhenConfiguredHigher(t *testing.T) {
+	limit, forceFinalAnswer := toolIterationLimit(100)
+
+	if limit != 50 {
+		t.Fatalf("expected tool iteration limit 50, got %d", limit)
+	}
+	if !forceFinalAnswer {
+		t.Fatal("expected final answer to be forced when max iterations exceeds 50")
+	}
+}
+
+func TestToolIterationLimitDoesNotForceFinalAnswerAtFiftyOrBelow(t *testing.T) {
+	limit, forceFinalAnswer := toolIterationLimit(50)
+
+	if limit != 50 {
+		t.Fatalf("expected tool iteration limit 50, got %d", limit)
+	}
+	if forceFinalAnswer {
+		t.Fatal("did not expect forced final answer when max iterations is 50")
+	}
+}
+
 func TestFormatObservationTruncatesLargeToolResultForPrompt(t *testing.T) {
 	agent := NewReActAgent(nil, nil, "session-test", 1)
 

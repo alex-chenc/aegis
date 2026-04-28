@@ -366,7 +366,7 @@ const testRuleGeneration = async () => {
         <el-option label="最近24小时" value="24h" />
         <el-option label="自定义" value="custom" />
       </el-select>
-      <el-input-number v-model="maxIterations" :min="1" :max="50" size="small" style="width: 120px" />
+      <el-input-number v-model="maxIterations" :min="1" :max="100" size="small" style="width: 120px" />
       <span>最大轮数</span>
       <el-button type="primary" size="small" @click="startAnalysis">
         开始分析
