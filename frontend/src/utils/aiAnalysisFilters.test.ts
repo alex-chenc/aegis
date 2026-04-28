@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildAnalysisAlertSnapshot,
   filterAnalysisAlerts,
+  filterOnlineHostnames,
   pruneSelectedAlertIds
 } from './aiAnalysisFilters'
 
@@ -39,6 +40,15 @@ const alerts = [
 ]
 
 describe('AI analysis alert filtering', () => {
+  it('builds selectable host options from online hosts only', () => {
+    expect(filterOnlineHostnames([
+      { hostname: 'host-a', online: true },
+      { hostname: 'host-b', online: false },
+      { hostname: 'host-a', online: true },
+      { hostname: '', online: true }
+    ])).toEqual(['host-a'])
+  })
+
   it('does not show any alerts until time range or host filter is set', () => {
     expect(filterAnalysisAlerts(alerts, [], null)).toEqual([])
   })

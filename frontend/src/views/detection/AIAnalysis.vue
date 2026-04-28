@@ -24,7 +24,7 @@
               />
             </el-form-item>
             <el-form-item label="主机过滤">
-              <el-select v-model="hostFilter" multiple placeholder="选择主机" clearable>
+              <el-select v-model="hostFilter" multiple filterable placeholder="选择在线主机" clearable :loading="hostLoading">
                 <el-option v-for="host in hosts" :key="host" :label="host" :value="host" />
               </el-select>
             </el-form-item>
@@ -291,11 +291,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
+import { getHosts } from '@/api/hosts'
 import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
 import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
-import { buildAnalysisAlertSnapshot, filterAnalysisAlerts, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
+import { buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 
 const route = useRoute()
 const router = useRouter()
@@ -335,6 +336,7 @@ interface Message {
 // State
 const alerts = ref<Alert[]>([])
 const alertLoading = ref(false)
+const hostLoading = ref(false)
 const selectedAlertIds = ref<string[]>([])
 const hostFilter = ref<string[]>([])
 const hosts = ref<string[]>([])
@@ -430,6 +432,10 @@ const filteredAlerts = computed(() => {
   return filterAnalysisAlerts(alerts.value, hostFilter.value, timeRange.value)
 })
 
+const hasAlertSearchCondition = computed(() => {
+  return hostFilter.value.length > 0 || Boolean(timeRange.value?.[0] && timeRange.value?.[1])
+})
+
 const isAnalysisSnapshotActive = computed(() => Boolean(sessionId.value && analysisAlertSnapshot.value.length > 0))
 
 const visibleAlertRows = computed(() => {
@@ -437,7 +443,26 @@ const visibleAlertRows = computed(() => {
 })
 
 // Methods
-async function loadAlerts() {
+async function loadHosts() {
+  hostLoading.value = true
+  try {
+    const response = await getHosts({ page: 1, pageSize: 1000 })
+    hosts.value = filterOnlineHostnames(response)
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载在线主机失败')
+  } finally {
+    hostLoading.value = false
+  }
+}
+
+async function loadAlerts(force = false) {
+  if (!force && !hasAlertSearchCondition.value) {
+    alerts.value = []
+    selectedAlertIds.value = []
+    alertLoading.value = false
+    return
+  }
+
   alertLoading.value = true
   try {
     const firstPage = await getAlerts({ page: 1, pageSize: 200 })
@@ -453,10 +478,6 @@ async function loadAlerts() {
     }
 
     alerts.value = collectedAlerts
-
-    // Extract unique hosts
-    const hostSet = new Set(alerts.value.map(a => a.hostname).filter(Boolean) as string[])
-    hosts.value = Array.from(hostSet)
   } catch (error: any) {
     ElMessage.error(error.message || '加载告警失败')
   } finally {
@@ -1041,6 +1062,10 @@ watch(filteredAlerts, () => {
   pruneSelectionToVisibleAlerts()
 }, { deep: true })
 
+watch([hostFilter, timeRange], () => {
+  loadAlerts()
+}, { deep: true })
+
 // Init
 onMounted(() => {
   // Check if we have query parameters from Alerts page
@@ -1053,7 +1078,9 @@ onMounted(() => {
     timeRange.value = [timeRangeStart, timeRangeEnd]
   }
 
-  loadAlerts().then(() => {
+  loadHosts()
+
+  loadAlerts(Boolean(alertIdsParam)).then(() => {
     // If alert_ids are provided, select them
     if (alertIdsParam) {
       const ids = alertIdsParam.split(',')

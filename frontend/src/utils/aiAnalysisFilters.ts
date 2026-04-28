@@ -10,6 +10,21 @@ export interface AnalysisAlertLike {
   last_seen_at?: string
 }
 
+export interface AnalysisHostLike {
+  hostname?: string
+  online?: boolean
+}
+
+export function filterOnlineHostnames(hosts: AnalysisHostLike[]) {
+  return Array.from(
+    new Set(
+      hosts
+        .filter(host => host.online && host.hostname)
+        .map(host => host.hostname as string)
+    )
+  )
+}
+
 function parseTime(value?: string) {
   if (!value) return null
   const time = Date.parse(value)
