@@ -33,10 +33,14 @@
             </el-form-item>
           </el-form>
 
+          <div v-if="isAnalysisSnapshotActive" class="analysis-snapshot-hint">
+            当前展示的是本次 AI 分析保留的事件快照，共 {{ analysisAlertSnapshot.length }} 条。
+          </div>
+
           <el-table
             ref="alertTableRef"
             v-loading="alertLoading"
-            :data="filteredAlerts"
+            :data="visibleAlertRows"
             border
             stripe
             height="400"
@@ -45,6 +49,11 @@
             <el-table-column type="selection" width="40" />
             <el-table-column prop="hostname" label="主机" min-width="100" />
             <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="last_seen_at" label="最近时间" min-width="150">
+              <template #default="{ row }">
+                {{ formatTime(row.last_seen_at) }}
+              </template>
+            </el-table-column>
             <el-table-column prop="severity" label="级别" width="80" align="center">
               <template #default="{ row }">
                 <el-tag :type="severityTagType(row.severity)" size="small">
@@ -56,7 +65,7 @@
 
           <div class="selection-info">
             已选择 {{ selectedAlertIds.length }} 个告警
-            <el-button type="primary" :disabled="selectedAlertIds.length === 0" @click="startAnalysis">
+            <el-button type="primary" :disabled="selectedAlertIds.length === 0 || isAnalysisSnapshotActive" @click="startAnalysis">
               开始 AI 分析
             </el-button>
           </div>
@@ -277,7 +286,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download } from '@element-plus/icons-vue'
@@ -286,6 +295,7 @@ import { createAISession, createAISessionStream, getSessionList, getSessionHisto
 import AttackGraph from '@/components/AttackGraph.vue'
 import { buildAttackGraphSvgDataUrl, extractAttackGraph, type AttackGraphData } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
+import { buildAnalysisAlertSnapshot, filterAnalysisAlerts, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 
 const route = useRoute()
 const router = useRouter()
@@ -299,6 +309,7 @@ interface Alert {
   mitre_id: string
   severity: string
   status: string
+  description?: string
   last_seen_at: string
 }
 
@@ -328,6 +339,7 @@ const selectedAlertIds = ref<string[]>([])
 const hostFilter = ref<string[]>([])
 const hosts = ref<string[]>([])
 const timeRange = ref<[string, string] | null>(null)
+const analysisAlertSnapshot = ref<Alert[]>([])
 
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
@@ -370,6 +382,7 @@ function saveConversation() {
       const data = {
         messages: messages.value,
         attackGraph: attackGraph.value,
+        analysisAlertSnapshot: analysisAlertSnapshot.value,
         finalAnswerContent: finalAnswerContent.value,
         generatedFlowchartImageUrl: generatedFlowchartImageUrl.value,
         maxIterations: maxIterations.value,
@@ -392,6 +405,7 @@ function loadConversation(): boolean {
       const data = JSON.parse(stored)
       messages.value = data.messages || []
       attackGraph.value = data.attackGraph || null
+      analysisAlertSnapshot.value = data.analysisAlertSnapshot || []
       finalAnswerContent.value = data.finalAnswerContent || ''
       generatedFlowchartImageUrl.value = data.generatedFlowchartImageUrl || ''
       maxIterations.value = data.maxIterations || 15
@@ -413,16 +427,13 @@ function clearSavedConversation() {
 
 // Computed
 const filteredAlerts = computed(() => {
-  let result = alerts.value
-  if (hostFilter.value.length > 0) {
-    result = result.filter(a => Boolean(a.hostname) && hostFilter.value.includes(a.hostname as string))
-  }
-  return result
+  return filterAnalysisAlerts(alerts.value, hostFilter.value, timeRange.value)
 })
 
-const selectedAlerts = computed(() => {
-  const selectedIds = new Set(selectedAlertIds.value)
-  return alerts.value.filter(alert => selectedIds.has(alert.id))
+const isAnalysisSnapshotActive = computed(() => Boolean(sessionId.value && analysisAlertSnapshot.value.length > 0))
+
+const visibleAlertRows = computed(() => {
+  return isAnalysisSnapshotActive.value ? analysisAlertSnapshot.value : filteredAlerts.value
 })
 
 // Methods
@@ -458,7 +469,12 @@ function handleAlertSelection(selection: Alert[]) {
 }
 
 function handleTimeRangeChange() {
-  // Time range is optional for filtering
+  pruneSelectionToVisibleAlerts()
+}
+
+function pruneSelectionToVisibleAlerts() {
+  if (isAnalysisSnapshotActive.value) return
+  selectedAlertIds.value = pruneSelectedAlertIds(selectedAlertIds.value, filteredAlerts.value)
 }
 
 function formatTime(timestamp: string): string {
@@ -538,6 +554,7 @@ async function loadSession(session: SessionListItem) {
   finalAnswerContent.value = ''
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
+  analysisAlertSnapshot.value = []
   maxIterations.value = session.max_iterations || 15
 
   // Load messages from history
@@ -649,6 +666,12 @@ async function startAnalysis() {
   }
 
   try {
+    const analysisSnapshot = buildAnalysisAlertSnapshot(filteredAlerts.value, selectedAlertIds.value)
+    if (analysisSnapshot.length === 0) {
+      ElMessage.warning('当前筛选条件下没有可分析的告警')
+      return
+    }
+
     // Convert time range to RFC3339 format for backend
     const timeRangeFormatted = timeRange.value ? {
       start: new Date(timeRange.value[0]).toISOString(),
@@ -656,7 +679,7 @@ async function startAnalysis() {
     } : undefined
 
     const response = await createAISession({
-      alert_ids: selectedAlertIds.value,
+      alert_ids: analysisSnapshot.map(alert => alert.id),
       time_range: timeRangeFormatted,
       host_filter: hostFilter.value.length > 0 ? hostFilter.value : undefined,
       max_iterations: maxIterations.value
@@ -672,6 +695,8 @@ async function startAnalysis() {
     finalAnswerContent.value = ''
     attackGraph.value = null
     generatedFlowchartImageUrl.value = ''
+    analysisAlertSnapshot.value = analysisSnapshot
+    selectedAlertIds.value = analysisSnapshot.map(alert => alert.id)
 
     // Save current session ID for page reload recovery
     saveCurrentSessionId()
@@ -682,7 +707,7 @@ async function startAnalysis() {
 
       // Automatically send initial analysis request
       const initialMessage = buildInitialAnalysisMessage(
-        selectedAlerts.value.map(alert => ({
+        analysisSnapshot.map(alert => ({
           id: alert.alert_id || alert.id,
           hostname: alert.hostname,
           rule_title: alert.rule_title,
@@ -1012,6 +1037,10 @@ onBeforeUnmount(() => {
   clearSavedConversation()
 })
 
+watch(filteredAlerts, () => {
+  pruneSelectionToVisibleAlerts()
+}, { deep: true })
+
 // Init
 onMounted(() => {
   // Check if we have query parameters from Alerts page
@@ -1076,6 +1105,17 @@ onMounted(() => {
 
 .filter-form {
   margin-bottom: 16px;
+}
+
+.analysis-snapshot-hint {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .selection-info {

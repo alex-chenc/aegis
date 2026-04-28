@@ -120,10 +120,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
+import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
+import { createIdleLogout } from '@/utils/sessionTimeout'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,6 +156,27 @@ const isAuthLayout = computed(() => {
 function handleRefresh() {
   router.go(0)
 }
+
+const idleLogout = createIdleLogout({
+  isEnabled: () => Boolean(getStoredAuth()) && !route.meta.authLayout,
+  onTimeout: () => {
+    clearStoredAuth()
+    ElMessage.warning('5 分钟未操作，已自动退出登录')
+    router.replace('/login')
+  }
+})
+
+onMounted(() => {
+  idleLogout.start()
+})
+
+onBeforeUnmount(() => {
+  idleLogout.stop()
+})
+
+watch(() => route.fullPath, () => {
+  idleLogout.refresh()
+}, { immediate: true })
 </script>
 
 <style scoped>
