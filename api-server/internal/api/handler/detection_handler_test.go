@@ -41,10 +41,40 @@ func setupDetectionHandlerTestDB(t *testing.T) *gorm.DB {
 			version TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			activated_at DATETIME,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			source TEXT DEFAULT 'upload',
+			file_name TEXT,
+			file_hash TEXT,
+			file_size INTEGER,
+			parsed_at DATETIME,
+			parse_error TEXT,
+			ai_generated BOOLEAN DEFAULT FALSE,
+			parent_rule_id TEXT,
+			generation_prompt TEXT,
+			generation_context TEXT,
+			approved_by TEXT,
+			approved_at DATETIME,
+			dispatch_hosts TEXT DEFAULT '[]',
+			dispatch_status TEXT DEFAULT 'pending'
 		)
 	`).Error; err != nil {
 		t.Fatalf("failed to create sigma_rules table: %v", err)
+	}
+
+	if err := db.Exec(`
+		CREATE TABLE block_policies (
+			id TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+			mitre_id TEXT NOT NULL UNIQUE,
+			mitre_name TEXT,
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			auto_block BOOLEAN NOT NULL DEFAULT FALSE,
+			auto_dispose BOOLEAN NOT NULL DEFAULT FALSE,
+			action TEXT NOT NULL DEFAULT 'kill_process',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`).Error; err != nil {
+		t.Fatalf("failed to create block_policies table: %v", err)
 	}
 
 	return db
@@ -129,7 +159,10 @@ func TestImportRules_Success(t *testing.T) {
 	}
 
 	db := setupDetectionHandlerTestDB(t)
-	h := &DetectionHandler{sigmaRuleRepo: repository.NewSigmaRuleRepository(db)}
+	h := &DetectionHandler{
+		sigmaRuleRepo:   repository.NewSigmaRuleRepository(db),
+		blockPolicyRepo: repository.NewBlockPolicyRepository(db),
+	}
 	r := gin.New()
 	r.POST("/import", h.ImportRules)
 
@@ -145,7 +178,7 @@ id: rule-2
 description: second desc
 level: high
 tags:
-  - windows
+  - attack.t1003
 `
 
 	req := newImportRulesMultipartRequest(t, yamlContent)
@@ -175,6 +208,55 @@ tags:
 	}
 	if count != 2 {
 		t.Fatalf("expected 2 rules in db, got %d", count)
+	}
+
+	if err := db.Table("block_policies").Count(&count).Error; err != nil {
+		t.Fatalf("failed to count policies: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected one policy per rule, got %d policies", count)
+	}
+}
+
+func TestImportRules_RejectsRuleWithoutMitreID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	if logger.Logger == nil {
+		if err := logger.Init(&logger.Config{Level: "error", MaxSize: 10, MaxBackups: 1, MaxAge: 1, Compress: false}); err != nil {
+			t.Fatalf("failed to init logger: %v", err)
+		}
+	}
+
+	db := setupDetectionHandlerTestDB(t)
+	h := &DetectionHandler{
+		sigmaRuleRepo:   repository.NewSigmaRuleRepository(db),
+		blockPolicyRepo: repository.NewBlockPolicyRepository(db),
+	}
+	r := gin.New()
+	r.POST("/import", h.ImportRules)
+
+	yamlContent := `title: No Mitre Rule
+id: rule-no-mitre
+description: missing mitre
+level: medium
+tags:
+  - windows
+`
+
+	req := newImportRulesMultipartRequest(t, yamlContent)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var count int64
+	if err := db.Table("sigma_rules").Count(&count).Error; err != nil {
+		t.Fatalf("failed to count rules: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no rule to be imported without mitre_id, got %d", count)
 	}
 }
 

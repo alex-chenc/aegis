@@ -102,6 +102,19 @@ func (r *BlockPolicyRepository) DeleteByMitreID(mitreID string) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+func (r *BlockPolicyRepository) DeleteExceptMitreIDs(mitreIDs []string) (int64, error) {
+	var result *gorm.DB
+	if len(mitreIDs) == 0 {
+		result = r.db.Where("1 = 1").Delete(&model.BlockPolicy{})
+	} else {
+		result = r.db.Where("mitre_id NOT IN ?", mitreIDs).Delete(&model.BlockPolicy{})
+	}
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func (r *BlockPolicyRepository) NormalizeMitreIDs(ctx context.Context) (int, error) {
 	var policies []model.BlockPolicy
 	if err := r.db.Where("mitre_id IS NOT NULL AND mitre_id != ''").Find(&policies).Error; err != nil {

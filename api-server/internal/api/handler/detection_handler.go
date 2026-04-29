@@ -79,6 +79,100 @@ func NewDetectionHandler(
 	}
 }
 
+func normalizeDetectionMitreID(mitreID string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(mitreID))
+	if normalized != "" && !strings.HasPrefix(normalized, "T") {
+		normalized = "T" + normalized
+	}
+	return normalized
+}
+
+func (h *DetectionHandler) createPolicyForRule(rule *model.SigmaRule) error {
+	mitreID := normalizeDetectionMitreID(rule.MitreID)
+	if mitreID == "" {
+		return fmt.Errorf("rule %s has no MITRE ID; cannot create one-to-one block policy", rule.RuleID)
+	}
+	if mitreID != rule.MitreID {
+		rule.MitreID = mitreID
+		if err := h.sigmaRuleRepo.Update(rule); err != nil {
+			return fmt.Errorf("failed to normalize rule MITRE ID: %w", err)
+		}
+	}
+
+	existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(mitreID)
+	if existingPolicy != nil {
+		return nil
+	}
+
+	policy := &model.BlockPolicy{
+		MitreID:     mitreID,
+		MitreName:   rule.Title,
+		Enabled:     true,
+		AutoBlock:   false,
+		AutoDispose: false,
+		Action:      "kill_process",
+	}
+	if err := h.blockPolicyRepo.Create(policy); err != nil {
+		return fmt.Errorf("failed to create one-to-one block policy for rule %s: %w", rule.RuleID, err)
+	}
+	return nil
+}
+
+func (h *DetectionHandler) reconcileRulePolicyBindings() (gin.H, error) {
+	rules, _, err := h.sigmaRuleRepo.List(1, 100000, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sigma rules: %w", err)
+	}
+
+	seen := make(map[string]string, len(rules))
+	mitreIDs := make([]string, 0, len(rules))
+	created := 0
+	for i := range rules {
+		rule := &rules[i]
+		mitreID := normalizeDetectionMitreID(rule.MitreID)
+		if mitreID == "" {
+			return nil, fmt.Errorf("rule %s has no MITRE ID; policy count cannot be bound one-to-one", rule.RuleID)
+		}
+		if previousRuleID, ok := seen[mitreID]; ok {
+			return nil, fmt.Errorf("rules %s and %s share MITRE ID %s; one-to-one policy binding requires unique MITRE IDs", previousRuleID, rule.RuleID, mitreID)
+		}
+		seen[mitreID] = rule.RuleID
+		mitreIDs = append(mitreIDs, mitreID)
+
+		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(mitreID)
+		if existingPolicy == nil {
+			if err := h.createPolicyForRule(rule); err != nil {
+				return nil, err
+			}
+			created++
+		} else if existingPolicy.MitreName == "" || existingPolicy.MitreName != rule.Title {
+			if err := h.blockPolicyRepo.Update(mitreID, map[string]interface{}{"mitre_name": rule.Title}); err != nil {
+				return nil, fmt.Errorf("failed to align policy title for %s: %w", mitreID, err)
+			}
+		}
+	}
+
+	deleted, err := h.blockPolicyRepo.DeleteExceptMitreIDs(mitreIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete orphan block policies: %w", err)
+	}
+
+	policies, err := h.blockPolicyRepo.List()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list block policies: %w", err)
+	}
+	if len(policies) != len(rules) {
+		return nil, fmt.Errorf("rule/policy binding mismatch: rules=%d policies=%d", len(rules), len(policies))
+	}
+
+	return gin.H{
+		"created":        created,
+		"deleted_orphan": deleted,
+		"total_rules":    len(rules),
+		"total_policies": len(policies),
+	}, nil
+}
+
 func (h *DetectionHandler) ListAlerts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSizeValue := c.DefaultQuery("pageSize", c.DefaultQuery("page_size", "20"))
@@ -249,6 +343,11 @@ func (h *DetectionHandler) ListBlockPolicies(c *gin.Context) {
 		pageSize = 10
 	}
 
+	if _, err := h.reconcileRulePolicyBindings(); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": err.Error()})
+		return
+	}
+
 	policies, total, err := h.blockPolicyRepo.ListPaginatedWithRuleTitle(page, pageSize, query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "internal error"})
@@ -310,47 +409,16 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 }
 
 func (h *DetectionHandler) SyncBlockPolicies(c *gin.Context) {
-	rules, _, err := h.sigmaRuleRepo.List(1, 1000, nil)
+	result, err := h.reconcileRulePolicyBindings()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to get rules"})
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": err.Error()})
 		return
-	}
-
-	created := 0
-	for _, rule := range rules {
-		if rule.MitreID == "" {
-			continue
-		}
-
-		upperMitreID := strings.ToUpper(rule.MitreID)
-		if !strings.HasPrefix(upperMitreID, "T") {
-			upperMitreID = "T" + upperMitreID
-		}
-		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(upperMitreID)
-		if existingPolicy == nil {
-			policy := &model.BlockPolicy{
-				MitreID:     upperMitreID,
-				MitreName:   rule.Title,
-				Enabled:     true,
-				AutoBlock:   false,
-				AutoDispose: false,
-				Action:      "kill_process",
-			}
-			if err := h.blockPolicyRepo.Create(policy); err != nil {
-				logger.Warn("failed to create block policy", zap.String("mitre_id", upperMitreID), zap.Error(err))
-			} else {
-				created++
-			}
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data": gin.H{
-			"created":     created,
-			"total_rules": len(rules),
-		},
+		"data":    result,
 	})
 }
 
@@ -823,10 +891,7 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 		r := rule
 
 		if r.MitreID != "" {
-			upperMitreID := strings.ToUpper(r.MitreID)
-			if !strings.HasPrefix(upperMitreID, "T") {
-				upperMitreID = "T" + upperMitreID
-			}
+			upperMitreID := normalizeDetectionMitreID(r.MitreID)
 			r.MitreID = upperMitreID
 
 			exists, err := h.sigmaRuleRepo.ExistsByMitreID(upperMitreID)
@@ -837,6 +902,9 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 				skipped++
 				continue
 			}
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("rule %s has no MITRE ID; every rule must map to exactly one block policy", r.RuleID)})
+			return
 		}
 
 		if err := h.sigmaRuleRepo.Create(&r); err != nil {
@@ -847,21 +915,10 @@ func (h *DetectionHandler) ImportRules(c *gin.Context) {
 		}
 		imported++
 
-		if r.MitreID != "" {
-			existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(r.MitreID)
-			if existingPolicy == nil {
-				policy := &model.BlockPolicy{
-					MitreID:     r.MitreID,
-					MitreName:   r.Title,
-					Enabled:     true,
-					AutoBlock:   false,
-					AutoDispose: false,
-					Action:      "kill_process",
-				}
-				if err := h.blockPolicyRepo.Create(policy); err != nil {
-					logger.Warn("failed to create block policy for imported rule", zap.String("mitre_id", r.MitreID), zap.Error(err))
-				}
-			}
+		if err := h.createPolicyForRule(&r); err != nil {
+			_ = h.sigmaRuleRepo.DeleteByRuleID(r.RuleID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
 	}
 
@@ -1266,10 +1323,7 @@ detection:
 	}
 
 	if rule.MitreID != "" {
-		upperMitreID := strings.ToUpper(rule.MitreID)
-		if !strings.HasPrefix(upperMitreID, "T") {
-			upperMitreID = "T" + upperMitreID
-		}
+		upperMitreID := normalizeDetectionMitreID(rule.MitreID)
 		rule.MitreID = upperMitreID
 
 		exists, err := h.sigmaRuleRepo.ExistsByMitreID(upperMitreID)
@@ -1282,6 +1336,12 @@ detection:
 			})
 			return
 		}
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "MITRE ID is required; every rule must map to exactly one block policy",
+		})
+		return
 	}
 
 	if err := h.sigmaRuleRepo.Create(rule); err != nil {
@@ -1289,24 +1349,10 @@ detection:
 		return
 	}
 
-	// 创建对应的阻断策略（如果MITRE ID存在）
-	if rule.MitreID != "" {
-		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(rule.MitreID)
-		if existingPolicy == nil {
-			policy := &model.BlockPolicy{
-				MitreID:     rule.MitreID,
-				MitreName:   rule.Title,
-				Enabled:     true,
-				AutoBlock:   false,
-				AutoDispose: false,
-				Action:      "kill_process",
-			}
-			if err := h.blockPolicyRepo.Create(policy); err != nil {
-				logger.Warn("failed to create block policy for rule", zap.String("mitre_id", rule.MitreID), zap.Error(err))
-			} else {
-				logger.Info("created block policy for generated rule", zap.String("mitre_id", rule.MitreID))
-			}
-		}
+	if err := h.createPolicyForRule(rule); err != nil {
+		_ = h.sigmaRuleRepo.DeleteByRuleID(rule.RuleID)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
 	}
 
 	duration := time.Since(startTime).Seconds()
@@ -1394,18 +1440,18 @@ func (h *DetectionHandler) DeleteRules(c *gin.Context) {
 		alertCount, _ := h.alertRepo.DeleteByRuleID(ruleID)
 		deletedAlerts += alertCount
 
+		if err := h.sigmaRuleRepo.DeleteByRuleID(ruleID); err != nil {
+			logger.Error("failed to delete rule", zap.String("rule_id", ruleID), zap.Error(err))
+			continue
+		}
+		deletedRules++
+
 		if rule.MitreID != "" {
 			policyDeleted, _ := h.blockPolicyRepo.DeleteByMitreID(rule.MitreID)
 			if policyDeleted {
 				deletedPolicies++
 			}
 		}
-
-		if err := h.sigmaRuleRepo.DeleteByRuleID(ruleID); err != nil {
-			logger.Error("failed to delete rule", zap.String("rule_id", ruleID), zap.Error(err))
-			continue
-		}
-		deletedRules++
 	}
 
 	logger.Info("rules deleted",
@@ -1539,24 +1585,18 @@ func (h *DetectionHandler) UploadRules(c *gin.Context) {
 			// 获取完整的规则信息以检查是否需要创建阻断策略
 			rule, err := h.sigmaRuleService.GetRuleByID(parsedRule.RuleID)
 			if err == nil && rule != nil {
-				existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(rule.MitreID)
-				if existingPolicy == nil {
-					policy := &model.BlockPolicy{
-						MitreID:     rule.MitreID,
-						MitreName:   rule.Title,
-						Enabled:     true,
-						AutoBlock:   false,
-						AutoDispose: false,
-						Action:      "kill_process",
-					}
-					if err := h.blockPolicyRepo.Create(policy); err != nil {
-						logger.Warn("failed to create block policy for rule", zap.String("mitre_id", rule.MitreID), zap.Error(err))
-					} else {
-						logger.Info("created block policy for uploaded rule", zap.String("mitre_id", rule.MitreID))
-					}
+				if err := h.createPolicyForRule(rule); err != nil {
+					_ = h.sigmaRuleRepo.DeleteByRuleID(rule.RuleID)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+					return
 				}
 			}
 		}
+	}
+
+	if _, err := h.reconcileRulePolicyBindings(); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

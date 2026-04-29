@@ -89,6 +89,7 @@ func detectionEnhancementSchemaStatements() []string {
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ppid INTEGER DEFAULT 0`,
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line TEXT`,
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree JSONB`,
+		`ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_judgment_source ON alerts(judgment_source)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_block_status ON alerts(block_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id)`,

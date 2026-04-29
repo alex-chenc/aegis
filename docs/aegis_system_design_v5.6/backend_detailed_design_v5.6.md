@@ -1535,6 +1535,16 @@ SSE 事件顺序要求：
 - AI 分析 SSE 使用真实告警创建会话，先走文本模型分析，随后在 `done` 前输出 `flowchart_image` 事件。
 - 页面截图保存到 `docs/screenshots/ui-refresh/detection-ai-analysis.png` 和 `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png`。
 
+### 10.4.2 规则与阻断策略一一绑定约束
+
+智能异常检测中的 Sigma 规则与阻断策略必须保持一一对应：
+
+- 每条 Sigma 规则必须具备规范化 MITRE ID，缺失 MITRE ID 的规则不得导入、生成或启用为检测规则。
+- 同一 MITRE ID 只允许存在一条 Sigma 规则，避免多规则共享同一策略导致策略数量和规则数量不一致。
+- 每条 Sigma 规则创建成功后，后端必须同步创建一条对应的 `block_policies` 记录；策略创建失败时必须回滚本次规则创建。
+- `/api/v1/detection/block-policies` 和 `/api/v1/detection/block-policies/sync` 必须执行强一致校验：补齐缺失策略、删除孤儿策略，并在最终规则数和策略数不相等时返回 `409`，禁止静默展示不一致数据。
+- 删除规则时必须删除对应阻断策略；删除阻断策略时必须删除对应规则和告警，保持两个页面数量一致。
+
 ### 10.5 数据模型更新
 
 #### AIMessage 新增字段
