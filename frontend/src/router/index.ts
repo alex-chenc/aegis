@@ -3,7 +3,8 @@ import { getStoredAuth } from '@/utils/auth'
 import Login from '../views/Login.vue'
 import ForcePasswordChange from '../views/ForcePasswordChange.vue'
 import Dashboard from '../views/Dashboard.vue'
-import Settings from '../views/Settings.vue'
+import ModelSettings from '../views/settings/ModelSettings.vue'
+import AgentInstall from '../views/settings/AgentInstall.vue'
 import Workbench from '../views/Workbench.vue'
 import TaskCenter from '../views/TaskCenter.vue'
 import TaskDetail from '../views/TaskDetail.vue'
@@ -110,9 +111,20 @@ const routes = [
   },
   {
     path: '/settings',
-    name: 'Settings',
-    component: Settings,
+    redirect: '/settings/models',
     meta: { title: '系统配置' }
+  },
+  {
+    path: '/settings/models',
+    name: 'ModelSettings',
+    component: ModelSettings,
+    meta: { title: '模型配置' }
+  },
+  {
+    path: '/settings/agent',
+    name: 'AgentInstall',
+    component: AgentInstall,
+    meta: { title: 'Agent 安装' }
   }
 ]
 

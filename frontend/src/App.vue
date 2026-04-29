@@ -78,10 +78,20 @@
           </el-menu-item>
         </el-sub-menu>
 
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <span>系统配置</span>
-        </el-menu-item>
+        <el-sub-menu index="settings">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>系统配置</span>
+          </template>
+          <el-menu-item index="/settings/models">
+            <el-icon><Setting /></el-icon>
+            <span>模型配置</span>
+          </el-menu-item>
+          <el-menu-item index="/settings/agent">
+            <el-icon><Operation /></el-icon>
+            <span>Agent 安装</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
 
       <div class="sidebar-footer">

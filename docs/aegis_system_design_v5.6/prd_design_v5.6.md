@@ -56,6 +56,8 @@ Aegis智能主机安全系统
 │   ├── 阻断策略
 │   └── 规则管理 (V5.6增强)
 └── 系统配置
+    ├── 模型配置
+    └── Agent 安装
 ```
 
 ### 3.2 菜单项说明
@@ -70,7 +72,9 @@ Aegis智能主机安全系统
 | ├─ 告警中心 | `/detection/alerts` | 告警列表、**AI降噪多轮分析(V5.6增强)** |
 | ├─ 阻断策略 | `/detection/policies` | 自动阻断开关配置 |
 | └─ 规则管理 | `/detection/rules` | **Sigma规则上传解析、AI规则更新配置(V5.6)** |
-| 系统配置 | `/settings` | LLM配置、Agent安装、系统参数设置 |
+| 系统配置 | `/settings` | 重定向到模型配置 |
+| ├─ 模型配置 | `/settings/models` | 文本模型与图片模型配置 |
+| └─ Agent 安装 | `/settings/agent` | Agent安装命令与接入地址 |
 
 ---
 
