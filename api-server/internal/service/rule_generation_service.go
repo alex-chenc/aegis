@@ -16,26 +16,26 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"gorm.io/datatypes"
 	"gopkg.in/yaml.v3"
+	"gorm.io/datatypes"
 )
 
 // RuleGenerationService AI规则自动更新服务（整合误报分析功能）
 type RuleGenerationService struct {
 	configService    *AIRuleConfigService
 	llmConfigRepo    *repository.ConfigRepository
-	sigmaRuleRepo     *repository.SigmaRuleRepository
-	alertRepo         *repository.AlertRepository
-	notificationRepo  *repository.NotificationRepository
-	sigmaRuleSvc      *SigmaRuleService
-	serverClient      *grpcclient.ServerClient
-	llmClient         *llm.LLMClient
-	llmTimeout        int
-	llmMaxRetries     int
-	sampleSize        int
-	enabled           bool
-	stopCh            chan struct{}
-	wg                sync.WaitGroup
+	sigmaRuleRepo    *repository.SigmaRuleRepository
+	alertRepo        *repository.AlertRepository
+	notificationRepo *repository.NotificationRepository
+	sigmaRuleSvc     *SigmaRuleService
+	serverClient     *grpcclient.ServerClient
+	llmClient        *llm.LLMClient
+	llmTimeout       int
+	llmMaxRetries    int
+	sampleSize       int
+	enabled          bool
+	stopCh           chan struct{}
+	wg               sync.WaitGroup
 }
 
 // NewRuleGenerationService 创建规则生成服务
@@ -51,18 +51,18 @@ func NewRuleGenerationService(
 	llmMaxRetries int,
 ) *RuleGenerationService {
 	return &RuleGenerationService{
-		configService:   configService,
-		llmConfigRepo:   llmConfigRepo,
-		sigmaRuleRepo:   sigmaRuleRepo,
-		alertRepo:       alertRepo,
+		configService:    configService,
+		llmConfigRepo:    llmConfigRepo,
+		sigmaRuleRepo:    sigmaRuleRepo,
+		alertRepo:        alertRepo,
 		notificationRepo: notificationRepo,
-		sigmaRuleSvc:    sigmaRuleSvc,
-		serverClient:    serverClient,
-		llmTimeout:      llmTimeout,
-		llmMaxRetries:   llmMaxRetries,
-		sampleSize:      10,
-		enabled:         true,
-		stopCh:          make(chan struct{}),
+		sigmaRuleSvc:     sigmaRuleSvc,
+		serverClient:     serverClient,
+		llmTimeout:       llmTimeout,
+		llmMaxRetries:    llmMaxRetries,
+		sampleSize:       10,
+		enabled:          true,
+		stopCh:           make(chan struct{}),
 	}
 }
 
@@ -73,14 +73,9 @@ func (s *RuleGenerationService) InitLLMClient(apiKey, baseURL, modelName string,
 
 // Start 启动AI规则自动更新服务
 func (s *RuleGenerationService) Start(ctx context.Context) {
-	if !s.configService.IsEnabled() {
-		logger.Info("AI rule auto-update service is disabled")
-		return
-	}
-
 	logger.Info("AI rule auto-update service starting")
 
-	// 定时检查触发条件
+	// Keep the scheduler alive so config changes made after startup take effect.
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -89,41 +84,7 @@ func (s *RuleGenerationService) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.checkTimeWindow("10m")
-			case <-s.stopCh:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.checkTimeWindow("30m")
-			case <-s.stopCh:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(60 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.checkTimeWindow("60m")
+				s.TriggerConfiguredCheck(ctx)
 			case <-s.stopCh:
 				return
 			case <-ctx.Done():
@@ -160,44 +121,54 @@ func (s *RuleGenerationService) Stop() {
 	logger.Info("AI rule auto-update service stopped")
 }
 
-// checkTimeWindow 检查指定时间窗口内的触发条件
-func (s *RuleGenerationService) checkTimeWindow(window string) {
-	if !s.configService.IsEnabled() {
-		return
-	}
-
-	ctx := context.Background()
-
-	thresholds := s.configService.GetThresholds()
-	threshold := thresholds.HighFrequencyCount
-
-	var startTime time.Time
-	switch window {
-	case "10m":
-		startTime = time.Now().Add(-10 * time.Minute)
-	case "30m":
-		startTime = time.Now().Add(-30 * time.Minute)
-	case "60m":
-		startTime = time.Now().Add(-60 * time.Minute)
-	default:
-		return
-	}
-
-	stats, err := s.alertRepo.GetRuleTriggerStats(startTime, time.Now(), threshold, s.sampleSize)
+// TriggerConfiguredCheck checks the current configured alert window once.
+func (s *RuleGenerationService) TriggerConfiguredCheck(ctx context.Context) {
+	stats, err := s.collectConfiguredTriggerStats(time.Now())
 	if err != nil {
-		logger.Error("failed to get rule trigger stats", zap.Error(err), zap.String("window", window))
+		logger.Error("failed to collect configured rule trigger stats", zap.Error(err))
 		return
 	}
 
-	logger.Info("rule trigger stats collected",
-		zap.String("window", window),
+	if len(stats) == 0 {
+		return
+	}
+
+	logger.Info("configured rule trigger stats collected",
 		zap.Int("rules_over_threshold", len(stats)))
 
 	for _, stat := range stats {
-		if stat.AlertCount > threshold {
-			go s.analyzeRule(ctx, stat, window)
-		}
+		go s.analyzeRule(ctx, stat, stat.TimeWindow)
 	}
+}
+
+func (s *RuleGenerationService) collectConfiguredTriggerStats(now time.Time) ([]repository.RuleTriggerStats, error) {
+	if !s.configService.IsEnabled() {
+		return nil, nil
+	}
+
+	thresholds := s.configService.GetThresholds()
+	if thresholds == nil {
+		thresholds = &model.Thresholds{HighFrequencyCount: 10, HighFrequencyHours: 1}
+	}
+	if thresholds.HighFrequencyCount <= 0 {
+		thresholds.HighFrequencyCount = 10
+	}
+	if thresholds.HighFrequencyHours <= 0 {
+		thresholds.HighFrequencyHours = 1
+	}
+
+	startTime := now.Add(-time.Duration(thresholds.HighFrequencyHours) * time.Hour)
+	stats, err := s.alertRepo.GetRuleTriggerStats(startTime, now, thresholds.HighFrequencyCount, s.sampleSize)
+	if err != nil {
+		return nil, err
+	}
+
+	timeWindow := fmt.Sprintf("%dh", thresholds.HighFrequencyHours)
+	for i := range stats {
+		stats[i].TimeWindow = timeWindow
+	}
+
+	return stats, nil
 }
 
 // analyzeRule 分析规则是否为误报，并进行紧收
@@ -213,6 +184,14 @@ func (s *RuleGenerationService) analyzeRule(ctx context.Context, stats repositor
 		return
 	}
 
+	conservatism := s.configService.GetConservatism()
+	if shouldSkipRuleForCooldown(rule, conservatism, time.Now()) {
+		logger.Info("skipping rule tightening inside conservative cooldown",
+			zap.String("rule_id", stats.RuleID),
+			zap.Float64("conservatism", conservatism))
+		return
+	}
+
 	result, err := s.callLLMForAnalysis(ctx, rule, stats, timeWindow)
 	if err != nil {
 		logger.Error("LLM analysis failed", zap.Error(err), zap.String("rule_id", stats.RuleID))
@@ -224,7 +203,8 @@ func (s *RuleGenerationService) analyzeRule(ctx context.Context, stats repositor
 		zap.Bool("is_false_positive", result.IsFalsePositive),
 		zap.Float64("confidence", result.Confidence))
 
-	if result.IsFalsePositive && result.Confidence >= 0.7 {
+	confidenceThreshold := falsePositiveConfidenceThreshold(conservatism)
+	if result.IsFalsePositive && result.Confidence >= confidenceThreshold {
 		if err := s.applyRuleAdjustment(rule, result.RuleAdjustment, stats); err != nil {
 			logger.Error("failed to apply rule adjustment", zap.Error(err), zap.String("rule_id", stats.RuleID))
 			return
@@ -344,6 +324,12 @@ func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjus
 	if err != nil {
 		return fmt.Errorf("failed to apply tightening: %w", err)
 	}
+	if strings.TrimSpace(newContent) == strings.TrimSpace(rule.Content) {
+		return fmt.Errorf("tightening did not change rule content")
+	}
+	if err := validateTightenedRuleContent(newContent); err != nil {
+		return fmt.Errorf("invalid tightened rule: %w", err)
+	}
 
 	rule.Content = newContent
 	rule.Version = incrementVersion(rule.Version)
@@ -352,12 +338,16 @@ func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjus
 	rule.ActivatedAt = &now
 	rule.UpdatedAt = now
 
-	if adjustment.SeverityChange != "" {
-		rule.Severity = adjustment.SeverityChange
+	if severity := normalizeSeverityChange(adjustment.SeverityChange); severity != "" {
+		rule.Severity = severity
 	}
 
 	if err := s.sigmaRuleRepo.Update(rule); err != nil {
 		return fmt.Errorf("failed to update rule: %w", err)
+	}
+
+	if s.sigmaRuleSvc != nil {
+		s.sigmaRuleSvc.broadcastRuleUpdate(rule.RuleID, rule.Status)
 	}
 
 	logger.Info("rule tightened and set to experimental",
@@ -368,11 +358,11 @@ func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjus
 	// 发送通知
 	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnGeneration && s.notificationRepo != nil {
 		metadataBytes, _ := json.Marshal(map[string]interface{}{
-			"rule_id":      rule.RuleID,
-			"mitre_id":     rule.MitreID,
-			"action":       "tighten",
-			"alert_count":  stats.AlertCount,
-			"time_window":  stats.TimeWindow,
+			"rule_id":     rule.RuleID,
+			"mitre_id":    rule.MitreID,
+			"action":      "tighten",
+			"alert_count": stats.AlertCount,
+			"time_window": stats.TimeWindow,
 		})
 		notification := &model.Notification{
 			Title:    "AI规则更新通知",
@@ -430,6 +420,127 @@ func (s *RuleGenerationService) applyTightening(content string, adjustment RuleA
 	}
 
 	return string(newContent), nil
+}
+
+func falsePositiveConfidenceThreshold(conservatism float64) float64 {
+	switch {
+	case conservatism <= 0.2:
+		return 0.90
+	case conservatism <= 0.4:
+		return 0.85
+	case conservatism <= 0.6:
+		return 0.80
+	default:
+		return 0.70
+	}
+}
+
+func ruleTighteningCooldown(conservatism float64) time.Duration {
+	switch {
+	case conservatism <= 0.2:
+		return 24 * time.Hour
+	case conservatism <= 0.4:
+		return 12 * time.Hour
+	case conservatism <= 0.6:
+		return 6 * time.Hour
+	default:
+		return time.Hour
+	}
+}
+
+func shouldSkipRuleForCooldown(rule *model.SigmaRule, conservatism float64, now time.Time) bool {
+	if rule == nil || rule.UpdatedAt.IsZero() {
+		return false
+	}
+	return now.Sub(rule.UpdatedAt) < ruleTighteningCooldown(conservatism)
+}
+
+func validateTightenedRuleContent(content string) error {
+	var sigmaRule map[string]interface{}
+	if err := yaml.Unmarshal([]byte(content), &sigmaRule); err != nil {
+		return err
+	}
+
+	detection, ok := sigmaRule["detection"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("missing detection block")
+	}
+
+	condition, _ := detection["condition"].(string)
+	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return fmt.Errorf("missing detection condition")
+	}
+
+	selectors := make(map[string]bool)
+	for key := range detection {
+		if key != "condition" {
+			selectors[key] = true
+		}
+	}
+	if len(selectors) == 0 {
+		return fmt.Errorf("missing detection selectors")
+	}
+
+	return validateConditionReferences(condition, selectors)
+}
+
+func validateConditionReferences(condition string, selectors map[string]bool) error {
+	tokens := tokenizeRuleCondition(condition)
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		lower := strings.ToLower(token)
+		switch lower {
+		case "and", "or", "not", "(", ")":
+			continue
+		case "of":
+			return fmt.Errorf("unexpected of in condition")
+		case "all", "1":
+			if i+2 >= len(tokens) || !strings.EqualFold(tokens[i+1], "of") {
+				return fmt.Errorf("invalid selector group in condition")
+			}
+			if !selectorPatternExists(tokens[i+2], selectors) {
+				return fmt.Errorf("condition references unknown selector pattern %q", tokens[i+2])
+			}
+			i += 2
+		default:
+			if strings.ContainsAny(token, "'\":|/\\") {
+				return fmt.Errorf("condition contains unsupported fragment %q", token)
+			}
+			if strings.Contains(token, "*") {
+				if !selectorPatternExists(token, selectors) {
+					return fmt.Errorf("condition references unknown selector pattern %q", token)
+				}
+				continue
+			}
+			if !selectors[token] {
+				return fmt.Errorf("condition references unknown selector %q", token)
+			}
+		}
+	}
+	return nil
+}
+
+func tokenizeRuleCondition(condition string) []string {
+	condition = strings.ReplaceAll(condition, "(", " ( ")
+	condition = strings.ReplaceAll(condition, ")", " ) ")
+	return strings.Fields(condition)
+}
+
+func selectorPatternExists(pattern string, selectors map[string]bool) bool {
+	if !strings.Contains(pattern, "*") {
+		return selectors[pattern]
+	}
+	parts := strings.Split(pattern, "*")
+	if len(parts) != 2 {
+		return false
+	}
+	for selector := range selectors {
+		if strings.HasPrefix(selector, parts[0]) && strings.HasSuffix(selector, parts[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkExperimentalRulesPromotion 检查实验性规则是否需要升级为active
@@ -492,7 +603,7 @@ func (s *RuleGenerationService) promoteRuleToActive(rule *model.SigmaRule) error
 // TriggerCheckResult 触发检查结果
 type TriggerCheckResult struct {
 	ShouldTrigger bool     `json:"should_trigger"`
-	TriggerType   string   `json:"trigger_type"`   // high_frequency, new_mitre, critical, manual
+	TriggerType   string   `json:"trigger_type"` // high_frequency, new_mitre, critical, manual
 	MitreID       string   `json:"mitre_id"`
 	AlertCount    int      `json:"alert_count"`
 	Message       string   `json:"message"`
@@ -541,9 +652,9 @@ func (s *RuleGenerationService) CheckTriggers(mitreID string, severity string) (
 
 // GenerateRuleRequest 生成规则请求
 type GenerateRuleRequest struct {
-	MitreID       string   `json:"mitre_id"`
-	SampleAlerts  []string `json:"sample_alerts"`
-	Conservatism  float64  `json:"conservatism"` // 0.0-1.0, 越低越保守
+	MitreID      string   `json:"mitre_id"`
+	SampleAlerts []string `json:"sample_alerts"`
+	Conservatism float64  `json:"conservatism"` // 0.0-1.0, 越低越保守
 }
 
 // GenerateRuleResponse 生成规则响应
@@ -610,7 +721,7 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 	// 发送通知
 	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnGeneration && s.notificationRepo != nil {
 		metadataBytes, _ := json.Marshal(map[string]interface{}{
-			"rule_id": rule.RuleID,
+			"rule_id":  rule.RuleID,
 			"mitre_id": rule.MitreID,
 		})
 		notification := &model.Notification{
@@ -779,6 +890,15 @@ func (s *RuleGenerationService) parseGeneratedRule(response, mitreID string) (*m
 	return rule, nil
 }
 
+func normalizeSeverityChange(severity string) string {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical", "high", "medium", "low", "info":
+		return strings.ToLower(strings.TrimSpace(severity))
+	default:
+		return ""
+	}
+}
+
 // SubmitForApproval 提交规则进入审核队列
 func (s *RuleGenerationService) SubmitForApproval(ruleID string) error {
 	_, err := s.sigmaRuleRepo.FindByID(ruleID)
@@ -837,8 +957,8 @@ func (s *RuleGenerationService) ActivateRule(ruleID string) error {
 // GetRuleForReview 获取待审核规则列表
 func (s *RuleGenerationService) GetRuleForReview() ([]model.SigmaRule, error) {
 	rules, _, err := s.sigmaRuleRepo.List(1, 100, map[string]interface{}{
-		"status":        "pending",
-		"generated_by":  "ai_generated",
+		"status":       "pending",
+		"generated_by": "ai_generated",
 	})
 	return rules, err
 }

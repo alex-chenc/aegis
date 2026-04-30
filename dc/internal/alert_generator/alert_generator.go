@@ -44,9 +44,10 @@ func (g *AlertGenerator) GenerateAlert(event *model.RuntimeEvent) *model.Alert {
 
 	// Check auto-block policy
 	if g.blockManager.ShouldAutoBlock(alert.MitreID) {
-		alert.AutoDispose = true
-		alert.Status = "resolved"
-		g.logger.Info("Alert marked for auto-dispose",
+		alert.AutoBlocked = true
+		blockStatus := "blocking"
+		alert.BlockStatus = &blockStatus
+		g.logger.Info("Alert marked for auto-block",
 			zap.String("alert_id", alert.AlertID),
 			zap.String("mitre_id", alert.MitreID),
 		)

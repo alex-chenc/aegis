@@ -361,9 +361,6 @@ services:
     build: ./frontend
     container_name: aegis-frontend
     restart: unless-stopped
-    depends_on:
-      api-server:
-        condition: service_healthy
     ports:
       - "80:80"
       - "8081:80"

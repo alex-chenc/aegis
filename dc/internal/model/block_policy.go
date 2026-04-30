@@ -2,16 +2,19 @@ package model
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // BlockPolicy represents a blocking policy for MITRE techniques
 type BlockPolicy struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
+	ID          uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	MitreID     string    `gorm:"uniqueIndex;not null" json:"mitre_id"`
 	MitreName   string    `json:"mitre_name"`
 	Description string    `gorm:"type:text" json:"description"`
 	Action      string    `json:"action"` // block, alert, log
 	Enabled     bool      `gorm:"default:false" json:"enabled"`
+	AutoBlock   bool      `gorm:"default:false" json:"auto_block"`
 	AutoDispose bool      `gorm:"default:false" json:"auto_dispose"`
 	Priority    int       `json:"priority"`
 	CreatedAt   time.Time `json:"created_at"`

@@ -36,7 +36,7 @@ func (m *BlockManager) ShouldAutoBlock(mitreID string) bool {
 	if !ok {
 		return false
 	}
-	return policy.Enabled && policy.AutoDispose
+	return policy.Enabled && policy.AutoBlock
 }
 
 func (m *BlockManager) IsBlocked(mitreID string) bool {
@@ -61,6 +61,7 @@ func (m *BlockManager) LoadPolicies(ctx context.Context, repo *repository.BlockP
 		logger.Debug("Loaded block policy",
 			zap.String("mitre_id", policy.MitreID),
 			zap.Bool("enabled", policy.Enabled),
+			zap.Bool("auto_block", policy.AutoBlock),
 			zap.Bool("auto_dispose", policy.AutoDispose),
 		)
 	}

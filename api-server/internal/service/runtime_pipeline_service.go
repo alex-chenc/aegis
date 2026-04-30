@@ -158,6 +158,14 @@ func (s *RuntimePipelineService) onWindowFlush(window *pipeline.HostWindow) {
 			)
 		}
 
+		// Check if auto-dispose is enabled
+		if err := s.alertService.CheckAndAutoDispose(createdAlert); err != nil {
+			s.logger.Error("auto-dispose check failed",
+				zap.String("alert_id", createdAlert.AlertID),
+				zap.Error(err),
+			)
+		}
+
 		// Broadcast alert via WebSocket
 		s.wsService.BroadcastAlert(createdAlert)
 

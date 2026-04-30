@@ -50,7 +50,18 @@ reachability:
    - It must not use `proxy_pass`.
 3. Keep API proxying explicit:
    - Only `/api/*` proxies to `aegis-api-server:8082`.
-4. Update the Docker healthcheck to use the local frontend health endpoint.
+   - Nginx must not require `aegis-api-server` DNS resolution during frontend
+     startup. Docker DNS resolution for the upstream must happen at request time
+     so static SPA routes remain available even when the API container is absent
+     or restarting.
+4. Keep frontend container startup independent from API health:
+   - `aegis-frontend` must be able to start and serve `/login` when
+     `aegis-api-server` is down or unhealthy.
+   - Docker Compose must not gate `frontend` startup on
+     `api-server: service_healthy`.
+   - API outages may affect `/api/*`, but must not prevent static SPA routes from
+     loading.
+5. Update the Docker healthcheck to use the local frontend health endpoint.
 
 ## Verification
 
@@ -61,6 +72,10 @@ Tests first:
 3. Assert that the `/health` location does not proxy to `aegis-api-server`.
 4. Assert that `/api/` still proxies to `aegis-api-server:8082`.
 5. Assert that `/` keeps SPA fallback behavior for `/login`.
+6. Assert that Docker Compose does not make `frontend` depend on
+   `api-server: service_healthy`.
+7. Assert that Nginx uses Docker DNS runtime resolution for the API upstream
+   instead of resolving `aegis-api-server` at frontend startup.
 
 Runtime verification:
 

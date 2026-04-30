@@ -8,7 +8,7 @@ import (
 
 // Alert represents a security alert
 type Alert struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
+	ID              uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	AlertID        string    `gorm:"uniqueIndex;not null" json:"alert_id"`
 	HostID         uuid.UUID `gorm:"index;not null" json:"host_id"`
 	PID            int       `json:"pid"`
@@ -22,7 +22,11 @@ type Alert struct {
 	DedupeKey      string    `gorm:"index" json:"dedupe_key"`
 	HitCount       int       `json:"hit_count"`
 	Status         string    `gorm:"index;default:pending" json:"status"`
+	AutoBlocked    bool      `json:"auto_blocked"`
+	ManualBlocked  bool      `gorm:"not null;default:false" json:"manual_blocked"`
 	AutoDispose    bool      `json:"auto_dispose"`
+	BlockStatus    *string   `json:"block_status,omitempty"`
+	BlockMessage   *string   `json:"block_message,omitempty"`
 	JudgmentSource string    `json:"judgment_source"`
 	RuleID         string    `json:"rule_id"`
 	FirstSeenAt    time.Time `json:"first_seen_at"`

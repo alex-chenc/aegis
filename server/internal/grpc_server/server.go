@@ -644,13 +644,30 @@ func (s *GRPCServer) checkAutoActions(alert *model.Alert) {
 		return
 	}
 
+	if policy.AutoBlock {
+		logger.Info("auto-blocking alert",
+			zap.String("alert_id", alert.AlertID),
+			zap.String("mitre_id", alert.MitreID))
+		alert.AutoBlocked = true
+		blockStatus := "blocking"
+		alert.BlockStatus = &blockStatus
+		if err := s.alertRepo.Update(alert); err != nil {
+			logger.Error("failed to update alert for auto-block",
+				zap.String("alert_id", alert.AlertID), zap.Error(err))
+		}
+		s.broadcastPolicyUpdate(policy)
+	}
+
 	if policy.AutoDispose {
 		logger.Info("auto-disposing alert",
 			zap.String("alert_id", alert.AlertID),
 			zap.String("mitre_id", alert.MitreID))
 		alert.AutoDispose = true
 		alert.Status = "resolved"
-		s.alertRepo.Update(alert)
+		if err := s.alertRepo.Update(alert); err != nil {
+			logger.Error("failed to update alert for auto-dispose",
+				zap.String("alert_id", alert.AlertID), zap.Error(err))
+		}
 		s.broadcastPolicyUpdate(policy)
 	}
 }

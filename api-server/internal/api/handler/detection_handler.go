@@ -1497,6 +1497,10 @@ func (h *DetectionHandler) UpdateAIConfig(c *gin.Context) {
 		return
 	}
 
+	if config.Enabled && h.ruleGenService != nil {
+		go h.ruleGenService.TriggerConfiguredCheck(context.Background())
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": config})
 }
 

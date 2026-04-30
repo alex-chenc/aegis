@@ -61,6 +61,7 @@ func (s *AlertService) UpsertByDedupe(hostID uuid.UUID, pid int, ruleID, ruleTit
 	}
 
 	alert := &model.Alert{
+		ID:             uuid.New(),
 		AlertID:        "ALT-" + uuid.New().String()[:8],
 		HostID:         hostID,
 		PID:            pid,
