@@ -7,6 +7,7 @@ import (
 
 	"server/internal/model"
 	"server/internal/repository"
+	pb "server/pkg/api/v1"
 	"server/pkg/logger"
 
 	"github.com/google/uuid"
@@ -124,6 +125,13 @@ func TestCheckAutoActions_AutoBlockWhenEnabled(t *testing.T) {
 		blockPolicyRepo: repository.NewBlockPolicyRepository(db),
 		alertRepo:       repository.NewAlertRepository(db),
 	}
+	stream := &captureAgentStream{}
+	s.agentConnections.Store(alert.HostID, &AgentConnection{
+		HostID: alert.HostID,
+		Stream: stream,
+		Ctx:    t.Context(),
+		Inbox:  make(chan *pb.CommandExecute, 1),
+	})
 
 	s.checkAutoActions(alert)
 
@@ -132,6 +140,9 @@ func TestCheckAutoActions_AutoBlockWhenEnabled(t *testing.T) {
 	}
 	if alert.BlockStatus == nil || *alert.BlockStatus != "blocking" {
 		t.Fatal("expected BlockStatus=blocking")
+	}
+	if len(stream.sent) != 1 || stream.sent[0].GetBlock() == nil {
+		t.Fatal("expected auto-block command to be sent")
 	}
 }
 

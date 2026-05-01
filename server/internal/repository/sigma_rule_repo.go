@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"strings"
-	"time"
 
 	"server/internal/model"
 
@@ -83,9 +82,9 @@ func (r *SigmaRuleRepository) UpdateStatus(ruleID, status string) error {
 		"status":     status,
 		"updated_at": gorm.Expr("NOW()"),
 	}
-	// Set activated_at for both active and experimental status
-	// This allows tracking when the rule entered experimental status (24h silent period)
-	// and when it was promoted to active
+	// Set activated_at for both active and experimental status.
+	// Experimental rules are dispatched immediately; activated_at is used for
+	// observing how long they have been in trial before promotion to active.
 	if status == "active" || status == "experimental" {
 		updates["activated_at"] = gorm.Expr("NOW()")
 	}
@@ -95,14 +94,7 @@ func (r *SigmaRuleRepository) UpdateStatus(ruleID, status string) error {
 
 func (r *SigmaRuleRepository) GetActiveAndExperimental() ([]model.SigmaRule, error) {
 	var rules []model.SigmaRule
-	// Only return experimental rules that have passed the 24-hour silent period
-	// Experimental rules need to wait 24 hours after being set to experimental before being deployed
-	err := r.db.Where(
-		"status = ? OR (status = ? AND activated_at IS NOT NULL AND activated_at <= ?)",
-		"active",
-		"experimental",
-		time.Now().Add(-24*time.Hour),
-	).Find(&rules).Error
+	err := r.db.Where("status IN ?", []string{"active", "experimental"}).Find(&rules).Error
 	return rules, err
 }
 

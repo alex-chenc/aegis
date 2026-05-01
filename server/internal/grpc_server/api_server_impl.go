@@ -146,8 +146,8 @@ func (s *APIServerToServerImpl) ListConnectedAgents(ctx context.Context, req *pb
 	agents = agents[start:end]
 
 	return &pb.ListConnectedAgentsResponse{
-		Agents:      agents,
-		Total:       total,
+		Agents:       agents,
+		Total:        total,
 		OnlineCount:  int32(onlineCount),
 		OfflineCount: int32(offlineCount),
 	}, nil
@@ -219,9 +219,9 @@ func (s *APIServerToServerImpl) ExecuteTool(ctx context.Context, req *pb.ToolExe
 
 	// Convert ToolExecuteRequest to ToolRequest for the internal call
 	toolReq := &pb.ToolRequest{
-		CallId:    req.CallId,
-		HostId:    req.HostId,
-		Tool:      req.Tool,
+		CallId:     req.CallId,
+		HostId:     req.HostId,
+		Tool:       req.Tool,
 		ParamsJson: req.Arguments,
 	}
 
@@ -242,10 +242,10 @@ func (s *APIServerToServerImpl) ExecuteTool(ctx context.Context, req *pb.ToolExe
 
 	// Convert ToolResponse to ToolExecuteResponse
 	return &pb.ToolExecuteResponse{
-		CallId:         toolResp.CallId,
-		Success:        toolResp.Success,
-		Result:         toolResp.ResultJson,
-		Error:          toolResp.Error,
+		CallId:          toolResp.CallId,
+		Success:         toolResp.Success,
+		Result:          toolResp.ResultJson,
+		Error:           toolResp.Error,
 		ExecutionTimeMs: 0, // Internal tool response doesn't have execution time
 	}, nil
 }
@@ -385,7 +385,7 @@ func (s *APIServerToServerImpl) ExecuteBlockCommand(ctx context.Context, req *pb
 		return &pb.ExecuteBlockCommandResponse{
 			CommandId: req.CommandId,
 			Success:   false,
-			Error:     fmt.Sprintf("failed to send block command: %v", err),
+			Error:     err.Error(),
 		}, nil
 	}
 
@@ -421,7 +421,7 @@ func (s *APIServerToServerImpl) CollectSoftware(ctx context.Context, req *pb.Col
 		return &pb.CollectSoftwareResponse{
 			Success:      false,
 			SoftwareJson: "[]",
-			Error:       err.Error(),
+			Error:        err.Error(),
 		}, nil
 	}
 
@@ -435,7 +435,7 @@ func (s *APIServerToServerImpl) CollectSoftware(ctx context.Context, req *pb.Col
 		return &pb.CollectSoftwareResponse{
 			Success:      false,
 			SoftwareJson: "[]",
-			Error:       "failed to marshal software list",
+			Error:        "failed to marshal software list",
 		}, nil
 	}
 
@@ -447,6 +447,6 @@ func (s *APIServerToServerImpl) CollectSoftware(ctx context.Context, req *pb.Col
 	return &pb.CollectSoftwareResponse{
 		Success:      true,
 		SoftwareJson: string(softwareJSON),
-		Error:       "",
+		Error:        "",
 	}, nil
 }

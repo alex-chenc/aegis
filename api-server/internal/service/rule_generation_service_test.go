@@ -125,15 +125,21 @@ func setupRuleGenerationTestDB(t *testing.T) *gorm.DB {
 func seedAIConfig(t *testing.T, db *gorm.DB, enabled bool, count int, hours int) {
 	t.Helper()
 
+	seedAIConfigWithMode(t, db, enabled, count, hours, "suggest", true)
+}
+
+func seedAIConfigWithMode(t *testing.T, db *gorm.DB, enabled bool, count int, hours int, mode string, requireApproval bool) {
+	t.Helper()
+
 	config := &model.AIConfig{
 		ID:                  uuid.New(),
 		Name:                "default",
 		Description:         "test config",
 		Enabled:             enabled,
-		Mode:                "suggest",
+		Mode:                mode,
 		Thresholds:          `{"high_frequency_count":` + strconv.Itoa(count) + `,"high_frequency_hours":` + strconv.Itoa(hours) + `}`,
 		Conservatism:        0.1,
-		RequireApproval:     true,
+		RequireApproval:     requireApproval,
 		NotificationTargets: `[]`,
 	}
 	if err := db.Create(config).Error; err != nil {
@@ -241,7 +247,7 @@ func TestRuleGenerationCollectConfiguredTriggerStatsSkipsDisabledConfig(t *testi
 func TestRuleGenerationApplyRuleAdjustmentPersistsTightenedExperimentalRule(t *testing.T) {
 	db := setupRuleGenerationTestDB(t)
 	now := time.Now()
-	seedAIConfig(t, db, true, 1, 1)
+	seedAIConfigWithMode(t, db, true, 1, 1, "auto", false)
 	seedRuleAndAlerts(t, db, "rule-tighten", "T1059.004", now, 1)
 
 	service := newRuleGenerationTestService(db)
@@ -279,10 +285,131 @@ func TestRuleGenerationApplyRuleAdjustmentPersistsTightenedExperimentalRule(t *t
 	}
 }
 
+func TestRuleGenerationApplyRuleAdjustmentSuggestCreatesPendingProposalWithoutMutatingLiveRule(t *testing.T) {
+	db := setupRuleGenerationTestDB(t)
+	now := time.Now()
+	seedAIConfigWithMode(t, db, true, 1, 1, "suggest", true)
+	seedRuleAndAlerts(t, db, "rule-tighten-suggest", "T1059.004", now, 1)
+
+	service := newRuleGenerationTestService(db)
+	rule, err := service.sigmaRuleRepo.FindByRuleID("rule-tighten-suggest")
+	if err != nil {
+		t.Fatalf("failed to find seeded rule: %v", err)
+	}
+	originalContent := "title: Broad shell rule\ndetection:\n  selection:\n    CommandLine|contains: bash\n  selection_process:\n    Image|endswith: /bash\n  filter_known_admin:\n    CommandLine|contains: uptime\n  condition: selection\n"
+	rule.Content = originalContent
+	rule.Version = "1.0"
+	if err := service.sigmaRuleRepo.Update(rule); err != nil {
+		t.Fatalf("failed to update seeded rule content: %v", err)
+	}
+
+	err = service.applyRuleAdjustment(rule, RuleAdjustment{
+		RuleID:          "rule-tighten-suggest",
+		Action:          "tighten",
+		AddConditions:   []string{"selection_process"},
+		ExcludePatterns: []string{"filter_known_admin"},
+	}, repository.RuleTriggerStats{RuleID: "rule-tighten-suggest", MitreID: "T1059.004", AlertCount: 1, TimeWindow: "1h"})
+	if err != nil {
+		t.Fatalf("expected rule adjustment proposal to persist, got error: %v", err)
+	}
+
+	updatedOriginal, err := service.sigmaRuleRepo.FindByRuleID("rule-tighten-suggest")
+	if err != nil {
+		t.Fatalf("failed to reload original rule: %v", err)
+	}
+	if updatedOriginal.Status != "active" {
+		t.Fatalf("expected original status to remain active, got %s", updatedOriginal.Status)
+	}
+	if updatedOriginal.Version != "1.0" {
+		t.Fatalf("expected original version to remain 1.0, got %s", updatedOriginal.Version)
+	}
+	if strings.TrimSpace(updatedOriginal.Content) != strings.TrimSpace(originalContent) {
+		t.Fatalf("expected original content to remain unchanged, got:\n%s", updatedOriginal.Content)
+	}
+
+	var proposals []model.SigmaRule
+	if err := db.Where("parent_rule_id = ?", "rule-tighten-suggest").Find(&proposals).Error; err != nil {
+		t.Fatalf("failed to query rule proposals: %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected one pending proposal, got %d", len(proposals))
+	}
+	proposal := proposals[0]
+	if proposal.RuleID == "rule-tighten-suggest" {
+		t.Fatalf("expected proposal to use a new rule id")
+	}
+	if proposal.Status != "pending" {
+		t.Fatalf("expected proposal status pending, got %s", proposal.Status)
+	}
+	if proposal.Version != "1.1" {
+		t.Fatalf("expected proposal version 1.1, got %s", proposal.Version)
+	}
+	if !strings.Contains(proposal.Content, "selection and selection_process and not filter_known_admin") {
+		t.Fatalf("expected tightened condition in proposal content, got:\n%s", proposal.Content)
+	}
+}
+
+func TestRuleGenerationSubmitForApprovalSuggestModeKeepsPendingEvenWithoutApprovalRequirement(t *testing.T) {
+	db := setupRuleGenerationTestDB(t)
+	now := time.Now()
+	seedAIConfigWithMode(t, db, true, 1, 1, "suggest", false)
+	seedRuleAndAlerts(t, db, "rule-submit-suggest", "T1059.004", now, 1)
+
+	service := newRuleGenerationTestService(db)
+	rule, err := service.sigmaRuleRepo.FindByRuleID("rule-submit-suggest")
+	if err != nil {
+		t.Fatalf("failed to find seeded rule: %v", err)
+	}
+	rule.Status = "pending"
+	if err := service.sigmaRuleRepo.Update(rule); err != nil {
+		t.Fatalf("failed to set pending rule: %v", err)
+	}
+
+	if err := service.SubmitForApproval("rule-submit-suggest"); err != nil {
+		t.Fatalf("expected submit for approval to keep pending, got error: %v", err)
+	}
+
+	updated, err := service.sigmaRuleRepo.FindByRuleID("rule-submit-suggest")
+	if err != nil {
+		t.Fatalf("failed to reload submitted rule: %v", err)
+	}
+	if updated.Status != "pending" {
+		t.Fatalf("expected suggest mode to keep rule pending, got %s", updated.Status)
+	}
+}
+
+func TestRuleGenerationGeneratedRuleModeMapsSuggestToPendingAndAutoToExperimental(t *testing.T) {
+	suggestDB := setupRuleGenerationTestDB(t)
+	seedAIConfigWithMode(t, suggestDB, true, 1, 1, "suggest", true)
+	suggestService := newRuleGenerationTestService(suggestDB)
+	suggestRule := &model.SigmaRule{RuleID: "generated-suggest", Status: "pending"}
+
+	suggestService.applyGeneratedRuleMode(suggestRule)
+	if suggestRule.Status != "pending" {
+		t.Fatalf("expected suggest generated rule to stay pending, got %s", suggestRule.Status)
+	}
+	if suggestRule.ActivatedAt != nil {
+		t.Fatalf("expected suggest generated rule to have no activation timestamp")
+	}
+
+	autoDB := setupRuleGenerationTestDB(t)
+	seedAIConfigWithMode(t, autoDB, true, 1, 1, "auto", false)
+	autoService := newRuleGenerationTestService(autoDB)
+	autoRule := &model.SigmaRule{RuleID: "generated-auto", Status: "pending"}
+
+	autoService.applyGeneratedRuleMode(autoRule)
+	if autoRule.Status != "experimental" {
+		t.Fatalf("expected auto generated rule to become experimental, got %s", autoRule.Status)
+	}
+	if autoRule.ActivatedAt == nil {
+		t.Fatalf("expected auto generated rule to have activation timestamp")
+	}
+}
+
 func TestRuleGenerationApplyRuleAdjustmentIgnoresInvalidSeverityChange(t *testing.T) {
 	db := setupRuleGenerationTestDB(t)
 	now := time.Now()
-	seedAIConfig(t, db, true, 1, 1)
+	seedAIConfigWithMode(t, db, true, 1, 1, "auto", false)
 	seedRuleAndAlerts(t, db, "rule-invalid-severity", "T1059.004", now, 1)
 
 	service := newRuleGenerationTestService(db)

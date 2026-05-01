@@ -2,9 +2,12 @@ package blocker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"aegis-agent/internal/logger"
@@ -26,7 +29,7 @@ func (b *Blocker) QuarantineFile(filePath string) error {
 	quarantinePath := filepath.Join(b.quarantineDir,
 		fmt.Sprintf("%s.%d", filepath.Base(filePath), time.Now().Unix()))
 
-	if err := os.Rename(filePath, quarantinePath); err != nil {
+	if err := moveFile(filePath, quarantinePath); err != nil {
 		return fmt.Errorf("failed to quarantine %s: %w", filePath, err)
 	}
 
@@ -40,6 +43,38 @@ func (b *Blocker) QuarantineFile(filePath string) error {
 	b.recordAudit("quarantine_file", filePath, quarantinePath, "success")
 	logger.Info("File quarantined", zap.String("original", filePath), zap.String("quarantined", quarantinePath))
 	return nil
+}
+
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 func (b *Blocker) RollbackQuarantine(quarantinePath string) error {

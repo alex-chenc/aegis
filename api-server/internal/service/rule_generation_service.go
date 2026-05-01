@@ -209,9 +209,9 @@ func (s *RuleGenerationService) analyzeRule(ctx context.Context, stats repositor
 			logger.Error("failed to apply rule adjustment", zap.Error(err), zap.String("rule_id", stats.RuleID))
 			return
 		}
-		logger.Info("rule adjusted successfully",
+		logger.Info("rule adjustment completed",
 			zap.String("rule_id", stats.RuleID),
-			zap.String("status", "experimental"))
+			zap.String("mode", s.configService.GetMode()))
 	}
 }
 
@@ -331,6 +331,14 @@ func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjus
 		return fmt.Errorf("invalid tightened rule: %w", err)
 	}
 
+	if s.configService != nil && s.configService.GetMode() == "suggest" {
+		return s.createRuleAdjustmentProposal(rule, newContent, adjustment, stats)
+	}
+
+	return s.applyRuleAdjustmentDirectly(rule, newContent, adjustment, stats)
+}
+
+func (s *RuleGenerationService) applyRuleAdjustmentDirectly(rule *model.SigmaRule, newContent string, adjustment RuleAdjustment, stats repository.RuleTriggerStats) error {
 	rule.Content = newContent
 	rule.Version = incrementVersion(rule.Version)
 	rule.Status = "experimental"
@@ -370,6 +378,75 @@ func (s *RuleGenerationService) applyRuleAdjustment(rule *model.SigmaRule, adjus
 			Severity: "info",
 			Type:     "rule_generated",
 			Link:     "/detection/rules?status=experimental",
+			Metadata: datatypes.JSON(metadataBytes),
+		}
+		s.notificationRepo.Create(notification)
+	}
+
+	return nil
+}
+
+func (s *RuleGenerationService) createRuleAdjustmentProposal(rule *model.SigmaRule, newContent string, adjustment RuleAdjustment, stats repository.RuleTriggerStats) error {
+	now := time.Now()
+	proposalID := fmt.Sprintf("%s-ai-%s", rule.RuleID, uuid.NewString()[:8])
+	severity := rule.Severity
+	if normalized := normalizeSeverityChange(adjustment.SeverityChange); normalized != "" {
+		severity = normalized
+	}
+
+	contextBytes, _ := json.Marshal(map[string]interface{}{
+		"source_rule_id": rule.RuleID,
+		"action":         adjustment.Action,
+		"reason":         adjustment.Reason,
+		"alert_count":    stats.AlertCount,
+		"time_window":    stats.TimeWindow,
+	})
+
+	proposal := &model.SigmaRule{
+		ID:                uuid.New(),
+		RuleID:            proposalID,
+		Title:             rule.Title,
+		Description:       rule.Description,
+		Content:           newContent,
+		Status:            "pending",
+		MitreID:           rule.MitreID,
+		Severity:          severity,
+		GeneratedBy:       "ai_generated",
+		Version:           incrementVersion(rule.Version),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		Source:            "ai_suggestion",
+		AIGenerated:       true,
+		ParentRuleID:      rule.RuleID,
+		GenerationContext: string(contextBytes),
+	}
+
+	if err := s.sigmaRuleRepo.Create(proposal); err != nil {
+		return fmt.Errorf("failed to create rule adjustment proposal: %w", err)
+	}
+
+	logger.Info("rule tightening proposal created",
+		zap.String("rule_id", rule.RuleID),
+		zap.String("proposal_rule_id", proposal.RuleID),
+		zap.String("status", proposal.Status))
+
+	if config, err := s.configService.GetConfig(); err == nil && config.NotifyOnGeneration && s.notificationRepo != nil {
+		metadataBytes, _ := json.Marshal(map[string]interface{}{
+			"rule_id":         proposal.RuleID,
+			"parent_rule_id":  rule.RuleID,
+			"mitre_id":        rule.MitreID,
+			"action":          "tighten",
+			"alert_count":     stats.AlertCount,
+			"time_window":     stats.TimeWindow,
+			"dispatch_status": "not_dispatched",
+			"generation_mode": "suggest",
+		})
+		notification := &model.Notification{
+			Title:    "AI规则更新建议",
+			Content:  fmt.Sprintf("AI已生成规则调整建议: %s (MITRE: %s)，请审核后下发", rule.Title, rule.MitreID),
+			Severity: "info",
+			Type:     "rule_generated",
+			Link:     "/detection/rules?status=pending",
 			Metadata: datatypes.JSON(metadataBytes),
 		}
 		s.notificationRepo.Create(notification)
@@ -709,10 +786,14 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse generated rule: %w", err)
 	}
+	s.applyGeneratedRuleMode(rule)
 
 	// 保存规则
 	if err := s.sigmaRuleRepo.Create(rule); err != nil {
 		return nil, fmt.Errorf("failed to save rule: %w", err)
+	}
+	if rule.Status == "experimental" && s.sigmaRuleSvc != nil {
+		s.sigmaRuleSvc.broadcastRuleUpdate(rule.RuleID, rule.Status)
 	}
 
 	// 更新统计
@@ -726,10 +807,10 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 		})
 		notification := &model.Notification{
 			Title:    "AI规则生成通知",
-			Content:  fmt.Sprintf("AI已自动生成新规则: %s (MITRE: %s)，请前往审核", rule.Title, rule.MitreID),
+			Content:  fmt.Sprintf("AI已自动生成新规则: %s (MITRE: %s)，当前状态为%s", rule.Title, rule.MitreID, rule.Status),
 			Severity: "info",
 			Type:     "rule_generated",
-			Link:     "/detection/rules?status=pending",
+			Link:     fmt.Sprintf("/detection/rules?status=%s", rule.Status),
 			Metadata: datatypes.JSON(metadataBytes),
 		}
 		s.notificationRepo.Create(notification)
@@ -744,6 +825,19 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 		Content:     rule.Content,
 		Status:      rule.Status,
 	}, nil
+}
+
+func (s *RuleGenerationService) applyGeneratedRuleMode(rule *model.SigmaRule) {
+	if s.configService == nil || s.configService.GetMode() != "auto" {
+		rule.Status = "pending"
+		rule.ActivatedAt = nil
+		return
+	}
+
+	now := time.Now()
+	rule.Status = "experimental"
+	rule.ActivatedAt = &now
+	rule.UpdatedAt = now
 }
 
 // buildRuleGenerationPrompt 构建规则生成提示词
@@ -906,12 +1000,12 @@ func (s *RuleGenerationService) SubmitForApproval(ruleID string) error {
 		return err
 	}
 
-	if s.configService.RequireApproval() {
-		// 需要审核，状态保持pending，24小时后自动变为experimental
+	if s.configService.GetMode() != "auto" || s.configService.RequireApproval() {
+		// suggest 模式始终保持 pending，不自动下发到 agent。
 		return nil
 	}
 
-	// 不需要审核，状态变为experimental
+	// auto 模式且不要求审核时，规则进入实验性并下发。
 	return s.sigmaRuleRepo.UpdateStatus(ruleID, "experimental")
 }
 

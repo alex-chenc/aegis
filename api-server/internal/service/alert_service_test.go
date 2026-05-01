@@ -85,6 +85,23 @@ func setupAlertServiceTestDB(t *testing.T) *gorm.DB {
 			created_at DATETIME,
 			updated_at DATETIME
 		)`,
+		`CREATE TABLE hosts (
+			id TEXT PRIMARY KEY,
+			hostname TEXT,
+			ip_address TEXT,
+			os_type TEXT,
+			agent_version TEXT,
+			status TEXT,
+			last_heartbeat DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE sigma_rules (
+			id TEXT PRIMARY KEY,
+			rule_id TEXT,
+			title TEXT,
+			mitre_id TEXT
+		)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -211,8 +228,12 @@ func TestCheckAndAutoBlock_BlocksWhenEnabled(t *testing.T) {
 	if !alert.AutoBlocked {
 		t.Fatal("expected AutoBlocked=true")
 	}
-	if alert.BlockStatus == nil || *alert.BlockStatus != BlockBlocking {
-		t.Fatal("expected BlockStatus=blocking")
+	var updated model.Alert
+	if err := db.Where("alert_id = ?", alert.AlertID).First(&updated).Error; err != nil {
+		t.Fatalf("failed to reload alert: %v", err)
+	}
+	if updated.BlockStatus == nil || *updated.BlockStatus != BlockFailed {
+		t.Fatal("expected persisted BlockStatus=failed when server client is unavailable")
 	}
 }
 
@@ -228,6 +249,77 @@ func TestCheckAndAutoBlock_NoOpWhenAutoBlockDisabled(t *testing.T) {
 
 	if alert.AutoBlocked {
 		t.Fatal("expected AutoBlocked=false when AutoBlock policy is disabled")
+	}
+}
+
+func TestBlockTargetForAlertCoversThreeBlockingActions(t *testing.T) {
+	alert := &model.Alert{
+		PID:         4242,
+		CommandLine: "/tmp/aegis-block-test-file",
+	}
+
+	target, err := blockTargetForAlert(alert, "kill_process")
+	if err != nil {
+		t.Fatalf("kill_process target failed: %v", err)
+	}
+	if target != "4242" {
+		t.Fatalf("expected kill_process target 4242, got %s", target)
+	}
+
+	target, err = blockTargetForAlert(alert, "quarantine_file")
+	if err != nil {
+		t.Fatalf("quarantine_file target failed: %v", err)
+	}
+	if target != "/tmp/aegis-block-test-file" {
+		t.Fatalf("expected quarantine_file target path, got %s", target)
+	}
+
+	alert.CommandLine = "203.0.113.25"
+	target, err = blockTargetForAlert(alert, "block_connection")
+	if err != nil {
+		t.Fatalf("block_connection target failed: %v", err)
+	}
+	if target != "203.0.113.25" {
+		t.Fatalf("expected block_connection target IP, got %s", target)
+	}
+}
+
+func TestBlockTargetForAlertRejectsMissingFileAndNetworkTargets(t *testing.T) {
+	alert := &model.Alert{PID: 4242}
+
+	if _, err := blockTargetForAlert(alert, "quarantine_file"); err == nil {
+		t.Fatal("expected missing quarantine_file target to fail")
+	}
+	if _, err := blockTargetForAlert(alert, "block_connection"); err == nil {
+		t.Fatal("expected missing block_connection target to fail")
+	}
+}
+
+func TestManualBlockPersistsFailureReasonWhenTargetMissing(t *testing.T) {
+	db := setupAlertServiceTestDB(t)
+	alert := seedAlertForTest(t, db, "ALT-MISSING-TARGET", "T1059.004", "pending")
+
+	svc := newAlertTestService(db)
+	record, err := svc.ManualBlock(alert.AlertID, "quarantine_file")
+	if err != nil {
+		t.Fatalf("expected missing target to be returned as block result, got error: %v", err)
+	}
+	if record.Success {
+		t.Fatal("expected failed block record")
+	}
+	if record.Message != "missing file path for quarantine_file" {
+		t.Fatalf("expected readable missing target reason, got %q", record.Message)
+	}
+
+	var updated model.Alert
+	if err := db.Where("alert_id = ?", alert.AlertID).First(&updated).Error; err != nil {
+		t.Fatalf("failed to reload alert: %v", err)
+	}
+	if updated.BlockStatus == nil || *updated.BlockStatus != BlockFailed {
+		t.Fatalf("expected alert block status failed, got %v", updated.BlockStatus)
+	}
+	if updated.BlockMessage != record.Message {
+		t.Fatalf("expected alert block message %q, got %q", record.Message, updated.BlockMessage)
 	}
 }
 

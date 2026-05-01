@@ -648,12 +648,38 @@ func (s *GRPCServer) checkAutoActions(alert *model.Alert) {
 		logger.Info("auto-blocking alert",
 			zap.String("alert_id", alert.AlertID),
 			zap.String("mitre_id", alert.MitreID))
+		target, targetErr := blockTargetForAlert(alert, policy.Action)
 		alert.AutoBlocked = true
 		blockStatus := "blocking"
 		alert.BlockStatus = &blockStatus
 		if err := s.alertRepo.Update(alert); err != nil {
 			logger.Error("failed to update alert for auto-block",
 				zap.String("alert_id", alert.AlertID), zap.Error(err))
+		}
+		if targetErr != nil {
+			if err := s.alertRepo.UpdateBlockStatus(alert.AlertID, "failed", targetErr.Error()); err != nil {
+				logger.Error("failed to update alert block target error",
+					zap.String("alert_id", alert.AlertID), zap.Error(err))
+			}
+		} else {
+			cmd := &pb.BlockCommand{
+				CommandId: "BLK-" + uuid.New().String()[:8],
+				HostId:    alert.HostID.String(),
+				Action:    policy.Action,
+				Target:    target,
+				Reason:    "auto block",
+			}
+			if err := s.SendBlockCommand(alert.HostID, cmd); err != nil {
+				logger.Error("failed to send auto-block command",
+					zap.String("alert_id", alert.AlertID),
+					zap.String("host_id", alert.HostID.String()),
+					zap.String("action", policy.Action),
+					zap.Error(err))
+				if updateErr := s.alertRepo.UpdateBlockStatus(alert.AlertID, "failed", err.Error()); updateErr != nil {
+					logger.Error("failed to update alert block send error",
+						zap.String("alert_id", alert.AlertID), zap.Error(updateErr))
+				}
+			}
 		}
 		s.broadcastPolicyUpdate(policy)
 	}
@@ -1264,16 +1290,72 @@ func (s *GRPCServer) GetPort() int {
 
 // SendBlockCommand sends a block command to an agent
 func (s *GRPCServer) SendBlockCommand(hostID uuid.UUID, cmd *pb.BlockCommand) error {
+	if cmd == nil {
+		return fmt.Errorf("block command is nil")
+	}
 	conn, ok := s.agentConnections.Load(hostID)
 	if !ok {
 		return fmt.Errorf("agent not connected: %s", hostID)
 	}
 
 	agentConn := conn.(*AgentConnection)
-	select {
-	case agentConn.Inbox <- nil: // nil indicates block command
+	client := agentConn.CallbackClient
+	if client == nil {
+		client = agentConn.Client
+	}
+	if client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := client.ExecuteBlockCommand(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if !resp.Success {
+			if resp.Error != "" {
+				return fmt.Errorf("%s", resp.Error)
+			}
+			return fmt.Errorf("agent block command failed")
+		}
 		return nil
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout sending block command to agent: %s", hostID)
+	}
+
+	if agentConn.Stream != nil {
+		return agentConn.Stream.Send(&pb.CommandRequest{
+			Request: &pb.CommandRequest_Block{
+				Block: cmd,
+			},
+		})
+	}
+
+	return fmt.Errorf("agent block command channel not available: %s", hostID)
+}
+
+func blockTargetForAlert(alert *model.Alert, action string) (string, error) {
+	switch action {
+	case "kill_process":
+		if alert.PID <= 0 {
+			return "", fmt.Errorf("missing process pid for kill_process")
+		}
+		return fmt.Sprintf("%d", alert.PID), nil
+	case "quarantine_file":
+		target := strings.TrimSpace(alert.CommandLine)
+		if target == "" {
+			return "", fmt.Errorf("missing file path for quarantine_file")
+		}
+		return target, nil
+	case "block_connection":
+		target := strings.TrimSpace(alert.CommandLine)
+		if target == "" {
+			return "", fmt.Errorf("missing remote address for block_connection")
+		}
+		if net.ParseIP(target) == nil {
+			return "", fmt.Errorf("invalid remote address for block_connection: %s", target)
+		}
+		return target, nil
+	default:
+		if alert.PID <= 0 {
+			return "", fmt.Errorf("missing process pid for %s", action)
+		}
+		return fmt.Sprintf("%d", alert.PID), nil
 	}
 }

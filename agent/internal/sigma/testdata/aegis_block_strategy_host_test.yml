@@ -1,0 +1,14 @@
+title: Aegis Block Strategy Host Test
+id: aegis-block-strategy-host-test
+status: test
+description: Dedicated host validation rule for alert-to-blocking strategy tests.
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    commandline|contains: aegis-block-strategy-test
+  condition: selection
+level: high
+tags:
+  - attack.T1059.004

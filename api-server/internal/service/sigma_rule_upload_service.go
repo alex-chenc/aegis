@@ -39,12 +39,12 @@ type SigmaRuleUploadParser struct{}
 
 // ParsedRule 解析后的规则信息
 type ParsedRule struct {
-	RuleID    string   `json:"rule_id"`
-	Title     string   `json:"title"`
-	Status    string   `json:"status"`
-	MitreID   string   `json:"mitre_id,omitempty"`
-	Severity  string   `json:"severity,omitempty"`
-	ParseError string  `json:"parse_error,omitempty"`
+	RuleID     string `json:"rule_id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	MitreID    string `json:"mitre_id,omitempty"`
+	Severity   string `json:"severity,omitempty"`
+	ParseError string `json:"parse_error,omitempty"`
 }
 
 // UploadResult 上传结果
@@ -86,8 +86,8 @@ func (s *SigmaRuleUploadService) UploadRules(file io.Reader, fileName string, fi
 		return s.parseZipFile(file)
 	default:
 		return &UploadResult{
-			Success:    false,
-			Error:      fmt.Sprintf("unsupported file format: %s", ext),
+			Success:     false,
+			Error:       fmt.Sprintf("unsupported file format: %s", ext),
 			ParsedCount: 0,
 		}, nil
 	}
@@ -320,8 +320,14 @@ func (s *SigmaRuleUploadService) ApproveRule(ruleID string, targetHostIDs []stri
 		return fmt.Errorf("rule not found: %w", err)
 	}
 
-	// 更新状态为active
-	if err := s.ruleRepo.UpdateStatusWithApproval(ruleID, "active", ""); err != nil {
+	nextStatus := "experimental"
+	if rule.Status == "experimental" {
+		nextStatus = "active"
+	} else if rule.Status == "active" {
+		nextStatus = "active"
+	}
+
+	if err := s.ruleRepo.UpdateStatusWithApproval(ruleID, nextStatus, ""); err != nil {
 		return fmt.Errorf("failed to update rule status: %w", err)
 	}
 
@@ -434,23 +440,23 @@ func (s *SigmaRuleUploadService) createSigmaRuleModel(
 
 	now := time.Now()
 	return &model.SigmaRule{
-		RuleID:       parsed.ID,
-		Title:        parsed.Title,
-		Description:  parsed.Description,
-		Content:      string(content),
-		Status:       "pending", // 初始状态为pending
-		MitreID:      mitreID,
-		Severity:     severity,
-		GeneratedBy: "upload",
-		Version:      "1.0",
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		Source:      "upload",
-		FileName:    fileName,
-		FileHash:    fileHash,
-		FileSize:    fileSize,
-		ParsedAt:    &now,
-		DispatchHosts: "[]",
+		RuleID:         parsed.ID,
+		Title:          parsed.Title,
+		Description:    parsed.Description,
+		Content:        string(content),
+		Status:         "pending", // 初始状态为pending
+		MitreID:        mitreID,
+		Severity:       severity,
+		GeneratedBy:    "upload",
+		Version:        "1.0",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Source:         "upload",
+		FileName:       fileName,
+		FileHash:       fileHash,
+		FileSize:       fileSize,
+		ParsedAt:       &now,
+		DispatchHosts:  "[]",
 		DispatchStatus: "pending",
 	}
 }

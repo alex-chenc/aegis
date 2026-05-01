@@ -17,8 +17,8 @@
         <!-- 模式选择 -->
         <el-form-item label="自动规则更新">
           <el-radio-group v-model="localConfig.mode" :disabled="!localConfig.enabled" @change="handleConfigChange">
-            <el-radio value="suggest">仅建议（生成规则后需人工审核）</el-radio>
-            <el-radio value="auto">自动（满足条件自动生成并激活）</el-radio>
+            <el-radio value="suggest">仅建议（生成待审核规则，不下发）</el-radio>
+            <el-radio value="auto">自动（设为实验性并下发）</el-radio>
           </el-radio-group>
         </el-form-item>
 
@@ -79,14 +79,6 @@
             @change="handleConfigChange"
           >
             规则生成后发送审核通知
-          </el-checkbox>
-          <el-checkbox
-            v-if="localConfig.mode === 'suggest'"
-            v-model="localConfig.auto_activate_after_approval"
-            :disabled="!localConfig.enabled || !localConfig.require_approval"
-            @change="handleConfigChange"
-          >
-            无人审核后24小时自动从待审核调整为实验性
           </el-checkbox>
         </el-form-item>
 
@@ -239,7 +231,7 @@ async function saveConfig() {
       thresholds: localConfig.thresholds,
       conservatism: localConfig.conservatism,
       require_approval: localConfig.require_approval,
-      auto_activate_after_approval: localConfig.auto_activate_after_approval,
+      auto_activate_after_approval: false,
       notify_on_generation: localConfig.notify_on_generation,
       notify_on_approval: localConfig.notify_on_approval
     }

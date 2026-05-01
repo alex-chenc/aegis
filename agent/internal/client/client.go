@@ -27,23 +27,23 @@ const CallbackPort = 19095 // Port for Server to call back to Agent
 
 type Client struct {
 	pb.UnimplementedAgentServiceServer // Must embed for forward compatibility
-	serverAddr     string
-	authToken      string
-	hostID         string
-	executor       *executor.Executor
-	toolManager    *tools.ToolManager
-	ruleLoader     *sigma.Loader
-	blocker        *blocker.Blocker
-	conn           *grpc.ClientConn
-	client         pb.AgentServiceClient
-	stream         pb.AgentService_ExecuteCommandClient
-	ctx            context.Context
-	cancel         context.CancelFunc
-	heartbeatDone  chan struct{}
-	callbackServer *grpc.Server
-	callbackLis    net.Listener
-	callbackPort   int32
-	mu             sync.RWMutex
+	serverAddr                         string
+	authToken                          string
+	hostID                             string
+	executor                           *executor.Executor
+	toolManager                        *tools.ToolManager
+	ruleLoader                         *sigma.Loader
+	blocker                            *blocker.Blocker
+	conn                               *grpc.ClientConn
+	client                             pb.AgentServiceClient
+	stream                             pb.AgentService_ExecuteCommandClient
+	ctx                                context.Context
+	cancel                             context.CancelFunc
+	heartbeatDone                      chan struct{}
+	callbackServer                     *grpc.Server
+	callbackLis                        net.Listener
+	callbackPort                       int32
+	mu                                 sync.RWMutex
 }
 
 func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.ToolManager, ruleLoader *sigma.Loader, blockerInst *blocker.Blocker) *Client {
@@ -580,6 +580,12 @@ func (c *Client) HandleRuleUpdate(ctx context.Context, req *pb.RuleUpdateRequest
 
 func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (*pb.BlockResponse, error) {
 	_ = ctx
+	if cmd == nil {
+		return &pb.BlockResponse{
+			Success: false,
+			Error:   "block command is nil",
+		}, nil
+	}
 	logger.Info("Block command received", zap.String("command_id", cmd.CommandId), zap.String("action", cmd.Action), zap.String("target", cmd.Target))
 
 	err := c.blocker.Execute(cmd.Action, cmd.Target)
@@ -587,7 +593,7 @@ func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (
 		return &pb.BlockResponse{
 			CommandId: cmd.CommandId,
 			Success:   false,
-			Error:     err.Error(),
+			Error:     fmt.Sprintf("%s failed for target %q: %v", cmd.Action, cmd.Target, err),
 		}, nil
 	}
 
@@ -652,8 +658,8 @@ func (c *Client) ReportEvent(ctx context.Context, req *pb.ReportEventRequest) (*
 	_ = ctx
 	if err := c.ReportEvents(req.Events); err != nil {
 		return &pb.ReportEventResponse{
-			Success:        false,
-			ReceivedCount:  0,
+			Success:       false,
+			ReceivedCount: 0,
 		}, err
 	}
 	return &pb.ReportEventResponse{

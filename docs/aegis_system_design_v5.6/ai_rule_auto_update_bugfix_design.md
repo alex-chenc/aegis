@@ -51,7 +51,7 @@ if err := s.alertService.CheckAndAutoBlock(createdAlert); err != nil {
 
 即使配置了 `AutoDispose=true` 的策略，告警也永远不会被自动解决。
 
-### Root Cause 4: 实验性规则24小时静默期导致更新延迟
+### Root Cause 4: 实验性规则24小时静默期导致更新延迟（已调整）
 
 `api-server/internal/repository/sigma_rule_repo.go:97-108`:
 
@@ -67,7 +67,9 @@ func (r *SigmaRuleRepository) GetActiveAndExperimental() ([]model.SigmaRule, err
 }
 ```
 
-AI收紧的规则被设置为 `experimental`，但Agent不会使用它直到24小时后。在这24小时内，Agent仍然使用旧的宽泛规则，告警持续产生。
+原设计中，AI收紧的规则被设置为 `experimental` 后，全量同步需等待24小时才会包含它。这会导致在线广播和重连全量同步行为不一致。
+
+新设计要求：`experimental` 也要下发。全量同步直接包含 `active` 和全部 `experimental` 规则，不再按24小时静默期过滤。
 
 ### Root Cause 5: promoteRuleToActive 广播内容正确性
 
@@ -102,9 +104,9 @@ func (m *BlockManager) ShouldAutoBlock(mitreID string) bool {
 2. 广播失败时记录更详细的错误日志
 3. 使用 `full` 模式而非 `incremental` 确保Agent收到完整规则
 
-### Fix 4: AI收紧的规则跳过24小时静默期
+### Fix 4: 实验性规则参与全量下发
 
-修改 `api-server/internal/service/rule_generation_service.go` 中 `applyRuleAdjustment`，在广播时直接使用 `full` action 推送完整规则内容到Agent，不依赖 `GetActiveAndExperimental` 的24小时过滤。
+修改 `GetActiveAndExperimental`，使其返回所有 `active` 和 `experimental` 规则。AI收紧后的即时广播继续保留，Agent 重连后的全量同步也能拿到刚进入实验性的规则。
 
 ## Files to Modify
 

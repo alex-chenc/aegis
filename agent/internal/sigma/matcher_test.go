@@ -59,3 +59,28 @@ func TestCompiledRuleMatchSupportsFilterExclusion(t *testing.T) {
 		t.Fatalf("expected event matching selection without filter to be accepted")
 	}
 }
+
+func TestBlockStrategyHostTestRuleMatchesOnlyDedicatedCommand(t *testing.T) {
+	loader := NewLoader("testdata")
+	if err := loader.LoadFromDisk(); err != nil {
+		t.Fatalf("failed to load test rules: %v", err)
+	}
+
+	matches := loader.MatchAll(map[string]interface{}{
+		"category":    "process_creation",
+		"commandline": "/bin/sh -c 'echo aegis-block-strategy-test'",
+	})
+	if len(matches) != 1 {
+		t.Fatalf("expected one dedicated block strategy rule match, got %d", len(matches))
+	}
+	if matches[0].ID != "aegis-block-strategy-host-test" {
+		t.Fatalf("expected dedicated rule id, got %s", matches[0].ID)
+	}
+
+	if matches := loader.MatchAll(map[string]interface{}{
+		"category":    "process_creation",
+		"commandline": "/bin/sh -c 'echo normal-command'",
+	}); len(matches) != 0 {
+		t.Fatalf("expected normal command not to match, got %d matches", len(matches))
+	}
+}

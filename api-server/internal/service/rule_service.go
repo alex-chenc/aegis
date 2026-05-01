@@ -74,29 +74,9 @@ func (s *RuleService) publishRuleUpdate(ctx context.Context, action string, rule
 	return s.producer.SendMessage(ctx, "rule-updates", rule.RuleID, update)
 }
 
-// CheckAndActivatePending activates pending rules after 24 hours
+// CheckAndActivatePending keeps pending rules in review.
 func (s *RuleService) CheckAndActivatePending() error {
-	rules, _, err := s.ruleRepo.List(1, 10000, map[string]interface{}{"status": "pending"})
-	if err != nil {
-		return err
-	}
-
-	for _, rule := range rules {
-		if time.Since(rule.CreatedAt) >= 24*time.Hour {
-			if err := s.ruleRepo.UpdateStatus(rule.RuleID, "experimental"); err != nil {
-				s.logger.Error("failed to activate pending rule",
-					zap.String("rule_id", rule.RuleID),
-					zap.Error(err),
-				)
-			} else {
-				s.logger.Info("pending rule activated as experimental",
-					zap.String("rule_id", rule.RuleID),
-				)
-				s.DistributeRuleChange(context.Background(), "update", &rule)
-			}
-		}
-	}
-
+	s.logger.Debug("pending rules are not auto-activated; approve them or use AI auto mode")
 	return nil
 }
 

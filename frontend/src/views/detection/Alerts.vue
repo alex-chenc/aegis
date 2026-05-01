@@ -57,7 +57,16 @@
         </el-table-column>
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status, row.block_status)">
+            <el-tooltip
+              v-if="row.block_status === 'failed' && row.block_message"
+              :content="row.block_message"
+              placement="top"
+            >
+              <el-tag :type="statusTagType(row.status, row.block_status)">
+                {{ statusLabel(row.status, row.block_status) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="statusTagType(row.status, row.block_status)">
               {{ statusLabel(row.status, row.block_status) }}
             </el-tag>
           </template>
@@ -250,8 +259,12 @@ function showBlockDialog(row: Alert) {
 
 async function confirmBlock() {
   if (!blockTargetAlert.value) return
-  await api.blockAlert(blockTargetAlert.value.alert_id, blockAction.value)
-  ElMessage.success('阻断指令已下发')
+  const record = await api.blockAlert(blockTargetAlert.value.alert_id, blockAction.value)
+  if (record.success) {
+    ElMessage.success(record.message || '阻断成功')
+  } else {
+    ElMessage.error(record.message || '阻断失败，原因未知')
+  }
   blockDialogVisible.value = false
   loadAlerts()
 }
@@ -325,4 +338,5 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 500;
 }
+
 </style>

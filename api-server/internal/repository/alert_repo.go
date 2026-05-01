@@ -216,7 +216,7 @@ func (r *AlertRepository) GetTrend(hours int) ([]map[string]interface{}, error) 
 func (r *AlertRepository) UpdateBlockStatus(alertID string, status string, message string) error {
 	updates := map[string]interface{}{
 		"block_status": status,
-		"updated_at":   gorm.Expr("NOW()"),
+		"updated_at":   time.Now(),
 	}
 	if message != "" {
 		updates["block_message"] = message

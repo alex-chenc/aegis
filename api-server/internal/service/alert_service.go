@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	grpcclient "api-server/internal/grpc"
@@ -103,6 +105,17 @@ func (s *AlertService) CheckAndAutoBlock(alert *model.Alert) error {
 		zap.Int("pid", alert.PID),
 	)
 
+	target, targetErr := blockTargetForAlert(alert, policy.Action)
+
+	record := &model.BlockRecord{
+		BlockID:  "BLK-" + uuid.New().String()[:8],
+		AlertID:  &alert.ID,
+		HostID:   alert.HostID,
+		Action:   policy.Action,
+		Target:   target,
+		IssuedBy: "auto",
+	}
+
 	alert.AutoBlocked = true
 	blockStatus := BlockBlocking
 	alert.BlockStatus = &blockStatus
@@ -110,16 +123,60 @@ func (s *AlertService) CheckAndAutoBlock(alert *model.Alert) error {
 		return err
 	}
 
-	record := &model.BlockRecord{
-		BlockID:  "BLK-" + uuid.New().String()[:8],
-		AlertID:  &alert.ID,
-		HostID:   alert.HostID,
-		Action:   policy.Action,
-		Target:   fmt.Sprintf("%d", alert.PID),
-		IssuedBy: "auto",
+	if targetErr != nil {
+		record.Success = false
+		record.Message = targetErr.Error()
+		if err := s.blockRepo.Create(record); err != nil {
+			return err
+		}
+		return s.alertRepo.UpdateBlockStatus(alert.AlertID, BlockFailed, record.Message)
 	}
 
-	return s.blockRepo.Create(record)
+	if s.serverClient == nil {
+		record.Success = false
+		record.Message = "Server gRPC client not configured"
+		if err := s.blockRepo.Create(record); err != nil {
+			return err
+		}
+		return s.alertRepo.UpdateBlockStatus(alert.AlertID, BlockFailed, record.Message)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := s.serverClient.ExecuteBlockCommand(ctx, &pb.ExecuteBlockCommandRequest{
+		CommandId: record.BlockID,
+		HostId:    alert.HostID.String(),
+		Action:    policy.Action,
+		Target:    target,
+		Reason:    "auto block",
+		AlertId:   alert.AlertID,
+	})
+	if err != nil {
+		record.Success = false
+		record.Message = fmt.Sprintf("阻断指令发送失败: %v", err)
+		if createErr := s.blockRepo.Create(record); createErr != nil {
+			return createErr
+		}
+		return s.alertRepo.UpdateBlockStatus(alert.AlertID, BlockFailed, record.Message)
+	}
+	if !resp.Success {
+		record.Success = false
+		record.Message = resp.Error
+		if record.Message == "" {
+			record.Message = "阻断失败，原因未知"
+		}
+		if createErr := s.blockRepo.Create(record); createErr != nil {
+			return createErr
+		}
+		return s.alertRepo.UpdateBlockStatus(alert.AlertID, BlockFailed, record.Message)
+	}
+
+	record.Success = true
+	record.Message = "阻断成功"
+	if err := s.blockRepo.Create(record); err != nil {
+		return err
+	}
+	return s.alertRepo.UpdateBlockStatus(alert.AlertID, BlockSuccess, "阻断执行成功")
 }
 
 // CheckAndAutoDispose checks if auto-dispose is enabled for the alert's MITRE ID
@@ -160,17 +217,7 @@ func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockR
 		action = "kill_process"
 	}
 
-	var target string
-	switch action {
-	case "kill_process":
-		target = fmt.Sprintf("%d", alert.PID)
-	case "quarantine_file":
-		target = alert.CommandLine
-	case "block_connection", "disable_user":
-		target = fmt.Sprintf("%d", alert.PID)
-	default:
-		target = fmt.Sprintf("%d", alert.PID)
-	}
+	target, targetErr := blockTargetForAlert(alert, action)
 
 	record := &model.BlockRecord{
 		BlockID:  "BLK-" + uuid.New().String()[:8],
@@ -185,6 +232,14 @@ func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockR
 	blockStatus := BlockBlocking
 	alert.BlockStatus = &blockStatus
 	s.alertRepo.Update(alert)
+
+	if targetErr != nil {
+		record.Success = false
+		record.Message = targetErr.Error()
+		s.blockRepo.Create(record)
+		s.alertRepo.UpdateBlockStatus(alertID, BlockFailed, record.Message)
+		return record, nil
+	}
 
 	// Check if server client is available
 	if s.serverClient == nil {
@@ -245,6 +300,36 @@ func (s *AlertService) ManualBlock(alertID string, action string) (*model.BlockR
 	}
 
 	return record, nil
+}
+
+func blockTargetForAlert(alert *model.Alert, action string) (string, error) {
+	switch action {
+	case "kill_process":
+		if alert.PID <= 0 {
+			return "", fmt.Errorf("missing process pid for kill_process")
+		}
+		return fmt.Sprintf("%d", alert.PID), nil
+	case "quarantine_file":
+		target := strings.TrimSpace(alert.CommandLine)
+		if target == "" {
+			return "", fmt.Errorf("missing file path for quarantine_file")
+		}
+		return target, nil
+	case "block_connection":
+		target := strings.TrimSpace(alert.CommandLine)
+		if target == "" {
+			return "", fmt.Errorf("missing remote address for block_connection")
+		}
+		if net.ParseIP(target) == nil {
+			return "", fmt.Errorf("invalid remote address for block_connection: %s", target)
+		}
+		return target, nil
+	default:
+		if alert.PID <= 0 {
+			return "", fmt.Errorf("missing process pid for %s", action)
+		}
+		return fmt.Sprintf("%d", alert.PID), nil
+	}
 }
 
 func (s *AlertService) Resolve(alertID string) error {

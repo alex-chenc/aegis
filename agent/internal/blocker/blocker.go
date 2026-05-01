@@ -3,6 +3,7 @@ package blocker
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"aegis-agent/internal/logger"
 
@@ -29,6 +30,15 @@ func NewBlocker(quarantineDir string) *Blocker {
 }
 
 func (b *Blocker) Execute(action, target string) error {
+	action = strings.TrimSpace(action)
+	target = strings.TrimSpace(target)
+	if action == "" {
+		return fmt.Errorf("missing block action")
+	}
+	if target == "" {
+		return fmt.Errorf("missing target for %s", action)
+	}
+
 	switch action {
 	case "kill_process":
 		pid, err := strconv.Atoi(target)

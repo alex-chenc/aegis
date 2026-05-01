@@ -66,7 +66,9 @@
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tooltip :content="statusHelp(row.status)" placement="top">
+              <el-tag :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="version" label="版本" width="80" align="center" />
@@ -383,6 +385,14 @@ function statusTagType(ruleStatus: string) {
 
 function statusLabel(ruleStatus: string) {
   return RuleStatusLabels[ruleStatus] || ruleStatus
+}
+
+function statusHelp(ruleStatus: string) {
+  if (ruleStatus === 'pending') return '待审核，未下发到 Agent'
+  if (ruleStatus === 'experimental') return '试运行中，已下发到 Agent'
+  if (ruleStatus === 'active') return '正式启用，已下发到 Agent'
+  if (ruleStatus === 'disabled') return '已禁用，未下发到 Agent'
+  return '未知状态'
 }
 
 function severityTagType(level: string) {

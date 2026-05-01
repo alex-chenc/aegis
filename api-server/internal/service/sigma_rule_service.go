@@ -27,10 +27,22 @@ func NewSigmaRuleService(ruleRepo *repository.SigmaRuleRepository, serverClient 
 }
 
 func (s *SigmaRuleService) ApproveRule(ruleID string) error {
-	if err := s.ruleRepo.UpdateStatus(ruleID, "active"); err != nil {
+	rule, err := s.ruleRepo.FindByRuleID(ruleID)
+	if err != nil {
 		return err
 	}
-	s.broadcastRuleUpdate(ruleID, "active")
+
+	nextStatus := "experimental"
+	if rule.Status == "experimental" {
+		nextStatus = "active"
+	} else if rule.Status == "active" {
+		return nil
+	}
+
+	if err := s.ruleRepo.UpdateStatus(ruleID, nextStatus); err != nil {
+		return err
+	}
+	s.broadcastRuleUpdate(ruleID, nextStatus)
 	return nil
 }
 
@@ -115,24 +127,5 @@ func (s *SigmaRuleService) CheckAndPromoteRules() {
 }
 
 func (s *SigmaRuleService) CheckAndActivatePendingRules() {
-	rules, _, err := s.ruleRepo.List(1, 1000, map[string]interface{}{"status": "pending"})
-	if err != nil {
-		logger.Error("failed to get pending rules", zap.Error(err))
-		return
-	}
-
-	for _, rule := range rules {
-		if time.Since(rule.CreatedAt) >= 24*time.Hour {
-			if err := s.ruleRepo.UpdateStatus(rule.RuleID, "experimental"); err != nil {
-				logger.Error("failed to activate pending rule",
-					zap.String("rule_id", rule.RuleID),
-					zap.Error(err),
-				)
-			} else {
-				logger.Info("pending rule activated as experimental",
-					zap.String("rule_id", rule.RuleID),
-				)
-			}
-		}
-	}
+	logger.Debug("pending rules are not auto-activated; approve them or use AI auto mode")
 }
