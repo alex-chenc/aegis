@@ -4,6 +4,7 @@
     title="消息通知"
     direction="rtl"
     size="480px"
+    :append-to-body="true"
     @close="handleClose"
   >
     <template #header>
