@@ -39,11 +39,11 @@ request.interceptors.response.use(
       } else if (status === 500) {
         errorMsg = '服务器内部错误'
       } else if (status === 401) {
-        errorMsg = '未授权'
         clearStoredAuth()
         if (window.location.pathname !== '/login') {
           window.location.assign('/login')
         }
+        return Promise.reject(new Error('未授权'))
       } else if (status === 403) {
         errorMsg = '禁止访问'
         if (getStoredAuth()?.forcePasswordChange && window.location.pathname !== '/force-password-change') {

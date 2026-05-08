@@ -11,13 +11,15 @@ import (
 	"sync"
 	"time"
 
+	"aegis-agent/internal/checker"
 	"aegis-agent/internal/logger"
 
 	"go.uber.org/zap"
 )
 
 type Executor struct {
-	sem chan struct{}
+	sem              chan struct{}
+	blacklistChecker *checker.BlacklistChecker
 }
 
 type ExecuteResult struct {
@@ -27,9 +29,10 @@ type ExecuteResult struct {
 	TimedOut bool
 }
 
-func NewExecutor(maxConcurrency int) *Executor {
+func NewExecutor(maxConcurrency int, blacklistChecker *checker.BlacklistChecker) *Executor {
 	return &Executor{
-		sem: make(chan struct{}, maxConcurrency),
+		sem:              make(chan struct{}, maxConcurrency),
+		blacklistChecker: blacklistChecker,
 	}
 }
 
@@ -40,6 +43,21 @@ func (e *Executor) ExecuteCommand(ctx context.Context, taskID, scriptContent str
 	logger.Info("Executing command",
 		zap.String("task_id", taskID),
 		zap.Int32("timeout_seconds", timeoutSeconds))
+
+	// V5.7: Agent-side blacklist check (last line of defense)
+	if e.blacklistChecker != nil {
+		result := e.blacklistChecker.Check(scriptContent)
+		if result.HasViolation {
+			logger.Warn("script blocked by agent blacklist check",
+				zap.String("task_id", taskID),
+				zap.Int("hits", len(result.Hits)),
+			)
+			return &ExecuteResult{
+				ExitCode: -1,
+				Stderr:   "脚本存在恶意命令，执行已阻止",
+			}
+		}
+	}
 
 	if strings.TrimSpace(scriptContent) == "#SOFTWARE_COLLECT#" {
 		return e.collectSoftwareList(ctx, taskID, timeoutSeconds)

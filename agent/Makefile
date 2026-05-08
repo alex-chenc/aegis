@@ -29,8 +29,8 @@ $(BPF_OBJ_DIR):
 
 build:
 	@echo "Building agent..."
-	GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
-	GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
 
 package:
 	@echo "Packaging agent..."

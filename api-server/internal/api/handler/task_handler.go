@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/repository"
 	"api-server/internal/service"
@@ -22,6 +23,7 @@ type TaskHandler struct {
 	serverClient       *grpcclient.ServerClient
 	ruleRepo           *repository.RuleRepository
 	selfHealingService *service.SelfHealingService
+	auditLogRepo       *repository.AuditLogRepo
 }
 
 func NewTaskHandler(
@@ -32,6 +34,7 @@ func NewTaskHandler(
 	serverClient *grpcclient.ServerClient,
 	ruleRepo *repository.RuleRepository,
 	selfHealingService *service.SelfHealingService,
+	auditLogRepo *repository.AuditLogRepo,
 ) *TaskHandler {
 	return &TaskHandler{
 		taskService:        taskService,
@@ -41,6 +44,7 @@ func NewTaskHandler(
 		serverClient:       serverClient,
 		ruleRepo:           ruleRepo,
 		selfHealingService: selfHealingService,
+		auditLogRepo:       auditLogRepo,
 	}
 }
 
@@ -72,6 +76,19 @@ type TaskGroupStatus struct {
 	Timeout     int    `json:"timeout"`
 }
 
+type AuditInfoResponse struct {
+	HitRules     []AuditHitRule `json:"hit_rules"`
+	ErrorMessage string         `json:"error_message,omitempty"`
+	AuditLogID   string         `json:"audit_log_id,omitempty"`
+}
+
+type AuditHitRule struct {
+	RuleName   string `json:"rule_name"`
+	Severity   string `json:"severity"`
+	LineNumber int    `json:"line_number"`
+	MatchedText string `json:"matched_text,omitempty"`
+}
+
 type TaskLogResponse struct {
 	ID            string                 `json:"id"`
 	TaskGroupID   string                 `json:"task_group_id"`
@@ -88,6 +105,7 @@ type TaskLogResponse struct {
 	StartedAt     *string                `json:"started_at"`
 	FinishedAt    *string                `json:"finished_at"`
 	HealingStatus *HealingStatusResponse `json:"healing_status,omitempty"`
+	AuditInfo     *AuditInfoResponse     `json:"audit_info,omitempty"`
 }
 
 type HealingStatusResponse struct {
@@ -393,6 +411,11 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 				}
 			}
 		}
+
+		// 查询审计拦截信息 (AUDIT_BLOCKED状态)
+		if log.Status == "AUDIT_BLOCKED" && h.auditLogRepo != nil {
+			responses[i].AuditInfo = h.buildAuditInfo(log.ID.String(), log.Stderr)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -400,6 +423,45 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		"message": "success",
 		"data":    responses,
 	})
+}
+
+func (h *TaskHandler) buildAuditInfo(taskID string, stderr *string) *AuditInfoResponse {
+	auditLog, auditErr := h.auditLogRepo.FindLatestByTaskID(taskID)
+	if auditErr != nil || auditLog == nil {
+		return nil
+	}
+	errMsg := ""
+	if stderr != nil {
+		errMsg = *stderr
+	}
+	auditInfo := &AuditInfoResponse{
+		ErrorMessage: errMsg,
+		AuditLogID:   auditLog.ID.String(),
+	}
+	if auditLog.BlacklistHits != nil {
+		var hits []struct {
+			RuleName    string `json:"rule_name"`
+			Severity    string `json:"severity"`
+			LineNumber  int    `json:"line_number"`
+			MatchedText string `json:"matched_text"`
+		}
+		if jsonErr := json.Unmarshal(auditLog.BlacklistHits, &hits); jsonErr != nil {
+			logger.Warn("failed to parse blacklist hits JSON",
+				zap.Error(jsonErr),
+				zap.String("audit_log_id", auditLog.ID.String()))
+		} else {
+			auditInfo.HitRules = make([]AuditHitRule, len(hits))
+			for j, hit := range hits {
+				auditInfo.HitRules[j] = AuditHitRule{
+					RuleName:    hit.RuleName,
+					Severity:    hit.Severity,
+					LineNumber:  hit.LineNumber,
+					MatchedText: hit.MatchedText,
+				}
+			}
+		}
+	}
+	return auditInfo
 }
 
 func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
@@ -445,6 +507,24 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 	if log.FinishedAt != nil {
 		t := log.FinishedAt.Format(time.RFC3339)
 		response.FinishedAt = &t
+	}
+
+	// 查询 healing status
+	if h.selfHealingService != nil {
+		healingStatus := h.selfHealingService.GetHealingStatus(log.ID.String())
+		if healingStatus != nil {
+			response.HealingStatus = &HealingStatusResponse{
+				Status:        healingStatus.Status,
+				TotalAttempts: healingStatus.TotalAttempts,
+				MaxAttempts:   healingStatus.MaxAttempts,
+				LastError:     healingStatus.LastError,
+			}
+		}
+	}
+
+	// 查询审计拦截信息 (AUDIT_BLOCKED状态)
+	if log.Status == "AUDIT_BLOCKED" && h.auditLogRepo != nil {
+		response.AuditInfo = h.buildAuditInfo(log.ID.String(), log.Stderr)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -615,9 +695,10 @@ func NewTaskHandlerWithHealing(
 	serverClient *grpcclient.ServerClient,
 	healingService *service.SelfHealingService,
 	ruleRepo *repository.RuleRepository,
+	auditLogRepo *repository.AuditLogRepo,
 ) *TaskHandlerWithHealing {
 	return &TaskHandlerWithHealing{
-		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, healingService),
+		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, healingService, auditLogRepo),
 		healingService: healingService,
 		ruleRepo:       ruleRepo,
 		taskLogRepo:    taskLogRepo,

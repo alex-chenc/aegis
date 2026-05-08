@@ -91,6 +91,14 @@
             <el-icon><Operation /></el-icon>
             <span>Agent 安装</span>
           </el-menu-item>
+          <el-menu-item index="/settings/command-audit">
+            <el-icon><Tickets /></el-icon>
+            <span>命令审计配置</span>
+          </el-menu-item>
+          <el-menu-item index="/settings/audit-logs">
+            <el-icon><Document /></el-icon>
+            <span>审计日志</span>
+          </el-menu-item>
         </el-sub-menu>
       </el-menu>
 

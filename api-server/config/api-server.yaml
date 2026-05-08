@@ -3,7 +3,7 @@ server:
   http_port: 8082
   grpc_port: 19093
   agent_hub_port: 19090
-  external_ip: ""
+  external_ip: "10.206.0.2"
 
 # gRPC Client Configuration (connect to Server service)
 grpc:

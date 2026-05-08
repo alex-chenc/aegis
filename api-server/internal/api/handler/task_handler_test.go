@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"api-server/internal/model"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
@@ -112,5 +114,132 @@ func TestGetTaskLogs_NilRuleID(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+}
+
+func TestGetTaskLogs_AuditBlocked(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	if logger.Logger == nil {
+		err := logger.Init(&logger.Config{
+			Level:      "error",
+			MaxSize:    10,
+			MaxBackups: 1,
+			MaxAge:     1,
+			Compress:   false,
+		})
+		if err != nil {
+			t.Fatalf("failed to init logger: %v", err)
+		}
+	}
+
+	db := setupTaskHandlerTestDB(t)
+
+	// Create script_audit_log table
+	if err := db.Exec(`
+		CREATE TABLE script_audit_log (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			rule_id TEXT,
+			script_type TEXT,
+			script_content TEXT,
+			audit_source TEXT,
+			attempt INTEGER,
+			passed BOOLEAN,
+			risk_level TEXT,
+			blacklist_hits TEXT,
+			ai_analysis TEXT,
+			error_msg TEXT,
+			duration_ms INTEGER,
+			created_at DATETIME
+		)
+	`).Error; err != nil {
+		t.Fatalf("failed to create script_audit_log table: %v", err)
+	}
+
+	taskLogRepo := repository.NewTaskLogRepository(db)
+	hostRepo := repository.NewHostRepository(db)
+	auditLogRepo := repository.NewAuditLogRepo(db)
+	taskService := service.NewTaskService(taskLogRepo, hostRepo, nil, nil, nil, nil)
+
+	taskGroupID := uuid.New()
+	hostID := uuid.New()
+	taskID := uuid.New()
+
+	// Insert AUDIT_BLOCKED task
+	insertSQL := `
+		INSERT INTO task_logs (
+			id, task_group_id, rule_id, host_id, task_type, status, stderr, created_at
+		) VALUES (?, ?, NULL, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`
+	blockReason := "脚本存在恶意命令，下发已阻止。\n命中规则：\n  1. [critical] curl管道执行 (第5行, 匹配: curl | bash)"
+	if err := db.Exec(insertSQL, taskID.String(), taskGroupID.String(), hostID.String(), "check", "AUDIT_BLOCKED", blockReason).Error; err != nil {
+		t.Fatalf("failed to insert task log: %v", err)
+	}
+
+	// Insert audit log with blacklist hits
+	hits := []map[string]interface{}{
+		{"rule_name": "curl管道执行", "severity": "critical", "line_number": 5, "matched_text": "curl | bash"},
+	}
+	hitsJSON, _ := json.Marshal(hits)
+	auditLog := &model.ScriptAuditLog{
+		TaskID:        taskID.String(),
+		ScriptType:    "all",
+		AuditSource:   "dispatch",
+		Attempt:       1,
+		Passed:        false,
+		RiskLevel:     "critical",
+		BlacklistHits: hitsJSON,
+	}
+	if err := auditLogRepo.Create(auditLog); err != nil {
+		t.Fatalf("failed to create audit log: %v", err)
+	}
+
+	handler := &TaskHandler{
+		taskService:  taskService,
+		taskLogRepo:  taskLogRepo,
+		auditLogRepo: auditLogRepo,
+	}
+
+	router := gin.Default()
+	router.GET("/tasks/:id/logs", handler.GetTaskLogs)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks/"+taskGroupID.String()+"/logs", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	// Parse response and verify audit_info is populated
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	data, ok := resp["data"].([]interface{})
+	if !ok || len(data) == 0 {
+		t.Fatalf("expected data array with at least 1 item")
+	}
+	task := data[0].(map[string]interface{})
+	auditInfo, ok := task["audit_info"]
+	if !ok || auditInfo == nil {
+		t.Fatalf("expected audit_info to be populated for AUDIT_BLOCKED task")
+	}
+	auditMap := auditInfo.(map[string]interface{})
+	if auditMap["error_message"] != blockReason {
+		t.Errorf("expected error_message to be block reason, got %v", auditMap["error_message"])
+	}
+	hitRules, ok := auditMap["hit_rules"].([]interface{})
+	if !ok || len(hitRules) == 0 {
+		t.Fatalf("expected hit_rules to have at least 1 entry")
+	}
+	hitRule := hitRules[0].(map[string]interface{})
+	if hitRule["rule_name"] != "curl管道执行" {
+		t.Errorf("expected rule_name 'curl管道执行', got %v", hitRule["rule_name"])
+	}
+	if hitRule["severity"] != "critical" {
+		t.Errorf("expected severity 'critical', got %v", hitRule["severity"])
 	}
 }

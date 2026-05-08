@@ -15,13 +15,16 @@ import (
 	"go.uber.org/zap"
 )
 
+var _ ScriptGenerator = (*scriptGeneratorFunc)(nil)
+
 type ScriptGenerationService struct {
-	ruleRepo          *repository.RuleRepository
-	scriptVersionRepo *repository.ScriptVersionRepository
-	configRepo        *repository.ConfigRepository
-	minioClient       *storage.MinIOClient
-	generateQueue     chan GenerateTask
-	workerCount       int
+	ruleRepo           *repository.RuleRepository
+	scriptVersionRepo  *repository.ScriptVersionRepository
+	configRepo         *repository.ConfigRepository
+	minioClient        *storage.MinIOClient
+	scriptAuditService *ScriptAuditService
+	generateQueue      chan GenerateTask
+	workerCount        int
 }
 
 type GenerateTask struct {
@@ -37,14 +40,16 @@ func NewScriptGenerationService(
 	llmTimeout int,
 	llmMaxRetries int,
 	workerCount int,
+	scriptAuditService *ScriptAuditService,
 ) *ScriptGenerationService {
 	return &ScriptGenerationService{
-		ruleRepo:          ruleRepo,
-		scriptVersionRepo: scriptVersionRepo,
-		configRepo:        configRepo,
-		minioClient:       minioClient,
-		generateQueue:     make(chan GenerateTask, 100),
-		workerCount:       workerCount,
+		ruleRepo:           ruleRepo,
+		scriptVersionRepo:  scriptVersionRepo,
+		configRepo:         configRepo,
+		minioClient:        minioClient,
+		scriptAuditService: scriptAuditService,
+		generateQueue:      make(chan GenerateTask, 100),
+		workerCount:        workerCount,
 	}
 }
 
@@ -119,22 +124,35 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		prompt = llm.GetFixScriptGenerationPrompt(rule.FixContent)
 	}
 
-	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本工程师", prompt, 0.1)
+	systemPrompt := "你是一位资深的 Shell 脚本工程师"
+	generator := &scriptGeneratorFunc{fn: func(genCtx context.Context, _ *AuditRequest) (string, error) {
+		return llmClient.ChatCompletion(genCtx, systemPrompt, prompt, 0.1)
+	}}
+
+	scriptType := ScriptTypeBaselineCheck
+	if task.ScriptType == "FIX" {
+		scriptType = ScriptTypeBaselineFix
+	}
+
+	auditReq := &AuditRequest{
+		ScriptContent: prompt,
+		ScriptType:    scriptType,
+		TaskID:        task.RuleID.String(),
+		RuleID:        task.RuleID.String(),
+		Source:        AuditSourceGeneration,
+	}
+
+	auditResult, err := s.scriptAuditService.AuditWithRetry(ctx, generator, auditReq)
 	if err != nil {
-		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("LLM调用失败: %v", err))
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本审计失败: %v", err))
+		return
+	}
+	if !auditResult.Passed {
+		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本审计未通过: %s", auditResult.ErrorMsg))
 		return
 	}
 
-	script, err := llm.ParseScript(llmResponse)
-	if err != nil {
-		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本解析失败: %v", err))
-		return
-	}
-
-	if err := s.validateScript(script); err != nil {
-		s.ruleRepo.UpdateScriptStatusWithError(task.RuleID, task.ScriptType, "failed", fmt.Sprintf("脚本安全校验失败: %v", err))
-		return
-	}
+	script := auditResult.Script
 
 	var version int
 	if task.ScriptType == "CHECK" {
@@ -178,52 +196,6 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		zap.String("script_type", task.ScriptType),
 		zap.Int("version", version),
 	)
-}
-
-// validateScript 脚本安全性校验
-func (s *ScriptGenerationService) validateScript(script string) error {
-	// 1. Shebang 检查
-	if !strings.HasPrefix(script, "#!") {
-		return fmt.Errorf("script must start with shebang (#!/bin/bash)")
-	}
-
-	// 2. 危险命令检测
-	dangerousPatterns := []string{
-		"rm -rf /",
-		"mkfs.",
-		"dd if=/dev/zero",
-		":(){:|:&};:",
-		"chmod -R 777 /",
-		"chown -R root:root /",
-	}
-
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(script, pattern) {
-			return fmt.Errorf("dangerous command detected: %s", pattern)
-		}
-	}
-
-	// 3. 网络外联检测（可选，根据安全策略）
-	// 如果脚本包含 curl/wget 访问外部地址，记录警告
-	externalPatterns := []string{
-		"curl http",
-		"wget http",
-	}
-
-	for _, pattern := range externalPatterns {
-		if strings.Contains(script, pattern) {
-			logger.Warn("script contains external network access",
-				zap.String("pattern", pattern),
-			)
-		}
-	}
-
-	// 4. 长度检查
-	if len(script) > 10000 {
-		return fmt.Errorf("script too long: %d bytes (max 10000)", len(script))
-	}
-
-	return nil
 }
 
 // QueueScriptGeneration 将脚本生成任务加入队列

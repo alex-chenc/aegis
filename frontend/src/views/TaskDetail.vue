@@ -83,6 +83,15 @@
                 {{ row.displayState }}
               </el-tag>
             </el-tooltip>
+            <el-tooltip
+              v-else-if="row.displayState === '审计未通过'"
+              :content="row.audit_info?.error_message || '脚本存在恶意命令，下发已阻止'"
+              placement="top"
+            >
+              <el-tag type="danger" size="small">
+                {{ row.displayState }}
+              </el-tag>
+            </el-tooltip>
             <el-tag v-else :type="getStateTagType(row.displayState)" size="small">
               {{ row.displayState }}
             </el-tag>
@@ -170,6 +179,32 @@
       </el-table>
     </el-card>
 
+    <el-card v-if="tasksWithState.some(t => t.audit_info)" style="margin-top: 20px">
+      <template #header>
+        <span>审计拦截信息</span>
+      </template>
+      <div v-for="task in tasksWithState.filter(t => t.audit_info)" :key="task.id" style="margin-bottom: 16px; padding: 12px; background: #fef2f2; border-radius: 4px; border: 1px solid #fecaca">
+        <div style="font-weight: 600; margin-bottom: 8px">{{ getRuleTitle(task) }} - {{ getHostname(task.host_id) }}</div>
+        <div v-if="task.audit_info?.error_message" style="color: #dc2626; margin-bottom: 8px">{{ task.audit_info.error_message }}</div>
+        <div v-if="task.audit_info?.hit_rules?.length" style="margin-bottom: 8px">
+          <div style="font-size: 13px; color: #666; margin-bottom: 4px">命中规则:</div>
+          <div v-for="(rule, i) in task.audit_info.hit_rules" :key="i" style="font-size: 13px; padding: 2px 0">
+            <el-tag :type="rule.severity === 'critical' ? 'danger' : 'warning'" size="small">{{ rule.severity }}</el-tag>
+            <span style="margin-left: 8px">{{ rule.rule_name }} (第{{ rule.line_number }}行)</span>
+          </div>
+        </div>
+        <el-button
+          v-if="task.audit_info?.audit_log_id"
+          link
+          type="primary"
+          size="small"
+          @click="router.push('/settings/audit-logs')"
+        >
+          查看审计日志
+        </el-button>
+      </div>
+    </el-card>
+
     <el-dialog v-model="scriptDialogVisible" :title="scriptDialogTitle" width="70%">
       <div class="script-viewer">
         <pre class="script-content">{{ currentScript }}</pre>
@@ -217,7 +252,7 @@ import {
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '脚本修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败'
+type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '脚本修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败' | '审计未通过'
 
 const route = useRoute()
 const router = useRouter()
@@ -297,6 +332,9 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
     if (isFix) return '修复超时'
     return '检测超时'
   }
+  if (taskStatus === 'audit_blocked') {
+    return '审计未通过'
+  }
   if (taskStatus === 'success') {
     if (isPoc) return exitCode === 0 ? 'POC验证成功' : 'POC验证失败'
     if (isFix) return '修复成功'
@@ -343,6 +381,7 @@ function getStateTagType(state: DisplayState): string {
     case '脚本修复超时':
     case '检测超时':
     case '修复超时':
+    case '审计未通过':
       return 'danger'
     default: return 'info'
   }

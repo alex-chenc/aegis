@@ -18,15 +18,16 @@ import (
 )
 
 type SelfHealingService struct {
-	healingLogRepo    *repository.HealingLogRepository
-	scriptVersionRepo *repository.ScriptVersionRepository
-	configRepo        *repository.ConfigRepository
-	ruleRepo          *repository.RuleRepository
-	taskLogRepo       *repository.TaskLogRepository
-	minioClient       *storage.MinIOClient
-	redisClient       *storage.RedisClient
-	healingQueue      chan HealingTask
-	maxRetries        int
+	healingLogRepo     *repository.HealingLogRepository
+	scriptVersionRepo  *repository.ScriptVersionRepository
+	configRepo         *repository.ConfigRepository
+	ruleRepo           *repository.RuleRepository
+	taskLogRepo        *repository.TaskLogRepository
+	minioClient        *storage.MinIOClient
+	redisClient        *storage.RedisClient
+	scriptAuditService *ScriptAuditService
+	healingQueue       chan HealingTask
+	maxRetries         int
 }
 
 type HealingTask struct {
@@ -52,17 +53,19 @@ func NewSelfHealingService(
 	llmTimeout int,
 	llmMaxRetries int,
 	maxRetries int,
+	scriptAuditService *ScriptAuditService,
 ) *SelfHealingService {
 	return &SelfHealingService{
-		healingLogRepo:    healingLogRepo,
-		scriptVersionRepo: scriptVersionRepo,
-		configRepo:        configRepo,
-		ruleRepo:          ruleRepo,
-		taskLogRepo:       taskLogRepo,
-		minioClient:       minioClient,
-		redisClient:       redisClient,
-		healingQueue:      make(chan HealingTask, 100),
-		maxRetries:        maxRetries,
+		healingLogRepo:     healingLogRepo,
+		scriptVersionRepo:  scriptVersionRepo,
+		configRepo:         configRepo,
+		ruleRepo:           ruleRepo,
+		taskLogRepo:        taskLogRepo,
+		minioClient:        minioClient,
+		redisClient:        redisClient,
+		scriptAuditService: scriptAuditService,
+		healingQueue:       make(chan HealingTask, 100),
+		maxRetries:         maxRetries,
 	}
 }
 
@@ -331,39 +334,47 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			prompt = fmt.Sprintf("%s\n\n用户提供的修复建议：%s", prompt, task.UserSuggestion)
 		}
 
-		llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位资深的 Shell 脚本调试专家", prompt, 0.1)
+		systemPrompt := "你是一位资深的 Shell 脚本调试专家"
+		healingPrompt := prompt
+		healingLLMClient := llmClient
+		healingGenerator := &scriptGeneratorFunc{fn: func(genCtx context.Context, _ *AuditRequest) (string, error) {
+			return healingLLMClient.ChatCompletion(genCtx, systemPrompt, healingPrompt, 0.1)
+		}}
+
+		ruleIDStr := ""
+		if task.RuleID != nil {
+			ruleIDStr = task.RuleID.String()
+		}
+
+		auditReq := &AuditRequest{
+			ScriptContent: prompt,
+			ScriptType:    ScriptTypeSelfHealing,
+			TaskID:        task.OriginalTaskID.String(),
+			RuleID:        ruleIDStr,
+			Source:        AuditSourceGeneration,
+		}
+
+		auditResult, err := s.scriptAuditService.AuditWithRetry(ctx, healingGenerator, auditReq)
 		if err != nil {
-			logger.Error("failed to call LLM for healing",
+			logger.Error("healed script audit failed",
 				zap.Error(err),
 				zap.Stringer("healing_id", healingLog.ID),
 				zap.Int("attempt", attempt),
 			)
-			lastError = fmt.Sprintf("LLM 调用失败：%v", err)
+			lastError = fmt.Sprintf("脚本审计失败：%v", err)
+			continue
+		}
+		if !auditResult.Passed {
+			logger.Error("healed script audit not passed",
+				zap.String("error", auditResult.ErrorMsg),
+				zap.Stringer("healing_id", healingLog.ID),
+				zap.Int("attempt", attempt),
+			)
+			lastError = fmt.Sprintf("脚本审计未通过：%s", auditResult.ErrorMsg)
 			continue
 		}
 
-		// 解析修复后的脚本
-		fixedScript, err = llm.ParseScript(llmResponse)
-		if err != nil {
-			logger.Error("failed to parse healed script",
-				zap.Error(err),
-				zap.Stringer("healing_id", healingLog.ID),
-				zap.Int("attempt", attempt),
-			)
-			lastError = fmt.Sprintf("脚本解析失败：%v", err)
-			continue
-		}
-
-		// 安全性校验
-		if err := s.validateScript(fixedScript); err != nil {
-			logger.Error("healed script validation failed",
-				zap.Error(err),
-				zap.Stringer("healing_id", healingLog.ID),
-				zap.Int("attempt", attempt),
-			)
-			lastError = fmt.Sprintf("脚本验证失败：%v", err)
-			continue
-		}
+		fixedScript = auditResult.Script
 
 		// 创建脚本版本记录
 		version := attempt // 自愈版本从 1 开始
@@ -516,33 +527,6 @@ func (s *SelfHealingService) buildHealingHistory(attempts model.AttemptsDetail) 
 	}
 
 	return history.String()
-}
-
-func (s *SelfHealingService) validateScript(script string) error {
-	if !strings.HasPrefix(script, "#!") {
-		return fmt.Errorf("script must start with shebang (#!/bin/bash)")
-	}
-
-	dangerousPatterns := []string{
-		"rm -rf /",
-		"mkfs.",
-		"dd if=/dev/zero",
-		":(){:|:&};:",
-		"chmod -R 777 /",
-		"chown -R root:root /",
-	}
-
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(script, pattern) {
-			return fmt.Errorf("dangerous command detected: %s", pattern)
-		}
-	}
-
-	if len(script) > 10000 {
-		return fmt.Errorf("script too long: %d bytes (max 10000)", len(script))
-	}
-
-	return nil
 }
 
 func (s *SelfHealingService) updateRuleScript(ruleID uuid.UUID, scriptType, scriptContent string) error {

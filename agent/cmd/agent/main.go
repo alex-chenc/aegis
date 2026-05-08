@@ -7,6 +7,7 @@ import (
 
 	"aegis-agent/internal/asset"
 	"aegis-agent/internal/blocker"
+	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
 	"aegis-agent/internal/config"
 	"aegis-agent/internal/ebpf"
@@ -50,7 +51,17 @@ func main() {
 		zap.String("os", assetInfo.OSType),
 	)
 
-	exec := executor.NewExecutor(2)
+	// V5.7: Load agent-side blacklist checker
+	var blacklistChecker *checker.BlacklistChecker
+	rulesPath := "/etc/aegis-agent/audit_rules.json"
+	if bc, err := checker.NewBlacklistChecker(rulesPath); err != nil {
+		logger.Warn("Failed to load blacklist rules, agent-side check disabled", zap.Error(err))
+	} else {
+		blacklistChecker = bc
+		logger.Info("Blacklist checker loaded", zap.Int("rules", bc.RuleCount()))
+	}
+
+	exec := executor.NewExecutor(2, blacklistChecker)
 	logger.Info("Executor created", zap.Int("max_concurrency", 2))
 
 	ruleLoader := sigma.NewLoader(cfg.RuleDir)

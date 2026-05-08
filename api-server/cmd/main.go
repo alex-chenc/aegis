@@ -12,6 +12,7 @@ import (
 	"api-server/config"
 	"api-server/internal/api"
 	"api-server/internal/api/handler"
+	"api-server/internal/checker"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/ipdetect"
 	"api-server/internal/queue"
@@ -122,15 +123,26 @@ func main() {
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
 	notificationRepo := repository.NewNotificationRepository(db)
 	authRepo := repository.NewAuthRepository(db)
+	commandAuditRuleRepo := repository.NewCommandAuditRuleRepo(db)
+	auditLogRepo := repository.NewAuditLogRepo(db)
+	systemConfigRepo := repository.NewSystemConfigRepo(db)
+
+	// V5.7 Script Audit Services (must initialize before services that depend on it)
+	blacklistChecker := checker.NewBlacklistChecker()
+	scriptAuditService := service.NewScriptAuditService(blacklistChecker, auditLogRepo, configRepo, systemConfigRepo, commandAuditRuleRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	if err := scriptAuditService.ReloadRules(context.Background()); err != nil {
+		logger.Warn("failed to load initial audit rules", zap.Error(err))
+	}
 
 	// Initialize services
 	templateService := service.NewTemplateService(templateRepo, ruleRepo, configRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
-	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 2)
+	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 2, scriptAuditService)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, serverClient)
-	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3)
-	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
+	taskService.SetAuditService(scriptAuditService)
+	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3, scriptAuditService)
+	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService)
 	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
-	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
+	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, scriptAuditService, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
 	alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
 	sigmaRuleService := service.NewSigmaRuleService(sigmaRuleRepo, serverClient)
 
@@ -193,17 +205,19 @@ func main() {
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient, serverClient)
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService, scriptGenService)
-	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, selfHealingService)
-	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, selfHealingService, ruleRepo)
+	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, selfHealingService, auditLogRepo)
+	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, selfHealingService, ruleRepo, auditLogRepo)
 	agentHandler := handler.NewAgentHandler(serverClient, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.AgentHubPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
 	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, sigmaRuleUploadService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService, aiRuleConfigService, ruleGenerationService)
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
 	authHandler := handler.NewAuthHandler(authService)
+	commandAuditHandler := handler.NewCommandAuditHandler(commandAuditRuleRepo, systemConfigRepo, scriptAuditService)
+	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
 
 	// Initialize HTTP router
-	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler)
+	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
 	router.Setup()
 
 	// Start HTTP server

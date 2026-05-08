@@ -98,6 +98,11 @@ export interface TaskLog {
   finished_at?: string
   healing_status?: HealingStatus
   created_at?: string
+  audit_info?: {
+    hit_rules: { rule_name: string; severity: string; line_number: number }[]
+    error_message?: string
+    audit_log_id?: string
+  }
 }
 
 export interface TaskGroupSummary {

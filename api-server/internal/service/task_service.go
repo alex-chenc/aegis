@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"api-server/internal/checker"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -23,6 +25,7 @@ type TaskService struct {
 	healingLogRepo   *repository.HealingLogRepository
 	redisClient      *storage.RedisClient
 	scriptGenService *ScriptGenerationService
+	auditService     *ScriptAuditService
 	serverClient     *grpcclient.ServerClient
 }
 
@@ -51,6 +54,10 @@ func NewTaskService(
 
 func (s *TaskService) SetScriptGenService(service *ScriptGenerationService) {
 	s.scriptGenService = service
+}
+
+func (s *TaskService) SetAuditService(service *ScriptAuditService) {
+	s.auditService = service
 }
 
 func (s *TaskService) GetHostByID(hostID uuid.UUID) (*model.Host, error) {
@@ -245,6 +252,26 @@ func (s *TaskService) dispatchToAgent(ctx context.Context, taskID, hostID, ruleI
 		return
 	}
 
+	// V5.7: Pre-dispatch blacklist audit
+	if s.auditService != nil {
+		auditResult, err := s.auditService.AuditForDispatch(ctx, scriptContent, taskID.String())
+		if err != nil {
+			logger.Error("pre-dispatch audit error, proceeding (fail-open)",
+				zap.String("task_id", taskID.String()),
+				zap.Error(err),
+			)
+		} else if auditResult != nil && !auditResult.Passed {
+			blockReason := formatAuditBlockReason(auditResult.BlacklistHits)
+			logger.Warn("script blocked by pre-dispatch audit",
+				zap.String("task_id", taskID.String()),
+				zap.String("reason", blockReason),
+			)
+			now := time.Now()
+			s.taskLogRepo.UpdateResult(taskID, nil, &blockReason, nil, "AUDIT_BLOCKED", now)
+			return
+		}
+	}
+
 	// Use background context for async dispatch - the HTTP request context
 	// will be canceled when the handler returns, but we need the gRPC
 	// call to continue running until completion
@@ -379,4 +406,14 @@ func (s *TaskService) checkAndMarkTimedOutTasks() {
 	}
 
 	logger.Info("marked tasks as timed out", zap.Int64("count", count))
+}
+
+func formatAuditBlockReason(hits []checker.BlacklistHit) string {
+	var sb strings.Builder
+	sb.WriteString("脚本存在恶意命令，下发已阻止。\n命中规则：")
+	for i, hit := range hits {
+		sb.WriteString(fmt.Sprintf("\n  %d. [%s] %s (第%d行, 匹配: %s)",
+			i+1, hit.Severity, hit.RuleName, hit.LineNumber, hit.MatchedText))
+	}
+	return sb.String()
 }

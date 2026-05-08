@@ -26,6 +26,8 @@ type Router struct {
 	websocketHandler       *handler.WebSocketHandler
 	notificationHandler    *handler.NotificationHandler
 	aiAnalysisHandler      *handler.AIAnalysisHandler
+	commandAuditHandler    *handler.CommandAuditHandler
+	auditLogHandler        *handler.AuditLogHandler
 }
 
 func NewRouter(
@@ -43,6 +45,8 @@ func NewRouter(
 	websocketHandler *handler.WebSocketHandler,
 	notificationHandler *handler.NotificationHandler,
 	aiAnalysisHandler *handler.AIAnalysisHandler,
+	commandAuditHandler *handler.CommandAuditHandler,
+	auditLogHandler *handler.AuditLogHandler,
 ) *Router {
 	return &Router{
 		authService:            authService,
@@ -59,6 +63,8 @@ func NewRouter(
 		websocketHandler:       websocketHandler,
 		notificationHandler:    notificationHandler,
 		aiAnalysisHandler:      aiAnalysisHandler,
+		commandAuditHandler:    commandAuditHandler,
+		auditLogHandler:        auditLogHandler,
 	}
 }
 
@@ -258,6 +264,27 @@ func (r *Router) Setup() {
 			notifications.GET("", r.notificationHandler.GetNotifications)
 			notifications.PUT("/read-all", r.notificationHandler.MarkAllAsRead)
 			notifications.PUT("/:id/read", r.notificationHandler.MarkAsRead)
+		}
+
+		// 命令审计配置接口
+		commandAudit := v1.Group("/settings/command-audit")
+		{
+			commandAudit.GET("/rules", r.commandAuditHandler.ListRules)
+			commandAudit.POST("/rules", r.commandAuditHandler.CreateRule)
+			commandAudit.PUT("/rules/:id", r.commandAuditHandler.UpdateRule)
+			commandAudit.DELETE("/rules/:id", r.commandAuditHandler.DeleteRule)
+			commandAudit.PUT("/rules/:id/toggle", r.commandAuditHandler.ToggleRule)
+			commandAudit.POST("/rules/test", r.commandAuditHandler.TestRule)
+			commandAudit.GET("/settings", r.commandAuditHandler.GetSettings)
+			commandAudit.PUT("/settings", r.commandAuditHandler.UpdateSettings)
+		}
+
+		// 审计日志接口
+		auditLogs := v1.Group("/settings/audit-logs")
+		{
+			auditLogs.GET("", r.auditLogHandler.ListLogs)
+			auditLogs.GET("/stats", r.auditLogHandler.GetStats)
+			auditLogs.GET("/:id", r.auditLogHandler.GetLog)
 		}
 	}
 }

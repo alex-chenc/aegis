@@ -14,6 +14,8 @@ import DetectionAlerts from '../views/detection/Alerts.vue'
 import DetectionPolicies from '../views/detection/Policies.vue'
 import DetectionRules from '../views/detection/Rules.vue'
 import AIAnalysis from '../views/detection/AIAnalysis.vue'
+import CommandAudit from '../views/settings/CommandAudit/index.vue'
+import AuditLogs from '../views/settings/AuditLogs/index.vue'
 
 const routes = [
   {
@@ -108,6 +110,18 @@ const routes = [
     name: 'DetectionRules',
     component: DetectionRules,
     meta: { title: '规则管理' }
+  },
+  {
+    path: '/settings/command-audit',
+    name: 'CommandAudit',
+    component: CommandAudit,
+    meta: { title: '命令审计配置' }
+  },
+  {
+    path: '/settings/audit-logs',
+    name: 'AuditLogs',
+    component: AuditLogs,
+    meta: { title: '审计日志' }
   },
   {
     path: '/settings',

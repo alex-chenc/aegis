@@ -28,6 +28,7 @@ agent/*.test
 agent/*.out
 agent/vendor/
 agent/agent
+agent/bin/*
 
 server/bin/*
 api-server/bin/*
