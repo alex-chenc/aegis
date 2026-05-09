@@ -37,25 +37,39 @@ describe('aegis global visual system', () => {
 
   describe('button readability (V5.7)', () => {
     it('uses solid background for primary buttons instead of gradient', () => {
-      expect(theme).toContain('.el-button--primary')
+      expect(theme).toContain('.el-button--primary:not(.is-link)')
       // Should use solid color, not gradient
-      expect(theme).not.toMatch(/\.el-button--primary[^}]*background:\s*linear-gradient/)
+      expect(theme).not.toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*background:\s*linear-gradient/)
     })
 
-    it('applies text-shadow to primary buttons for legibility', () => {
-      expect(theme).toMatch(/\.el-button--primary[^}]*text-shadow:\s*0\s+1px\s+2px/)
+    it('does not blur Chinese text with shadow on primary buttons', () => {
+      expect(theme).toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*text-shadow:\s*none/)
+      expect(theme).not.toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*text-shadow:\s*0\s+1px\s+2px/)
     })
 
-    it('applies letter-spacing to primary buttons for character clarity', () => {
-      expect(theme).toMatch(/\.el-button--primary[^}]*letter-spacing:\s*0\.02em/)
+    it('keeps default CJK letter spacing on primary buttons', () => {
+      expect(theme).toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*letter-spacing:\s*0/)
+      expect(theme).not.toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*letter-spacing:\s*0\.02em/)
+    })
+
+    it('sets explicit white text and stable line height for filled primary buttons', () => {
+      expect(theme).toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*color:\s*#ffffff/)
+      expect(theme).toMatch(/\.el-button--primary:not\(\.is-link\)[^}]*line-height:\s*1\.2/)
+    })
+
+    it('keeps link primary buttons as text links instead of filled pills', () => {
+      expect(theme).toContain('.el-button.is-link.el-button--primary')
+      expect(theme).toMatch(/\.el-button\.is-link\.el-button--primary[^}]*background:\s*transparent/)
+      expect(theme).toMatch(/\.el-button\.is-link\.el-button--primary[^}]*box-shadow:\s*none/)
+      expect(theme).toMatch(/\.el-button\.is-link\.el-button--primary[^}]*color:\s*var\(--aegis-action-blue-dark\)/)
     })
 
     it('defines hover state with darker background', () => {
-      expect(theme).toContain('.el-button--primary:hover')
+      expect(theme).toContain('.el-button--primary:not(.is-link):hover')
     })
 
     it('defines active state with darkest background', () => {
-      expect(theme).toContain('.el-button--primary:active')
+      expect(theme).toContain('.el-button--primary:not(.is-link):active')
     })
   })
 })

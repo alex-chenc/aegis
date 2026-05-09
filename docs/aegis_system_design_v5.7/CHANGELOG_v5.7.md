@@ -163,6 +163,11 @@
 2. 新增 `POST /api/v1/auth/reset-password` API，支持通过重置密钥重置密码
 3. 重置密钥存储在 `system_configs` 表中，每次重置后自动更换
 
+### Bug 6: 蓝底白字按钮中文显示发糊
+**现象**: 表格操作区“详情”等短中文按钮显示为蓝色胶囊背景，文字边缘发虚、阅读负担高。
+**根因**: 全局主题直接覆盖 `.el-button--primary`，误伤 `link type="primary"` 文字按钮；同时普通 primary 按钮使用 `text-shadow` 和额外 `letter-spacing`，在小字号中文按钮上降低清晰度。
+**修复**: 普通 primary 填充样式限定为 `.el-button--primary:not(.is-link)`；link primary 恢复透明文字链接形态；移除 primary 按钮文字阴影和额外字距，显式设置白色文字、行高、字重与焦点环。
+
 ---
 
 ## 设计文档索引
@@ -181,3 +186,4 @@
 | frontend_detailed_design_v5.7.md | 前端详细设计 |
 | database_structure_design_v5.7.md | 数据库结构设计 |
 | icon_and_password_reset_design.md | 图标迁移与密码重置设计 |
+| button_readability_design.md | 按钮可读性修复设计 |

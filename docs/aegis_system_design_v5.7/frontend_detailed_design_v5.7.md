@@ -81,7 +81,18 @@ src/views/settings/AuditLogs/
 
 ## 3. 现有页面改造
 
-### 3.1 任务状态增强
+### 3.1 全局按钮可读性修复
+
+**设计文档**: `button_readability_design.md`
+
+全局主题对 Element Plus primary 按钮做样式隔离：
+
+- 普通 `.el-button--primary:not(.is-link)` 保持深蓝实色背景与白字，显式设置文字色、行高和字重。
+- 移除 primary 按钮上的 `text-shadow` 与额外 `letter-spacing`，避免短中文按钮在小字号下发糊。
+- `.el-button.is-link.el-button--primary` 保持文字链接形态，不继承蓝底白字填充样式。
+- hover、active、focus 状态继续通过颜色、浅底和焦点环提供反馈。
+
+### 3.2 任务状态增强
 
 ```vue
 <!-- 新增audit_blocked状态 -->
@@ -121,7 +132,7 @@ src/views/settings/AuditLogs/
 `audit_info` 字段仅在 `status === "AUDIT_BLOCKED"` 时存在，其他状态为 `null`。
 ```
 
-### 3.2 导航菜单
+### 3.3 导航菜单
 
 ```typescript
 {
