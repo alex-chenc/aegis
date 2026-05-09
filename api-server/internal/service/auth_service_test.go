@@ -21,7 +21,7 @@ func newTestAuthService(t *testing.T) *AuthService {
 		t.Fatalf("failed to migrate auth tables: %v", err)
 	}
 
-	return NewAuthService(repository.NewAuthRepository(db))
+	return NewAuthService(repository.NewAuthRepository(db), nil)
 }
 
 func TestAuthServiceBootstrapLoginRequiresCredentialChange(t *testing.T) {

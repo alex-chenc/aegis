@@ -3,17 +3,19 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAuditLogs } from './useAuditLogs'
 
-const { getLogsMock, getLogMock, getStatsMock } = vi.hoisted(() => ({
+const { getLogsMock, getLogMock, getStatsMock, deleteLogsMock } = vi.hoisted(() => ({
   getLogsMock: vi.fn(),
   getLogMock: vi.fn(),
-  getStatsMock: vi.fn()
+  getStatsMock: vi.fn(),
+  deleteLogsMock: vi.fn()
 }))
 
 vi.mock('@/api/audit-logs', () => ({
   auditLogApi: {
     getLogs: getLogsMock,
     getLog: getLogMock,
-    getStats: getStatsMock
+    getStats: getStatsMock,
+    deleteLogs: deleteLogsMock
   }
 }))
 
@@ -64,5 +66,19 @@ describe('useAuditLogs', () => {
 
     expect(getLogMock).toHaveBeenCalledWith('1')
     expect(result).toEqual(mockLog)
+  })
+
+  it('deletes logs and refreshes list and stats', async () => {
+    deleteLogsMock.mockResolvedValueOnce({ deleted: 2 })
+    getLogsMock.mockResolvedValueOnce({ items: [], total: 0 })
+    getStatsMock.mockResolvedValueOnce({ total: 0, passed: 0, failed: 0, pass_rate: 0, retry_distribution: { '1': 0, '2': 0, '3': 0, failed: 0 } })
+
+    const { deleteLogs } = useAuditLogs()
+    const result = await deleteLogs(['id-1', 'id-2'])
+
+    expect(deleteLogsMock).toHaveBeenCalledWith(['id-1', 'id-2'])
+    expect(getLogsMock).toHaveBeenCalled()
+    expect(getStatsMock).toHaveBeenCalled()
+    expect(result).toBe(2)
   })
 })

@@ -24,7 +24,7 @@ func newMiddlewareTestAuthService(t *testing.T) *service.AuthService {
 	if err := db.AutoMigrate(&model.AuthUser{}, &model.AuthSession{}); err != nil {
 		t.Fatalf("failed to migrate auth tables: %v", err)
 	}
-	return service.NewAuthService(repository.NewAuthRepository(db))
+	return service.NewAuthService(repository.NewAuthRepository(db), nil)
 }
 
 func TestAuthRequiredRejectsBusinessAPIWithoutToken(t *testing.T) {

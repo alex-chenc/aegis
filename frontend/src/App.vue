@@ -104,7 +104,7 @@
 
       <div class="sidebar-footer">
         <span class="status-dot" />
-        <span class="version">控制面在线 · v3.0</span>
+        <span class="version">控制面在线 · V5.7</span>
       </div>
     </el-aside>
 
@@ -127,6 +127,7 @@
           <el-tooltip content="刷新" placement="bottom">
             <el-button :icon="Refresh" circle size="small" @click="handleRefresh" />
           </el-tooltip>
+          <UserProfileDropdown />
         </div>
       </el-header>
 
@@ -143,6 +144,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
+import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
 import { createIdleLogout } from '@/utils/sessionTimeout'
 

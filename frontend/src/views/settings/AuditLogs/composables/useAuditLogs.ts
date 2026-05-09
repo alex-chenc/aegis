@@ -28,6 +28,13 @@ export function useAuditLogs() {
     return await auditLogApi.getLog(id)
   }
 
+  const deleteLogs = async (ids: string[]) => {
+    const res = await auditLogApi.deleteLogs(ids)
+    await fetchLogs()
+    await fetchStats()
+    return res.deleted
+  }
+
   return {
     logs,
     total,
@@ -36,6 +43,7 @@ export function useAuditLogs() {
     queryParams,
     fetchLogs,
     fetchStats,
-    fetchLogDetail
+    fetchLogDetail,
+    deleteLogs
   }
 }

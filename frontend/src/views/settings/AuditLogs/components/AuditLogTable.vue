@@ -3,7 +3,16 @@
     <template #header>
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px">
         <span>审计日志</span>
-        <div style="display: flex; gap: 8px">
+        <div style="display: flex; gap: 8px; align-items: center">
+          <el-button
+            data-testid="batch-delete-btn"
+            type="danger"
+            size="small"
+            :disabled="selectedRows.length === 0"
+            @click="handleBatchDelete"
+          >
+            删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
+          </el-button>
           <el-select v-model="filters.result" placeholder="结果" size="small" clearable style="width: 100px" @change="handleFilter">
             <el-option label="通过" value="passed" />
             <el-option label="失败" value="failed" />
@@ -22,7 +31,8 @@
       </div>
     </template>
 
-    <el-table :data="logs" v-loading="loading" style="width: 100%">
+    <el-table ref="tableRef" :data="logs" v-loading="loading" style="width: 100%" @selection-change="handleSelectionChange">
+      <el-table-column type="selection" width="55" />
       <el-table-column prop="created_at" label="时间" width="170">
         <template #default="{ row }">
           {{ formatTime(row.created_at) }}
@@ -77,6 +87,7 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import type { AuditLog } from '@/api/audit-logs'
 
 defineProps<{
@@ -88,10 +99,13 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'detail', log: AuditLog): void
   (e: 'filter', params: Record<string, any>): void
+  (e: 'delete', ids: string[]): void
 }>()
 
+const tableRef = ref()
 const currentPage = ref(1)
 const pageSize = ref(20)
+const selectedRows = ref<AuditLog[]>([])
 const filters = reactive({ result: '', script_type: '', audit_source: '' })
 
 const scriptTypeLabels: Record<string, string> = {
@@ -116,6 +130,27 @@ function riskTagType(level: string): string {
 function formatTime(ts: string): string {
   if (!ts) return '-'
   return ts.replace('T', ' ').substring(0, 19)
+}
+
+function handleSelectionChange(rows: AuditLog[]) {
+  selectedRows.value = rows
+}
+
+async function handleBatchDelete() {
+  if (selectedRows.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${selectedRows.value.length} 条审计日志？此操作不可恢复。`,
+      '批量删除确认',
+      { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    const ids = selectedRows.value.map(r => r.id)
+    emit('delete', ids)
+    selectedRows.value = []
+    tableRef.value?.clearSelection()
+  } catch {
+    // user cancelled
+  }
 }
 
 function handleFilter() {

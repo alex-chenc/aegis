@@ -16,6 +16,12 @@ export interface ChangeCredentialsPayload {
   confirm_password: string
 }
 
+export interface ChangePasswordPayload {
+  current_password: string
+  new_password: string
+  confirm_password: string
+}
+
 export function getAuthStatus(): Promise<AuthStatus> {
   return request.get('/auth/status')
 }
@@ -38,4 +44,8 @@ export function getCurrentUser(): Promise<Omit<AuthSession, 'token'>> {
 
 export function logout(): Promise<{ ok: boolean }> {
   return request.post('/auth/logout')
+}
+
+export function changePassword(payload: ChangePasswordPayload): Promise<AuthSession> {
+  return request.post('/auth/change-password', payload)
 }

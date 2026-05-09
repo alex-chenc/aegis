@@ -10,6 +10,7 @@
       :total="total"
       @detail="showDetail"
       @filter="handleFilter"
+      @delete="handleDelete"
     />
 
     <AuditDetailDrawer
@@ -22,6 +23,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import AuditStatsCard from './components/AuditStatsCard.vue'
 import AuditLogTable from './components/AuditLogTable.vue'
 import AuditDetailDrawer from './components/AuditDetailDrawer.vue'
@@ -30,7 +32,7 @@ import type { AuditLog } from '@/api/audit-logs'
 
 const {
   logs, total, loading, stats,
-  fetchLogs, fetchStats, fetchLogDetail
+  fetchLogs, fetchStats, fetchLogDetail, deleteLogs
 } = useAuditLogs()
 
 const drawerVisible = ref(false)
@@ -52,5 +54,14 @@ async function showDetail(log: AuditLog) {
 
 async function handleFilter(params: Record<string, any>) {
   await fetchLogs(params)
+}
+
+async function handleDelete(ids: string[]) {
+  try {
+    const deleted = await deleteLogs(ids)
+    ElMessage.success(`成功删除 ${deleted} 条审计日志`)
+  } catch {
+    ElMessage.error('删除失败，请重试')
+  }
 }
 </script>

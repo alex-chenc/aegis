@@ -40,4 +40,7 @@ export const auditLogApi = {
 
   getStats: () =>
     request.get('/settings/audit-logs/stats'),
+
+  deleteLogs: (ids: string[]) =>
+    request.delete('/settings/audit-logs', { data: { ids } }),
 }

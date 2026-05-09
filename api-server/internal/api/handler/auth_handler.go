@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -25,6 +26,18 @@ type ChangeCredentialsRequest struct {
 	ConfirmPassword string `json:"confirm_password"`
 }
 
+type ResetPasswordRequest struct {
+	ResetKey        string `json:"reset_key"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
 func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 	return &AuthHandler{authService: authService}
 }
@@ -35,6 +48,8 @@ func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/login", h.Login)
 	group.GET("/me", h.Me)
 	group.POST("/change-credentials", h.ChangeCredentials)
+	group.POST("/reset-password", h.ResetPassword)
+	group.POST("/change-password", h.ChangePassword)
 	group.POST("/logout", h.Logout)
 }
 
@@ -110,6 +125,40 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request"})
+		return
+	}
+
+	session, err := h.authService.ResetPassword(req.ResetKey, req.NewPassword, req.ConfirmPassword)
+	if err != nil {
+		writeAuthError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, session)
+}
+
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request"})
+		return
+	}
+
+	session, err := h.authService.ChangePassword(bearerToken(c), service.ChangePasswordInput{
+		CurrentPassword: req.CurrentPassword,
+		NewPassword:     req.NewPassword,
+		ConfirmPassword: req.ConfirmPassword,
+	})
+	if err != nil {
+		writeAuthError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, session)
+}
+
 func bearerToken(c *gin.Context) string {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
@@ -119,9 +168,16 @@ func bearerToken(c *gin.Context) string {
 }
 
 func writeAuthError(c *gin.Context, err error) {
+	var rateLimitErr *service.LoginRateLimitError
 	switch {
+	case errors.As(err, &rateLimitErr):
+		minutes := int(rateLimitErr.Remaining.Minutes())
+		if minutes < 1 {
+			minutes = 1
+		}
+		c.JSON(http.StatusTooManyRequests, gin.H{"message": fmt.Sprintf("密码错误次数过多，请 %d 分钟后再试", minutes)})
 	case errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrInvalidToken):
-		c.JSON(http.StatusUnauthorized, gin.H{"message": "认证失败"})
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "密码错误"})
 	case errors.Is(err, service.ErrBootstrapUnavailable):
 		c.JSON(http.StatusForbidden, gin.H{"message": "首次进入已关闭"})
 	case errors.Is(err, service.ErrValidation):

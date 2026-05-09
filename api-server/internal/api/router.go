@@ -285,6 +285,7 @@ func (r *Router) Setup() {
 			auditLogs.GET("", r.auditLogHandler.ListLogs)
 			auditLogs.GET("/stats", r.auditLogHandler.GetStats)
 			auditLogs.GET("/:id", r.auditLogHandler.GetLog)
+			auditLogs.DELETE("", r.auditLogHandler.DeleteLogs)
 		}
 	}
 }

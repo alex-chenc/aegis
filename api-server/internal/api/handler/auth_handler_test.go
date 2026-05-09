@@ -28,7 +28,7 @@ func newTestAuthRouter(t *testing.T) *gin.Engine {
 		t.Fatalf("failed to migrate auth tables: %v", err)
 	}
 
-	authSvc := service.NewAuthService(repository.NewAuthRepository(db))
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), nil)
 	authHandler := NewAuthHandler(authSvc)
 
 	router := gin.New()

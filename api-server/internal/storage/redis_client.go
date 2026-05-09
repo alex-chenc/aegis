@@ -739,6 +739,67 @@ func (r *RedisClient) DeleteGenerationStatus(cveID, mode string) error {
 }
 
 // ============================================================================
+// Login Rate Limiting
+// Key pattern: auth:login:fail:{username}
+// TTL: 10 minutes
+// Max attempts: 3
+// ============================================================================
+
+const LoginFailTTL = 10 * time.Minute
+const LoginFailKeyPrefix = "auth:login:fail:"
+const LoginMaxAttempts = 3
+
+func loginFailKey(username string) string {
+	return fmt.Sprintf("%s%s", LoginFailKeyPrefix, username)
+}
+
+// IncrementLoginFail increments the failed login attempt counter for a username.
+// Returns the new attempt count.
+func (r *RedisClient) IncrementLoginFail(username string) (int, error) {
+	key := loginFailKey(username)
+	count, err := r.client.Incr(r.ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if count == 1 {
+		r.client.Expire(r.ctx, key, LoginFailTTL)
+	}
+	return int(count), nil
+}
+
+// GetLoginFailCount returns the current failed login attempt count for a username.
+func (r *RedisClient) GetLoginFailCount(username string) (int, error) {
+	key := loginFailKey(username)
+	val, err := r.client.Get(r.ctx, key).Int()
+	if err != nil {
+		if err == redis.Nil {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return val, nil
+}
+
+// GetLoginFailTTL returns the remaining TTL for the login fail key.
+func (r *RedisClient) GetLoginFailTTL(username string) (time.Duration, error) {
+	key := loginFailKey(username)
+	ttl, err := r.client.TTL(r.ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if ttl < 0 {
+		return 0, nil
+	}
+	return ttl, nil
+}
+
+// ClearLoginFail clears the failed login attempt counter for a username.
+func (r *RedisClient) ClearLoginFail(username string) error {
+	key := loginFailKey(username)
+	return r.client.Del(r.ctx, key).Err()
+}
+
+// ============================================================================
 // Healing Status Management
 // Key pattern: healing:status:{task_id}
 // TTL: 10 minutes (longer than 5-minute timeout)

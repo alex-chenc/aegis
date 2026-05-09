@@ -43,6 +43,18 @@ func (r *AuditLogRepo) FindLatestByTaskID(taskID string) (*model.ScriptAuditLog,
 	return &log, nil
 }
 
+func (r *AuditLogRepo) DeleteByIDs(ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := r.db.Where("id IN ?", ids).Delete(&model.ScriptAuditLog{})
+	if result.Error != nil {
+		logger.Error("failed to delete audit logs", zap.Error(result.Error))
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func (r *AuditLogRepo) List(scriptType, auditSource, passedStr string, page, pageSize int) ([]model.ScriptAuditLog, int64, error) {
 	var logs []model.ScriptAuditLog
 	var total int64

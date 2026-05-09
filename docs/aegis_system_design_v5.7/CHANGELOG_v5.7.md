@@ -149,6 +149,22 @@
 
 ---
 
+## V5.7 功能增强 (2026-05-09)
+
+### 功能 1: 图标文件迁移
+**需求**: 将系统图标迁移到前端项目内部目录
+**方案**: 图标放置于 `frontend/public/docs/img/icon.png`，`index.html` 引用路径更新为 `/docs/img/icon.png`
+
+### 功能 2: 管理员密码重置机制
+**现象**: 管理员密码 `Admin@123` 无法登录，数据库中的 bcrypt 哈希与该密码不匹配
+**根因**: 系统缺少密码重置功能，密码一旦丢失无法恢复
+**方案**:
+1. 数据库迁移重置管理员密码为 `Admin@123`
+2. 新增 `POST /api/v1/auth/reset-password` API，支持通过重置密钥重置密码
+3. 重置密钥存储在 `system_configs` 表中，每次重置后自动更换
+
+---
+
 ## 设计文档索引
 
 | 文档 | 说明 |
@@ -164,3 +180,4 @@
 | backend_detailed_design_v5.7.md | 后端详细设计 |
 | frontend_detailed_design_v5.7.md | 前端详细设计 |
 | database_structure_design_v5.7.md | 数据库结构设计 |
+| icon_and_password_reset_design.md | 图标迁移与密码重置设计 |

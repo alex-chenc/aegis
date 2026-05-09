@@ -393,6 +393,9 @@ async function handleLogin() {
       ElMessage.success('登录成功')
       window.location.assign('/hosts')
     }
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || '登录失败'
+    ElMessage.error(msg)
   } finally {
     submitting.value = false
   }
@@ -940,8 +943,9 @@ async function handleLogin() {
   overflow: hidden;
   border: 0;
   border-radius: 8px;
-  background: linear-gradient(90deg, #4d8dff, #00b7ff);
+  background: linear-gradient(90deg, #2563eb, #0891b2);
   box-shadow: 0 12px 30px rgba(0, 119, 255, 0.28);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: filter 180ms ease, box-shadow 180ms ease, transform 120ms ease;
 }
 

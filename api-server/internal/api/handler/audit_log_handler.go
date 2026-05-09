@@ -82,3 +82,51 @@ func (h *AuditLogHandler) GetStats(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": stats})
 }
+
+type deleteLogsRequest struct {
+	IDs []string `json:"ids" binding:"required"`
+}
+
+// DeleteLogs DELETE /api/v1/settings/audit-logs
+func (h *AuditLogHandler) DeleteLogs(c *gin.Context) {
+	var req deleteLogsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "ids is required"})
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "ids cannot be empty"})
+		return
+	}
+
+	if len(req.IDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "maximum 100 ids allowed"})
+		return
+	}
+
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, idStr := range req.IDs {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid uuid: " + idStr})
+			return
+		}
+		ids = append(ids, id)
+	}
+
+	deleted, err := h.auditLogRepo.DeleteByIDs(ids)
+	if err != nil {
+		logger.Error("failed to delete audit logs", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to delete audit logs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"deleted": deleted,
+		},
+	})
+}

@@ -164,7 +164,7 @@ func main() {
 
 	// Notification Service
 	notificationSvc := service.NewNotificationService(notificationRepo)
-	authService := service.NewAuthService(authRepo)
+	authService := service.NewAuthService(authRepo, redisClient)
 
 	// V5.0 Runtime Detection Services
 	wsService := service.NewWebSocketService()

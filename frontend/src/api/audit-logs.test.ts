@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { auditLogApi } from './audit-logs'
 
-const { getMock } = vi.hoisted(() => ({
-  getMock: vi.fn()
+const { getMock, deleteMock } = vi.hoisted(() => ({
+  getMock: vi.fn(),
+  deleteMock: vi.fn()
 }))
 
 vi.mock('./index', () => ({
   default: {
-    get: getMock
+    get: getMock,
+    delete: deleteMock
   }
 }))
 
@@ -50,6 +52,16 @@ describe('audit-logs APIs', () => {
       getMock.mockResolvedValueOnce(expected)
       const result = await auditLogApi.getStats()
       expect(getMock).toHaveBeenCalledWith('/settings/audit-logs/stats')
+      expect(result).toEqual(expected)
+    })
+  })
+
+  describe('deleteLogs', () => {
+    it('sends DELETE with ids in request body', async () => {
+      const expected = { deleted: 3 }
+      deleteMock.mockResolvedValueOnce(expected)
+      const result = await auditLogApi.deleteLogs(['id-1', 'id-2', 'id-3'])
+      expect(deleteMock).toHaveBeenCalledWith('/settings/audit-logs', { data: { ids: ['id-1', 'id-2', 'id-3'] } })
       expect(result).toEqual(expected)
     })
   })

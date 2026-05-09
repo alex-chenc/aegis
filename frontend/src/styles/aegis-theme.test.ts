@@ -34,4 +34,28 @@ describe('aegis global visual system', () => {
     expect(theme).toContain('.el-input__wrapper')
     expect(theme).toContain('.el-button--primary')
   })
+
+  describe('button readability (V5.7)', () => {
+    it('uses solid background for primary buttons instead of gradient', () => {
+      expect(theme).toContain('.el-button--primary')
+      // Should use solid color, not gradient
+      expect(theme).not.toMatch(/\.el-button--primary[^}]*background:\s*linear-gradient/)
+    })
+
+    it('applies text-shadow to primary buttons for legibility', () => {
+      expect(theme).toMatch(/\.el-button--primary[^}]*text-shadow:\s*0\s+1px\s+2px/)
+    })
+
+    it('applies letter-spacing to primary buttons for character clarity', () => {
+      expect(theme).toMatch(/\.el-button--primary[^}]*letter-spacing:\s*0\.02em/)
+    })
+
+    it('defines hover state with darker background', () => {
+      expect(theme).toContain('.el-button--primary:hover')
+    })
+
+    it('defines active state with darkest background', () => {
+      expect(theme).toContain('.el-button--primary:active')
+    })
+  })
 })

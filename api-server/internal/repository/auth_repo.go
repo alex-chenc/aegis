@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"time"
 
 	"api-server/internal/model"
@@ -68,4 +69,30 @@ func (r *AuthRepository) DeleteSessionByTokenHash(tokenHash string) error {
 
 func (r *AuthRepository) DeleteExpiredSessions(now time.Time) error {
 	return r.db.Where("expires_at <= ?", now).Delete(&model.AuthSession{}).Error
+}
+
+func (r *AuthRepository) DeleteSessionsByUserID(userID uuid.UUID) error {
+	return r.db.Where("user_id = ?", userID).Delete(&model.AuthSession{}).Error
+}
+
+func (r *AuthRepository) GetPasswordResetKey() (string, error) {
+	var config model.SystemConfig
+	if err := r.db.Where("config_key = ?", "password_reset_key").First(&config).Error; err != nil {
+		return "", err
+	}
+	var key string
+	if err := json.Unmarshal(config.ConfigValue, &key); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+func (r *AuthRepository) UpdatePasswordResetKey(newKey string) error {
+	keyJSON, err := json.Marshal(newKey)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&model.SystemConfig{}).
+		Where("config_key = ?", "password_reset_key").
+		Update("config_value", keyJSON).Error
 }
