@@ -129,11 +129,11 @@
 
           <el-button
             type="primary"
+            native-type="submit"
             size="large"
             class="submit-button"
             :loading="submitting"
             :disabled="submitting"
-            @click="handleLogin"
           >
             登录
           </el-button>
@@ -378,6 +378,7 @@ async function handleBootstrap() {
 }
 
 async function handleLogin() {
+  if (submitting.value) return
   if (!loginFormRef.value) return
   const valid = await loginFormRef.value.validate().catch(() => false)
   if (!valid) return

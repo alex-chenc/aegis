@@ -48,9 +48,10 @@ const InputStub = defineComponent({
   inheritAttrs: false,
   props: ['modelValue'],
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props, { emit, attrs }) {
     return () =>
       h('input', {
+        ...attrs,
         value: props.modelValue,
         onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value)
       })
@@ -126,5 +127,49 @@ describe('Login view', () => {
       force_password_change: true
     })
     expect(replaceMock).toHaveBeenCalledWith('/force-password-change')
+  })
+
+  it('triggers login when Enter is pressed in password input', async () => {
+    getAuthStatusMock.mockResolvedValueOnce({ initialized: true })
+    loginMock.mockResolvedValueOnce({
+      token: 'token-2',
+      username: 'admin',
+      force_password_change: false
+    })
+    const wrapper = mountLogin()
+    await settle()
+
+    const inputs = wrapper.findAll('input')
+    await inputs[0].setValue('admin')
+    await inputs[1].setValue('Cc&324511')
+
+    const form = wrapper.find('form')
+    await form.trigger('submit')
+    await settle()
+
+    expect(loginMock).toHaveBeenCalledWith('admin', 'Cc&324511')
+    expect(loginMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('triggers login when form submit event fires', async () => {
+    getAuthStatusMock.mockResolvedValueOnce({ initialized: true })
+    loginMock.mockResolvedValueOnce({
+      token: 'token-3',
+      username: 'admin',
+      force_password_change: false
+    })
+    const wrapper = mountLogin()
+    await settle()
+
+    const inputs = wrapper.findAll('input')
+    await inputs[0].setValue('admin')
+    await inputs[1].setValue('Cc&324511')
+
+    const form = wrapper.find('form')
+    await form.trigger('submit')
+    await settle()
+
+    expect(loginMock).toHaveBeenCalledWith('admin', 'Cc&324511')
+    expect(loginMock).toHaveBeenCalledTimes(1)
   })
 })
