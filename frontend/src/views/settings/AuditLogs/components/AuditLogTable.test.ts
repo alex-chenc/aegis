@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick, defineComponent, h } from 'vue'
 import AuditLogTable from './AuditLogTable.vue'
 import type { AuditLog } from '@/api/audit-logs'
+import { auditSourceLabels, scriptTypeLabels } from '../constants'
 
 const { confirmMock } = vi.hoisted(() => ({
   confirmMock: vi.fn().mockResolvedValue('confirm')
@@ -17,44 +18,50 @@ vi.mock('element-plus', () => ({
 const mockLogs: AuditLog[] = [
   {
     id: 'aaaa-bbbb-cccc-dddd-0001',
+    task_id: 'task-001',
+    rule_id: 'rule-001',
     script_type: 'check',
-    audit_source: 'blacklist',
-    attempt_count: 1,
-    result: 'passed',
+    audit_source: 'generation',
+    attempt: 1,
+    passed: true,
     risk_level: 'safe',
     duration_ms: 120,
     script_content: '#!/bin/bash\necho hello',
-    blacklist_hit_rules: [],
-    ai_audit_issues: [],
-    audit_timeline: [],
+    blacklist_hits: [],
+    ai_analysis: [],
+    error_msg: '',
     created_at: '2026-05-08T10:00:00Z'
   },
   {
     id: 'aaaa-bbbb-cccc-dddd-0002',
+    task_id: 'task-002',
+    rule_id: 'rule-002',
     script_type: 'fix',
-    audit_source: 'ai',
-    attempt_count: 2,
-    result: 'failed',
+    audit_source: 'dispatch',
+    attempt: 2,
+    passed: false,
     risk_level: 'high',
     duration_ms: 350,
     script_content: '#!/bin/bash\nrm -rf /',
-    blacklist_hit_rules: [{ rule_name: 'dangerous_rm', line_number: 2, matched_text: 'rm -rf /' }],
-    ai_audit_issues: [{ type: 'privilege_escalation', description: 'Dangerous command', line_range: '2', suggestion: 'Remove rm -rf' }],
-    audit_timeline: [],
+    blacklist_hits: [{ rule_name: 'dangerous_rm', line_number: 2, matched_text: 'rm -rf /' }],
+    ai_analysis: [{ type: 'privilege_escalation', description: 'Dangerous command', line_range: '2', suggestion: 'Remove rm -rf' }],
+    error_msg: '',
     created_at: '2026-05-08T11:00:00Z'
   },
   {
     id: 'aaaa-bbbb-cccc-dddd-0003',
+    task_id: 'task-003',
+    rule_id: 'rule-003',
     script_type: 'poc_verify',
-    audit_source: 'blacklist',
-    attempt_count: 1,
-    result: 'passed',
+    audit_source: 'agent',
+    attempt: 1,
+    passed: true,
     risk_level: 'safe',
     duration_ms: 80,
     script_content: '#!/bin/bash\ncurl example.com',
-    blacklist_hit_rules: [],
-    ai_audit_issues: [],
-    audit_timeline: [],
+    blacklist_hits: [],
+    ai_analysis: [],
+    error_msg: '',
     created_at: '2026-05-08T12:00:00Z'
   }
 ]
@@ -198,7 +205,7 @@ describe('AuditLogTable multi-select delete', () => {
 
     expect(wrapper.emitted('filter')).toBeTruthy()
     const emittedParams = wrapper.emitted('filter')![0][0] as any
-    expect(emittedParams.result).toBe('failed')
+    expect(emittedParams.passed).toBe('false')
     expect(emittedParams.page).toBe(1)
   })
 
@@ -243,5 +250,41 @@ describe('AuditLogTable multi-select delete', () => {
     expect(wrapper.emitted('filter')).toBeTruthy()
     const emittedParams = wrapper.emitted('filter')![0][0] as any
     expect(emittedParams.page).toBe(3)
+  })
+})
+
+describe('AuditLogTable audit source display', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('maps generation audit source to Chinese label', () => {
+    expect(auditSourceLabels['generation']).toBe('生成阶段')
+  })
+
+  it('maps dispatch audit source to Chinese label', () => {
+    expect(auditSourceLabels['dispatch']).toBe('下发阶段')
+  })
+
+  it('maps agent audit source to Chinese label', () => {
+    expect(auditSourceLabels['agent']).toBe('Agent侧')
+  })
+
+  it('does not contain obsolete blacklist/ai source labels', () => {
+    expect(auditSourceLabels['blacklist']).toBeUndefined()
+    expect(auditSourceLabels['ai']).toBeUndefined()
+  })
+
+  it('emits correct audit_source value in filter event', async () => {
+    const wrapper = mountTable()
+    const vm = wrapper.vm as any
+
+    vm.filters.audit_source = 'generation'
+    vm.handleFilter()
+    await nextTick()
+
+    expect(wrapper.emitted('filter')).toBeTruthy()
+    const emittedParams = wrapper.emitted('filter')![0][0] as any
+    expect(emittedParams.audit_source).toBe('generation')
   })
 })

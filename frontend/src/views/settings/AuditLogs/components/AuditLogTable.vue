@@ -24,8 +24,9 @@
             <el-option label="自愈" value="self_healing" />
           </el-select>
           <el-select v-model="filters.audit_source" placeholder="审计来源" size="small" clearable style="width: 120px" @change="handleFilter">
-            <el-option label="黑名单" value="blacklist" />
-            <el-option label="AI" value="ai" />
+            <el-option label="生成阶段" value="generation" />
+            <el-option label="下发阶段" value="dispatch" />
+            <el-option label="Agent侧" value="agent" />
           </el-select>
         </div>
       </div>
@@ -48,11 +49,11 @@
           {{ auditSourceLabels[row.audit_source] || row.audit_source }}
         </template>
       </el-table-column>
-      <el-table-column prop="attempt_count" label="尝试次数" width="90" />
-      <el-table-column prop="result" label="结果" width="80">
+      <el-table-column prop="attempt" label="尝试次数" width="90" />
+      <el-table-column prop="passed" label="结果" width="80">
         <template #default="{ row }">
-          <el-tag :type="row.result === 'passed' ? 'success' : 'danger'" size="small">
-            {{ row.result === 'passed' ? '通过' : '失败' }}
+          <el-tag :type="row.passed ? 'success' : 'danger'" size="small">
+            {{ row.passed ? '通过' : '失败' }}
           </el-tag>
         </template>
       </el-table-column>
@@ -89,6 +90,7 @@
 import { ref, reactive } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import type { AuditLog } from '@/api/audit-logs'
+import { scriptTypeLabels, auditSourceLabels } from '../constants'
 
 defineProps<{
   logs: AuditLog[]
@@ -107,18 +109,6 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const selectedRows = ref<AuditLog[]>([])
 const filters = reactive({ result: '', script_type: '', audit_source: '' })
-
-const scriptTypeLabels: Record<string, string> = {
-  check: '检测',
-  fix: '修复',
-  poc_verify: 'POC',
-  self_healing: '自愈'
-}
-
-const auditSourceLabels: Record<string, string> = {
-  blacklist: '黑名单',
-  ai: 'AI'
-}
 
 function riskTagType(level: string): string {
   if (level === 'critical') return 'danger'
@@ -164,10 +154,11 @@ function handlePageChange(page: number) {
 }
 
 function emitParams() {
+  const passed = filters.result === 'passed' ? 'true' : filters.result === 'failed' ? 'false' : undefined
   emit('filter', {
     page: currentPage.value,
     page_size: pageSize.value,
-    result: filters.result || undefined,
+    passed,
     script_type: filters.script_type || undefined,
     audit_source: filters.audit_source || undefined
   })

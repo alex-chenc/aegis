@@ -184,12 +184,12 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			MAX(task_type) as task_type,
 			COALESCE(SUM(CASE WHEN task_type = 'check' OR task_type = 'CHECK' THEN 1 ELSE 0 END), 0) as has_check,
 			COALESCE(SUM(CASE WHEN task_type = 'fix' OR task_type = 'FIX' THEN 1 ELSE 0 END), 0) as has_fix,
-			CASE 
+			CASE
 				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
 				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
-				ELSE 'partial'
+				ELSE 'failed'
 			END as status,
 			SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as success_count,
 			SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed_count,
@@ -203,12 +203,12 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 
 	if params.Status != "" {
 		query = query.Having(`
-			CASE 
+			CASE
 				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
 				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
-				ELSE 'partial'
+				ELSE 'failed'
 			END = ?
 		`, params.Status)
 	}
@@ -251,12 +251,12 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 func (r *TaskLogRepository) CountTaskGroups(params ListTaskGroupsParams) (int64, error) {
 	subQuery := r.db.Table("task_logs").
 		Select(`task_group_id,
-			CASE 
+			CASE
 				WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
 				WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
 				WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
 				WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
-				ELSE 'partial'
+				ELSE 'failed'
 			END as status
 		`).
 		Group("task_group_id")

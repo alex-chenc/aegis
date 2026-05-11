@@ -27,6 +27,7 @@ const (
 	AgentService_ExecuteTool_FullMethodName         = "/agent_comm.v1.AgentService/ExecuteTool"
 	AgentService_UpdateRules_FullMethodName         = "/agent_comm.v1.AgentService/UpdateRules"
 	AgentService_ExecuteBlockCommand_FullMethodName = "/agent_comm.v1.AgentService/ExecuteBlockCommand"
+	AgentService_SyncConfig_FullMethodName          = "/agent_comm.v1.AgentService/SyncConfig"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -51,6 +52,8 @@ type AgentServiceClient interface {
 	UpdateRules(ctx context.Context, in *RuleUpdateRequest, opts ...grpc.CallOption) (*RuleUpdateResponse, error)
 	// ExecuteBlockCommand 执行阻断指令
 	ExecuteBlockCommand(ctx context.Context, in *BlockCommand, opts ...grpc.CallOption) (*BlockResponse, error)
+	// SyncConfig 配置同步（Server -> Agent）
+	SyncConfig(ctx context.Context, in *ConfigSyncRequest, opts ...grpc.CallOption) (*ConfigSyncResponse, error)
 }
 
 type agentServiceClient struct {
@@ -144,6 +147,16 @@ func (c *agentServiceClient) ExecuteBlockCommand(ctx context.Context, in *BlockC
 	return out, nil
 }
 
+func (c *agentServiceClient) SyncConfig(ctx context.Context, in *ConfigSyncRequest, opts ...grpc.CallOption) (*ConfigSyncResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigSyncResponse)
+	err := c.cc.Invoke(ctx, AgentService_SyncConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -166,6 +179,8 @@ type AgentServiceServer interface {
 	UpdateRules(context.Context, *RuleUpdateRequest) (*RuleUpdateResponse, error)
 	// ExecuteBlockCommand 执行阻断指令
 	ExecuteBlockCommand(context.Context, *BlockCommand) (*BlockResponse, error)
+	// SyncConfig 配置同步（Server -> Agent）
+	SyncConfig(context.Context, *ConfigSyncRequest) (*ConfigSyncResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -199,6 +214,9 @@ func (UnimplementedAgentServiceServer) UpdateRules(context.Context, *RuleUpdateR
 }
 func (UnimplementedAgentServiceServer) ExecuteBlockCommand(context.Context, *BlockCommand) (*BlockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteBlockCommand not implemented")
+}
+func (UnimplementedAgentServiceServer) SyncConfig(context.Context, *ConfigSyncRequest) (*ConfigSyncResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncConfig not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -354,6 +372,24 @@ func _AgentService_ExecuteBlockCommand_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SyncConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigSyncRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SyncConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SyncConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SyncConfig(ctx, req.(*ConfigSyncRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -388,6 +424,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecuteBlockCommand",
 			Handler:    _AgentService_ExecuteBlockCommand_Handler,
+		},
+		{
+			MethodName: "SyncConfig",
+			Handler:    _AgentService_SyncConfig_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

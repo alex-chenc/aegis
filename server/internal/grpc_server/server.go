@@ -31,20 +31,22 @@ type WebSocketBroadcaster interface {
 
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
-	server             *grpc.Server
-	hostRepo           *repository.HostRepository
-	taskLogRepo        *repository.TaskLogRepository
-	sigmaRuleRepo      *repository.SigmaRuleRepository
-	alertRepo          *repository.AlertRepository
-	runtimeEventRepo   *repository.RuntimeEventRepository
-	blockPolicyRepo    *repository.BlockPolicyRepository
-	wsBroadcaster      WebSocketBroadcaster
-	redisClient        *storage.RedisClient
-	kafkaProducer      *queue.KafkaProducer
-	agentConnections   sync.Map
-	callbackPorts      sync.Map // hostID -> callback port
-	port               int
-	taskResultCallback TaskResultCallback
+	server               *grpc.Server
+	hostRepo             *repository.HostRepository
+	taskLogRepo          *repository.TaskLogRepository
+	sigmaRuleRepo        *repository.SigmaRuleRepository
+	alertRepo            *repository.AlertRepository
+	runtimeEventRepo     *repository.RuntimeEventRepository
+	blockPolicyRepo      *repository.BlockPolicyRepository
+	commandAuditRuleRepo *repository.CommandAuditRuleRepo
+	systemConfigRepo     *repository.SystemConfigRepo
+	wsBroadcaster        WebSocketBroadcaster
+	redisClient          *storage.RedisClient
+	kafkaProducer        *queue.KafkaProducer
+	agentConnections     sync.Map
+	callbackPorts        sync.Map // hostID -> callback port
+	port                 int
+	taskResultCallback   TaskResultCallback
 }
 
 type AgentConnection struct {
@@ -90,6 +92,14 @@ func (s *GRPCServer) SetRuntimeEventRepo(repo *repository.RuntimeEventRepository
 
 func (s *GRPCServer) SetBlockPolicyRepo(repo *repository.BlockPolicyRepository) {
 	s.blockPolicyRepo = repo
+}
+
+func (s *GRPCServer) SetCommandAuditRuleRepo(repo *repository.CommandAuditRuleRepo) {
+	s.commandAuditRuleRepo = repo
+}
+
+func (s *GRPCServer) SetSystemConfigRepo(repo *repository.SystemConfigRepo) {
+	s.systemConfigRepo = repo
 }
 
 // Start 启动 gRPC 服务器
@@ -220,7 +230,7 @@ func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb
 		)
 	}
 
-	go s.pushRulesToAgent(hostID)
+	go s.pushConfigToAgent(hostID)
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -361,7 +371,7 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 					zap.Stringer("host_id", hostID),
 				)
 
-				go s.pushActiveRulesToAgent(hostID, connection)
+				go s.pushActiveConfigToAgent(hostID, connection)
 			}
 
 		case *pb.CommandRequest_Result:
@@ -1281,6 +1291,201 @@ func (s *GRPCServer) BroadcastRuleUpdate(update *pb.RuleUpdate) {
 		}
 		return true
 	})
+}
+
+// pushConfigToAgent pushes all configurations (sigma rules, audit rules, audit settings) to an agent on registration.
+func (s *GRPCServer) pushConfigToAgent(hostID uuid.UUID) {
+	// Wait for agent connection to be established
+	var conn interface{}
+	var ok bool
+	for i := 0; i < 5; i++ {
+		conn, ok = s.agentConnections.Load(hostID)
+		if ok {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if !ok {
+		logger.Warn("agent connection not ready for config push after retries",
+			zap.String("host_id", hostID.String()))
+		return
+	}
+
+	agentConn, ok := conn.(*AgentConnection)
+	if !ok || agentConn.CallbackClient == nil {
+		logger.Warn("agent callback client not available for config push",
+			zap.String("host_id", hostID.String()))
+		return
+	}
+
+	configs := s.buildAllConfigs()
+	if len(configs) == 0 {
+		logger.Info("no configs to push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := agentConn.CallbackClient.SyncConfig(ctx, &pb.ConfigSyncRequest{
+		Configs: configs,
+	})
+	if err != nil {
+		logger.Error("failed to push config to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
+	} else {
+		logger.Info("config pushed to agent",
+			zap.String("host_id", hostID.String()),
+			zap.Int("config_count", len(configs)),
+			zap.Bool("success", resp.Success))
+	}
+}
+
+// pushActiveConfigToAgent pushes all configs to an agent via the bidirectional stream.
+func (s *GRPCServer) pushActiveConfigToAgent(hostID uuid.UUID, conn *AgentConnection) {
+	time.Sleep(1 * time.Second)
+
+	configs := s.buildAllConfigs()
+	if len(configs) == 0 {
+		logger.Info("no configs to push via stream", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	if conn.Stream == nil {
+		logger.Warn("agent stream is nil for config push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	for _, cfg := range configs {
+		err := conn.Stream.Send(&pb.CommandRequest{
+			Request: &pb.CommandRequest_ConfigSync{
+				ConfigSync: cfg,
+			},
+		})
+		if err != nil {
+			logger.Error("failed to push config via stream",
+				zap.String("host_id", hostID.String()),
+				zap.String("config_type", cfg.ConfigType),
+				zap.Error(err))
+		} else {
+			logger.Info("config pushed via stream",
+				zap.String("host_id", hostID.String()),
+				zap.String("config_type", cfg.ConfigType))
+		}
+	}
+}
+
+// buildAllConfigs builds all config sync messages for an agent.
+func (s *GRPCServer) buildAllConfigs() []*pb.ConfigSync {
+	var configs []*pb.ConfigSync
+
+	// 1. Build sigma rules config
+	if sigmaConfig := s.buildSigmaRulesConfig(); sigmaConfig != nil {
+		configs = append(configs, sigmaConfig)
+	}
+
+	// 2. Build audit rules config
+	if auditRulesConfig := s.buildAuditRulesConfig(); auditRulesConfig != nil {
+		configs = append(configs, auditRulesConfig)
+	}
+
+	// 3. Build audit settings config
+	if auditSettingsConfig := s.buildAuditSettingsConfig(); auditSettingsConfig != nil {
+		configs = append(configs, auditSettingsConfig)
+	}
+
+	return configs
+}
+
+// buildSigmaRulesConfig builds a ConfigSync message with all active/experimental sigma rules.
+func (s *GRPCServer) buildSigmaRulesConfig() *pb.ConfigSync {
+	if s.sigmaRuleRepo == nil {
+		return nil
+	}
+
+	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
+	if err != nil {
+		logger.Error("failed to get active rules for config sync", zap.Error(err))
+		return nil
+	}
+
+	type rulePayload struct {
+		RuleID  string `json:"rule_id"`
+		Action  string `json:"action"`
+		Content string `json:"content"`
+	}
+
+	var payload []rulePayload
+	for _, rule := range rules {
+		payload = append(payload, rulePayload{
+			RuleID:  rule.RuleID,
+			Action:  "add",
+			Content: rule.Content,
+		})
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("failed to marshal sigma rules payload", zap.Error(err))
+		return nil
+	}
+
+	return &pb.ConfigSync{
+		ConfigType: "sigma_rules",
+		Action:     "full_sync",
+		Payload:    string(payloadBytes),
+	}
+}
+
+// buildAuditRulesConfig builds a ConfigSync message with all enabled audit rules.
+func (s *GRPCServer) buildAuditRulesConfig() *pb.ConfigSync {
+	if s.commandAuditRuleRepo == nil {
+		return nil
+	}
+
+	rules, err := s.commandAuditRuleRepo.FindAllEnabled()
+	if err != nil {
+		logger.Error("failed to get audit rules for config sync", zap.Error(err))
+		return nil
+	}
+
+	payloadBytes, err := json.Marshal(rules)
+	if err != nil {
+		logger.Error("failed to marshal audit rules payload", zap.Error(err))
+		return nil
+	}
+
+	return &pb.ConfigSync{
+		ConfigType: "audit_rules",
+		Action:     "full_sync",
+		Payload:    string(payloadBytes),
+	}
+}
+
+// buildAuditSettingsConfig builds a ConfigSync message with audit settings.
+func (s *GRPCServer) buildAuditSettingsConfig() *pb.ConfigSync {
+	if s.systemConfigRepo == nil {
+		return nil
+	}
+
+	settings, err := s.systemConfigRepo.GetCommandAuditSettings()
+	if err != nil {
+		logger.Error("failed to get audit settings for config sync", zap.Error(err))
+		return nil
+	}
+
+	payloadBytes, err := json.Marshal(settings)
+	if err != nil {
+		logger.Error("failed to marshal audit settings payload", zap.Error(err))
+		return nil
+	}
+
+	return &pb.ConfigSync{
+		ConfigType: "audit_settings",
+		Action:     "full_sync",
+		Payload:    string(payloadBytes),
+	}
 }
 
 // GetPort returns the gRPC server port

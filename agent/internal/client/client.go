@@ -12,6 +12,7 @@ import (
 	"aegis-agent/internal/asset"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/config"
+	"aegis-agent/internal/configmgr"
 	"aegis-agent/internal/executor"
 	"aegis-agent/internal/logger"
 	"aegis-agent/internal/sigma"
@@ -34,6 +35,7 @@ type Client struct {
 	toolManager                        *tools.ToolManager
 	ruleLoader                         *sigma.Loader
 	blocker                            *blocker.Blocker
+	configManager                      *configmgr.ConfigManager
 	conn                               *grpc.ClientConn
 	client                             pb.AgentServiceClient
 	stream                             pb.AgentService_ExecuteCommandClient
@@ -55,6 +57,7 @@ func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.T
 		toolManager:   toolManager,
 		ruleLoader:    ruleLoader,
 		blocker:       blockerInst,
+		configManager: configmgr.NewConfigManager(),
 		heartbeatDone: make(chan struct{}),
 		callbackPort:  CallbackPort,
 	}
@@ -267,6 +270,20 @@ func (c *Client) run() {
 					zap.String("target", block.Target))
 				c.handleBlockCommand(block)
 			}
+
+			if configSync := req.GetConfigSync(); configSync != nil {
+				logger.Info("Received config sync via stream",
+					zap.String("config_type", configSync.ConfigType),
+					zap.String("action", configSync.Action))
+				if err := c.configManager.ApplyConfigSync(configSync); err != nil {
+					logger.Error("Failed to apply config sync",
+						zap.String("config_type", configSync.ConfigType),
+						zap.Error(err))
+				} else {
+					logger.Info("Config sync applied",
+						zap.String("config_type", configSync.ConfigType))
+				}
+			}
 		}
 	}
 }
@@ -282,6 +299,32 @@ func (c *Client) handleBlockCommand(cmd *pb.BlockCommand) {
 			zap.String("command_id", cmd.CommandId),
 			zap.String("action", cmd.Action))
 	}
+}
+
+// SyncConfig handles config sync requests from the Server (called via callback gRPC)
+func (c *Client) SyncConfig(ctx context.Context, req *pb.ConfigSyncRequest) (*pb.ConfigSyncResponse, error) {
+	logger.Info("Received SyncConfig request",
+		zap.Int("config_count", len(req.Configs)))
+
+	applied := make(map[string]bool)
+	for _, cfg := range req.Configs {
+		if err := c.configManager.ApplyConfigSync(cfg); err != nil {
+			logger.Error("Failed to apply config",
+				zap.String("config_type", cfg.ConfigType),
+				zap.Error(err))
+			applied[cfg.ConfigType] = false
+		} else {
+			logger.Info("Config applied",
+				zap.String("config_type", cfg.ConfigType))
+			applied[cfg.ConfigType] = true
+		}
+	}
+
+	return &pb.ConfigSyncResponse{
+		Success: true,
+		Message: "config sync completed",
+		Applied: applied,
+	}, nil
 }
 
 func (c *Client) applyRuleUpdate(req *pb.RuleUpdateRequest) {

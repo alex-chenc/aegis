@@ -47,6 +47,10 @@ func (c *failingAgentClient) ExecuteBlockCommand(context.Context, *pb.BlockComma
 	return &pb.BlockResponse{Success: false, Error: c.reason}, nil
 }
 
+func (c *failingAgentClient) SyncConfig(context.Context, *pb.ConfigSyncRequest, ...grpc.CallOption) (*pb.ConfigSyncResponse, error) {
+	return &pb.ConfigSyncResponse{Success: true}, nil
+}
+
 func TestExecuteBlockCommandPreservesAgentFailureReason(t *testing.T) {
 	hostID := uuid.New()
 	reason := "quarantine_file failed for target /tmp/missing: missing target"

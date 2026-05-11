@@ -71,6 +71,8 @@ func main() {
 	alertRepo := repository.NewAlertRepository(db)
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
 	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
+	commandAuditRuleRepo := repository.NewCommandAuditRuleRepo(db)
+	systemConfigRepo := repository.NewSystemConfigRepo(db)
 
 	grpcServer := grpc_server.NewGRPCServer(
 		hostRepo,
@@ -85,6 +87,8 @@ func main() {
 	grpcServer.SetAlertRepo(alertRepo, nil) // wsBroadcaster is nil for server - DC handles WS broadcasting
 	grpcServer.SetRuntimeEventRepo(runtimeEventRepo)
 	grpcServer.SetBlockPolicyRepo(blockPolicyRepo)
+	grpcServer.SetCommandAuditRuleRepo(commandAuditRuleRepo)
+	grpcServer.SetSystemConfigRepo(systemConfigRepo)
 
 	// Create APIServerToServer gRPC server on different port (19094)
 	apiServerGRPCPort := 19094

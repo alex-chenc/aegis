@@ -24,8 +24,6 @@
           <el-option label="执行中" value="running" />
           <el-option label="成功" value="success" />
           <el-option label="失败" value="failed" />
-          <el-option label="超时" value="timeout" />
-          <el-option label="部分成功" value="partial" />
         </el-select>
 
         <el-select v-model="filters.task_type" placeholder="类型" clearable style="width: 120px; margin-left: 10px" @change="handleFilterChange">
@@ -217,7 +215,6 @@ const getStatusType = (status: string) => {
     case 'success': return 'success'
     case 'failed': return 'danger'
     case 'timeout': return 'danger'
-    case 'partial': return 'warning'
     default: return 'info'
   }
 }
@@ -229,7 +226,6 @@ const getStatusText = (status: string) => {
     case 'success': return '成功'
     case 'failed': return '失败'
     case 'timeout': return '超时'
-    case 'partial': return '部分成功'
     default: return status
   }
 }

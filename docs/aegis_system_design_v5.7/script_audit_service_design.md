@@ -337,3 +337,28 @@ type ScriptAuditLog struct {
 | `command_audit.settings` | `{"blacklist_enabled": true, "ai_enabled": true, "max_retry": 3, "dispatch_check": true, "agent_check": true}` | 审计策略总开关 |
 
 当 `ai_enabled=false` 或 LLM 不可用时，自动降级为仅黑名单审计模式。
+
+---
+
+## 8. 前端展示规范
+
+### 8.1 审计来源（AuditSource）标签映射
+
+前端展示和筛选必须与后端 `audit_source` 字段的实际存储值保持一致：
+
+| 后端值 | 中文标签 | 说明 |
+|:---|:---|:---|
+| `generation` | 生成阶段 | 脚本生成时的审计（黑名单 + AI 双重审计） |
+| `dispatch` | 下发阶段 | 脚本下发到 Agent 前的审计（仅黑名单） |
+| `agent` | Agent侧 | Agent 执行前的审计（仅黑名单） |
+
+**注意**：`audit_source` 表示审计发生的**阶段**，而非审计方式。审计方式（黑名单/AI）由审计日志中的 `blacklist_hits` 和 `ai_analysis` 字段体现。
+
+### 8.2 脚本类型（ScriptType）标签映射
+
+| 后端值 | 中文标签 |
+|:---|:---|
+| `check` | 检测 |
+| `fix` | 修复 |
+| `poc_verify` | POC |
+| `self_healing` | 自愈 |

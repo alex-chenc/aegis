@@ -308,10 +308,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	} else if status.Pending > 0 {
 		status.Status = "pending"
 	} else if status.Failed > 0 || status.Timeout > 0 {
-		status.Status = "partial_success"
-		if status.Success == 0 {
-			status.Status = "failed"
-		}
+		status.Status = "failed"
 	} else {
 		status.Status = "success"
 	}

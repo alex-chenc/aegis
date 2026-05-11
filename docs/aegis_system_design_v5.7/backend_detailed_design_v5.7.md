@@ -162,3 +162,56 @@ CREATE INDEX idx_system_configs_category ON system_configs(category);
 INSERT INTO system_configs (config_key, config_value, category)
 VALUES ('command_audit.settings', '{"blacklist_enabled":true,"ai_enabled":true,"max_retry":3,"dispatch_check":true,"agent_check":true}', 'command_audit');
 ```
+
+---
+
+## 7. 任务组状态计算规范
+
+### 7.1 子任务状态（task_logs.status）
+
+| 状态 | 说明 |
+|:---|:---|
+| `PENDING` | 待执行 |
+| `RUNNING` | 执行中 |
+| `SUCCESS` | 成功 |
+| `FAILED` | 失败 |
+| `TIMEOUT` | 超时 |
+
+### 7.2 任务组状态（派生状态）
+
+任务组状态由子任务状态聚合计算，规则如下：
+
+| 任务组状态 | 条件 | 说明 |
+|:---|:---|:---|
+| `pending` | 所有子任务均为 PENDING | 待执行 |
+| `running` | 任意子任务为 RUNNING | 执行中 |
+| `success` | 所有子任务均为 SUCCESS | 全部成功 |
+| `failed` | 任意子任务为 FAILED 或 TIMEOUT，或非全部成功 | 失败 |
+
+**关键规则**：不存在 `partial` 或 `partial_success` 状态。只要不是全部成功，任务组状态就是 `failed`。
+
+### 7.3 状态计算逻辑（SQL）
+
+```sql
+CASE
+    WHEN SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) = COUNT(*) THEN 'success'
+    WHEN SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) + SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) = COUNT(*) THEN 'failed'
+    WHEN SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) > 0 THEN 'running'
+    WHEN SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) = COUNT(*) THEN 'pending'
+    ELSE 'failed'
+END as status
+```
+
+### 7.4 状态计算逻辑（Go 代码）
+
+```go
+if status.Running > 0 {
+    status.Status = "running"
+} else if status.Pending > 0 {
+    status.Status = "pending"
+} else if status.Failed > 0 || status.Timeout > 0 {
+    status.Status = "failed"
+} else {
+    status.Status = "success"
+}
+```

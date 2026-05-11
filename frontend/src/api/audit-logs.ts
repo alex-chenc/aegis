@@ -2,16 +2,18 @@ import request from './index'
 
 export interface AuditLog {
   id: string
+  task_id: string
+  rule_id: string
   script_type: string
   audit_source: string
-  attempt_count: number
-  result: 'passed' | 'failed'
+  attempt: number
+  passed: boolean
   risk_level: string
   duration_ms: number
   script_content: string
-  blacklist_hit_rules: { rule_name: string; line_number: number; matched_text: string }[]
-  ai_audit_issues: { type: string; description: string; line_range: string; suggestion: string }[]
-  audit_timeline: { attempt: number; result: string; timestamp: string }[]
+  blacklist_hits: { rule_name: string; line_number: number; matched_text: string }[]
+  ai_analysis: { type: string; description: string; line_range: string; suggestion: string }[]
+  error_msg: string
   created_at: string
 }
 
@@ -20,7 +22,9 @@ export interface AuditStats {
   passed: number
   failed: number
   pass_rate: number
-  retry_distribution: { '1': number; '2': number; '3': number; failed: number }
+  by_source: Record<string, number>
+  by_type: Record<string, number>
+  retry_distribution: Record<string, number>
 }
 
 export interface AuditLogParams {

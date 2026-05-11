@@ -226,6 +226,7 @@
           :limit="10"
           accept=".yaml,.yml,.zip"
           multiple
+          :on-exceed="handleExceed"
           :on-change="handleFileChange"
           :on-remove="handleFileRemove"
         >
@@ -582,6 +583,10 @@ function showImportDialog() {
     uploadRef.value.clearFiles()
   }
   importVisible.value = true
+}
+
+function handleExceed(files: File[]) {
+  ElMessage.warning('最多支持10个文件，请分批导入')
 }
 
 function handleFileChange(file: UploadRawFile, fileList: UploadRawFile[]) {

@@ -11,7 +11,7 @@ export type LegacyTaskType = 'check' | 'fix' | 'poc_verify' | 'vulnerability_fix
 // 任务状态（大写）
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TIMEOUT'
 // 任务状态（小写 - 兼容旧格式）
-export type LegacyTaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'timeout' | 'partial'
+export type LegacyTaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'timeout'
 
 // 类型标准化辅助函数
 export function normalizeType(type: string | undefined): string {

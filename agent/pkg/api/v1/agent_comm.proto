@@ -67,6 +67,7 @@ message CommandRequest {
     CommandResult result = 2;
     RuleUpdateRequest rule_update = 3;
     BlockCommand block = 4;
+    ConfigSync config_sync = 5;
   }
 }
 
@@ -174,6 +175,25 @@ message BlockResponse {
   string error = 3;
 }
 
+// ConfigSync 配置同步
+message ConfigSync {
+  string config_type = 1;    // "sigma_rules", "audit_rules", "audit_settings"
+  string action = 2;         // "full_sync", "incremental"
+  string payload = 3;        // JSON格式配置内容
+}
+
+// ConfigSyncRequest 配置同步请求
+message ConfigSyncRequest {
+  repeated ConfigSync configs = 1;
+}
+
+// ConfigSyncResponse 配置同步响应
+message ConfigSyncResponse {
+  bool success = 1;
+  string message = 2;
+  map<string, bool> applied = 3;  // config_type -> success
+}
+
 // AgentService Agent服务
 service AgentService {
   // Register 注册Agent
@@ -193,4 +213,6 @@ service AgentService {
   rpc UpdateRules(RuleUpdateRequest) returns (RuleUpdateResponse);
   // ExecuteBlockCommand 执行阻断指令
   rpc ExecuteBlockCommand(BlockCommand) returns (BlockResponse);
+  // SyncConfig 配置同步（Server -> Agent）
+  rpc SyncConfig(ConfigSyncRequest) returns (ConfigSyncResponse);
 }
