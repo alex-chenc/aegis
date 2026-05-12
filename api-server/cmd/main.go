@@ -174,11 +174,13 @@ func main() {
 	websocketHandler := handler.NewWebSocketHandler(wsService)
 
 	// AI Analysis Services
-	// Note: VectorService needs a valid LLM API key for embeddings, initialized lazily
-	vectorService := service.NewVectorService(db, nil)
+	// Initialize EmbeddingService for RAG vector search
+	embeddingSvc := service.NewEmbeddingService(cfg.LLM.APIKey, cfg.LLM.BaseURL)
+	vectorService := service.NewVectorService(db, embeddingSvc)
 	aiSessionRepo := repository.NewAISessionRepository(db)
 	aiMessageRepo := repository.NewAIMessageRepository(db)
-	aiAnalysisHandler := handler.NewAIAnalysisHandler(alertRepo, configRepo, vectorService, serverClient, aiSessionRepo, aiMessageRepo)
+	agentExecRepo := repository.NewAgentExecutionRepository(db)
+	aiAnalysisHandler := handler.NewAIAnalysisHandler(alertRepo, configRepo, vectorService, serverClient, aiSessionRepo, aiMessageRepo, agentExecRepo)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())

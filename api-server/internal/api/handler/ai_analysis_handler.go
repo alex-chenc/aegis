@@ -12,10 +12,13 @@ import (
 
 	"api-server/internal/grpc"
 	"api-server/internal/llm"
+	"api-server/internal/llm/adapters"
 	"api-server/internal/model"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
+
+	agentruntime "github.com/chenchen511/agent-runtime"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -29,6 +32,7 @@ type AIAnalysisHandler struct {
 	serverClient  *grpc.ServerClient
 	sessionRepo   *repository.AISessionRepository
 	messageRepo   *repository.AIMessageRepository
+	agentExecRepo *repository.AgentExecutionRepository
 	sessions      map[string]*AISSESion
 	sessionsMutex sync.RWMutex
 }
@@ -47,6 +51,23 @@ type AlertContextSnapshot struct {
 	LLMSummary  string    `json:"llm_summary,omitempty"`
 	FirstSeenAt time.Time `json:"first_seen_at"`
 	LastSeenAt  time.Time `json:"last_seen_at"`
+	// 进程级别信息
+	PID         int    `json:"pid"`
+	PPID        int    `json:"ppid"`
+	CommandLine string `json:"command_line,omitempty"`
+	// 规则和 MITRE 详情
+	MitreName string `json:"mitre_name,omitempty"`
+	RuleID    string `json:"rule_id,omitempty"`
+	// 告警统计
+	HitCount int `json:"hit_count"`
+	// 阻断状态
+	AutoBlocked   bool   `json:"auto_blocked"`
+	ManualBlocked bool   `json:"manual_blocked"`
+	BlockStatus   string `json:"block_status,omitempty"`
+	BlockMessage  string `json:"block_message,omitempty"`
+	// 历史 AI 分析
+	LLMDisposalStrategy string    `json:"llm_disposal_strategy,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 type finalAnswerResult struct {
@@ -194,6 +215,49 @@ func (c *SSEResponseCollector) finishCurrentStep(observation string) {
 	c.currentStep = nil
 }
 
+// AddThinking implements adapters.EventCollector
+func (c *SSEResponseCollector) AddThinking(text string) {
+	c.WriteThinking(text)
+}
+
+// AddToolCall implements adapters.EventCollector
+func (c *SSEResponseCollector) AddToolCall(tool, callID string, args interface{}) {
+	c.WriteToolCall(tool, callID, args)
+}
+
+// AddToolResult implements adapters.EventCollector
+func (c *SSEResponseCollector) AddToolResult(callID string, result interface{}) {
+	c.toolResults = append(c.toolResults, map[string]interface{}{
+		"call_id": callID,
+		"result":  result,
+	})
+}
+
+// AddToolError implements adapters.EventCollector
+func (c *SSEResponseCollector) AddToolError(callID, errMsg string) {
+	c.toolResults = append(c.toolResults, map[string]interface{}{
+		"call_id": callID,
+		"error":   errMsg,
+	})
+}
+
+// SetContent implements adapters.EventCollector
+func (c *SSEResponseCollector) SetContent(content string) {
+	c.content = content
+}
+
+// SetPlan implements adapters.EventCollector (no-op for now, plan data not persisted in messages)
+func (c *SSEResponseCollector) SetPlan(plan interface{}) {}
+
+// AddAudit implements adapters.EventCollector (no-op for now)
+func (c *SSEResponseCollector) AddAudit(audit interface{}) {}
+
+// AddReflection implements adapters.EventCollector (no-op for now)
+func (c *SSEResponseCollector) AddReflection(reflection interface{}) {}
+
+// AddCorrection implements adapters.EventCollector (no-op for now)
+func (c *SSEResponseCollector) AddCorrection(correction interface{}) {}
+
 func toStringMap(value interface{}) map[string]interface{} {
 	if value == nil {
 		return nil
@@ -240,6 +304,10 @@ func buildAlertSnapshots(alerts []model.Alert) []AlertContextSnapshot {
 		if alert.HostID != uuid.Nil {
 			hostID = alert.HostID.String()
 		}
+		blockStatus := ""
+		if alert.BlockStatus != nil {
+			blockStatus = *alert.BlockStatus
+		}
 		snapshots = append(snapshots, AlertContextSnapshot{
 			ID:          alert.ID.String(),
 			AlertID:     alert.AlertID,
@@ -254,6 +322,23 @@ func buildAlertSnapshots(alerts []model.Alert) []AlertContextSnapshot {
 			LLMSummary:  alert.LLMSummary,
 			FirstSeenAt: alert.FirstSeenAt,
 			LastSeenAt:  alert.LastSeenAt,
+			// 进程级别信息
+			PID:         alert.PID,
+			PPID:        alert.PPID,
+			CommandLine: alert.CommandLine,
+			// 规则和 MITRE 详情
+			MitreName: alert.MitreName,
+			RuleID:    alert.RuleID,
+			// 告警统计
+			HitCount: alert.HitCount,
+			// 阻断状态
+			AutoBlocked:   alert.AutoBlocked,
+			ManualBlocked: alert.ManualBlocked,
+			BlockStatus:   blockStatus,
+			BlockMessage:  alert.BlockMessage,
+			// 历史 AI 分析
+			LLMDisposalStrategy: alert.LLMDisposalStrategy,
+			CreatedAt:           alert.CreatedAt,
 		})
 	}
 	return snapshots
@@ -581,6 +666,7 @@ func NewAIAnalysisHandler(
 	serverClient *grpc.ServerClient,
 	sessionRepo *repository.AISessionRepository,
 	messageRepo *repository.AIMessageRepository,
+	agentExecRepo *repository.AgentExecutionRepository,
 ) *AIAnalysisHandler {
 	return &AIAnalysisHandler{
 		alertRepo:     alertRepo,
@@ -589,6 +675,7 @@ func NewAIAnalysisHandler(
 		serverClient:  serverClient,
 		sessionRepo:   sessionRepo,
 		messageRepo:   messageRepo,
+		agentExecRepo: agentExecRepo,
 		sessions:      make(map[string]*AISSESion),
 	}
 }
@@ -755,38 +842,71 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 
 	responseCollector := &SSEResponseCollector{}
 
-	// Create a wrapper that captures content while writing SSE
-	collectingWriter := &collectingSSEWriter{
-		writer:    sseWriter,
-		collector: responseCollector,
-		beforeDone: func(content string) error {
-			return h.writeFlowchartImageEvent(c.Request.Context(), sseWriter, content)
-		},
-	}
-
-	// Initialize ReAct agent if not exists
-	if session.ReActAgent == nil {
-		session.ReActAgent = llm.NewReActAgent(session.LLMClient, NewToolExecutor(h.serverClient, session.HostIDs), sessionID, session.MaxIterations)
-	}
-
 	// Build context for the session
-	context := h.buildSessionContext(session)
+	alertCtx := h.buildSessionContext(session)
 
-	logger.Info("StreamMessage: calling ReActAgent.Stream", zap.String("session_id", sessionID))
+	logger.Info("StreamMessage: using agent-runtime", zap.String("session_id", sessionID))
 
-	// Stream the response - use collectingWriter instead of sseWriter
-	ctx := c.Request.Context()
-	if err := session.ReActAgent.Stream(ctx, message, session.Messages, collectingWriter, context); err != nil {
-		logger.Error("stream error", zap.Error(err), zap.String("session_id", sessionID))
-		sseWriter.WriteError(fmt.Sprintf("stream error: %v", err))
+	// Create experience provider
+	var experienceProvider agentruntime.ExperienceProvider
+	if h.vectorService != nil && h.agentExecRepo != nil {
+		reflectionQuerier := adapters.NewReflectionQuerierAdapter(h.agentExecRepo)
+		experienceProvider = adapters.NewExperienceProviderAdapter(h.vectorService, reflectionQuerier, 5)
 	}
-	logger.Info("StreamMessage: ReActAgent.Stream returned", zap.String("session_id", sessionID))
+
+	// Create agent-runtime
+	runtime, err := adapters.NewAegisRuntime(
+		session.LLMClient,
+		h.serverClient,
+		sseWriter,
+		responseCollector,
+		session.HostIDs,
+		alertCtx,
+		session.MaxIterations,
+		experienceProvider,
+	)
+	if err != nil {
+		logger.Error("failed to create agent runtime", zap.Error(err), zap.String("session_id", sessionID))
+		sseWriter.WriteError(fmt.Sprintf("failed to create agent runtime: %v", err))
+		sseWriter.WriteDone()
+		return
+	}
+
+	// Run the agent with a detached context so that client disconnects
+	// (which cancel c.Request.Context()) do not kill in-flight LLM calls.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	taskResult, err := runtime.Run(ctx, agentruntime.TaskInput{
+		UserInput:   message,
+		UserContext: alertCtx,
+		Metadata:    map[string]string{"session_id": sessionID},
+	})
+	if err != nil {
+		logger.Error("agent runtime error", zap.Error(err), zap.String("session_id", sessionID))
+		sseWriter.WriteError(fmt.Sprintf("agent runtime error: %v", err))
+		sseWriter.WriteDone()
+		return
+	}
+	logger.Info("StreamMessage: agent-runtime.Run returned", zap.String("session_id", sessionID))
 
 	// Get the full AI response content
 	aiResponseContent := responseCollector.GetContent()
 	logger.Info("AI response collected", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
 
+	// Persist agent execution results
+	if taskResult != nil && h.agentExecRepo != nil {
+		h.persistAgentResult(sessionID, taskResult)
+	}
+
 	h.persistAnalysisOutcome(session, aiResponseContent)
+
+	// Generate flowchart image from final content
+	if aiResponseContent != "" {
+		_ = h.writeFlowchartImageEvent(c.Request.Context(), sseWriter, aiResponseContent)
+	}
+
+	// Signal the SSE stream is complete
+	sseWriter.WriteDone()
 
 	// Persist user message to database
 	if h.messageRepo != nil {
@@ -880,6 +1000,161 @@ func (h *AIAnalysisHandler) persistAnalysisOutcome(session *AISSESion, finalCont
 				zap.Error(err))
 		}
 	}
+}
+
+func (h *AIAnalysisHandler) persistAgentResult(sessionID string, result *agentruntime.TaskResult) {
+	if h.agentExecRepo == nil {
+		return
+	}
+
+	// 1. Save execution record
+	exec := &model.AgentExecution{
+		SessionID:       sessionID,
+		TaskID:          result.TaskID,
+		Status:          string(result.Status),
+		ExitReason:      string(result.ExitReason),
+		FinalAnswer:     result.FinalAnswer,
+		InitialPlan:     marshalJSONB(result.InitialPlan),
+		FinalPlan:       marshalJSONB(result.FinalPlan),
+		Completion:      marshalJSONB(result.Completion),
+		Metrics:         marshalJSONB(result.Metrics),
+		StartedAt:       result.StartedAt,
+		EndedAt:         result.EndedAt,
+		TotalDurationMs: result.Metrics.TotalDuration.Milliseconds(),
+	}
+	if err := h.agentExecRepo.CreateExecution(exec); err != nil {
+		logger.Warn("failed to persist agent execution", zap.Error(err))
+		return
+	}
+
+	// 2. Save step executions
+	for _, step := range result.StepExecutions {
+		h.agentExecRepo.CreateStepExecution(&model.AgentStepExecution{
+			ExecutionID: exec.ID,
+			TaskID:      result.TaskID,
+			StepID:      step.StepID,
+			Attempt:     step.Attempt,
+			Status:      string(step.Status),
+			Result:      step.Result,
+			Evidence:    marshalJSONB(step.Evidence),
+			Error:       marshalJSONB(step.Error),
+			ReactTurns:  marshalJSONB(step.ReactTurns),
+			StartedAt:   step.StartedAt,
+			EndedAt:     step.EndedAt,
+			DurationMs:  step.EndedAt.Sub(step.StartedAt).Milliseconds(),
+		})
+	}
+
+	// 3. Save reflections
+	for _, refl := range result.Reflections {
+		h.agentExecRepo.CreateReflection(&model.AgentReflection{
+			ExecutionID:    exec.ID,
+			TaskID:         result.TaskID,
+			ReflectionID:   refl.ReflectionID,
+			Trigger:        refl.Trigger,
+			RootCause:      refl.RootCause,
+			Impact:         refl.Impact,
+			Recoverable:    refl.Recoverable,
+			Recommendation: string(refl.Recommendation),
+			DisableTools:   marshalJSONB(refl.DisableTools),
+			CorrectionHint: refl.CorrectionHint,
+			ReusableLesson: refl.ReusableLesson,
+			CreatedAt:      refl.CreatedAt,
+		})
+	}
+
+	// 4. Save audits
+	for _, aud := range result.Audits {
+		h.agentExecRepo.CreateAudit(&model.AgentAudit{
+			ExecutionID:    exec.ID,
+			TaskID:         result.TaskID,
+			AuditID:        aud.AuditID,
+			Trigger:        aud.Trigger,
+			Drifted:        aud.Drifted,
+			RiskLevel:      string(aud.RiskLevel),
+			Findings:       marshalJSONB(aud.Findings),
+			Decision:       string(aud.Decision),
+			CorrectionHint: aud.CorrectionHint,
+			ShouldExit:     aud.ShouldExit,
+			ExitReason:     string(aud.ExitReason),
+			CreatedAt:      aud.CreatedAt,
+		})
+	}
+
+	// 5. Save corrections
+	for _, corr := range result.Corrections {
+		h.agentExecRepo.CreateCorrection(&model.AgentCorrection{
+			ExecutionID:     exec.ID,
+			TaskID:          result.TaskID,
+			CorrectionID:    corr.CorrectionID,
+			Trigger:         corr.Trigger,
+			FromPlanVersion: corr.FromPlanVersion,
+			ToPlanVersion:   corr.ToPlanVersion,
+			Reason:          corr.Reason,
+			Actions:         marshalJSONB(corr.Actions),
+			Valid:           corr.Valid,
+			ValidationErrors: marshalJSONB(corr.ValidationErrors),
+			CreatedAt:       corr.CreatedAt,
+		})
+	}
+
+	// 6. Save tool calls
+	for _, tc := range result.ToolCalls {
+		h.agentExecRepo.CreateToolCall(&model.AgentToolCallRecord{
+			ExecutionID:   exec.ID,
+			TaskID:        result.TaskID,
+			StepID:        tc.StepID,
+			CallID:        tc.CallID,
+			ToolName:      tc.ToolName,
+			Reason:        tc.Reason,
+			ArgsSummary:   tc.ArgsSummary,
+			Status:        string(tc.Status),
+			ResultSummary: tc.ResultSummary,
+			ErrorMessage:  tc.ErrorMessage,
+			RiskLevel:     string(tc.RiskLevel),
+			DurationMs:    tc.EndedAt.Sub(tc.StartedAt).Milliseconds(),
+			StartedAt:     tc.StartedAt,
+			EndedAt:       tc.EndedAt,
+		})
+	}
+
+	// 7. Save model errors
+	for _, mc := range result.ModelCalls {
+		if mc.Error != "" {
+			h.agentExecRepo.CreateModelError(&model.AgentModelError{
+				ExecutionID: exec.ID,
+				TaskID:      result.TaskID,
+				StepID:      mc.StepID,
+				CallID:      mc.CallID,
+				Purpose:     string(mc.Purpose),
+				Message:     mc.Error,
+				Model:       mc.Model,
+				TokensUsed:  mc.TokensUsed,
+				LatencyMs:   mc.Latency.Milliseconds(),
+				OccurredAt:  mc.OccurredAt,
+			})
+		}
+	}
+
+	logger.Info("persisted agent execution results",
+		zap.String("session_id", sessionID),
+		zap.String("task_id", result.TaskID),
+		zap.String("status", string(result.Status)))
+}
+
+func marshalJSONB(v interface{}) model.JSONB {
+	if v == nil {
+		return nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var result model.JSONB
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	return result
 }
 
 func (h *AIAnalysisHandler) writeFlowchartImageEvent(ctx context.Context, writer *llm.SSEWriter, finalContent string) error {

@@ -45,14 +45,15 @@ func (r *AlertRepository) FindByID(id string) (*model.Alert, error) {
 
 	var result AlertWithHost
 	err := r.db.Table("alerts").
-		Select(`alerts.*, 
-			hosts.hostname, 
+		Select(`alerts.*,
+			hosts.hostname,
 			COALESCE(
 				NULLIF(alerts.rule_title, ''),
-				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				sr.title,
 				alerts.mitre_id
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Joins("LEFT JOIN sigma_rules sr ON LOWER(sr.mitre_id) = LOWER(alerts.mitre_id)").
 		Where("alerts.alert_id = ?", id).
 		First(&result).Error
 	if err != nil {
@@ -90,14 +91,15 @@ func (r *AlertRepository) List(page, pageSize int, filters map[string]interface{
 
 	var alertsWithHost []AlertWithHost
 	query := r.db.Table("alerts").
-		Select(`alerts.*, 
-			hosts.hostname, 
+		Select(`alerts.*,
+			hosts.hostname,
 			COALESCE(
 				NULLIF(alerts.rule_title, ''),
-				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				sr.title,
 				alerts.mitre_name
 			) as rule_title`).
-		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id")
+		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Joins("LEFT JOIN sigma_rules sr ON LOWER(sr.mitre_id) = LOWER(alerts.mitre_id)")
 
 	query = applyAlertFilters(query, filters)
 
@@ -310,14 +312,15 @@ func (r *AlertRepository) FindPendingByTimeRange(startTime, endTime time.Time, h
 
 	var alertsWithHost []AlertWithHost
 	query := r.db.Table("alerts").
-		Select(`alerts.*, 
-			hosts.hostname, 
+		Select(`alerts.*,
+			hosts.hostname,
 			COALESCE(
 				NULLIF(alerts.rule_title, ''),
-				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				sr.title,
 				alerts.mitre_name
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Joins("LEFT JOIN sigma_rules sr ON LOWER(sr.mitre_id) = LOWER(alerts.mitre_id)").
 		Where("alerts.status = ?", "pending").
 		Where("alerts.created_at >= ? AND alerts.created_at <= ?", startTime, endTime)
 
@@ -480,10 +483,11 @@ func (r *AlertRepository) FindByAlertIDs(alertIDs []string) ([]model.Alert, erro
 			hosts.hostname,
 			COALESCE(
 				NULLIF(alerts.rule_title, ''),
-				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				sr.title,
 				alerts.mitre_name
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
+		Joins("LEFT JOIN sigma_rules sr ON LOWER(sr.mitre_id) = LOWER(alerts.mitre_id)").
 		Where("alerts.alert_id IN ?", alertIDs).
 		Find(&alertsWithHost).Error
 	if err != nil {

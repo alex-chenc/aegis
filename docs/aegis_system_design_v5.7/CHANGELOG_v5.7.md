@@ -6,6 +6,18 @@
 
 ---
 
+## Bug 修复
+
+### AI 分析告警详情增强与连接中断修复（2026-05-12）
+- **问题1**：`AlertContextSnapshot` 缺少进程级别关键字段（PID、PPID、CommandLine、RuleID 等 12 个字段），导致 LLM 无法直接获取告警的完整上下文
+- **修复1**：扩展 `AlertContextSnapshot` 结构体，补充 PID、PPID、CommandLine、MitreName、RuleID、HitCount、AutoBlocked、ManualBlocked、BlockStatus、BlockMessage、LLMDisposalStrategy、CreatedAt 字段
+- **问题2**：`StreamMessage` handler 使用 `c.Request.Context()` 作为 agent runtime context，SSE 连接断开时 context 取消导致 LLM 调用全部失败（`context canceled`）；且错误路径缺少 `WriteDone()`
+- **修复2**：使用 `context.WithTimeout(context.Background(), 15*time.Minute)` 解绑 agent runtime 与 SSE 连接生命周期；在两个错误路径添加 `sseWriter.WriteDone()` 和 `return`
+- **设计文档**：[ai_analysis_alert_detail_and_connection_fix.md](ai_analysis_alert_detail_and_connection_fix.md)
+- **测试覆盖**：新增 5 个单元测试，覆盖字段映射、nil 指针处理、SSE 错误终止
+
+---
+
 ## 新增功能
 
 ### 命令审计配置（REQ-001~008）
@@ -94,6 +106,10 @@
 - `idx_script_audit_log_task_id`
 - `idx_script_audit_log_created_at`
 - `idx_system_configs_category`
+- `idx_alerts_last_seen_at` - AI分析页面时间范围查询优化
+- `idx_alerts_created_at` - 告警排序优化
+- `idx_alerts_last_seen_at_host_id` - 复合查询优化
+- `idx_sigma_rules_mitre_id_lower` - LOWER函数查询优化
 
 ### 初始化数据
 - 15条预置审计规则

@@ -51,6 +51,13 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.CommandAuditRule{},
 		&model.ScriptAuditLog{},
 		&model.SystemConfig{},
+		&model.AgentExecution{},
+		&model.AgentStepExecution{},
+		&model.AgentReflection{},
+		&model.AgentAudit{},
+		&model.AgentCorrection{},
+		&model.AgentToolCallRecord{},
+		&model.AgentModelError{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

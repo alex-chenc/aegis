@@ -76,7 +76,12 @@ export interface RAGContextResponse {
 }
 
 // SSE Event types for streaming
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'content' | 'flowchart_image' | 'done' | 'error'
+export type SSEEventType =
+  | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
+  | 'content' | 'flowchart_image' | 'done' | 'error'
+  // agent-runtime new event types
+  | 'plan' | 'step_started' | 'step_completed' | 'audit'
+  | 'reflection' | 'correction'
 
 export interface SSEEvent {
   type: SSEEventType
@@ -87,6 +92,45 @@ export interface SSEEvent {
   result?: any
   time_ms?: number
   error?: string
+}
+
+// agent-runtime plan step
+export interface PlanStep {
+  id: string
+  description: string
+  tool_names?: string[]
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'replaced' | 'invalidated'
+  result_summary?: string
+}
+
+// agent-runtime SSE event payloads
+export interface PlanEvent {
+  id: string
+  goal: string
+  steps: PlanStep[]
+  total_steps: number
+}
+
+export interface AuditEvent {
+  decision: string
+  risk_level: string
+  findings?: string[]
+  recommendations?: string[]
+  step_id?: string
+}
+
+export interface ReflectionEvent {
+  root_cause: string
+  impact: string
+  recommendation: string
+  reusable_lesson?: string
+  recoverable?: boolean
+}
+
+export interface CorrectionEvent {
+  reason: string
+  actions?: string[]
+  step_id?: string
 }
 
 // AI Analysis API functions
