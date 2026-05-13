@@ -256,7 +256,7 @@
                 @keydown.enter.ctrl="handleEnterKey"
               />
               <el-button
-                v-if="isLoading"
+                v-if="getActionButtonType(isLoading, !!inputMessage.trim()) === 'pause'"
                 type="warning"
                 @click="pauseAnalysis"
               >
@@ -373,7 +373,7 @@ import {
 } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
-import { applyPlanStepStatus, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
+import { applyPlanStepStatus, getActionButtonType, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
 
 const route = useRoute()
 const router = useRouter()

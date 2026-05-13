@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyPlanStepStatus, isPlanTerminal, normalizePlanEvent } from './aiAnalysisRuntime'
+import { applyPlanStepStatus, getActionButtonType, isPlanTerminal, normalizePlanEvent } from './aiAnalysisRuntime'
 
 describe('aiAnalysisRuntime helpers', () => {
   it('normalizes agent-runtime plan fields for the execution plan UI', () => {
@@ -55,5 +55,20 @@ describe('aiAnalysisRuntime helpers', () => {
     expect(plan.steps[0].result_summary).toBe('进程树确认完成')
     expect(plan.steps[1].status).toBe('failed')
     expect(isPlanTerminal(plan)).toBe(true)
+  })
+
+  describe('getActionButtonType', () => {
+    it('returns pause when loading and no input', () => {
+      expect(getActionButtonType(true, false)).toBe('pause')
+    })
+
+    it('returns send when loading but user has input', () => {
+      expect(getActionButtonType(true, true)).toBe('send')
+    })
+
+    it('returns send when not loading', () => {
+      expect(getActionButtonType(false, false)).toBe('send')
+      expect(getActionButtonType(false, true)).toBe('send')
+    })
   })
 })

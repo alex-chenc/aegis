@@ -61,6 +61,52 @@ func TestSSEHookSinkStepFailedIsDistinctAndCollected(t *testing.T) {
 	}
 }
 
+func TestSSEHookSinkStepEventsCarryCallID(t *testing.T) {
+	tests := []struct {
+		name      string
+		hookType  agentruntime.HookEventType
+		stepID    string
+		wantType  string
+		wantField string
+	}{
+		{"step_started", agentruntime.HookStepStarted, "step-1", "step_started", "call_id"},
+		{"step_completed", agentruntime.HookStepCompleted, "step-2", "step_completed", "call_id"},
+		{"step_failed", agentruntime.HookStepFailed, "step-3", "step_failed", "call_id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			collector := &fakeEventCollector{}
+			sink := NewSSEHookSink(llm.NewSSEWriter(recorder), collector)
+
+			err := sink.Handle(context.Background(), agentruntime.HookEvent{
+				Type:   tt.hookType,
+				StepID: tt.stepID,
+				Snapshot: &agentruntime.TaskSnapshot{
+					CurrentPlan: &agentruntime.Plan{
+						Steps: []agentruntime.PlanStep{
+							{StepID: tt.stepID, Title: "test step"},
+						},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("handle %s: %v", tt.name, err)
+			}
+
+			body := recorder.Body.String()
+			if !strings.Contains(body, `"type":"`+tt.wantType+`"`) {
+				t.Fatalf("expected %s SSE event, body: %s", tt.wantType, body)
+			}
+			// Verify the call_id field contains the step ID
+			if !strings.Contains(body, `"call_id":"`+tt.stepID+`"`) {
+				t.Fatalf("expected call_id=%q in SSE event, body: %s", tt.stepID, body)
+			}
+		})
+	}
+}
+
 func TestSSEHookSinkTaskFinishedDoesNotCloseStreamEarly(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	collector := &fakeEventCollector{}

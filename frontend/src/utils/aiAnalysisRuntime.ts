@@ -69,3 +69,14 @@ export function isPlanTerminal(plan: PlanEvent | null | undefined) {
   if (!plan || plan.steps.length === 0) return false
   return plan.steps.every(step => terminalStatuses.has(step.status))
 }
+
+/**
+ * Determines the action button type based on loading state and user input.
+ * - When analysis is running and user has typed text: show "send" (user wants to send)
+ * - When analysis is running and no text: show "pause"
+ * - When analysis is not running: show "send"
+ */
+export function getActionButtonType(isLoading: boolean, hasInput: boolean): 'send' | 'pause' {
+  if (isLoading && !hasInput) return 'pause'
+  return 'send'
+}
