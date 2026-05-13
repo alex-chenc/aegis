@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createIdleLogout, IDLE_LOGOUT_TIMEOUT_MS } from './sessionTimeout'
 
 describe('session idle timeout', () => {
+  it('IDLE_LOGOUT_TIMEOUT_MS is 2 hours', () => {
+    expect(IDLE_LOGOUT_TIMEOUT_MS).toBe(2 * 60 * 60 * 1000)
+  })
   beforeEach(() => {
     vi.useFakeTimers()
   })
@@ -11,7 +14,7 @@ describe('session idle timeout', () => {
     vi.useRealTimers()
   })
 
-  it('logs out after five minutes without activity', () => {
+  it('logs out after two hours without activity', () => {
     const onTimeout = vi.fn()
     const idleLogout = createIdleLogout({ onTimeout })
 

@@ -1,4 +1,4 @@
-export const IDLE_LOGOUT_TIMEOUT_MS = 5 * 60 * 1000
+export const IDLE_LOGOUT_TIMEOUT_MS = 2 * 60 * 60 * 1000
 
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const
 

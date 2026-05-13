@@ -197,7 +197,7 @@ const idleLogout = createIdleLogout({
   isEnabled: () => Boolean(getStoredAuth()) && !route.meta.authLayout,
   onTimeout: () => {
     clearStoredAuth()
-    ElMessage.warning('5 分钟未操作，已自动退出登录')
+    ElMessage.warning('2 小时未操作，已自动退出登录')
     router.replace('/login')
   }
 })
