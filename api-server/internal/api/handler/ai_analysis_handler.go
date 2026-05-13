@@ -105,7 +105,7 @@ type AISSESion struct {
 }
 
 const (
-	defaultAnalysisMaxIterations = 15
+	defaultAnalysisMaxIterations = 50
 	analysisMaxIterationsLimit   = 100
 	maxToolResultEventBytes      = 20000
 	maxToolResultArrayItems      = 20

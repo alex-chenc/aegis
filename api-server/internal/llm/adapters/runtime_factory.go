@@ -45,16 +45,16 @@ func NewAegisRuntime(
 
 	// 5. Build runtime config
 	if maxIterations <= 0 {
-		maxIterations = 15
+		maxIterations = 50
 	}
 
 	config := agentruntime.RuntimeConfig{
 		MaxTotalTurns:         maxIterations,
 		MaxPlanSteps:          8,
-		MaxStepReactTurns:     6,
+		MaxStepReactTurns:     8,
 		MaxToolCalls:          100,
 		MaxToolCallsPerStep:   10,
-		MaxToolFailures:       10,
+		MaxToolFailures:       15,
 		MaxModelFailures:      5,
 		MaxParseFailures:      3,
 		MaxNoProgressTurns:    3,
