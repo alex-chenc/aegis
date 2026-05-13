@@ -253,10 +253,21 @@
                 type="textarea"
                 :rows="2"
                 placeholder="输入您的问题..."
-                :disabled="isLoading"
-                @keydown.enter.ctrl="sendMessage"
+                @keydown.enter.ctrl="handleEnterKey"
               />
-              <el-button type="primary" :loading="isLoading" :disabled="!inputMessage.trim()" @click="sendMessage">
+              <el-button
+                v-if="isLoading"
+                type="warning"
+                @click="pauseAnalysis"
+              >
+                暂停
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                :disabled="!inputMessage.trim()"
+                @click="sendMessage"
+              >
                 发送 (Ctrl+Enter)
               </el-button>
             </div>
@@ -350,7 +361,7 @@ import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
-import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
 import ExecutionPlan from '@/components/ExecutionPlan.vue'
 import {
@@ -362,6 +373,7 @@ import {
 } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
+import { applyPlanStepStatus, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
 
 const route = useRoute()
 const router = useRouter()
@@ -667,6 +679,17 @@ function applyStructuredFinalAnswer(content = finalAnswerContent.value) {
 async function deleteSessionById(session: SessionListItem) {
   try {
     await deleteSession(session.session_id)
+    if (sessionId.value === session.session_id) {
+      closeCurrentStreamSilently()
+      sessionId.value = null
+      messages.value = []
+      executionPlan.value = null
+      auditResults.value = []
+      reflectionResults.value = []
+      correctionResults.value = []
+      clearCurrentSessionId()
+      clearSavedConversation()
+    }
     ElMessage.success('会话已删除')
     loadSessionList(sessionPage.value)
   } catch (error: any) {
@@ -714,13 +737,21 @@ async function loadSession(session: SessionListItem) {
   // Load messages from history
   try {
     const response = await getSessionHistory(session.session_id)
-    // Backend returns {success: true, data: {session_id, messages}}
+    // Backend returns {success: true, data: {session_id, messages, execution_plan}}
     const payload = (response as any).data || response
     const msgs = payload.messages || []
     if (msgs.length > 0) {
       messages.value = rebuildMessagesFromHistory(msgs)
       applyStructuredFinalAnswer()
     }
+    // Load execution plan from history
+    if (payload.execution_plan) {
+      executionPlan.value = normalizePlanEvent(payload.execution_plan)
+    }
+    auditResults.value = payload.audits || []
+    reflectionResults.value = payload.reflections || []
+    correctionResults.value = payload.corrections || []
+    appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
   } catch (error: any) {
     ElMessage.error(error.message || '加载会话消息失败')
   }
@@ -730,6 +761,37 @@ async function loadSession(session: SessionListItem) {
 
 function handleSelectSession(row: SessionListItem) {
   loadSession(row)
+}
+
+function appendHistoryRuntimeEventMessages(
+  audits: AuditEvent[] = [],
+  reflections: ReflectionEvent[] = [],
+  corrections: CorrectionEvent[] = []
+) {
+  audits.forEach((audit) => {
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+      type: 'audit',
+      auditResult: audit
+    })
+  })
+  reflections.forEach((reflection) => {
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+      type: 'reflection',
+      reflectionResult: reflection
+    })
+  })
+  corrections.forEach((correction) => {
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+      type: 'correction',
+      correctionResult: correction
+    })
+  })
 }
 
 function unwrapHistoryItems<T = any>(value: any): T[] {
@@ -1039,7 +1101,7 @@ function createSSEHandler(message: string) {
         } else {
           upsertFinalAssistantMessage(event.content || '', true)
         }
-        isLoading.value = false
+        // Don't set isLoading=false here; wait for 'done' event
         scrollToBottom()
         break
 
@@ -1056,7 +1118,7 @@ function createSSEHandler(message: string) {
         try {
           const planData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
           if (planData) {
-            executionPlan.value = planData as PlanEvent
+            executionPlan.value = normalizePlanEvent(planData)
           }
         } catch {
           // ignore parse errors
@@ -1065,22 +1127,15 @@ function createSSEHandler(message: string) {
         break
 
       case 'step_started':
-        // Update plan step status to running
-        if (executionPlan.value) {
-          const step = executionPlan.value.steps.find(s => s.id === event.call_id)
-          if (step) step.status = 'running'
-        }
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'running')
         break
 
       case 'step_completed':
-        // Update plan step status to completed
-        if (executionPlan.value) {
-          const step = executionPlan.value.steps.find(s => s.id === event.call_id)
-          if (step) {
-            step.status = 'completed'
-            step.result_summary = event.content || ''
-          }
-        }
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'completed', event.content || '')
+        break
+
+      case 'step_failed':
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'failed', event.error || event.content || '')
         break
 
       case 'audit':
@@ -1153,6 +1208,7 @@ function createSSEHandler(message: string) {
         const normalizedError = normalizeAIAnalysisErrorMessage(event.content || 'AI 分析出错')
         ElMessage.error(normalizedError)
         cleanup()
+        flushThought(true)
         currentEventSource.value?.close()
         currentEventSource.value = null
         currentThought = ''
@@ -1216,6 +1272,42 @@ function sendMessage() {
   scrollToBottom()
   isLoading.value = true
   currentEventSource.value = createSSEHandler(userMessage)
+}
+
+function closeCurrentStreamSilently() {
+  if (!currentEventSource.value) return
+  currentEventSource.value.onmessage = null
+  currentEventSource.value.onerror = null
+  currentEventSource.value.close()
+  currentEventSource.value = null
+}
+
+async function pauseAnalysis() {
+  if (!sessionId.value) return
+  try {
+    await pauseSession(sessionId.value)
+    ElMessage.success('AI 分析已暂停')
+  } catch (error: any) {
+    ElMessage.error(error.message || '暂停 AI 分析失败')
+  } finally {
+    closeCurrentStreamSilently()
+    isLoading.value = false
+  }
+}
+
+async function handleEnterKey(e: KeyboardEvent) {
+  if (isLoading.value) {
+    // During analysis, Ctrl+Enter pauses current analysis and re-sends with new input
+    e.preventDefault()
+    await pauseAnalysis()
+    nextTick(() => {
+      if (inputMessage.value.trim()) {
+        sendMessage()
+      }
+    })
+  } else {
+    sendMessage()
+  }
 }
 
 function scrollToBottom() {

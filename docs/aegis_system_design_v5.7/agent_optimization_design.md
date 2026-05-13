@@ -70,7 +70,7 @@ Plan → Execute Steps (ReAct per step) → Reflect → Audit → Correct → Su
 | ⑤ inferToolFromInput关键词推断 | 消除 — ToolDescriptor定义精确ArgsSchema |
 | ⑥ JSON流式提取不可靠 | 消除 — agent-runtime使用非流式Complete() |
 | ⑦ Session仅内存存储 | 不变 — 独立于agent-runtime，后续单独优化 |
-| ⑧ 无可观测性 | HookSink接口提供18种事件类型 |
+| ⑧ 无可观测性 | HookSink接口提供18种内部HookEvent，桥接层收敛为正式SSE契约 |
 
 ---
 
@@ -181,34 +181,33 @@ type SSEHookSink struct {
 }
 ```
 
-**事件映射表（18种HookEvent → SSE）**:
+**事件映射表（内部HookEvent → 正式SSE）**:
 
 | HookEventType | SSE Event Type | Payload提取 | 说明 |
 |:---|:---|:---|:---|
 | `task_started` | (无) | 内部跟踪 | 任务开始 |
-| `experience_loaded` | `thinking` | "Loading experience..." | 经验加载 |
-| `plan_created` | `thinking` + `plan` | `Snapshot.CurrentPlan` → 步骤列表 | **新增SSE类型** |
-| `step_started` | `thinking` | "Step N: {title}" | 步骤开始 |
+| `experience_loaded` | (无) | 内部跟踪/历史摘要 | 经验加载不直接暴露为正式SSE |
+| `plan_created` | `plan` | `Snapshot.CurrentPlan` → `step_id/title/objective/suggested_tools` | 计划创建 |
+| `step_started` | `step_started` | `StepID` + 计划中的标题/目标 | 步骤开始 |
 | `model_call_started` | (无) | 内部跟踪 | 模型调用开始 |
-| `model_call_finished` | `thinking` | `ModelCallRecord.OutputSummary` | 模型调用完成 |
+| `model_call_finished` | (无) | 可展示摘要写入collector/history | 不暴露隐藏CoT |
 | `tool_call_started` | `tool_call` | `ToolCallRecord.ToolName`, `.CallID`, `.ArgsSummary` | 工具调用开始 |
 | `tool_call_finished` | `tool_result`/`tool_error` | `ToolCallRecord.Status`, `.ResultSummary`, `.ErrorMessage` | 工具调用完成 |
-| `step_completed` | `thinking` | "Step completed: {result}" | 步骤完成 |
-| `step_failed` | `thinking` | "Step failed: {error}" | 步骤失败 |
-| `audit_started` | `thinking` | "Auditing progress..." | 审计开始 |
-| `audit_finished` | `thinking` + `audit` | `AuditResult.Findings`, `.Decision` | **新增SSE类型** |
-| `reflection_started` | `thinking` | "Reflecting on failure..." | 反思开始 |
-| `reflection_finished` | `thinking` + `reflection` | `ReflectionResult.RootCause`, `.Recommendation` | **新增SSE类型** |
-| `correction_applied` | `thinking` + `correction` | `CorrectionResult.Reason`, `.Actions` | **新增SSE类型** |
+| `step_completed` | `step_completed` | `StepID`, result, evidence, duration | 步骤成功完成 |
+| `step_failed` | `step_failed` | `StepID`, error, duration | 步骤失败 |
+| `audit_started` | (无) | 内部跟踪 | 审计开始 |
+| `audit_finished` | `audit` | `AuditResult.Findings`, `.Decision` | 审计完成 |
+| `reflection_started` | (无) | 内部跟踪 | 反思开始 |
+| `reflection_finished` | `reflection` | `ReflectionResult.RootCause`, `.Recommendation` | 反思完成 |
+| `correction_applied` | `correction` + 可选 `plan` | `CorrectionResult.Reason`, `.Actions`, corrected plan | 纠正完成；如计划变化需更新最终计划版本 |
 | `config_changed` | (无) | 内部跟踪 | 配置变更 |
-| `task_interrupted` | `error` | "Analysis interrupted" | 任务中断 |
-| `task_finished` | `content` + `done` | `TaskResult.FinalAnswer` | 任务完成 |
+| `task_interrupted` | `error` | status/code/message/recoverable | 暂停、取消或异常中断 |
+| `task_finished` | `content` → `done` | `TaskResult.FinalAnswer` + 最终状态 | 任务完成；`content` 只缓存最终回答，`done` 才结束UI完成态 |
 
-**新增SSE事件类型**:
-- `plan` — 执行计划创建，包含步骤列表
-- `audit` — 审计结果
-- `reflection` — 反思结果
-- `correction` — 计划纠正
+**正式SSE事件类型**:
+`plan`、`step_started`、`step_completed`、`step_failed`、`tool_call`、`tool_result`、`tool_error`、`audit`、`reflection`、`correction`、`content`、`done`、`error`。
+
+`thinking` 不属于正式SSE契约。Aegis展示的思考链是可展示推理摘要和执行过程，不承诺展示模型隐藏CoT。
 
 #### 3.2.4 PromptProvider
 
@@ -360,8 +359,9 @@ result, _ := runtime.Run(ctx, agentruntime.TaskInput{
     UserContext:  alertCtx,
     Metadata:     map[string]string{"session_id": sessionID},
 })
-// HookSink在Run过程中自动通过SSE推送所有中间事件
-// Run完成后，task_finished hook自动写入content + done
+// HookSink在Run过程中自动通过SSE推送计划、步骤、工具、审计、反思和纠正事件
+// Run进入终态后，StreamMessage先持久化TaskResult并检查计划是否完成；
+// 只有完成性检查通过后，handler才写入content + done，前端只能在done后进入完成态
 ```
 
 **SSE响应收集器扩展**:
@@ -386,6 +386,7 @@ type SSEResponseCollector struct {
 **持久化增强**:
 - `persistAnalysisOutcome()` 从 `TaskResult` 提取更丰富的数据
 - 保存 Plan、StepExecutions、Reflections、Audits、Corrections、Metrics
+- 历史会话API必须返回 `messages + execution_plan + audits/reflections/corrections`，用于重建可展示思考摘要、工具调用、观察和计划状态
 
 #### 4.1.3 prompts.go 改造
 
@@ -928,14 +929,21 @@ func (p *AegisPromptProvider) Build(ctx context.Context, req core.PromptRequest)
 **文件**: `frontend/src/api/aiAnalysis.ts`
 
 ```typescript
-// 改造前
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
-  | 'content' | 'flowchart_image' | 'done' | 'error'
-
-// 改造后
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
-  | 'content' | 'flowchart_image' | 'done' | 'error'
-  | 'plan' | 'step_started' | 'step_completed' | 'audit' | 'reflection' | 'correction'
+// V5.7最终SSE契约
+export type SSEEventType =
+  | 'plan'
+  | 'step_started'
+  | 'step_completed'
+  | 'step_failed'
+  | 'tool_call'
+  | 'tool_result'
+  | 'tool_error'
+  | 'audit'
+  | 'reflection'
+  | 'correction'
+  | 'content'
+  | 'done'
+  | 'error'
 ```
 
 **新增接口**:
@@ -980,6 +988,8 @@ export interface CorrectionEvent {
 }
 ```
 
+`PlanStep` 的源字段以 agent-runtime 的 `step_id/title/objective/suggested_tools` 为准；前端必须规范化缺省值并自行计算 `status`。`thinking`/`flowchart_image` 只作为旧协议兼容输入，不参与最终状态流转。
+
 #### 4.2.2 新增 ExecutionPlan 组件
 
 **文件**: `frontend/src/components/ExecutionPlan.vue`
@@ -994,10 +1004,12 @@ export interface CorrectionEvent {
 
 - 新增 `executionPlan` reactive ref 存储计划数据
 - 新增 `auditResults`、`reflectionResults`、`correctionResults` 存储分析过程数据
-- `createSSEHandler()` 增加对 `plan`、`step_started`、`step_completed`、`audit`、`reflection`、`correction` 事件的处理
+- `createSSEHandler()` 增加对 `plan`、`step_started`、`step_completed`、`step_failed`、`audit`、`reflection`、`correction` 事件的处理
+- `content` 只缓存最终回答，不能结束loading；`done` 到达后才以最终计划状态渲染完成态
 - `Message` 接口扩展：`planStepId`、`auditResult`、`reflectionResult`、`correctionResult`
 - 左侧面板增加"执行计划"折叠区域
 - 右侧消息流增加审计/反思/纠正消息气泡
+- 暂停/取消按钮调用显式 `pause`/`cancel` API；关闭 `EventSource` 只表示断开实时订阅
 
 ---
 
@@ -1006,22 +1018,24 @@ export interface CorrectionEvent {
 ### 5.1 当前协议
 
 ```
-thinking → tool_call → tool_result → thinking → ... → content → done
+tool_call → tool_result → ... → content → done
 ```
 
 ### 5.2 新协议
 
 ```
-plan → step_started → thinking → tool_call → tool_result → thinking → step_completed
-→ step_started → thinking → tool_call → tool_result → step_completed
-→ audit → thinking → step_started → ... → step_completed
-→ reflection → correction → ... → content → done
+plan → step_started → tool_call → tool_result → step_completed
+→ step_started → tool_call → tool_error → step_failed
+→ reflection → correction → plan
+→ audit → ... → content → done
 ```
+
+`content` 表示运行结束阶段生成的最终回答，只能缓存；`done` 是成功完成态的唯一信号。失败、暂停、取消通过 `error.status` 或后续历史状态表达。
 
 ### 5.3 向后兼容
 
-- 旧事件类型（thinking, tool_call, tool_result, tool_error, content, done, error）保持不变
-- 新增事件类型（plan, step_started, step_completed, audit, reflection, correction）为可选
+- 正式事件类型固定为 `plan`、`step_started`、`step_completed`、`step_failed`、`tool_call`、`tool_result`、`tool_error`、`audit`、`reflection`、`correction`、`content`、`done`、`error`
+- 旧 `thinking`/`flowchart_image` 可被前端忽略或降级为普通摘要，不影响完成态判断
 - 前端对未知事件类型做忽略处理，不影响现有功能
 
 ---
@@ -1054,14 +1068,20 @@ plan → step_started → thinking → tool_call → tool_result → thinking �
 
 ## 7. 验证方案
 
+实现要求测试先行，先补覆盖再改实现：
+
 1. **单元测试**: Mock LLMClient和ToolGateway，验证Runtime产出有效TaskResult
 2. **适配器测试**: 验证LLMClientAdapter按Purpose正确路由，ToolGatewayAdapter正确归一化参数
-3. **SSE桥接测试**: 验证18种HookEvent产生正确的SSE事件
-4. **持久化测试**: 验证TaskResult完整数据（Reflections/Audits/Corrections/Errors）正确入库
-5. **RAG集成测试**: 验证ExperienceProvider正确查询相似案例和失败教训
-6. **集成测试**: 使用 aegis-build-test skill 运行完整流程，验证attack_graph输出格式
-7. **前端测试**: 验证新事件类型正确渲染，现有事件不受影响
-8. **回滚测试**: 关闭feature flag，验证旧ReActAgent路径仍可用
+3. **SSE桥接测试**: 验证内部HookEvent只产生13个正式SSE类型；`step_failed` 不得映射为 `step_completed`
+4. **状态机测试**: 验证 `content` 不结束loading，只有 `done` 能进入完成态
+5. **暂停/取消测试**: 验证关闭 `EventSource` 不会暂停运行，显式 `pause`/`cancel` API 会更新运行状态
+6. **历史恢复测试**: 验证history返回 `messages + execution_plan + audits/reflections/corrections`，并可重建思考摘要、工具调用、观察和计划状态
+7. **持久化测试**: 验证TaskResult完整数据（Reflections/Audits/Corrections/Errors）正确入库
+8. **RAG集成测试**: 验证ExperienceProvider正确查询相似案例和失败教训
+9. **集成测试**: 使用 aegis-build-test skill 运行完整流程，验证attack_graph输出格式
+10. **前端测试**: 验证正式事件类型正确渲染，旧 `thinking`/`flowchart_image` 不影响状态流转
+11. **curl验证**: 使用 `curl -N` 验证SSE顺序，使用history接口验证恢复字段，使用pause/cancel接口验证显式暂停/取消
+12. **回滚测试**: 关闭feature flag，验证旧ReActAgent路径仍可用
 
 ---
 

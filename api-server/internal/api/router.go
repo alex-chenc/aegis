@@ -251,6 +251,8 @@ func (r *Router) Setup() {
 			detection.GET("/alerts/ai-analysis/sessions", r.aiAnalysisHandler.GetSessionList)
 			detection.GET("/alerts/ai-analysis/:session_id/stream", r.aiAnalysisHandler.StreamMessage)
 			detection.POST("/alerts/ai-analysis/:session_id/message", r.aiAnalysisHandler.SendMessage)
+			detection.POST("/alerts/ai-analysis/:session_id/pause", r.aiAnalysisHandler.PauseAnalysis)
+			detection.POST("/alerts/ai-analysis/:session_id/cancel", r.aiAnalysisHandler.CancelAnalysis)
 			detection.GET("/alerts/ai-analysis/:session_id/history", r.aiAnalysisHandler.GetSessionHistory)
 			detection.DELETE("/alerts/ai-analysis/:session_id", r.aiAnalysisHandler.DeleteSession)
 			detection.POST("/alerts/ai-analysis/:session_id/conclusion", r.aiAnalysisHandler.ApplyConclusion)

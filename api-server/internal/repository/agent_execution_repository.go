@@ -58,6 +58,14 @@ func (r *AgentExecutionRepository) FindByTaskID(taskID string) (*model.AgentExec
 	return &exec, nil
 }
 
+func (r *AgentExecutionRepository) FindBySessionID(sessionID string) (*model.AgentExecution, error) {
+	var exec model.AgentExecution
+	if err := r.db.Where("session_id = ?", sessionID).Order("created_at DESC").First(&exec).Error; err != nil {
+		return nil, err
+	}
+	return &exec, nil
+}
+
 func (r *AgentExecutionRepository) FindStepsByExecutionID(execID uuid.UUID) ([]*model.AgentStepExecution, error) {
 	var steps []*model.AgentStepExecution
 	if err := r.db.Where("execution_id = ?", execID).Order("created_at ASC").Find(&steps).Error; err != nil {

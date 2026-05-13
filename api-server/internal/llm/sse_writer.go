@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,8 +23,9 @@ type SSEEvent struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-// SSEWriter writes SSE events to an HTTP response
+// SSEWriter writes SSE events to an HTTP response. It is safe for concurrent use.
 type SSEWriter struct {
+	mu      sync.Mutex
 	writer  http.ResponseWriter
 	flushed bool
 }
@@ -33,13 +35,15 @@ func NewSSEWriter(w http.ResponseWriter) *SSEWriter {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Transfer-Encoding", "chunked")
 	w.Header().Set("X-Accel-Buffering", "no")
 	return &SSEWriter{writer: w}
 }
 
 // Write writes an SSE event
 func (w *SSEWriter) Write(event SSEEvent) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal SSE event: %w", err)
@@ -104,16 +108,40 @@ func (w *SSEWriter) WriteError(errMsg string) error {
 
 // Close closes the SSE stream
 func (w *SSEWriter) Close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if !w.flushed {
-		w.Write(SSEEvent{Type: "done"})
+		// Write already acquires mu, so call the underlying write directly.
+		data, _ := json.Marshal(SSEEvent{Type: "done"})
+		fmt.Fprintf(w.writer, "data: %s\n\n", string(data))
+		if f, ok := w.writer.(http.Flusher); ok {
+			f.Flush()
+		}
 	}
 }
 
 // Flush flushes any buffered data
 func (w *SSEWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if f, ok := w.writer.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// WriteComment writes an SSE comment (ignored by EventSource, keeps connection alive)
+func (w *SSEWriter) WriteComment(comment string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	_, err := fmt.Fprintf(w.writer, ": %s\n\n", comment)
+	if err != nil {
+		return fmt.Errorf("failed to write SSE comment: %w", err)
+	}
+	if f, ok := w.writer.(http.Flusher); ok {
+		f.Flush()
+	}
+	return nil
 }
 
 // ChatStreamResponse represents a streaming chat response

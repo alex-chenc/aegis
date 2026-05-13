@@ -53,11 +53,9 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 
 	case agentruntime.HookTaskFinished:
 		payload := toMap(event.Payload)
-		if finalAnswer, ok := payload["final_answer"].(string); ok && finalAnswer != "" {
-			_ = s.writer.WriteContent(finalAnswer)
+		if finalAnswer, ok := payload["final_answer"].(string); ok && finalAnswer != "" && s.collector != nil {
 			s.collector.SetContent(finalAnswer)
 		}
-		_ = s.writer.WriteDone()
 
 	case agentruntime.HookTaskInterrupted:
 		_ = s.writer.WriteError("Analysis interrupted")
@@ -65,10 +63,10 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 	// --- experience / plan ---
 
 	case agentruntime.HookExperienceLoaded:
-		_ = s.writer.WriteThinking("Loading experience...")
+		s.writeThinking("Loading experience...")
 
 	case agentruntime.HookPlanCreated:
-		_ = s.writer.WriteThinking("Creating analysis plan...")
+		s.writeThinking("Creating analysis plan...")
 
 		var plan *agentruntime.Plan
 		if event.Snapshot != nil {
@@ -82,19 +80,48 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 					Content: string(planJSON),
 				})
 			}
-			s.collector.SetPlan(plan)
+			if s.collector != nil {
+				s.collector.SetPlan(plan)
+			}
 		}
 
 	// --- step lifecycle ---
 
 	case agentruntime.HookStepStarted:
-		_ = s.writer.WriteThinking(fmt.Sprintf("Step %s started...", event.StepID))
+		stepTitle := findStepTitle(event, event.StepID)
+		if stepTitle != "" {
+			s.writeThinking(fmt.Sprintf("开始执行步骤: %s", stepTitle))
+		} else {
+			s.writeThinking(fmt.Sprintf("Step %s started...", event.StepID))
+		}
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:   "step_started",
+			CallID: event.StepID,
+		})
 
 	case agentruntime.HookStepCompleted:
-		_ = s.writer.WriteThinking(fmt.Sprintf("Step %s completed", event.StepID))
+		stepTitle := findStepTitle(event, event.StepID)
+		if stepTitle != "" {
+			s.writeThinking(fmt.Sprintf("步骤完成: %s", stepTitle))
+		} else {
+			s.writeThinking(fmt.Sprintf("Step %s completed", event.StepID))
+		}
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:   "step_completed",
+			CallID: event.StepID,
+		})
 
 	case agentruntime.HookStepFailed:
-		_ = s.writer.WriteThinking(fmt.Sprintf("Step %s failed", event.StepID))
+		stepTitle := findStepTitle(event, event.StepID)
+		if stepTitle != "" {
+			s.writeThinking(fmt.Sprintf("步骤失败: %s", stepTitle))
+		} else {
+			s.writeThinking(fmt.Sprintf("Step %s failed", event.StepID))
+		}
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:   "step_failed",
+			CallID: event.StepID,
+		})
 
 	// --- model calls ---
 
@@ -103,8 +130,11 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 
 	case agentruntime.HookModelCallFinished:
 		payload := toMap(event.Payload)
+		if purpose, _ := payload["purpose"].(string); purpose == string(agentruntime.PurposeSummarize) {
+			return nil
+		}
 		if summary, ok := payload["output_summary"].(string); ok && summary != "" {
-			_ = s.writer.WriteThinking(summary)
+			s.writeThinking(summary)
 		}
 
 	// --- tool calls ---
@@ -116,7 +146,9 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 		argsSummary := payload["args_summary"]
 
 		_ = s.writer.WriteToolCall(toolName, callID, argsSummary)
-		s.collector.AddToolCall(toolName, callID, argsSummary)
+		if s.collector != nil {
+			s.collector.AddToolCall(toolName, callID, argsSummary)
+		}
 
 	case agentruntime.HookToolCallFinished:
 		payload := toMap(event.Payload)
@@ -130,23 +162,27 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 				durationMs = int64(dm)
 			}
 			_ = s.writer.WriteToolResult(callID, resultSummary, durationMs)
-			s.collector.AddToolResult(callID, resultSummary)
+			if s.collector != nil {
+				s.collector.AddToolResult(callID, resultSummary)
+			}
 		} else {
 			errMsg, _ := payload["error_message"].(string)
 			_ = s.writer.WriteToolError(callID, errMsg)
-			s.collector.AddToolError(callID, errMsg)
+			if s.collector != nil {
+				s.collector.AddToolError(callID, errMsg)
+			}
 		}
 
 	// --- audit ---
 
 	case agentruntime.HookAuditStarted:
-		_ = s.writer.WriteThinking("Auditing progress...")
+		s.writeThinking("Auditing progress...")
 
 	case agentruntime.HookAuditFinished:
 		payload := toMap(event.Payload)
 		auditSummary := buildAuditSummary(payload)
 		if auditSummary != "" {
-			_ = s.writer.WriteThinking(auditSummary)
+			s.writeThinking(auditSummary)
 		}
 		if auditJSON, err := json.Marshal(payload); err == nil {
 			_ = s.writer.Write(llm.SSEEvent{
@@ -154,18 +190,20 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 				Content: string(auditJSON),
 			})
 		}
-		s.collector.AddAudit(payload)
+		if s.collector != nil {
+			s.collector.AddAudit(payload)
+		}
 
 	// --- reflection ---
 
 	case agentruntime.HookReflectionStarted:
-		_ = s.writer.WriteThinking("Reflecting on failure...")
+		s.writeThinking("Reflecting on failure...")
 
 	case agentruntime.HookReflectionFinished:
 		payload := toMap(event.Payload)
 		reflSummary := buildReflectionSummary(payload)
 		if reflSummary != "" {
-			_ = s.writer.WriteThinking(reflSummary)
+			s.writeThinking(reflSummary)
 		}
 		if reflJSON, err := json.Marshal(payload); err == nil {
 			_ = s.writer.Write(llm.SSEEvent{
@@ -173,7 +211,9 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 				Content: string(reflJSON),
 			})
 		}
-		s.collector.AddReflection(payload)
+		if s.collector != nil {
+			s.collector.AddReflection(payload)
+		}
 
 	// --- correction ---
 
@@ -181,7 +221,7 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 		payload := toMap(event.Payload)
 		corrSummary := buildCorrectionSummary(payload)
 		if corrSummary != "" {
-			_ = s.writer.WriteThinking(corrSummary)
+			s.writeThinking(corrSummary)
 		}
 		if corrJSON, err := json.Marshal(payload); err == nil {
 			_ = s.writer.Write(llm.SSEEvent{
@@ -189,7 +229,9 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 				Content: string(corrJSON),
 			})
 		}
-		s.collector.AddCorrection(payload)
+		if s.collector != nil {
+			s.collector.AddCorrection(payload)
+		}
 
 	// --- config ---
 
@@ -198,6 +240,16 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 	}
 
 	return nil
+}
+
+func (s *SSEHookSink) writeThinking(text string) {
+	if text == "" {
+		return
+	}
+	_ = s.writer.WriteThinking(text)
+	if s.collector != nil {
+		s.collector.AddThinking(text)
+	}
 }
 
 // toMap converts an arbitrary payload (typically map[string]interface{} after
@@ -263,4 +315,23 @@ func buildCorrectionSummary(payload map[string]interface{}) string {
 		"actions": actions,
 	})
 	return string(b)
+}
+
+// findStepTitle looks up the step title from the plan in the event snapshot.
+func findStepTitle(event agentruntime.HookEvent, stepID string) string {
+	if event.Snapshot == nil || event.Snapshot.CurrentPlan == nil {
+		return stepID
+	}
+	for _, step := range event.Snapshot.CurrentPlan.Steps {
+		if step.StepID == stepID {
+			if step.Title != "" {
+				return step.Title
+			}
+			if step.Objective != "" {
+				return step.Objective
+			}
+			return stepID
+		}
+	}
+	return stepID
 }

@@ -182,43 +182,66 @@ export const auditLogApi = {
 
 ### 5.1 背景
 
-V5.7将AI分析的后端执行引擎从手写ReAct循环替换为 `agent-runtime` SDK。agent-runtime提供完整的 Plan → Execute → Reflect → Audit → Correct → Summarize 生命周期，通过HookSink接口实时推送18种事件。前端需要扩展SSE事件处理和UI展示以支持新的执行流程。
+V5.7将AI分析的后端执行引擎从手写ReAct循环替换为 `agent-runtime` SDK。agent-runtime提供完整的 Plan → Execute → Reflect → Audit → Correct → Summarize 生命周期，通过HookSink接口实时推送执行事件。前端需要扩展SSE事件处理和UI展示以支持新的执行流程。
+
+AI分析页展示的“思考链”定义为可展示推理摘要与执行过程，包括计划、步骤、工具调用、观察、审计、反思、纠正和最终结论；前端文案不得承诺展示模型隐藏 CoT。
 
 ### 5.2 SSE事件类型扩展
 
 **文件**: `frontend/src/api/aiAnalysis.ts`
 
 ```typescript
-// 改造前
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
-  | 'content' | 'flowchart_image' | 'done' | 'error'
-
-// 改造后 — 新增6种事件类型
-export type SSEEventType = 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
-  | 'content' | 'flowchart_image' | 'done' | 'error'
-  | 'plan' | 'step_started' | 'step_completed' | 'audit' | 'reflection' | 'correction'
+// V5.7最终SSE契约
+export type SSEEventType =
+  | 'plan'
+  | 'step_started'
+  | 'step_completed'
+  | 'step_failed'
+  | 'tool_call'
+  | 'tool_result'
+  | 'tool_error'
+  | 'audit'
+  | 'reflection'
+  | 'correction'
+  | 'content'
+  | 'done'
+  | 'error'
 ```
+
+`thinking` 和 `flowchart_image` 仅作为旧协议兼容输入处理，不属于最终状态流转依赖。
 
 ### 5.3 新增接口定义
 
 ```typescript
-// 执行计划步骤
+// agent-runtime原始计划步骤来源字段
+export interface RuntimePlanStep {
+  step_id: string
+  title: string
+  objective: string
+  suggested_tools?: string[]
+}
+
+// 前端规范化后的执行计划步骤
 export interface PlanStep {
   step_id: string
   title: string
   objective: string
-  expected_output: string
+  suggested_tools: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'replaced' | 'invalidated'
-  suggested_tools?: string[]
-  dependencies?: string[]
+  raw?: RuntimePlanStep & Record<string, unknown>
 }
 
 // 执行计划事件 (SSE type: 'plan')
 export interface PlanEvent {
   plan_id: string
   goal: string
-  steps: PlanStep[]
+  version?: number
+  steps: RuntimePlanStep[]
   assumptions?: string[]
+}
+
+export interface NormalizedPlanEvent extends Omit<PlanEvent, 'steps'> {
+  steps: PlanStep[]
 }
 
 // 步骤开始事件 (SSE type: 'step_started')
@@ -234,6 +257,13 @@ export interface StepCompletedEvent {
   result?: string
   evidence?: string[]
   duration_ms: number
+}
+
+// 步骤失败事件 (SSE type: 'step_failed')
+export interface StepFailedEvent {
+  step_id: string
+  error: string
+  duration_ms?: number
 }
 
 // 审计事件 (SSE type: 'audit')
@@ -320,13 +350,14 @@ src/components/
 
 ```typescript
 // 执行计划
-const executionPlan = ref<PlanEvent | null>(null)
+const executionPlan = ref<NormalizedPlanEvent | null>(null)
 const currentStepId = ref<string | null>(null)
 
 // 分析过程数据
 const auditResults = ref<AuditEvent[]>([])
 const reflectionResults = ref<ReflectionEvent[]>([])
 const correctionResults = ref<CorrectionEvent[]>([])
+const finalContent = ref('')
 
 // 运行时指标
 const runtimeMetrics = ref({
@@ -344,43 +375,54 @@ const runtimeMetrics = ref({
 const createSSEHandler = (sessionId: string) => {
   return (event: SSEEvent) => {
     switch (event.type) {
-      // 现有事件处理（不变）
-      case 'thinking':   // ...
+      // 正式V5.7事件处理
       case 'tool_call':  // ...
       case 'tool_result': // ...
       case 'tool_error':  // ...
-      case 'content':    // ...
-      case 'done':       // ...
-      case 'error':      // ...
-
-      // 新增事件处理
       case 'plan':
-        executionPlan.value = event.content as PlanEvent
+        executionPlan.value = normalizePlan(event.content as PlanEvent)
         break
       case 'step_started':
         currentStepId.value = (event.content as StepStartedEvent).step_id
         updateStepStatus(currentStepId.value, 'running')
-        addThinkingMessage(`步骤开始: ${(event.content as StepStartedEvent).title}`)
+        addProcessMessage(`步骤开始: ${(event.content as StepStartedEvent).title}`)
         break
       case 'step_completed':
         updateStepStatus((event.content as StepCompletedEvent).step_id, 'completed')
         break
+      case 'step_failed':
+        updateStepStatus((event.content as StepFailedEvent).step_id, 'failed')
+        addProcessMessage(`步骤失败: ${(event.content as StepFailedEvent).error}`)
+        break
       case 'audit':
         auditResults.value.push(event.content as AuditEvent)
-        addThinkingMessage(`审计完成: ${(event.content as AuditEvent).decision}`)
+        addProcessMessage(`审计完成: ${(event.content as AuditEvent).decision}`)
         break
       case 'reflection':
         reflectionResults.value.push(event.content as ReflectionEvent)
-        addThinkingMessage(`反思: ${(event.content as ReflectionEvent).root_cause}`)
+        addProcessMessage(`反思: ${(event.content as ReflectionEvent).root_cause}`)
         break
       case 'correction':
         correctionResults.value.push(event.content as CorrectionEvent)
-        addThinkingMessage(`计划纠正: ${(event.content as CorrectionEvent).reason}`)
+        addProcessMessage(`计划纠正: ${(event.content as CorrectionEvent).reason}`)
+        break
+      case 'content':
+        finalContent.value = extractFinalContent(event.content)
+        break
+      case 'done':
+        applyFinalPlanStatus(event.content)
+        appendAssistantFinalMessage(finalContent.value)
+        isLoading.value = false
+        break
+      case 'error':
+        handleSSEError(event.content)
         break
     }
   }
 }
 ```
+
+`content` 只能缓存最终回答，不能把 `isLoading` 置为 `false`；完成态、按钮解锁和最终计划状态必须等 `done` 到达后统一处理。旧协议的 `thinking` 可降级为过程摘要，但不得参与完成态判断。
 
 #### 5.5.3 左侧面板改造
 
@@ -473,6 +515,33 @@ interface Message {
 }
 ```
 
+#### 5.5.6 暂停/取消交互
+
+AI分析页的暂停和取消必须调用显式API：
+
+```typescript
+POST /api/v1/detection/alerts/ai-analysis/:session_id/pause
+POST /api/v1/detection/alerts/ai-analysis/:session_id/cancel
+```
+
+关闭 `EventSource` 只表示停止接收实时事件，不能更新为“已暂停”。暂停按钮流程为：调用 `pause` API → 服务端返回 `pausing`/`paused` → 前端关闭本地 EventSource 并展示暂停态。取消按钮流程相同，但终态为 `cancelled`。
+
+#### 5.5.7 历史会话恢复
+
+历史会话接口必须返回完整恢复所需数据：
+
+```typescript
+interface SessionHistoryPayload {
+  messages: Message[]
+  execution_plan: PlanEvent | null
+  audits: AuditEvent[]
+  reflections: ReflectionEvent[]
+  corrections: CorrectionEvent[]
+}
+```
+
+`loadSession()` 需要先规范化 `execution_plan`，再回放 `messages` 中的可展示思考摘要、工具调用和观察，随后追加 `audits`、`reflections`、`corrections`。计划状态以历史返回的最终步骤状态或步骤执行结果为准，不能因为没有实时SSE就全部显示为 `pending`。
+
 ### 5.6 样式设计
 
 ```scss
@@ -514,8 +583,9 @@ interface Message {
 
 ### 5.7 向后兼容
 
-- 旧SSE事件类型（thinking, tool_call, tool_result, tool_error, content, done, error）完全不变
-- 新增事件类型为可选，前端对未知事件类型做忽略处理
+- 正式状态流转只依赖 V5.7 事件类型：`plan`、`step_started`、`step_completed`、`step_failed`、`tool_call`、`tool_result`、`tool_error`、`audit`、`reflection`、`correction`、`content`、`done`、`error`
+- 旧 `thinking`/`flowchart_image` 仅作为兼容输入，前端可忽略或转为普通过程摘要
+- 前端对未知事件类型做忽略处理，并记录调试日志
 - 无 `plan` 事件时，不显示执行计划面板（兼容旧版后端）
 - 无 `audit`/`reflection`/`correction` 事件时，不显示对应气泡
 
@@ -527,12 +597,14 @@ interface Message {
 
 | 文件 | 变更 |
 |:---|:---|
-| `src/api/aiAnalysis.ts` | SSEEventType新增6个类型；新增PlanStep/PlanEvent/AuditEvent/ReflectionEvent/CorrectionEvent接口 |
+| `src/api/aiAnalysis.ts` | SSEEventType对齐最终契约；新增PlanStep/PlanEvent/StepFailedEvent/AuditEvent/ReflectionEvent/CorrectionEvent接口 |
 | `src/components/ExecutionPlan.vue` | 新建组件：可折叠执行计划面板，步骤状态徽章，审计/反思/纠正事件时间线 |
-| `src/views/detection/AIAnalysis.vue` | 导入ExecutionPlan组件；新增executionPlan/auditResults/reflectionResults/correctionResults响应式引用；createSSEHandler新增plan/step_started/step_completed/audit/reflection/correction事件处理；Message接口扩展type/planStepId/auditResult/reflectionResult/correctionResult字段；左侧面板添加ExecutionPlan组件；右侧消息流添加审计(紫色)/反思(橙色)/纠正(蓝色)气泡；localStorage持久化新增字段 |
+| `src/views/detection/AIAnalysis.vue` | 导入ExecutionPlan组件；新增executionPlan/auditResults/reflectionResults/correctionResults/finalContent响应式引用；createSSEHandler处理plan/step_started/step_completed/step_failed/tool_call/tool_result/tool_error/audit/reflection/correction/content/done/error；Message接口扩展type/planStepId/auditResult/reflectionResult/correctionResult字段；左侧面板添加ExecutionPlan组件；右侧消息流添加审计(紫色)/反思(橙色)/纠正(蓝色)气泡；localStorage持久化新增字段 |
 
 ### 6.2 向后兼容验证
 
-- 旧SSE事件类型完全不变，新事件类型为可选
+- 旧 `thinking`/`flowchart_image` 不影响最终状态流转
 - 无plan事件时ExecutionPlan组件不渲染（v-if="plan"）
 - 未知事件类型在switch default中被忽略
+- `content` 不结束loading，只有 `done` 能进入完成态
+- 历史会话能从 `messages + execution_plan + audits/reflections/corrections` 重建计划状态和过程链

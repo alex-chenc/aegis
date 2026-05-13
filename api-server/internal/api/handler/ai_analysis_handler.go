@@ -35,6 +35,13 @@ type AIAnalysisHandler struct {
 	agentExecRepo *repository.AgentExecutionRepository
 	sessions      map[string]*AISSESion
 	sessionsMutex sync.RWMutex
+	activeRuns    map[string]activeAnalysisRun
+	activeRunsMu  sync.Mutex
+}
+
+type activeAnalysisRun struct {
+	id     string
+	cancel context.CancelFunc
 }
 
 type AlertContextSnapshot struct {
@@ -122,8 +129,8 @@ func (c *SSEResponseCollector) WriteContent(chunk string) error {
 }
 
 func (c *SSEResponseCollector) WriteThinking(content string) {
-	c.thinking += content
-	c.pendingThought += content
+	c.thinking = appendTraceText(c.thinking, content)
+	c.pendingThought = appendTraceText(c.pendingThought, content)
 }
 
 func (c *SSEResponseCollector) WriteToolCall(tool, callID string, args interface{}) {
@@ -138,6 +145,17 @@ func (c *SSEResponseCollector) WriteToolCall(tool, callID string, args interface
 		ActionInput: toStringMap(args),
 	}
 	c.pendingThought = ""
+}
+
+func appendTraceText(current, next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return current
+	}
+	if current == "" {
+		return next
+	}
+	return current + "\n" + next
 }
 
 func (c *SSEResponseCollector) WriteToolResult(callID string, result interface{}, timeMs int64) {
@@ -231,6 +249,7 @@ func (c *SSEResponseCollector) AddToolResult(callID string, result interface{}) 
 		"call_id": callID,
 		"result":  result,
 	})
+	c.finishCurrentStep(formatCollectedPayload(result))
 }
 
 // AddToolError implements adapters.EventCollector
@@ -239,6 +258,7 @@ func (c *SSEResponseCollector) AddToolError(callID, errMsg string) {
 		"call_id": callID,
 		"error":   errMsg,
 	})
+	c.finishCurrentStep("Error: " + errMsg)
 }
 
 // SetContent implements adapters.EventCollector
@@ -264,6 +284,16 @@ func toStringMap(value interface{}) map[string]interface{} {
 	}
 	if typed, ok := value.(map[string]interface{}); ok {
 		return typed
+	}
+	if typed, ok := value.(string); ok {
+		typed = strings.TrimSpace(typed)
+		if typed == "" {
+			return nil
+		}
+		var decoded map[string]interface{}
+		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
+			return decoded
+		}
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -659,6 +689,13 @@ type ApplyConclusionRequest struct {
 	Conclusions []AlertConclusion `json:"conclusions"`
 }
 
+type AnalysisControlResponse struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	ActiveRun bool   `json:"active_run"`
+	Message   string `json:"message"`
+}
+
 func NewAIAnalysisHandler(
 	alertRepo *repository.AlertRepository,
 	configRepo *repository.ConfigRepository,
@@ -677,7 +714,44 @@ func NewAIAnalysisHandler(
 		messageRepo:   messageRepo,
 		agentExecRepo: agentExecRepo,
 		sessions:      make(map[string]*AISSESion),
+		activeRuns:    make(map[string]activeAnalysisRun),
 	}
+}
+
+func (h *AIAnalysisHandler) setActiveRun(sessionID string, cancel context.CancelFunc) string {
+	h.activeRunsMu.Lock()
+	defer h.activeRunsMu.Unlock()
+	runID := uuid.New().String()
+	h.activeRuns[sessionID] = activeAnalysisRun{
+		id:     runID,
+		cancel: cancel,
+	}
+	return runID
+}
+
+func (h *AIAnalysisHandler) clearActiveRun(sessionID, runID string) {
+	h.activeRunsMu.Lock()
+	defer h.activeRunsMu.Unlock()
+	if current, ok := h.activeRuns[sessionID]; ok && current.id == runID {
+		delete(h.activeRuns, sessionID)
+	}
+}
+
+func (h *AIAnalysisHandler) popActiveRun(sessionID string) (context.CancelFunc, bool) {
+	h.activeRunsMu.Lock()
+	defer h.activeRunsMu.Unlock()
+	run, ok := h.activeRuns[sessionID]
+	if ok {
+		delete(h.activeRuns, sessionID)
+	}
+	return run.cancel, ok
+}
+
+func (h *AIAnalysisHandler) hasActiveRun(sessionID string) bool {
+	h.activeRunsMu.Lock()
+	defer h.activeRunsMu.Unlock()
+	_, ok := h.activeRuns[sessionID]
+	return ok
 }
 
 // CreateSession creates a new AI analysis session
@@ -824,7 +898,6 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Transfer-Encoding", "chunked")
 	c.Header("X-Accel-Buffering", "no")
 
 	// Create SSE writer and response collector
@@ -872,10 +945,28 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 		return
 	}
 
-	// Run the agent with a detached context so that client disconnects
-	// (which cancel c.Request.Context()) do not kill in-flight LLM calls.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
+	runID := h.setActiveRun(sessionID, cancel)
+	defer h.clearActiveRun(sessionID, runID)
+
+	// Start keepalive goroutine to prevent reverse proxy timeout during long LLM/tool calls.
+	// SSE comments (lines starting with ":") are ignored by EventSource but keep the TCP connection active.
+	keepaliveCtx, keepaliveCancel := context.WithCancel(ctx)
+	defer keepaliveCancel()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepaliveCtx.Done():
+				return
+			case <-ticker.C:
+				_ = sseWriter.WriteComment("keepalive")
+			}
+		}
+	}()
+
 	taskResult, err := runtime.Run(ctx, agentruntime.TaskInput{
 		UserInput:   message,
 		UserContext: alertCtx,
@@ -889,16 +980,37 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	}
 	logger.Info("StreamMessage: agent-runtime.Run returned", zap.String("session_id", sessionID))
 
-	// Get the full AI response content
-	aiResponseContent := responseCollector.GetContent()
-	logger.Info("AI response collected", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
-
-	// Persist agent execution results
+	// Persist agent execution results before deciding whether a final answer is safe
+	// to show so history can replay failed, paused, or limited runs.
 	if taskResult != nil && h.agentExecRepo != nil {
 		h.persistAgentResult(sessionID, taskResult)
 	}
 
+	// Get the full AI response content
+	aiResponseContent := responseCollector.GetContent()
+	if aiResponseContent == "" && taskResult != nil {
+		aiResponseContent = taskResult.FinalAnswer
+		responseCollector.SetContent(aiResponseContent)
+	}
+	logger.Info("AI response collected", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
+
+	if taskResult != nil && !isConclusiveTaskResult(taskResult) {
+		errMsg := buildTaskResultFailureMessage(taskResult)
+		logger.Warn("agent runtime task did not reach conclusive completion",
+			zap.String("status", string(taskResult.Status)),
+			zap.String("reason", string(taskResult.ExitReason)),
+			zap.String("session_id", sessionID))
+		h.persistStreamMessages(session, message, "AI 分析失败: "+errMsg, responseCollector)
+		sseWriter.WriteError(errMsg)
+		sseWriter.WriteDone()
+		return
+	}
+
 	h.persistAnalysisOutcome(session, aiResponseContent)
+
+	if aiResponseContent != "" {
+		sseWriter.WriteContent(aiResponseContent)
+	}
 
 	// Generate flowchart image from final content
 	if aiResponseContent != "" {
@@ -908,40 +1020,86 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 	// Signal the SSE stream is complete
 	sseWriter.WriteDone()
 
-	// Persist user message to database
+	h.persistStreamMessages(session, message, aiResponseContent, responseCollector)
+}
+
+func isConclusiveTaskResult(result *agentruntime.TaskResult) bool {
+	if result == nil {
+		return true
+	}
+	if result.Status != agentruntime.StatusCompleted {
+		return false
+	}
+	return !planHasUnfinishedSteps(result.FinalPlan)
+}
+
+func planHasUnfinishedSteps(plan *agentruntime.Plan) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		switch step.Status {
+		case agentruntime.StepCompleted, agentruntime.StepFailed, agentruntime.StepSkipped, agentruntime.StepReplaced, agentruntime.StepInvalidated:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func buildTaskResultFailureMessage(result *agentruntime.TaskResult) string {
+	if result == nil {
+		return "AI 分析未返回执行结果"
+	}
+	if planHasUnfinishedSteps(result.FinalPlan) {
+		return "AI 分析未完成全部执行计划，已停止输出结论。请缩小告警范围、补充上下文或稍后重试。"
+	}
+	if len(result.Errors) > 0 {
+		return result.Errors[len(result.Errors)-1].Message
+	}
+	if result.ExitReason != "" {
+		return fmt.Sprintf("执行状态为 %s，退出原因: %s", result.Status, result.ExitReason)
+	}
+	return fmt.Sprintf("执行状态为 %s，未生成可应用结论", result.Status)
+}
+
+func (h *AIAnalysisHandler) persistStreamMessages(session *AISSESion, userContent, assistantContent string, collector *SSEResponseCollector) {
+	if session == nil {
+		return
+	}
+	sessionID := session.SessionID
 	if h.messageRepo != nil {
 		userMsg := &model.AIMessage{
 			SessionID: sessionID,
 			MessageID: uuid.New().String(),
 			Role:      "user",
-			Content:   message,
+			Content:   userContent,
 		}
 		if err := h.messageRepo.Create(userMsg); err != nil {
 			logger.Warn("failed to persist user message", zap.Error(err))
-		}
-		if h.sessionRepo != nil {
+		} else if h.sessionRepo != nil {
 			h.sessionRepo.IncrementMessageCount(sessionID)
 		}
 
-		// Persist AI response and the complete ReAct trace collected from the SSE stream.
-		if responseCollector.HasAssistantTrace() {
+		if collector != nil && (collector.HasAssistantTrace() || assistantContent != "") {
 			aiMsg := &model.AIMessage{
 				SessionID:   sessionID,
 				MessageID:   uuid.New().String(),
 				Role:        "assistant",
-				Content:     aiResponseContent,
-				Thinking:    responseCollector.GetThinking(),
-				ToolCalls:   responseCollector.ToolCallsJSONB(),
-				ToolResults: responseCollector.ToolResultsJSONB(),
-				Steps:       responseCollector.StepsJSONB(),
+				Content:     assistantContent,
+				Thinking:    collector.GetThinking(),
+				ToolCalls:   collector.ToolCallsJSONB(),
+				ToolResults: collector.ToolResultsJSONB(),
+				Steps:       collector.StepsJSONB(),
 			}
 			if err := h.messageRepo.Create(aiMsg); err != nil {
 				logger.Warn("failed to persist AI response", zap.Error(err))
 			} else {
-				logger.Info("persisted AI response", zap.String("session_id", sessionID), zap.Int("content_len", len(aiResponseContent)))
+				logger.Info("persisted AI response", zap.String("session_id", sessionID), zap.Int("content_len", len(assistantContent)))
 				if h.sessionRepo != nil {
 					h.sessionRepo.IncrementMessageCount(sessionID)
-					for range responseCollector.GetToolCalls() {
+					for range collector.GetToolCalls() {
 						h.sessionRepo.IncrementToolCallCount(sessionID)
 					}
 				}
@@ -949,15 +1107,14 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 		}
 	}
 
-	// Add messages to in-memory session history in the same order users saw them.
 	session.Messages = append(session.Messages, &llm.AIMessage{
 		Role:    "user",
-		Content: message,
+		Content: userContent,
 	})
-	if aiResponseContent != "" {
+	if assistantContent != "" {
 		session.Messages = append(session.Messages, &llm.AIMessage{
 			Role:    "assistant",
-			Content: aiResponseContent,
+			Content: assistantContent,
 		})
 	}
 }
@@ -1084,17 +1241,17 @@ func (h *AIAnalysisHandler) persistAgentResult(sessionID string, result *agentru
 	// 5. Save corrections
 	for _, corr := range result.Corrections {
 		h.agentExecRepo.CreateCorrection(&model.AgentCorrection{
-			ExecutionID:     exec.ID,
-			TaskID:          result.TaskID,
-			CorrectionID:    corr.CorrectionID,
-			Trigger:         corr.Trigger,
-			FromPlanVersion: corr.FromPlanVersion,
-			ToPlanVersion:   corr.ToPlanVersion,
-			Reason:          corr.Reason,
-			Actions:         marshalJSONB(corr.Actions),
-			Valid:           corr.Valid,
+			ExecutionID:      exec.ID,
+			TaskID:           result.TaskID,
+			CorrectionID:     corr.CorrectionID,
+			Trigger:          corr.Trigger,
+			FromPlanVersion:  corr.FromPlanVersion,
+			ToPlanVersion:    corr.ToPlanVersion,
+			Reason:           corr.Reason,
+			Actions:          marshalJSONB(corr.Actions),
+			Valid:            corr.Valid,
 			ValidationErrors: marshalJSONB(corr.ValidationErrors),
-			CreatedAt:       corr.CreatedAt,
+			CreatedAt:        corr.CreatedAt,
 		})
 	}
 
@@ -1354,6 +1511,53 @@ func (h *AIAnalysisHandler) GetRAGContext(c *gin.Context) {
 	})
 }
 
+// loadExecutionPlan loads the execution plan from agent execution records for a session.
+func (h *AIAnalysisHandler) loadExecutionPlan(sessionID string) interface{} {
+	if h.agentExecRepo == nil {
+		return nil
+	}
+	exec, err := h.agentExecRepo.FindBySessionID(sessionID)
+	if err != nil || exec == nil {
+		return nil
+	}
+	if exec.FinalPlan != nil {
+		return exec.FinalPlan
+	}
+	return exec.InitialPlan
+}
+
+type executionHistoryArtifacts struct {
+	ExecutionPlan interface{}
+	Audits        interface{}
+	Reflections   interface{}
+	Corrections   interface{}
+}
+
+func (h *AIAnalysisHandler) loadExecutionHistoryArtifacts(sessionID string) executionHistoryArtifacts {
+	if h.agentExecRepo == nil {
+		return executionHistoryArtifacts{}
+	}
+	exec, err := h.agentExecRepo.FindBySessionID(sessionID)
+	if err != nil || exec == nil {
+		return executionHistoryArtifacts{}
+	}
+
+	artifacts := executionHistoryArtifacts{ExecutionPlan: exec.InitialPlan}
+	if exec.FinalPlan != nil {
+		artifacts.ExecutionPlan = exec.FinalPlan
+	}
+	if audits, err := h.agentExecRepo.FindAuditsByExecutionID(exec.ID); err == nil {
+		artifacts.Audits = audits
+	}
+	if reflections, err := h.agentExecRepo.FindReflectionsByExecutionID(exec.ID); err == nil {
+		artifacts.Reflections = reflections
+	}
+	if corrections, err := h.agentExecRepo.FindCorrectionsByExecutionID(exec.ID); err == nil {
+		artifacts.Corrections = corrections
+	}
+	return artifacts
+}
+
 // GetSessionHistory gets the message history for a session
 // GET /api/v1/detection/alerts/ai-analysis/{session_id}/history
 func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
@@ -1363,11 +1567,16 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 	if h.messageRepo != nil {
 		messages, err := h.messageRepo.FindBySessionID(sessionID)
 		if err == nil && len(messages) > 0 {
+			artifacts := h.loadExecutionHistoryArtifacts(sessionID)
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,
 				"data": gin.H{
-					"session_id": sessionID,
-					"messages":   messages,
+					"session_id":     sessionID,
+					"messages":       messages,
+					"execution_plan": artifacts.ExecutionPlan,
+					"audits":         artifacts.Audits,
+					"reflections":    artifacts.Reflections,
+					"corrections":    artifacts.Corrections,
 				},
 			})
 			return
@@ -1385,11 +1594,16 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 		return
 	}
 
+	artifacts := h.loadExecutionHistoryArtifacts(sessionID)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"session_id": sessionID,
-			"messages":   session.Messages,
+			"session_id":     sessionID,
+			"messages":       session.Messages,
+			"execution_plan": artifacts.ExecutionPlan,
+			"audits":         artifacts.Audits,
+			"reflections":    artifacts.Reflections,
+			"corrections":    artifacts.Corrections,
 		},
 	})
 }
@@ -1453,6 +1667,52 @@ func (h *AIAnalysisHandler) DeleteSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "session deleted",
+	})
+}
+
+// PauseAnalysis requests cooperative cancellation of the current stream run while
+// preserving the session for a follow-up user message.
+// POST /api/v1/detection/alerts/ai-analysis/{session_id}/pause
+func (h *AIAnalysisHandler) PauseAnalysis(c *gin.Context) {
+	h.stopActiveAnalysis(c, "paused", "AI 分析已暂停")
+}
+
+// CancelAnalysis cancels the current stream run and marks the session cancelled.
+// POST /api/v1/detection/alerts/ai-analysis/{session_id}/cancel
+func (h *AIAnalysisHandler) CancelAnalysis(c *gin.Context) {
+	h.stopActiveAnalysis(c, "cancelled", "AI 分析已取消")
+}
+
+func (h *AIAnalysisHandler) stopActiveAnalysis(c *gin.Context, status, message string) {
+	sessionID := c.Param("session_id")
+	cancel, ok := h.popActiveRun(sessionID)
+	if ok {
+		cancel()
+	}
+
+	h.sessionsMutex.Lock()
+	if session, exists := h.sessions[sessionID]; exists {
+		session.Status = status
+	}
+	h.sessionsMutex.Unlock()
+
+	if h.sessionRepo != nil {
+		if err := h.sessionRepo.UpdateStatus(sessionID, status); err != nil {
+			logger.Warn("failed to update AI analysis session status",
+				zap.String("session_id", sessionID),
+				zap.String("status", status),
+				zap.Error(err))
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": AnalysisControlResponse{
+			SessionID: sessionID,
+			Status:    status,
+			ActiveRun: ok,
+			Message:   message,
+		},
 	})
 }
 

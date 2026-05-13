@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"api-server/internal/llm"
@@ -61,6 +63,58 @@ func TestSSEResponseCollectorKeepsReActTrace(t *testing.T) {
 	}
 	if !strings.Contains(steps[0].Observation, "\"count\": 1") {
 		t.Fatalf("unexpected observation: %q", steps[0].Observation)
+	}
+}
+
+func TestSSEResponseCollectorHookMethodsBuildStepHistory(t *testing.T) {
+	collector := &SSEResponseCollector{}
+
+	collector.AddThinking("需要查询主机上的可疑进程树")
+	collector.AddToolCall("GetProcessTree", "call-process-tree", `{"host_id":"host-1","pid":1234}`)
+	collector.AddToolResult("call-process-tree", "发现 bash 由 sshd 拉起，并继续启动 curl")
+
+	if !strings.Contains(collector.GetThinking(), "可疑进程树") {
+		t.Fatalf("thinking was not collected: %q", collector.GetThinking())
+	}
+
+	steps := collector.GetSteps()
+	if len(steps) != 1 {
+		t.Fatalf("expected one reconstructed step, got %d", len(steps))
+	}
+	if steps[0].Action != "GetProcessTree" {
+		t.Fatalf("unexpected action: %#v", steps[0])
+	}
+	if steps[0].ActionInput["host_id"] != "host-1" {
+		t.Fatalf("expected JSON string args to be decoded, got %#v", steps[0].ActionInput)
+	}
+	if !strings.Contains(steps[0].Observation, "bash") {
+		t.Fatalf("unexpected observation: %q", steps[0].Observation)
+	}
+}
+
+func TestPauseAnalysisCancelsActiveRun(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+	cancelled := false
+	handler.setActiveRun("session-1", func() {
+		cancelled = true
+	})
+
+	router := gin.New()
+	router.POST("/ai/:session_id/pause", handler.PauseAnalysis)
+
+	req := httptest.NewRequest(http.MethodPost, "/ai/session-1/pause", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !cancelled {
+		t.Fatal("expected active run cancel func to be called")
+	}
+	if handler.hasActiveRun("session-1") {
+		t.Fatal("expected active run to be removed after pause")
 	}
 }
 

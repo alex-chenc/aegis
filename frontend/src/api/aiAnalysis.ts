@@ -80,7 +80,7 @@ export type SSEEventType =
   | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
   | 'content' | 'flowchart_image' | 'done' | 'error'
   // agent-runtime new event types
-  | 'plan' | 'step_started' | 'step_completed' | 'audit'
+  | 'plan' | 'step_started' | 'step_completed' | 'step_failed' | 'audit'
   | 'reflection' | 'correction'
 
 export interface SSEEvent {
@@ -97,8 +97,12 @@ export interface SSEEvent {
 // agent-runtime plan step
 export interface PlanStep {
   id: string
+  step_id?: string
+  title?: string
   description: string
+  objective?: string
   tool_names?: string[]
+  suggested_tools?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'replaced' | 'invalidated'
   result_summary?: string
 }
@@ -106,9 +110,12 @@ export interface PlanStep {
 // agent-runtime SSE event payloads
 export interface PlanEvent {
   id: string
+  plan_id?: string
   goal: string
   steps: PlanStep[]
   total_steps: number
+  version?: number
+  assumptions?: string[]
 }
 
 export interface AuditEvent {
@@ -143,6 +150,21 @@ export function sendMessage(sessionId: string, data: SendMessageRequest): Promis
   return request.post(`/detection/alerts/ai-analysis/${sessionId}/message`, data)
 }
 
+export interface AnalysisControlResponse {
+  session_id: string
+  status: string
+  active_run: boolean
+  message: string
+}
+
+export function pauseSession(sessionId: string): Promise<AnalysisControlResponse> {
+  return request.post(`/detection/alerts/ai-analysis/${sessionId}/pause`)
+}
+
+export function cancelSession(sessionId: string): Promise<AnalysisControlResponse> {
+  return request.post(`/detection/alerts/ai-analysis/${sessionId}/cancel`)
+}
+
 export function getSessionHistory(sessionId: string): Promise<{
   success: boolean
   data: {
@@ -156,6 +178,10 @@ export function getSessionHistory(sessionId: string): Promise<{
       steps?: { items?: AgentStep[] } | AgentStep[]
       created_at?: string
     }>
+    execution_plan?: PlanEvent | null
+    audits?: AuditEvent[]
+    reflections?: ReflectionEvent[]
+    corrections?: CorrectionEvent[]
   }
 }> {
   return request.get(`/detection/alerts/ai-analysis/${sessionId}/history`)
@@ -233,12 +259,15 @@ export function createAISessionStream(
     `/api/v1/detection/alerts/ai-analysis/${sessionId}/stream?message=${encodedMessage}&auth_token=${token}`
   )
 
+  let streamFinished = false
+
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data) as SSEEvent
       onEvent(data)
 
       if (data.type === 'done' || data.type === 'error') {
+        streamFinished = true
         eventSource.close()
       }
     } catch (e) {
@@ -246,8 +275,9 @@ export function createAISessionStream(
     }
   }
 
-  eventSource.onerror = (error) => {
-    console.error('SSE error:', error)
+  eventSource.onerror = () => {
+    if (streamFinished) return
+    streamFinished = true
     onEvent({
       type: 'error',
       content: 'AI 分析连接中断，请稍后重试或查看服务日志'
