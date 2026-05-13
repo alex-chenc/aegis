@@ -119,15 +119,25 @@ const planPromptTemplate = `你是一个专业的安全分析AI助手，负责�
 
 const reactJSONPromptTemplate = `你是一个安全分析AI助手，正在执行分析计划的某个步骤。
 
+## 可用工具（必须严格使用以下工具名，不得发明新工具名）
+- GetProcessTree: 获取指定主机上指定进程的完整进程树。参数：{"host_id":"主机ID","pid":进程PID}
+- GetNetworkConnections: 获取指定主机的网络连接信息。参数：{"host_id":"主机ID","pid":进程PID（可选）}
+- GetOpenFiles: 获取指定进程打开的文件列表。参数：{"host_id":"主机ID","pid":进程PID}
+- GetRunningProcesses: 获取指定主机上正在运行的进程列表。参数：{"host_id":"主机ID","filter":"过滤条件（可选）"}
+- GetUserSessions: 获取指定主机上的用户会话信息。参数：{"host_id":"主机ID"}
+- QueryHistoricalLogs: 查询指定主机的历史日志。参数：{"host_id":"主机ID","start_time":"起始时间","end_time":"结束时间","filter":"过滤条件（可选）"}
+
 ## 行动格式
 你必须以JSON格式输出行动指令：
-{"action":"tool_call","tool_call":{"tool_name":"工具名","args":{...}}}
 
-可用工具同规划阶段。当收集到足够信息完成当前步骤时，输出：
-{"action":"step_complete","step_result":"步骤结果","evidence":["证据1","证据2"]}
+调用工具时输出：
+{"action":"tool_call","summary":"调用目的简述","tool_call":{"tool_name":"上面列出的工具名之一","reason":"调用原因","args":{...}}}
+
+当收集到足够信息完成当前步骤时，输出：
+{"action":"step_result","summary":"完成总结","step_result":{"result":"步骤结果","evidence":["证据1","证据2"],"confidence":"high/medium/low"}}
 
 当无法继续时，输出：
-{"action":"fail_step","failure_reason":"失败原因","recoverable":true/false}`
+{"action":"fail_step","summary":"失败总结","failure":{"reason":"失败原因","recoverable":true/false}}`
 
 const summarizePromptTemplate = `你是一个安全分析AI助手，需要根据所有收集到的信息生成最终分析报告。
 
@@ -142,9 +152,14 @@ const summarizePromptTemplate = `你是一个安全分析AI助手，需要根据
     "recommendations": ["建议1", "建议2"]
   },
   "conclusions": [
-    {"title":"结论标题","description":"详细描述","severity":"low|medium|high|critical","mitre_id":"MITRE ID（如有）","recommendation":"处置建议"}
+    {"alert_id":"告警ID","action":"mark_false_positive|confirm_threat|generate_rule","summary":"该告警的中文分析结论"}
   ]
-}`
+}
+
+要求：
+- conclusions[].alert_id 必须使用告警上下文中的 alert_id 或原始告警 ID。
+- conclusions[].action 只能取 mark_false_positive、confirm_threat、generate_rule。
+- 不要声称未执行的计划步骤已经完成。`
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -160,6 +160,213 @@ if err != nil {
 |:---|:---|:---|
 | `extractFinalAnswerResult` 解析失败 | 低 | agent-runtime 不总是返回 JSON 格式 final answer，不影响功能 |
 | 溯源图生成 401 错误 | 低 | 图片 API 认证问题，与本次修复无关 |
+| SSE 连接缺少心跳/keepalive | **高** | 长时间 LLM/Tool 调用期间无 SSE 数据，反向代理超时断连 |
+
+---
+
+## 6. SSE Keepalive 心跳修复（2026-05-13）
+
+### 6.1 问题描述
+
+**现象**：用户仍然频繁看到 "AI 分析连接中断，请稍后重试或查看服务日志"。
+
+**根因**：虽然 context 绑定和 WriteDone 已修复，但 SSE 连接在长时间运行期间**无数据传输**，导致反向代理（nginx）超时断连。
+
+**具体场景**：
+1. LLM 调用（PurposePlan/PurposeReact/PurposeSummarize）耗时可达 60s
+2. gRPC 工具调用（QueryHistoricalLogs 等）耗时可达 60s
+3. 在这些调用期间，`SSEHookSink` 不发送任何事件
+4. nginx `proxy_read_timeout` 默认 60s，超时后断开连接
+5. 前端 `EventSource.onerror` 触发 → 显示 "连接中断"
+
+**错误链路**：
+```
+LLM/Tool 调用阻塞 >60s → nginx proxy_read_timeout → 连接断开 → EventSource.onerror → "连接中断"
+```
+
+### 6.2 解决方案
+
+在 `StreamMessage` handler 中启动 keepalive 协程，定期发送 SSE 注释（comment）保持连接活跃。
+
+**SSE 注释格式**：以 `:` 开头的行是 SSE 注释，浏览器 `EventSource` 会忽略它们，但它们能保持 TCP 连接活跃。
+
+```
+: keepalive\n\n
+```
+
+**设计要点**：
+1. 使用 `SSEWriter.WriteComment()` 发送 SSE 注释
+2. keepalive 间隔 15s（远小于 nginx 默认 60s 超时）
+3. 使用 `context.WithCancel` 控制协程生命周期
+4. `StreamMessage` 返回时自动取消协程（`defer cancel()`）
+
+### 6.3 代码变更
+
+**文件 1**：`api-server/internal/llm/sse_writer.go`
+
+新增 `WriteComment` 方法：
+```go
+// WriteComment writes an SSE comment (ignored by EventSource, keeps connection alive)
+func (w *SSEWriter) WriteComment(comment string) error {
+    fmt.Fprintf(w.writer, ": %s\n\n", comment)
+    if f, ok := w.writer.(http.Flusher); ok {
+        f.Flush()
+    }
+    return nil
+}
+```
+
+**文件 2**：`api-server/internal/api/handler/ai_analysis_handler.go`
+
+在 `StreamMessage` 中启动 keepalive 协程：
+```go
+// Start keepalive goroutine to prevent proxy timeout
+keepaliveCtx, keepaliveCancel := context.WithCancel(context.Background())
+defer keepaliveCancel()
+go func() {
+    ticker := time.NewTicker(15 * time.Second)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-keepaliveCtx.Done():
+            return
+        case <-ticker.C:
+            _ = sseWriter.WriteComment("keepalive")
+        }
+    }
+}()
+```
+
+### 6.4 影响范围
+
+- **后端**：`sse_writer.go`（新增 WriteComment）、`ai_analysis_handler.go`（新增 keepalive 协程）
+- **前端**：无修改（SSE 注释被 EventSource 自动忽略）
+- **协议**：无修改（SSE 注释是标准特性）
+
+### 6.5 验证结果
+
+#### 单元测试
+- `TestWriteCommentOutputsSSECommentFormat` — 验证 SSE 注释格式 `: keepalive\n\n` ✓
+- `TestWriteCommentDoesNotAffectSubsequentDataEvents` — 验证注释不影响后续 data 事件 ✓
+- `TestWriteCommentWithEmptyString` — 验证空注释格式 ✓
+
+#### 编译验证
+- `go build ./...` — 编译成功 ✓
+- `go vet ./...` — 无警告 ✓
+- 所有 AI 分析相关测试（14 个）全部通过 ✓
+
+#### curl 端到端验证
+- SSE 流中出现 `: keepalive` 注释 ✓
+- keepalive 注释位于事件之间，保持连接活跃 ✓
+- SSE 数据事件正常传输不受影响 ✓
+
+#### 代码审查修复
+| 问题 | 严重程度 | 修复 |
+|:---|:---|:---|
+| SSEWriter 并发写入竞态条件 | HIGH | SSEWriter 添加 `sync.Mutex`，所有写方法加锁 |
+| WriteComment 静默丢弃写入错误 | MEDIUM | 传播 `fmt.Fprintf` 错误 |
+| keepalive context 未关联任务 context | MEDIUM | 改为从 task context 派生 |
+
+#### 变更文件
+| 文件 | 变更 |
+|:---|:---|
+| `api-server/internal/llm/sse_writer.go` | 新增 `WriteComment` 方法，SSEWriter 添加 `sync.Mutex` 保证并发安全 |
+| `api-server/internal/llm/sse_writer_test.go` | 新增 4 个测试（含并发写入测试） |
+| `api-server/internal/api/handler/ai_analysis_handler.go` | `StreamMessage` 新增 keepalive 协程（从 task context 派生） |
+
+### 6.6 已修复问题汇总
+| 问题 | 状态 |
+|:---|:---|
+| AlertContextSnapshot 缺少 12 个字段 | ✅ 已修复（v5.7 之前） |
+| context 绑定 HTTP request 导致 LLM 调用取消 | ✅ 已修复（v5.7 之前） |
+| 错误路径缺少 WriteDone | ✅ 已修复（v5.7 之前） |
+| SSE 连接缺少 keepalive 导致代理超时断连 | ✅ 已修复（本次） |
+| ReAct 阶段 LLM 幻觉工具名导致解析失败 | ✅ 已修复（本次） |
+
+---
+
+## 7. ReAct Prompt 工具名幻觉修复（2026-05-13）
+
+### 7.1 问题描述
+
+**现象**：AI 分析失败，报错 "AI 分析未完成全部执行计划"。数据库显示 `status: "limited"`, `reason: "max_parse_failures"`，3 次解析失败。
+
+**根因**（两层问题）：
+
+**根因 A — agent-runtime 忽略 PromptProvider**：`ReActExecutor.buildReactMessages()` 使用硬编码的英文系统 prompt，完全不调用 `PromptProvider.Build()`。即使 aegis 的 `prompt_provider.go` 定义了包含工具列表的 ReAct prompt，agent-runtime 也不会使用。
+
+**根因 B — aegis ReAct prompt 缺少工具列表**：`reactJSONPromptTemplate` 写了"可用工具同规划阶段"但未列出具体工具名，且 JSON action 格式与 agent-runtime parser 不匹配（使用 `step_complete` 而非 `step_result`，缺少 `summary`/`reason`/`confidence` 字段）。
+
+**错误链路**：
+```
+agent-runtime 硬编码 prompt（无工具列表）→ LLM 不知道可用工具 → 幻觉 "execute_command" → 工具注册表找不到 → 3 次 parse failure → max_parse_failures → "未完成全部执行计划"
+```
+
+### 7.2 解决方案
+
+**修复 1 — agent-runtime**（`executor/react.go`）：
+
+修改 `buildReactMessages` 方法，优先使用 `PromptProvider` 获取系统 prompt，仅在 provider 不可用时回退到硬编码 prompt：
+
+```go
+func (e *ReActExecutor) buildReactMessages(ctx context.Context, ...) []core.LLMMessage {
+    var system string
+    if e.provider != nil {
+        bundle, err := e.provider.Build(ctx, core.PromptRequest{
+            TaskID: taskCtx.TaskID, StepID: step.StepID, Purpose: core.PurposeReact,
+        })
+        if err == nil && bundle.SystemPrompt != "" {
+            system = bundle.SystemPrompt
+        }
+    }
+    if system == "" {
+        system = `You are an AI agent...` // fallback
+    }
+    system += fmt.Sprintf("\n\n## Current Step\n- Title: %s\n- Objective: %s\n- Expected output: %s", ...)
+}
+```
+
+**修复 2 — aegis**（`adapters/prompt_provider.go`）：
+
+替换 `reactJSONPromptTemplate`，显式列出全部 6 个工具的名称和参数，并使用与 agent-runtime parser 匹配的 JSON action 格式：
+
+```
+可用工具（必须严格使用以下工具名，不得发明新工具名）
+- GetProcessTree: 获取指定主机上指定进程的完整进程树
+- GetNetworkConnections: 获取指定主机的网络连接信息
+- GetOpenFiles: 获取指定进程打开的文件列表
+- GetRunningProcesses: 获取指定主机上正在运行的进程列表
+- GetUserSessions: 获取指定主机上的用户会话信息
+- QueryHistoricalLogs: 查询指定主机的历史日志
+```
+
+JSON action 格式修正：
+- `tool_call`: 增加 `summary`、`reason` 字段
+- `step_result`: 从 `step_complete` 改为 `step_result`，增加 `confidence` 字段
+- `fail_step`: 增加 `summary` 字段，`failure_reason` 改为 `failure.reason`
+
+### 7.3 影响范围
+
+| 文件 | 变更 |
+|:---|:---|
+| `agent-runtime/executor/react.go` | `buildReactMessages` 使用 PromptProvider，传递 ctx |
+| `api-server/internal/llm/adapters/prompt_provider.go` | 替换 `reactJSONPromptTemplate`，显式列出 6 个工具 |
+| `api-server/internal/llm/adapters/prompt_provider_test.go` | 新增 `TestBuildReactPrompt_ExplicitlyListsAllToolNames` |
+
+### 7.4 验证结果
+
+#### 单元测试
+- `TestBuildReactPrompt_ExplicitlyListsAllToolNames` — 验证 6 个工具名全部显式列出 ✓
+- 验证使用 `step_result`（非 `step_complete`）✓
+- 验证包含 `confidence` 字段 ✓
+- 验证不包含 "可用工具同规划阶段" ✓
+- agent-runtime 全部测试通过 ✓
+
+#### curl 端到端验证
+- Session `8df283d2`: LLM 正确使用 `GetRunningProcesses` ✓
+- 无 `execute_command` 幻觉 ✓
+- 无 `tool_error` ✓
+- 工具调用成功: `"result":"tool GetRunningProcesses executed successfully"` ✓
 
 ## 5. 关联文档
 

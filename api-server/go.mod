@@ -29,7 +29,7 @@ require (
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/chenchen511/agent-runtime v0.0.0-20260511111437-4209f8ab22e2
+	github.com/chenchen511/agent-runtime v0.0.0-20260513062738-7d72146ff015
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
