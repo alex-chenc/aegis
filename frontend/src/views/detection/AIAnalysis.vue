@@ -29,7 +29,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="最大轮数">
-              <el-input-number v-model="maxIterations" :min="1" :max="100" size="default" />
+              <el-input-number v-model="maxIterations" :min="1" :max="1000" size="default" />
             </el-form-item>
           </el-form>
 
@@ -434,7 +434,7 @@ const attackGraph = ref<AttackGraphData | null>(null)
 const finalAnswerContent = ref<string>('')
 const generatedFlowchartImageUrl = ref('')
 const isLoading = ref(false)
-const maxIterations = ref(15)
+const maxIterations = ref(500)
 const executionPlan = ref<PlanEvent | null>(null)
 const auditResults = ref<AuditEvent[]>([])
 const reflectionResults = ref<ReflectionEvent[]>([])
@@ -507,7 +507,7 @@ function loadConversation(): boolean {
       auditResults.value = data.auditResults || []
       reflectionResults.value = data.reflectionResults || []
       correctionResults.value = data.correctionResults || []
-      maxIterations.value = data.maxIterations || 15
+      maxIterations.value = data.maxIterations || 500
       applyStructuredFinalAnswer()
       return true
     } catch (e) {
@@ -732,7 +732,7 @@ async function loadSession(session: SessionListItem) {
   reflectionResults.value = []
   correctionResults.value = []
   analysisAlertSnapshot.value = []
-  maxIterations.value = session.max_iterations || 15
+  maxIterations.value = session.max_iterations || 500
 
   // Load messages from history
   try {

@@ -19,7 +19,7 @@ import (
 //   - collector: event collector for hook-based event forwarding
 //   - defaultHostIDs: fallback host IDs when tools do not specify one
 //   - alertCtx: alert context injected into LLM prompts (may be nil)
-//   - maxIterations: max total turns; <= 0 uses default of 15
+//   - maxIterations: max total turns; <= 0 uses default of 500
 //   - experienceProvider: optional experience provider (may be nil)
 func NewAegisRuntime(
 	llmClient *llm.LLMClient,
@@ -45,7 +45,7 @@ func NewAegisRuntime(
 
 	// 5. Build runtime config
 	if maxIterations <= 0 {
-		maxIterations = 50
+		maxIterations = 500
 	}
 
 	config := agentruntime.RuntimeConfig{
