@@ -289,4 +289,37 @@ curl -s "http://localhost:8082/api/v1/detection/alerts/ai-analysis/${SESSION_ID}
   | jq '.data | {messages, execution_plan, audits, reflections, corrections}'
 ```
 
+## 9. Max Iterations 配置修复
+
+### 9.1 问题描述
+
+AI 分析频繁报错"未完成全部执行计划，已停止输出结论"，原因是默认最大迭代轮数过低（50轮），且后端限制（100轮）过早截断分析。
+
+### 9.2 根因分析
+
+| 配置项 | 修改前 | 修改后 | 说明 |
+|--------|--------|--------|------|
+| `defaultAnalysisMaxIterations` | 50 | 500 | handler 默认值 |
+| `analysisMaxIterationsLimit` | 100 | 500 | handler 上限值 |
+| `runtime_factory.go` 默认值 | 50 | 500 | agent-runtime 默认值 |
+| 前端 `maxIterations` 默认值 | 15 | 500 | Vue 组件默认值 |
+| 前端 `el-input-number :max` | 100 | 1000 | 前端最大可配置值 |
+
+### 9.3 配置流向
+
+```
+前端 maxIterations (默认500, 最大1000)
+  → POST /session { max_iterations: 500 }
+    → normalizeAnalysisMaxIterations(req.MaxIterations)
+      → session.MaxIterations = 500
+        → NewAegisRuntime(..., maxIterations=500, ...)
+          → RuntimeConfig.MaxTotalTurns = 500
+```
+
+### 9.4 修改文件
+
+- `api-server/internal/api/handler/ai_analysis_handler.go`: 默认值和上限改为 500
+- `api-server/internal/llm/adapters/runtime_factory.go`: 默认值改为 500
+- `frontend/src/views/detection/AIAnalysis.vue`: 默认值 500, 最大可配 1000
+
 历史响应必须能重建思考摘要、工具调用、观察、审计、反思、纠正和最终计划状态。
