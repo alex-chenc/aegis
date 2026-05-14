@@ -123,6 +123,30 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 			CallID: event.StepID,
 		})
 
+	case agentruntime.HookStepRetrying:
+		stepTitle := findStepTitle(event, event.StepID)
+		if stepTitle != "" {
+			s.writeThinking(fmt.Sprintf("正在重试步骤: %s", stepTitle))
+		} else {
+			s.writeThinking(fmt.Sprintf("Retrying step %s...", event.StepID))
+		}
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:   "step_retrying",
+			CallID: event.StepID,
+		})
+
+	case agentruntime.HookStepSkipped:
+		stepTitle := findStepTitle(event, event.StepID)
+		if stepTitle != "" {
+			s.writeThinking(fmt.Sprintf("已跳过步骤: %s", stepTitle))
+		} else {
+			s.writeThinking(fmt.Sprintf("Step %s skipped", event.StepID))
+		}
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:   "step_skipped",
+			CallID: event.StepID,
+		})
+
 	// --- model calls ---
 
 	case agentruntime.HookModelCallStarted:

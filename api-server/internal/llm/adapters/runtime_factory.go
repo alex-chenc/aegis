@@ -69,6 +69,7 @@ func NewAegisRuntime(
 		AuditEveryNSteps:      3,
 		MaxAudits:             2,
 		MaxReflections:        3,
+		MaxStepRetries:        2,
 		MaxCorrections:        2,
 		AllowDynamicNewSteps:  true,
 		AllowSkipFailedStep:   true,

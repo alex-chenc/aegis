@@ -11,72 +11,106 @@
             </div>
           </template>
 
-          <el-form label-width="80px" class="filter-form">
-            <el-form-item label="时间范围">
-              <el-date-picker
-                v-model="timeRange"
-                type="datetimerange"
-                range-separator="至"
-                start-placeholder="开始时间"
-                end-placeholder="结束时间"
-                :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 1, 1, 23, 59, 59)]"
-                @change="handleTimeRangeChange"
+          <div class="alert-selection-scroll">
+            <el-form label-width="80px" class="filter-form">
+              <el-form-item label="时间范围">
+                <el-date-picker
+                  v-model="timeRange"
+                  type="datetimerange"
+                  range-separator="至"
+                  start-placeholder="开始时间"
+                  end-placeholder="结束时间"
+                  :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 1, 1, 23, 59, 59)]"
+                  @change="handleTimeRangeChange"
+                />
+              </el-form-item>
+              <el-form-item label="主机过滤">
+                <el-select v-model="hostFilter" multiple filterable placeholder="选择在线主机" clearable :loading="hostLoading">
+                  <el-option v-for="host in hosts" :key="host" :label="host" :value="host" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="最大轮数">
+                <el-input-number v-model="maxIterations" :min="1" :max="1000" size="default" />
+              </el-form-item>
+            </el-form>
+
+            <div v-if="isAnalysisSnapshotActive" class="analysis-snapshot-hint">
+              当前展示的是本次 AI 分析保留的事件快照，共 {{ analysisAlertSnapshot.length }} 条。
+            </div>
+
+            <el-table
+              ref="alertTableRef"
+              v-loading="alertLoading"
+              :data="visibleAlertRows"
+              border
+              stripe
+              height="400"
+              row-key="id"
+              @selection-change="handleAlertSelection"
+            >
+              <el-table-column type="selection" width="40" />
+              <el-table-column prop="hostname" label="主机" min-width="100" />
+              <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="last_seen_at" label="最近时间" min-width="150">
+                <template #default="{ row }">
+                  {{ formatTime(row.last_seen_at) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="severity" label="级别" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="severityTagType(row.severity)" size="small">
+                    {{ severityLabel(row.severity) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <div
+              v-if="!isAnalysisSnapshotActive && alertTotal > alertPageSize"
+              class="alert-pagination"
+              aria-label="告警分页"
+            >
+              <div class="alert-pagination-summary">
+                <span class="alert-pagination-total">共 {{ alertTotal }} 条</span>
+                <el-select
+                  v-model="alertPageSize"
+                  class="alert-page-size-select"
+                  size="small"
+                  @change="handleAlertSizeChange"
+                >
+                  <el-option label="10 条/页" :value="10" />
+                  <el-option label="20 条/页" :value="20" />
+                  <el-option label="50 条/页" :value="50" />
+                </el-select>
+              </div>
+              <el-pagination
+                class="alert-pagination-pager"
+                background
+                small
+                layout="prev, pager, next"
+                :total="alertTotal"
+                :page-size="alertPageSize"
+                :current-page="alertPage"
+                :pager-count="5"
+                @current-change="handleAlertPageChange"
               />
-            </el-form-item>
-            <el-form-item label="主机过滤">
-              <el-select v-model="hostFilter" multiple filterable placeholder="选择在线主机" clearable :loading="hostLoading">
-                <el-option v-for="host in hosts" :key="host" :label="host" :value="host" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="最大轮数">
-              <el-input-number v-model="maxIterations" :min="1" :max="1000" size="default" />
-            </el-form-item>
-          </el-form>
+            </div>
 
-          <div v-if="isAnalysisSnapshotActive" class="analysis-snapshot-hint">
-            当前展示的是本次 AI 分析保留的事件快照，共 {{ analysisAlertSnapshot.length }} 条。
+            <div class="selection-info">
+              已选择 {{ selectedAlertIds.length }} 个告警
+              <el-button type="primary" :disabled="selectedAlertIds.length === 0 || isAnalysisSnapshotActive" @click="startAnalysis">
+                开始 AI 分析
+              </el-button>
+            </div>
+
+            <!-- Execution plan (agent-runtime) -->
+            <ExecutionPlan
+              :plan="executionPlan"
+              :audits="auditResults"
+              :reflections="reflectionResults"
+              :corrections="correctionResults"
+            />
           </div>
-
-          <el-table
-            ref="alertTableRef"
-            v-loading="alertLoading"
-            :data="visibleAlertRows"
-            border
-            stripe
-            height="400"
-            @selection-change="handleAlertSelection"
-          >
-            <el-table-column type="selection" width="40" />
-            <el-table-column prop="hostname" label="主机" min-width="100" />
-            <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip />
-            <el-table-column prop="last_seen_at" label="最近时间" min-width="150">
-              <template #default="{ row }">
-                {{ formatTime(row.last_seen_at) }}
-              </template>
-            </el-table-column>
-            <el-table-column prop="severity" label="级别" width="80" align="center">
-              <template #default="{ row }">
-                <el-tag :type="severityTagType(row.severity)" size="small">
-                  {{ severityLabel(row.severity) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-
-          <div class="selection-info">
-            已选择 {{ selectedAlertIds.length }} 个告警
-            <el-button type="primary" :disabled="selectedAlertIds.length === 0 || isAnalysisSnapshotActive" @click="startAnalysis">
-              开始 AI 分析
-            </el-button>
-          </div>
-
-          <!-- Execution plan (agent-runtime) -->
-          <ExecutionPlan
-            :plan="executionPlan"
-            :audits="auditResults"
-            :reflections="reflectionResults"
-            :corrections="correctionResults"
-          />
         </el-card>
       </el-col>
 
@@ -372,7 +406,7 @@ import {
   type AttackGraphData
 } from '@/utils/attackGraph'
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
-import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterAnalysisAlerts, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
+import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 import { applyPlanStepStatus, getActionButtonType, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
 
 const route = useRoute()
@@ -426,6 +460,11 @@ const hosts = ref<string[]>([])
 const timeRange = ref<[string, string] | null>(null)
 const analysisAlertSnapshot = ref<Alert[]>([])
 let alertLoadSeq = 0
+
+// Pagination state
+const alertPage = ref(1)
+const alertPageSize = ref(10)
+const alertTotal = ref(0)
 
 const sessionId = ref<string | null>(null)
 const messages = ref<Message[]>([])
@@ -527,7 +566,8 @@ function clearSavedConversation() {
 
 // Computed
 const filteredAlerts = computed(() => {
-  return filterAnalysisAlerts(alerts.value, hostFilter.value, timeRange.value)
+  if (!hasAlertSearchCondition.value) return []
+  return alerts.value
 })
 
 const hasAlertSearchCondition = computed(() => {
@@ -554,12 +594,13 @@ async function loadHosts() {
 }
 
 async function loadAlerts(force = false) {
-  const query = buildAnalysisAlertQuery(hostFilter.value, timeRange.value)
+  const query = buildAnalysisAlertQuery(hostFilter.value, timeRange.value, alertPage.value, alertPageSize.value)
 
   if (!force && !query) {
     alertLoadSeq += 1
     alerts.value = []
     selectedAlertIds.value = []
+    alertTotal.value = 0
     alertLoading.value = false
     return
   }
@@ -567,12 +608,13 @@ async function loadAlerts(force = false) {
   const currentSeq = ++alertLoadSeq
   alertLoading.value = true
   try {
-    const response = await getAlerts(query || { page: 1, pageSize: 200 })
+    const response = await getAlerts(query || { page: alertPage.value, pageSize: alertPageSize.value })
     if (currentSeq !== alertLoadSeq) {
       return
     }
 
     alerts.value = response.data || []
+    alertTotal.value = response.total || 0
   } catch (error: any) {
     if (currentSeq === alertLoadSeq) {
       ElMessage.error(error.message || '加载告警失败')
@@ -596,6 +638,35 @@ function pruneSelectionToVisibleAlerts() {
   if (isAnalysisSnapshotActive.value) return
   selectedAlertIds.value = pruneSelectedAlertIds(selectedAlertIds.value, filteredAlerts.value)
 }
+
+function handleAlertPageChange(page: number) {
+  alertPage.value = page
+  loadAlerts()
+}
+
+function handleAlertSizeChange(size: number) {
+  alertPageSize.value = size
+  alertPage.value = 1
+  loadAlerts()
+}
+
+// Reset page when filters change
+watch([hostFilter, timeRange], () => {
+  alertPage.value = 1
+}, { deep: true })
+
+// Restore selection state when alerts change (for cross-page selection)
+watch(alerts, () => {
+  nextTick(() => {
+    if (alertTableRef.value) {
+      alerts.value.forEach((alert: Alert) => {
+        if (selectedAlertIds.value.includes(alert.id)) {
+          alertTableRef.value.toggleRowSelection(alert, true)
+        }
+      })
+    }
+  })
+})
 
 function formatTime(timestamp: string): string {
   if (!timestamp) return '-'
@@ -1138,6 +1209,14 @@ function createSSEHandler(message: string) {
         applyPlanStepStatus(executionPlan.value, event.call_id, 'failed', event.error || event.content || '')
         break
 
+      case 'step_retrying':
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'retrying', '正在重试...')
+        break
+
+      case 'step_skipped':
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'skipped', '已跳过')
+        break
+
       case 'audit':
         try {
           const auditData = typeof event.content === 'string' ? JSON.parse(event.content) : event.result
@@ -1361,16 +1440,18 @@ watch(messages, () => {
 
 // Cleanup on unmount
 onBeforeUnmount(() => {
+  if (loadAlertsTimer) clearTimeout(loadAlertsTimer)
   clearSavedConversation()
 })
 
-watch(filteredAlerts, () => {
-  pruneSelectionToVisibleAlerts()
-}, { deep: true })
+// Prune selection only when filters change, not on page change
+// The watch on [hostFilter, timeRange] above handles page reset + reload
 
+let loadAlertsTimer: ReturnType<typeof setTimeout> | null = null
 watch([hostFilter, timeRange], () => {
-  loadAlerts()
-}, { deep: true })
+  if (loadAlertsTimer) clearTimeout(loadAlertsTimer)
+  loadAlertsTimer = setTimeout(() => loadAlerts(), 300)
+})
 
 // Init
 onMounted(() => {
@@ -1426,6 +1507,47 @@ onMounted(() => {
   height: calc(100vh - 160px);
 }
 
+.alert-selection-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.alert-selection-card :deep(.el-card__header) {
+  flex: 0 0 auto;
+}
+
+.alert-selection-card :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.alert-selection-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+.alert-selection-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.alert-selection-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.28);
+}
+
+.alert-selection-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -1451,6 +1573,81 @@ onMounted(() => {
   color: #1d4ed8;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.alert-pagination {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.alert-pagination-summary {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.alert-pagination-total {
+  flex: 0 0 auto;
+  color: var(--aegis-text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 32px;
+  white-space: nowrap;
+}
+
+.alert-page-size-select {
+  width: 104px;
+  flex: 0 0 auto;
+}
+
+.alert-page-size-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1) inset;
+}
+
+.alert-pagination-pager {
+  --el-pagination-button-width: 28px;
+  --el-pagination-button-height: 32px;
+  --el-pagination-button-width-small: 28px;
+  --el-pagination-button-height-small: 32px;
+  --el-pagination-item-gap: 0;
+  display: inline-flex;
+  max-width: 100%;
+  justify-content: center;
+  margin-left: 0;
+  overflow: hidden;
+}
+
+.alert-pagination-pager :deep(.el-pager) {
+  display: flex;
+  min-width: 0;
+}
+
+.alert-pagination-pager :deep(.btn-prev),
+.alert-pagination-pager :deep(.btn-next),
+.alert-pagination-pager :deep(.el-pager li) {
+  min-width: 28px;
+  width: 28px;
+  height: 32px;
+  margin: 0 1px;
+  padding: 0;
+  border-radius: 8px;
+  font-weight: 650;
+}
+
+.alert-pagination-pager :deep(.el-pager li.is-active) {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
 }
 
 .selection-info {

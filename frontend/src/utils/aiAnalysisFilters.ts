@@ -70,11 +70,18 @@ export function filterAnalysisAlerts<T extends AnalysisAlertLike>(
   })
 }
 
+export function shouldBypassClientFilter(
+  hostFilter: string[],
+  timeRange?: [string | Date, string | Date] | null
+): boolean {
+  return buildAnalysisAlertQuery(hostFilter, timeRange) !== null
+}
+
 export function buildAnalysisAlertQuery(
   hostFilter: string[],
   timeRange?: [string | Date, string | Date] | null,
   page = 1,
-  pageSize = 200
+  pageSize = 10
 ): AnalysisAlertQuery | null {
   const hostnames = hostFilter.filter(Boolean)
   const startTime = timeRange?.[0] ? toISOString(timeRange[0]) : null

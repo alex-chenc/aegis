@@ -4,7 +4,8 @@ import {
   buildAnalysisAlertSnapshot,
   filterAnalysisAlerts,
   filterOnlineHostnames,
-  pruneSelectedAlertIds
+  pruneSelectedAlertIds,
+  shouldBypassClientFilter
 } from './aiAnalysisFilters'
 
 const alerts = [
@@ -64,11 +65,31 @@ describe('AI analysis alert filtering', () => {
       '2026-04-28T02:00:00Z'
     ])).toEqual({
       page: 1,
-      pageSize: 200,
+      pageSize: 10,
       hostnames: 'host-a,host-b',
       start_time: '2026-04-28T01:00:00.000Z',
       end_time: '2026-04-28T02:00:00.000Z'
     })
+  })
+
+  it('uses default pageSize of 10 when not specified', () => {
+    const query = buildAnalysisAlertQuery(['host-a'], null)
+    expect(query).toEqual({ page: 1, pageSize: 10, hostnames: 'host-a' })
+  })
+
+  it('supports custom pageSize of 20', () => {
+    const query = buildAnalysisAlertQuery(['host-a'], null, 1, 20)
+    expect(query).toEqual({ page: 1, pageSize: 20, hostnames: 'host-a' })
+  })
+
+  it('supports custom pageSize of 50', () => {
+    const query = buildAnalysisAlertQuery(['host-a'], null, 1, 50)
+    expect(query).toEqual({ page: 1, pageSize: 50, hostnames: 'host-a' })
+  })
+
+  it('supports custom page number', () => {
+    const query = buildAnalysisAlertQuery(['host-a'], null, 3, 10)
+    expect(query).toEqual({ page: 3, pageSize: 10, hostnames: 'host-a' })
   })
 
   it('shows alerts when only host filter is set', () => {
@@ -114,5 +135,33 @@ describe('AI analysis alert filtering', () => {
       hostname: 'host-b',
       rule_title: '异常外联'
     })
+  })
+})
+
+describe('shouldBypassClientFilter', () => {
+  it('returns false when no filters are set', () => {
+    expect(shouldBypassClientFilter([], null)).toBe(false)
+  })
+
+  it('returns true when host filter is set', () => {
+    expect(shouldBypassClientFilter(['host-a'], null)).toBe(true)
+  })
+
+  it('returns true when time range is set', () => {
+    expect(shouldBypassClientFilter([], [
+      '2026-04-28T01:00:00Z',
+      '2026-04-28T02:00:00Z'
+    ])).toBe(true)
+  })
+
+  it('returns true when both host and time range are set', () => {
+    expect(shouldBypassClientFilter(['host-a'], [
+      '2026-04-28T01:00:00Z',
+      '2026-04-28T02:00:00Z'
+    ])).toBe(true)
+  })
+
+  it('returns false when host filter has only empty strings', () => {
+    expect(shouldBypassClientFilter(['', ''], null)).toBe(false)
   })
 })
