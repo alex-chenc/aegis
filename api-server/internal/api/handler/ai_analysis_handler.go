@@ -431,6 +431,21 @@ func extractFinalAnswerResult(content string) (*finalAnswerResult, error) {
 	return nil, fmt.Errorf("no final answer JSON found")
 }
 
+// isAllFalsePositive checks whether all conclusions in the AI analysis are false positives.
+// Returns true only when every conclusion's action is "mark_false_positive".
+func isAllFalsePositive(content string) bool {
+	result, err := extractFinalAnswerResult(content)
+	if err != nil || len(result.Conclusions) == 0 {
+		return false
+	}
+	for _, c := range result.Conclusions {
+		if c.Action != "mark_false_positive" {
+			return false
+		}
+	}
+	return true
+}
+
 func buildAlertWritebacks(session *AISSESion, result *finalAnswerResult) []alertWriteback {
 	if session == nil || result == nil {
 		return nil
@@ -1012,8 +1027,8 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 		sseWriter.WriteContent(aiResponseContent)
 	}
 
-	// Generate flowchart image from final content
-	if aiResponseContent != "" {
+	// Generate flowchart image from final content (skip if all conclusions are false positives)
+	if aiResponseContent != "" && !isAllFalsePositive(aiResponseContent) {
 		_ = h.writeFlowchartImageEvent(c.Request.Context(), sseWriter, aiResponseContent)
 	}
 
@@ -1297,6 +1312,71 @@ func (h *AIAnalysisHandler) persistAgentResult(sessionID string, result *agentru
 		zap.String("session_id", sessionID),
 		zap.String("task_id", result.TaskID),
 		zap.String("status", string(result.Status)))
+
+	// Save RAG record for future experience retrieval (async)
+	go h.saveAnalysisRecordForRAG(sessionID, result)
+}
+
+// saveAnalysisRecordForRAG builds an analysis summary from the task result and
+// saves it with a vector embedding for future similarity search.
+func (h *AIAnalysisHandler) saveAnalysisRecordForRAG(sessionID string, result *agentruntime.TaskResult) {
+	if h.vectorService == nil {
+		return
+	}
+
+	h.sessionsMutex.RLock()
+	session, exists := h.sessions[sessionID]
+	h.sessionsMutex.RUnlock()
+	if !exists {
+		return
+	}
+
+	summary := buildAnalysisSummary(result)
+
+	record := &service.AIAnalysisRecord{
+		ID:           uuid.New().String(),
+		SessionID:    sessionID,
+		AlertIDs:     marshalJSONString(session.AlertIDs),
+		HostFilter:   marshalJSONString(session.HostFilter),
+		InitialQuery: session.InitialQuery,
+		Summary:      summary,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := h.vectorService.GenerateAndSaveEmbedding(ctx, record); err != nil {
+		logger.Warn("failed to save RAG record for experience",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+	}
+}
+
+// buildAnalysisSummary extracts key information from a TaskResult into a
+// human-readable summary string for embedding generation.
+func buildAnalysisSummary(result *agentruntime.TaskResult) string {
+	var b strings.Builder
+	if result.InitialPlan != nil {
+		b.WriteString("目标: ")
+		b.WriteString(result.InitialPlan.Goal)
+		b.WriteString("\n")
+	}
+	b.WriteString(fmt.Sprintf("完成: %d/%d 步骤\n", result.Completion.CompletedSteps, len(result.StepExecutions)))
+	b.WriteString(fmt.Sprintf("工具调用: %d次, 模型调用: %d次\n", result.Completion.ToolCalls, result.Completion.ModelCalls))
+	if len(result.Reflections) > 0 {
+		b.WriteString(fmt.Sprintf("反思: %d次\n", len(result.Reflections)))
+	}
+	if len(result.Audits) > 0 {
+		b.WriteString(fmt.Sprintf("审计: %d次\n", len(result.Audits)))
+	}
+	return b.String()
+}
+
+func marshalJSONString(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func marshalJSONB(v interface{}) model.JSONB {
@@ -1563,6 +1643,17 @@ func (h *AIAnalysisHandler) loadExecutionHistoryArtifacts(sessionID string) exec
 func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 	sessionID := c.Param("session_id")
 
+	// 获取会话信息（用于状态和结论）
+	var displayStatus string
+	var conclusion model.JSONB
+	if h.sessionRepo != nil {
+		session, err := h.sessionRepo.FindBySessionID(sessionID)
+		if err == nil {
+			displayStatus = repository.GetDisplayStatus(session)
+			conclusion = session.Conclusion
+		}
+	}
+
 	// Try to read from database first
 	if h.messageRepo != nil {
 		messages, err := h.messageRepo.FindBySessionID(sessionID)
@@ -1577,6 +1668,8 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 					"audits":         artifacts.Audits,
 					"reflections":    artifacts.Reflections,
 					"corrections":    artifacts.Corrections,
+					"status":         displayStatus,
+					"conclusion":     conclusion,
 				},
 			})
 			return
@@ -1604,8 +1697,234 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 			"audits":         artifacts.Audits,
 			"reflections":    artifacts.Reflections,
 			"corrections":    artifacts.Corrections,
+			"status":         displayStatus,
+			"conclusion":     conclusion,
 		},
 	})
+}
+
+// GetExecutionResult gets the structured execution result for a session
+// GET /api/v1/detection/alerts/ai-analysis/{session_id}/execution-result
+func (h *AIAnalysisHandler) GetExecutionResult(c *gin.Context) {
+	sessionID := c.Param("session_id")
+
+	if h.agentExecRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "执行记录服务不可用"})
+		return
+	}
+
+	exec, err := h.agentExecRepo.FindBySessionID(sessionID)
+	if err != nil || exec == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "执行记录不存在"})
+		return
+	}
+
+	steps, err := h.agentExecRepo.FindStepsByExecutionID(exec.ID)
+	if err != nil {
+		steps = []*model.AgentStepExecution{}
+	}
+
+	response := buildExecutionResultResponse(exec, steps)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": response})
+}
+
+func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.AgentStepExecution) map[string]interface{} {
+	statusMap := map[string]string{
+		"completed":   "已完成",
+		"failed":      "失败",
+		"interrupted": "已中断",
+		"limited":     "已限制",
+		"running":     "执行中",
+		"pending":     "等待中",
+	}
+
+	exitReasonMap := map[string]string{
+		"normal_completed": "正常完成",
+		"max_iterations":   "达到最大轮次",
+		"timeout":          "执行超时",
+		"user_cancelled":   "用户取消",
+		"error":            "执行错误",
+		"audit_rejected":   "审计拒绝",
+		"drift_detected":   "检测到计划漂移",
+		"rate_limit":       "速率限制",
+	}
+
+	statusDisplay := exec.Status
+	if v, ok := statusMap[exec.Status]; ok {
+		statusDisplay = v
+	}
+
+	exitReasonDisplay := exec.ExitReason
+	if v, ok := exitReasonMap[exec.ExitReason]; ok {
+		exitReasonDisplay = v
+	}
+
+	stepResponses := make([]map[string]interface{}, 0, len(steps))
+	for _, step := range steps {
+		stepStatus := step.Status
+		if v, ok := statusMap[step.Status]; ok {
+			stepStatus = v
+		}
+		stepResponses = append(stepResponses, map[string]interface{}{
+			"step_id":     step.StepID,
+			"status":      stepStatus,
+			"result":      step.Result,
+			"started_at":  step.StartedAt,
+			"ended_at":    step.EndedAt,
+			"duration_ms": step.DurationMs,
+		})
+	}
+
+	conclusion := parseConclusionFromAnswer(exec.FinalAnswer)
+
+	return map[string]interface{}{
+		"execution_id":      exec.ID.String(),
+		"task_id":           exec.TaskID,
+		"session_id":        exec.SessionID,
+		"status":            statusDisplay,
+		"exit_reason":       exitReasonDisplay,
+		"started_at":        exec.StartedAt,
+		"ended_at":          exec.EndedAt,
+		"total_duration_ms": exec.TotalDurationMs,
+		"steps":             stepResponses,
+		"errors":            extractErrorsFromExecution(exec),
+		"conclusion":        conclusion,
+	}
+}
+
+func parseConclusionFromAnswer(finalAnswer string) map[string]interface{} {
+	if finalAnswer == "" {
+		return map[string]interface{}{
+			"verdict":   "unknown",
+			"summary":   "未生成结论",
+			"reasoning": "",
+		}
+	}
+
+	// Step 1: Try structured JSON extraction (handles LLM's summarizePromptTemplate output)
+	if result, err := extractFinalAnswerResult(finalAnswer); err == nil && len(result.Conclusions) > 0 {
+		return buildVerdictFromConclusions(result, finalAnswer)
+	}
+
+	// Step 2: Fallback to keyword matching (English + Chinese, deterministic with severity priority)
+	type keywordRule struct {
+		keyword  string
+		verdict  string
+		severity int
+	}
+	keywordRules := []keywordRule{
+		{"Malicious", "malicious", 2}, {"恶意", "malicious", 2}, {"Threat", "malicious", 2},
+		{"Suspicious", "suspicious", 1}, {"可疑", "suspicious", 1},
+		{"Benign", "benign", 0}, {"False Positive", "benign", 0}, {"误报", "benign", 0}, {"良性", "benign", 0},
+	}
+
+	verdict := "unknown"
+	summary := finalAnswer
+	worstSeverity := -1
+	for _, rule := range keywordRules {
+		if strings.Contains(finalAnswer, rule.keyword) && rule.severity > worstSeverity {
+			verdict = rule.verdict
+			worstSeverity = rule.severity
+		}
+	}
+
+	verdictDisplayMap := map[string]string{
+		"benign":    "良性/误报",
+		"malicious": "恶意",
+		"suspicious": "可疑",
+		"unknown":   "未知",
+	}
+
+	if v, ok := verdictDisplayMap[verdict]; ok {
+		summary = v
+	}
+
+	// Step 3: If still unknown but has content, use truncated text as summary
+	if verdict == "unknown" && len(finalAnswer) > 0 {
+		runes := []rune(finalAnswer)
+		if len(runes) > 200 {
+			summary = string(runes[:200]) + "..."
+		} else {
+			summary = finalAnswer
+		}
+	}
+
+	return map[string]interface{}{
+		"verdict":   verdict,
+		"summary":   summary,
+		"reasoning": finalAnswer,
+	}
+}
+
+// buildVerdictFromConclusions maps structured JSON conclusions to a verdict.
+// When multiple conclusions exist, the most severe verdict is used:
+// malicious > suspicious > benign.
+func buildVerdictFromConclusions(result *finalAnswerResult, originalText string) map[string]interface{} {
+	actionVerdictMap := map[string]string{
+		"mark_false_positive": "benign",
+		"confirm_threat":      "malicious",
+		"generate_rule":       "suspicious",
+	}
+
+	severityOrder := map[string]int{
+		"benign":    0,
+		"suspicious": 1,
+		"malicious": 2,
+	}
+
+	worstVerdict := "unknown"
+	worstSeverity := -1
+	summary := ""
+
+	for _, c := range result.Conclusions {
+		v, ok := actionVerdictMap[c.Action]
+		if !ok {
+			continue
+		}
+		if severityOrder[v] > worstSeverity {
+			worstSeverity = severityOrder[v]
+			worstVerdict = v
+		}
+		if summary == "" && c.Summary != "" {
+			summary = c.Summary
+		}
+	}
+
+	if summary == "" {
+		summary = attackGraphStringField(result.AttackGraph, "summary")
+	}
+
+	return map[string]interface{}{
+		"verdict":   worstVerdict,
+		"summary":   summary,
+		"reasoning": originalText,
+	}
+}
+
+func extractErrorsFromExecution(exec *model.AgentExecution) []string {
+	errors := []string{}
+
+	if exec.Completion != nil {
+		if errMsgs, ok := exec.Completion["errors"].([]interface{}); ok {
+			for _, e := range errMsgs {
+				if s, ok := e.(string); ok {
+					errors = append(errors, s)
+				}
+			}
+		}
+	}
+
+	if exec.Metrics != nil {
+		if errMsgs, ok := exec.Metrics["errors"].([]interface{}); ok {
+			for _, e := range errMsgs {
+				if s, ok := e.(string); ok {
+					errors = append(errors, s)
+				}
+			}
+		}
+	}
+
+	return errors
 }
 
 // GetSessionList gets the list of sessions with pagination
@@ -1632,6 +1951,11 @@ func (h *AIAnalysisHandler) GetSessionList(c *gin.Context) {
 		logger.Error("failed to get session list", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get session list"})
 		return
+	}
+
+	// 转换状态为显示状态：只有conclusion不为空才是completed
+	for _, session := range sessions {
+		session.Status = repository.GetDisplayStatus(session)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

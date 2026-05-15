@@ -50,28 +50,12 @@ func (r *AgentExecutionRepository) CreateModelError(err *model.AgentModelError) 
 
 // ==================== Query Methods ====================
 
-func (r *AgentExecutionRepository) FindByTaskID(taskID string) (*model.AgentExecution, error) {
-	var exec model.AgentExecution
-	if err := r.db.Where("task_id = ?", taskID).First(&exec).Error; err != nil {
-		return nil, err
-	}
-	return &exec, nil
-}
-
 func (r *AgentExecutionRepository) FindBySessionID(sessionID string) (*model.AgentExecution, error) {
 	var exec model.AgentExecution
 	if err := r.db.Where("session_id = ?", sessionID).Order("created_at DESC").First(&exec).Error; err != nil {
 		return nil, err
 	}
 	return &exec, nil
-}
-
-func (r *AgentExecutionRepository) FindStepsByExecutionID(execID uuid.UUID) ([]*model.AgentStepExecution, error) {
-	var steps []*model.AgentStepExecution
-	if err := r.db.Where("execution_id = ?", execID).Order("created_at ASC").Find(&steps).Error; err != nil {
-		return nil, err
-	}
-	return steps, nil
 }
 
 func (r *AgentExecutionRepository) FindReflectionsByExecutionID(execID uuid.UUID) ([]*model.AgentReflection, error) {
@@ -98,20 +82,12 @@ func (r *AgentExecutionRepository) FindCorrectionsByExecutionID(execID uuid.UUID
 	return corrections, nil
 }
 
-func (r *AgentExecutionRepository) FindToolCallsByExecutionID(execID uuid.UUID) ([]*model.AgentToolCallRecord, error) {
-	var toolCalls []*model.AgentToolCallRecord
-	if err := r.db.Where("execution_id = ?", execID).Order("created_at ASC").Find(&toolCalls).Error; err != nil {
+func (r *AgentExecutionRepository) FindStepsByExecutionID(execID uuid.UUID) ([]*model.AgentStepExecution, error) {
+	var steps []*model.AgentStepExecution
+	if err := r.db.Where("execution_id = ?", execID).Order("created_at ASC").Find(&steps).Error; err != nil {
 		return nil, err
 	}
-	return toolCalls, nil
-}
-
-func (r *AgentExecutionRepository) FindModelErrorsByExecutionID(execID uuid.UUID) ([]*model.AgentModelError, error) {
-	var modelErrors []*model.AgentModelError
-	if err := r.db.Where("execution_id = ?", execID).Order("created_at ASC").Find(&modelErrors).Error; err != nil {
-		return nil, err
-	}
-	return modelErrors, nil
+	return steps, nil
 }
 
 // ==================== RAG Query Methods ====================
@@ -143,4 +119,34 @@ func (r *AgentExecutionRepository) FindSuccessfulSummaries(ctx context.Context, 
 		return nil, err
 	}
 	return executions, nil
+}
+
+// FindRecentAudits gets recent audits where decision='correct_plan' for learning audit correction patterns.
+// Conditions: decision='correct_plan', within last 7 days, ordered by created_at DESC.
+func (r *AgentExecutionRepository) FindRecentAudits(ctx context.Context, limit int) ([]*model.AgentAudit, error) {
+	var audits []*model.AgentAudit
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+	if err := r.db.WithContext(ctx).
+		Where("decision = ? AND created_at >= ?", "correct_plan", sevenDaysAgo).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&audits).Error; err != nil {
+		return nil, err
+	}
+	return audits, nil
+}
+
+// FindRecentModelErrors gets recent recoverable model errors for degradation strategy learning.
+// Conditions: recoverable=true, within last 3 days, ordered by created_at DESC.
+func (r *AgentExecutionRepository) FindRecentModelErrors(ctx context.Context, limit int) ([]*model.AgentModelError, error) {
+	var errors []*model.AgentModelError
+	threeDaysAgo := time.Now().AddDate(0, 0, -3)
+	if err := r.db.WithContext(ctx).
+		Where("recoverable = ? AND created_at >= ?", true, threeDaysAgo).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&errors).Error; err != nil {
+		return nil, err
+	}
+	return errors, nil
 }

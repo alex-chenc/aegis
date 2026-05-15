@@ -539,13 +539,18 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 	}
 
 	// Check if the rule is disabled - skip alert creation if so
+	// Also retain rule reference for MitreID/RuleTitle fallback
+	var matchedRule *model.SigmaRule
 	if s.sigmaRuleRepo != nil && event.MatchedRuleId != "" {
 		rule, err := s.sigmaRuleRepo.FindByRuleID(event.MatchedRuleId)
-		if err == nil && rule != nil && rule.Status == "disabled" {
-			logger.Debug("rule is disabled, skipping alert creation",
-				zap.String("rule_id", event.MatchedRuleId),
-				zap.String("mitre_id", event.MitreId))
-			return
+		if err == nil && rule != nil {
+			if rule.Status == "disabled" {
+				logger.Debug("rule is disabled, skipping alert creation",
+					zap.String("rule_id", event.MatchedRuleId),
+					zap.String("mitre_id", event.MitreId))
+				return
+			}
+			matchedRule = rule
 		}
 	}
 
@@ -568,6 +573,19 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 	}
 
 	processTree := normalizeJSONBText(event.ProcessTree)
+
+	// Fallback to sigma_rules table when event fields are empty
+	mitreID := strings.ToUpper(event.MitreId)
+	ruleTitle := event.MatchedRuleTitle
+	if matchedRule != nil {
+		if mitreID == "" && matchedRule.MitreID != "" {
+			mitreID = strings.ToUpper(matchedRule.MitreID)
+		}
+		if ruleTitle == "" && matchedRule.Title != "" {
+			ruleTitle = matchedRule.Title
+		}
+	}
+
 	alert := &model.Alert{
 		AlertID:        "ALT-" + uuid.New().String()[:8],
 		HostID:         hostID,
@@ -575,16 +593,17 @@ func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEve
 		PPID:           int(event.Ppid),
 		CommandLine:    event.CommandLine,
 		ProcessTree:    processTree,
-		MitreID:        strings.ToUpper(event.MitreId),
+		MitreID:        mitreID,
 		Severity:       event.Severity,
 		DedupeKey:      dedupeKey,
 		HitCount:       1,
 		Status:         "pending",
 		JudgmentSource: "system",
 		RuleID:         event.MatchedRuleId,
+		RuleTitle:      ruleTitle,
 	}
 
-	mitreName, mitreDesc := model.GetMITREChineseDescription(event.MitreId)
+	mitreName, mitreDesc := model.GetMITREChineseDescription(mitreID)
 	if mitreName != "" {
 		alert.MitreName = mitreName
 		alert.Description = mitreDesc
@@ -950,18 +969,6 @@ func (s *GRPCServer) IsAgentConnected(hostID uuid.UUID) bool {
 	return ok
 }
 
-// GetConnectedHostIDs 获取所有已建立双向流连接的主机ID列表
-func (s *GRPCServer) GetConnectedHostIDs() []uuid.UUID {
-	var hostIDs []uuid.UUID
-	s.agentConnections.Range(func(key, value interface{}) bool {
-		if hostID, ok := key.(uuid.UUID); ok {
-			hostIDs = append(hostIDs, hostID)
-		}
-		return true
-	})
-	return hostIDs
-}
-
 func (s *GRPCServer) CollectSoftwareList(ctx context.Context, req *pb.SoftwareListRequest) (*pb.SoftwareListResponse, error) {
 	// Note: Software collection is done via bidirectional stream (ExecuteCommand),
 	// not via unary RPC. Agents receive #SOFTWARE_COLLECT# command and respond
@@ -1138,125 +1145,6 @@ func (s *GRPCServer) pushActiveRulesToAgent(hostID uuid.UUID, conn *AgentConnect
 		logger.Info("pushed active rules to agent",
 			zap.String("host_id", hostID.String()),
 			zap.Int("rule_count", len(rules)))
-	}
-}
-
-func (s *GRPCServer) pushRulesToAgent(hostID uuid.UUID) {
-	// Retry loop to wait for bidirectional stream establishment
-	maxRetries := 5
-	retryDelay := 1 * time.Second
-
-	var conn interface{}
-	var ok bool
-
-	for i := 0; i < maxRetries; i++ {
-		conn, ok = s.agentConnections.Load(hostID)
-		if ok {
-			break
-		}
-		logger.Debug("waiting for agent connection",
-			zap.String("host_id", hostID.String()),
-			zap.Int("attempt", i+1),
-			zap.Int("max_retries", maxRetries))
-		time.Sleep(retryDelay)
-	}
-
-	if !ok {
-		logger.Warn("agent connection not ready for rule push after retries",
-			zap.String("host_id", hostID.String()))
-		return
-	}
-
-	if s.sigmaRuleRepo == nil {
-		logger.Warn("sigmaRuleRepo is nil, cannot return rules")
-		logger.Warn("sigma rule repo not initialized")
-		return
-	}
-
-	// Get all active/experimental rules
-	rules, err := s.sigmaRuleRepo.GetActiveAndExperimental()
-	logger.Info("querying active rules from database")
-	if err != nil {
-		logger.Error("failed to get rules for push", zap.Error(err))
-		return
-	}
-
-	if len(rules) == 0 {
-		logger.Info("no active rules to push, sending clear_all to agent", zap.String("host_id", hostID.String()))
-		// Send clear_all command to agent to remove all local rules
-		agentConn, ok := conn.(*AgentConnection)
-		if !ok {
-			logger.Error("failed to cast connection to AgentConnection",
-				zap.String("host_id", hostID.String()))
-			return
-		}
-
-		if agentConn.Client == nil {
-			logger.Warn("agent client not initialized, cannot send clear_all",
-				zap.String("host_id", hostID.String()))
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		resp, err := agentConn.Client.UpdateRules(ctx, &pb.RuleUpdateRequest{
-			Action: "clear_all",
-			Rules:  nil,
-		})
-		if err != nil {
-			logger.Error("failed to send clear_all to agent",
-				zap.String("host_id", hostID.String()),
-				zap.Error(err))
-		} else {
-			logger.Info("clear_all sent to agent",
-				zap.String("host_id", hostID.String()),
-				zap.Int32("loaded_count", resp.LoadedCount))
-		}
-		return
-	}
-
-	// Build update request
-	updates := make([]*pb.RuleUpdate, 0, len(rules))
-	for _, rule := range rules {
-		updates = append(updates, &pb.RuleUpdate{
-			RuleId:  rule.RuleID,
-			Action:  "add",
-			Content: rule.Content,
-		})
-	}
-
-	// Send to Agent with safe type assertion
-	agentConn, ok := conn.(*AgentConnection)
-	if !ok {
-		logger.Error("failed to cast connection to AgentConnection",
-			zap.String("host_id", hostID.String()))
-		return
-	}
-
-	if agentConn.Client == nil {
-		logger.Warn("agent client not initialized, cannot push rules",
-			zap.String("host_id", hostID.String()))
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	resp, err := agentConn.Client.UpdateRules(ctx, &pb.RuleUpdateRequest{
-		Action: "full_sync",
-		Rules:  updates,
-	})
-
-	if err != nil {
-		logger.Error("failed to push rules to agent",
-			zap.String("host_id", hostID.String()),
-			zap.Error(err))
-	} else {
-		logger.Info("rules pushed to agent",
-			zap.String("host_id", hostID.String()),
-			zap.Int("rule_count", len(rules)),
-			zap.Int32("loaded_count", resp.LoadedCount))
 	}
 }
 

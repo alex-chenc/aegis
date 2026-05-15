@@ -34,7 +34,7 @@ func (p *AegisPromptProvider) Build(ctx context.Context, req agentruntime.Prompt
 	case agentruntime.PurposePlan:
 		return p.buildPlanPrompt(ctx, req)
 	case agentruntime.PurposeReact:
-		return p.buildReactPrompt(), nil
+		return p.buildReactPrompt(ctx, req)
 	case agentruntime.PurposeSummarize:
 		return p.buildSummarizePrompt(), nil
 	case agentruntime.PurposeAudit, agentruntime.PurposeReflect, agentruntime.PurposeCorrect:
@@ -72,11 +72,26 @@ func (p *AegisPromptProvider) buildPlanPrompt(ctx context.Context, req agentrunt
 	}, nil
 }
 
-// buildReactPrompt returns the ReAct JSON-action prompt.
-func (p *AegisPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
-	return agentruntime.PromptBundle{
-		SystemPrompt: reactJSONPromptTemplate,
+// buildReactPrompt returns the ReAct JSON-action prompt. When an experience
+// provider is configured it fetches relevant historical experience and appends
+// it to the system prompt.
+func (p *AegisPromptProvider) buildReactPrompt(ctx context.Context, req agentruntime.PromptRequest) (agentruntime.PromptBundle, error) {
+	systemPrompt := reactJSONPromptTemplate
+
+	if p.experienceProvider != nil {
+		expResp, err := p.experienceProvider.Fetch(ctx, agentruntime.ExperienceRequest{
+			TaskID:   req.TaskID,
+			Query:    getAlertQuery(p.alertCtx),
+			MaxItems: 3,
+		})
+		if err == nil && len(expResp.Items) > 0 {
+			systemPrompt += "\n\n## 历史经验参考\n" + formatExperienceForPrompt(expResp.Items)
+		}
 	}
+
+	return agentruntime.PromptBundle{
+		SystemPrompt: systemPrompt,
+	}, nil
 }
 
 // buildSummarizePrompt returns the attack-graph summarisation prompt.

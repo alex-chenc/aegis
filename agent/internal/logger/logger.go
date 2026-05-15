@@ -11,7 +11,7 @@ import (
 
 var log *zap.Logger
 
-func Init(logDir string, level string) error {
+func Init(logDir string, level string, stdout ...bool) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
@@ -59,7 +59,27 @@ func Init(logDir string, level string) error {
 		logLevel,
 	)
 
-	log = zap.New(fileCore, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
+ cores := []zapcore.Core{fileCore}
+
+	if len(stdout) > 0 && stdout[0] {
+		consoleEncoder := zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
+			TimeKey:        "T",
+			LevelKey:       "L",
+			NameKey:        "N",
+			CallerKey:      "C",
+			FunctionKey:    zapcore.OmitKey,
+			MessageKey:     "M",
+			StacktraceKey:  "S",
+			LineEnding:     zapcore.DefaultLineEnding,
+			EncodeLevel:    zapcore.LowercaseColorLevelEncoder,
+			EncodeTime:     zapcore.ISO8601TimeEncoder,
+			EncodeDuration: zapcore.SecondsDurationEncoder,
+			EncodeCaller:   zapcore.ShortCallerEncoder,
+		})
+		cores = append(cores, zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), logLevel))
+	}
+
+	log = zap.New(zapcore.NewTee(cores...), zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return nil
 }

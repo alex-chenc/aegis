@@ -77,21 +77,6 @@ func moveFile(src, dst string) error {
 	return os.Remove(src)
 }
 
-func (b *Blocker) RollbackQuarantine(quarantinePath string) error {
-	record, err := b.findQuarantineRecord(quarantinePath)
-	if err != nil {
-		return err
-	}
-
-	if err := os.Rename(quarantinePath, record.OriginalPath); err != nil {
-		return fmt.Errorf("failed to rollback: %w", err)
-	}
-
-	b.recordAudit("rollback_quarantine", quarantinePath, record.OriginalPath, "success")
-	logger.Info("Quarantine rolled back", zap.String("from", quarantinePath), zap.String("to", record.OriginalPath))
-	return nil
-}
-
 func (b *Blocker) saveQuarantineRecord(record *QuarantineRecord) {
 	logFile := filepath.Join(b.quarantineDir, "quarantine_log.json")
 	var records []QuarantineRecord

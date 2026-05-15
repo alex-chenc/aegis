@@ -1,8 +1,10 @@
 package ebpf
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,18 +15,19 @@ import (
 
 // Event represents a security event from eBPF
 type Event struct {
-	EventID     string
-	HostID      string
-	Hostname    string
-	Timestamp   int64
-	EventType   string
-	ProcessName string
-	PID         int
-	PPID        int
-	UID         int
-	CommandLine string
-	FilePath    string
-	RemoteAddr  string
+	EventID       string
+	HostID        string
+	Hostname      string
+	Timestamp     int64
+	EventType     string
+	ProcessName   string
+	PID           int
+	PPID          int
+	UID           int
+	CommandLine   string
+	FilePath      string
+	RemoteAddr    string
+	ArgsTruncated bool
 }
 
 // Collector manages eBPF event collection
@@ -127,6 +130,8 @@ func (c *Collector) monitorProc() {
 	logger.Info("Starting /proc fallback monitor")
 
 	knownPIDs := make(map[int]struct{})
+	c.snapshotExistingProcesses(knownPIDs)
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -155,6 +160,8 @@ func (c *Collector) monitorProc() {
 
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
 			cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+			cmdlineStr := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte(" ")))
+			cmdlineStr = strings.TrimSpace(cmdlineStr)
 
 			event := Event{
 				EventID:     generateEventID(),
@@ -163,8 +170,8 @@ func (c *Collector) monitorProc() {
 				Timestamp:   time.Now().UnixMilli(),
 				EventType:   "process_exec",
 				PID:         pid,
-				ProcessName: string(comm),
-				CommandLine: string(cmdline),
+				ProcessName: strings.TrimSpace(string(comm)),
+				CommandLine: cmdlineStr,
 			}
 
 			select {
@@ -180,6 +187,58 @@ func (c *Collector) monitorProc() {
 			}
 		}
 	}
+}
+
+// snapshotExistingProcesses captures all currently running processes
+// to ensure we don't miss processes that were already running before monitoring started.
+func (c *Collector) snapshotExistingProcesses(knownPIDs map[int]struct{}) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		logger.Warn("Failed to read /proc for initial snapshot", zap.Error(err))
+		return
+	}
+
+	count := 0
+	for _, entry := range entries {
+		pid, err := parsePID(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		knownPIDs[pid] = struct{}{}
+
+		comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		cmdlineStr := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte(" ")))
+		cmdlineStr = strings.TrimSpace(cmdlineStr)
+
+		if cmdlineStr == "" {
+			continue // Skip kernel threads
+		}
+
+		event := Event{
+			EventID:     generateEventID(),
+			HostID:      c.hostID,
+			Hostname:    c.hostname,
+			Timestamp:   time.Now().UnixMilli(),
+			EventType:   "process_exec",
+			PID:         pid,
+			ProcessName: strings.TrimSpace(string(comm)),
+			CommandLine: cmdlineStr,
+		}
+
+		select {
+		case c.events <- event:
+			count++
+		default:
+			logger.Warn("Event channel full during snapshot, dropping event",
+				zap.Int("pid", pid))
+		}
+	}
+
+	logger.Info("Initial /proc snapshot complete",
+		zap.Int("total_pids", len(knownPIDs)),
+		zap.Int("events_sent", count))
 }
 
 func parsePID(name string) (int, error) {

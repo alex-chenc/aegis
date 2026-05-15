@@ -1,6 +1,59 @@
 package sigma
 
-import "testing"
+import (
+	"testing"
+)
+
+func TestExtractMitreID(t *testing.T) {
+	tests := []struct {
+		name     string
+		tags     []string
+		expected string
+	}{
+		{"lowercase t888", []string{"attack.t888"}, "T888"},
+		{"uppercase T888", []string{"attack.T888"}, "T888"},
+		{"sub-technique lowercase", []string{"attack.t1059.004"}, "T1059.004"},
+		{"sub-technique uppercase", []string{"attack.T1059.004"}, "T1059.004"},
+		{"mixed case", []string{"attack.T888"}, "T888"},
+		{"no mitre tag", []string{"host-based", "linux"}, ""},
+		{"empty tags", []string{}, ""},
+		{"mitre among other tags", []string{"host-based", "attack.t1053.003", "linux"}, "T1053.003"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractMitreID(tt.tags)
+			if result != tt.expected {
+				t.Errorf("extractMitreID(%v) = %q, want %q", tt.tags, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCompileRuleMitreIDNormalization(t *testing.T) {
+	rule := &Rule{
+		ID:     "reverse-shell-detect",
+		Tags:   []string{"attack.t888"},
+		Level:  "high",
+		Logsource: Logsource{Category: "process_creation"},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"selection": map[string]interface{}{
+					"commandline": "bash -i",
+				},
+			},
+			Condition: "selection",
+		},
+	}
+
+	compiled := CompileRule(rule)
+	if compiled.MitreID != "T888" {
+		t.Errorf("MitreID = %q, want %q", compiled.MitreID, "T888")
+	}
+	if compiled.Severity != "high" {
+		t.Errorf("Severity = %q, want %q", compiled.Severity, "high")
+	}
+}
 
 func TestCompiledRuleMatchRequiresAllConditionSelectors(t *testing.T) {
 	rule := &Rule{

@@ -3,6 +3,7 @@
 BINARY_NAME=aegis-agent
 BPF_DIR=internal/ebpf/bpf
 BPF_OBJ_DIR=internal/ebpf/bpf/obj
+ARCH_INCLUDE_DIR?=/usr/include/$(shell uname -m)-linux-gnu
 
 BPF_PROGRAMS=execve fork openat connect setuid setgid capset
 
@@ -13,11 +14,13 @@ bpf: $(BPF_OBJ_DIR)
 	@for prog in $(BPF_PROGRAMS); do \
 		clang -g -O2 -c -target bpf -D__TARGET_ARCH_$$(uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm/') \
 			-I/usr/include \
+			-I$(ARCH_INCLUDE_DIR) \
 			-I$(BPF_DIR) \
 			-o $(BPF_OBJ_DIR)/$$prog.bpf.o \
 			$(BPF_DIR)/$$prog.bpf.c 2>/dev/null || \
 		clang -g -O2 -c -target bpf \
 			-I/usr/include \
+			-I$(ARCH_INCLUDE_DIR) \
 			-I$(BPF_DIR) \
 			-o $(BPF_OBJ_DIR)/$$prog.bpf.o \
 			$(BPF_DIR)/$$prog.bpf.c; \

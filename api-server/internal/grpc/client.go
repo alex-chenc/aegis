@@ -80,11 +80,6 @@ func (c *ServerClient) ListConnectedAgents(ctx context.Context) (*pb.ListConnect
 	})
 }
 
-// HealthCheck performs a health check on the Server service
-func (c *ServerClient) HealthCheck(ctx context.Context) (*pb.HealthCheckResponse, error) {
-	return c.client.HealthCheck(ctx, &pb.HealthCheckRequest{})
-}
-
 // UpdateAgentRules updates the Sigma rules on agents
 func (c *ServerClient) UpdateAgentRules(ctx context.Context, req *pb.UpdateAgentRulesRequest) (*pb.UpdateAgentRulesResponse, error) {
 	return c.client.UpdateAgentRules(ctx, req)

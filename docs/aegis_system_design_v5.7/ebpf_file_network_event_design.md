@@ -21,6 +21,45 @@
 
 - `connect.bpf.c`: 仅IPv4，仅目标地址/端口，无源地址，无协议标识
 - `openat.bpf.c`: 相对完整，flags解析可增强
+- `execve.bpf.c`（2026-05-15补充）: 当前仅读取 `argv[1]`，且 Go 侧曾在 syscall entry 阶段优先读取 `/proc/{pid}/cmdline`，会拿到旧进程 cmdline，导致 `process_exec` 命令行误报为 `-bash` 等旧值。
+
+### 1.2 process_exec 参数模型修正（2026-05-15）
+
+参考 Cilium/Tetragon 的 `process_exec` 事件模型，Aegis v5.7 将执行文件与参数拆分表达：
+
+| 字段 | 来源优先级 | 语义 |
+|:---|:---|:---|
+| `FilePath` / `image` / `exe` | execve `filename` → `/proc/{pid}/exe` | 执行文件路径 |
+| `ProcessName` | `filename` basename → `argv[0]` basename → `comm` | 进程短名称 |
+| `Args` / `CommandLine` | eBPF `argv[0..N]` → `/proc/{pid}/cmdline` 兜底 | 执行参数与完整命令行 |
+
+设计原则：
+
+- eBPF 在 `sys_enter_execve` 使用 bounded loop 读取 `argv[0..N]`，写入固定长度 `NUL-separated` args buffer。
+- Go 侧优先解码 eBPF argv，并用空格重建 `CommandLine`；`/proc/{pid}/cmdline` 仅在 eBPF `filename` 与 `argv` 都缺失时兜底。
+- 不使用 `task comm` 代替 `arguments/cmdline`。`comm` 只作为 `ProcessName` 的最后兜底。
+- `FilePath` 使用 execve `filename` 或 `/proc/{pid}/exe`，避免把参数字符串写入 `image/exe`。
+- argv buffer 达到 512 字节或 20 个参数上限时设置 `args_truncated`，供后续 Sigma/AI 分析识别命令行可能不完整。
+- `execve` eBPF 程序是 `process_exec` 的必需采集项；加载失败必须返回错误并触发 Collector fallback，不能只打日志后继续运行。
+
+待执行验证：
+
+| 验证项 | 验证内容 |
+|:---|:---|
+| argv完整性 | `argv[0]`、`argv[1]`、后续参数均能被 eBPF buffer 解码 |
+| /proc时序 | 在交互 shell 中执行新命令，不应将旧 `/proc/{pid}/cmdline` 误报为 `-bash` |
+| 字段分离 | `image/exe` 为执行文件路径，`commandline` 为 argv 重建命令行 |
+| 兜底路径 | eBPF filename/argv 都为空时，才使用 `/proc/{pid}/cmdline` |
+| 截断标记 | argv buffer 或参数个数达到上限时，Go 事件包含 `args_truncated=true` |
+| 加载失败 | `execve` verifier/load 失败时，`LoadAll()` 返回错误，Collector 进入 fallback |
+
+2026-05-15 已执行的窄验证：
+
+- `env GOCACHE=/tmp/aegis-go-cache go test ./internal/ebpf -count=1`
+- `make bpf`
+- `env GOCACHE=/tmp/aegis-go-cache make build`
+
+未执行本机 root/eBPF 加载验证；该步骤需要替换或启动 `/opt/aegis-agent` 并具备内核 eBPF 权限。本次修改不涉及 HTTP API，因此未执行 curl 接口验证。
 
 ---
 

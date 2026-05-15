@@ -788,25 +788,26 @@ func (x *SoftwareListResponse) GetSoftwareList() []*SoftwareInfo {
 
 // RuntimeEvent 运行时事件
 type RuntimeEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	HostId        string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
-	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	EventType     string                 `protobuf:"bytes,5,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // process_exec, file_access, network_connect, privilege_change
-	ProcessName   string                 `protobuf:"bytes,6,opt,name=process_name,json=processName,proto3" json:"process_name,omitempty"`
-	Pid           int32                  `protobuf:"varint,7,opt,name=pid,proto3" json:"pid,omitempty"`
-	Ppid          int32                  `protobuf:"varint,8,opt,name=ppid,proto3" json:"ppid,omitempty"`
-	Uid           int32                  `protobuf:"varint,9,opt,name=uid,proto3" json:"uid,omitempty"`
-	CommandLine   string                 `protobuf:"bytes,10,opt,name=command_line,json=commandLine,proto3" json:"command_line,omitempty"`
-	FilePath      string                 `protobuf:"bytes,11,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
-	RemoteAddr    string                 `protobuf:"bytes,12,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
-	MatchedRuleId string                 `protobuf:"bytes,13,opt,name=matched_rule_id,json=matchedRuleId,proto3" json:"matched_rule_id,omitempty"`
-	MitreId       string                 `protobuf:"bytes,14,opt,name=mitre_id,json=mitreId,proto3" json:"mitre_id,omitempty"`
-	Severity      string                 `protobuf:"bytes,15,opt,name=severity,proto3" json:"severity,omitempty"`
-	ProcessTree   string                 `protobuf:"bytes,16,opt,name=process_tree,json=processTree,proto3" json:"process_tree,omitempty"` // JSON格式的进程树，Agent检测到威胁时自动采集
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	EventId          string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	HostId           string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Hostname         string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Timestamp        int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	EventType        string                 `protobuf:"bytes,5,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // process_exec, file_access, network_connect, privilege_change
+	ProcessName      string                 `protobuf:"bytes,6,opt,name=process_name,json=processName,proto3" json:"process_name,omitempty"`
+	Pid              int32                  `protobuf:"varint,7,opt,name=pid,proto3" json:"pid,omitempty"`
+	Ppid             int32                  `protobuf:"varint,8,opt,name=ppid,proto3" json:"ppid,omitempty"`
+	Uid              int32                  `protobuf:"varint,9,opt,name=uid,proto3" json:"uid,omitempty"`
+	CommandLine      string                 `protobuf:"bytes,10,opt,name=command_line,json=commandLine,proto3" json:"command_line,omitempty"`
+	FilePath         string                 `protobuf:"bytes,11,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	RemoteAddr       string                 `protobuf:"bytes,12,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
+	MatchedRuleId    string                 `protobuf:"bytes,13,opt,name=matched_rule_id,json=matchedRuleId,proto3" json:"matched_rule_id,omitempty"`
+	MitreId          string                 `protobuf:"bytes,14,opt,name=mitre_id,json=mitreId,proto3" json:"mitre_id,omitempty"`
+	Severity         string                 `protobuf:"bytes,15,opt,name=severity,proto3" json:"severity,omitempty"`
+	ProcessTree      string                 `protobuf:"bytes,16,opt,name=process_tree,json=processTree,proto3" json:"process_tree,omitempty"`                  // JSON格式的进程树，Agent检测到威胁时自动采集
+	MatchedRuleTitle string                 `protobuf:"bytes,17,opt,name=matched_rule_title,json=matchedRuleTitle,proto3" json:"matched_rule_title,omitempty"` // 匹配的规则标题
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RuntimeEvent) Reset() {
@@ -947,6 +948,13 @@ func (x *RuntimeEvent) GetSeverity() string {
 func (x *RuntimeEvent) GetProcessTree() string {
 	if x != nil {
 		return x.ProcessTree
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetMatchedRuleTitle() string {
+	if x != nil {
+		return x.MatchedRuleTitle
 	}
 	return ""
 }
@@ -1735,7 +1743,7 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\x0fpackage_manager\x18\x03 \x01(\tR\x0epackageManager\x12\"\n" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\"X\n" +
 	"\x14SoftwareListResponse\x12@\n" +
-	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\xd9\x03\n" +
+	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\x87\x04\n" +
 	"\fRuntimeEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x1a\n" +
@@ -1755,7 +1763,8 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\x0fmatched_rule_id\x18\r \x01(\tR\rmatchedRuleId\x12\x19\n" +
 	"\bmitre_id\x18\x0e \x01(\tR\amitreId\x12\x1a\n" +
 	"\bseverity\x18\x0f \x01(\tR\bseverity\x12!\n" +
-	"\fprocess_tree\x18\x10 \x01(\tR\vprocessTree\"b\n" +
+	"\fprocess_tree\x18\x10 \x01(\tR\vprocessTree\x12,\n" +
+	"\x12matched_rule_title\x18\x11 \x01(\tR\x10matchedRuleTitle\"b\n" +
 	"\x12ReportEventRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x123\n" +
 	"\x06events\x18\x02 \x03(\v2\x1b.agent_comm.v1.RuntimeEventR\x06events\"V\n" +

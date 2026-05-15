@@ -1,13 +1,16 @@
 package ebpf
 
+const ExecEventArgsTruncated uint32 = 1 << 0
+
 type ExecEvent struct {
 	Pid      uint32
 	Ppid     uint32
 	Uid      uint32
 	Gid      uint32
+	Flags    uint32
 	Comm     [16]byte
 	Filename [256]byte
-	Args     [256]byte
+	Args     [512]byte
 }
 
 type ForkEvent struct {

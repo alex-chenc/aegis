@@ -50,7 +50,16 @@
             >
               <el-table-column type="selection" width="40" />
               <el-table-column prop="hostname" label="主机" min-width="100" />
-              <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ row.rule_title || row.mitre_id || '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="MITRE" width="120">
+                <template #default="{ row }">
+                  {{ row.mitre_id || '-' }}
+                </template>
+              </el-table-column>
               <el-table-column prop="last_seen_at" label="最近时间" min-width="150">
                 <template #default="{ row }">
                   {{ formatTime(row.last_seen_at) }}
@@ -209,7 +218,10 @@
                     </div>
 
                     <!-- 最终回复 -->
-                    <div v-if="msg.content && !msg.thought" class="final-content">
+                    <div v-if="msg.executionResult && !msg.thought" class="final-execution-result">
+                      <TaskExecutionResult :result="msg.executionResult" />
+                    </div>
+                    <div v-else-if="msg.content && !msg.thought && !msg.isError" class="final-content">
                       <pre>{{ msg.content }}</pre>
                     </div>
 
@@ -307,6 +319,17 @@
             </div>
           </div>
 
+          <!-- 执行结果展示区域 -->
+          <div v-if="executionResult && !hasMessageExecutionResult" class="execution-result-panel">
+            <div class="execution-result-header">
+              <span>任务执行结果</span>
+              <el-button size="small" type="danger" @click="executionResult = null">
+                关闭
+              </el-button>
+            </div>
+            <TaskExecutionResult :result="executionResult" />
+          </div>
+
           <!-- 溯源图展示区域 -->
           <el-card v-if="attackGraph" class="attack-graph-card" style="margin-top: 16px;">
             <template #header>
@@ -345,8 +368,8 @@
             </el-table-column>
             <el-table-column prop="status" label="状态" width="100">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">
-                  {{ row.status === 'active' ? '进行中' : '已结束' }}
+                <el-tag :type="getDisplayStatus(row) === 'completed' ? 'success' : 'info'" size="small">
+                  {{ getDisplayStatus(row) === 'completed' ? '已完成' : '未完成' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -395,9 +418,10 @@ import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
-import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, getExecutionResult, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent, type ExecutionResult } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
 import ExecutionPlan from '@/components/ExecutionPlan.vue'
+import TaskExecutionResult from '@/components/TaskExecutionResult.vue'
 import {
   buildAttackGraphDisplayText,
   buildAttackGraphSvgDataUrl,
@@ -408,6 +432,8 @@ import {
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 import { applyPlanStepStatus, getActionButtonType, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
+import { parseExecutionResultText } from '@/utils/taskExecutionResult'
+import { getDisplayStatus, isFalsePositive, getRemediationSuggestion, getVerdictType, getVerdictText } from '@/utils/sessionStatus'
 
 const route = useRoute()
 const router = useRouter()
@@ -448,6 +474,7 @@ interface Message {
   auditResult?: AuditEvent
   reflectionResult?: ReflectionEvent
   correctionResult?: CorrectionEvent
+  executionResult?: ExecutionResult | null
 }
 
 // State
@@ -478,6 +505,7 @@ const executionPlan = ref<PlanEvent | null>(null)
 const auditResults = ref<AuditEvent[]>([])
 const reflectionResults = ref<ReflectionEvent[]>([])
 const correctionResults = ref<CorrectionEvent[]>([])
+const executionResult = ref<ExecutionResult | null>(null)
 const messageListRef = ref<HTMLElement | null>(null)
 const alertTableRef = ref<any>(null)
 const currentEventSource = ref<EventSource | null>(null)
@@ -548,6 +576,7 @@ function loadConversation(): boolean {
       correctionResults.value = data.correctionResults || []
       maxIterations.value = data.maxIterations || 500
       applyStructuredFinalAnswer()
+      applyParsedExecutionResultFromContent()
       return true
     } catch (e) {
       console.error('Failed to load conversation from localStorage:', e)
@@ -578,6 +607,10 @@ const isAnalysisSnapshotActive = computed(() => Boolean(sessionId.value && analy
 
 const visibleAlertRows = computed(() => {
   return isAnalysisSnapshotActive.value ? analysisAlertSnapshot.value : filteredAlerts.value
+})
+
+const hasMessageExecutionResult = computed(() => {
+  return messages.value.some(msg => Boolean(msg.executionResult))
 })
 
 // Methods
@@ -712,6 +745,7 @@ function isFinalAssistantMessage(msg?: Message) {
       !msg.thought &&
       !msg.action &&
       !msg.observation &&
+      !msg.type &&
       !msg.isError
   )
 }
@@ -725,6 +759,9 @@ function upsertFinalAssistantMessage(content: string, append = false) {
   const index = findLatestFinalAssistantMessageIndex()
   if (index >= 0) {
     messages.value[index].content = append ? (messages.value[index].content || '') + content : content
+    if (append || content) {
+      messages.value[index].executionResult = null
+    }
     return
   }
 
@@ -734,7 +771,8 @@ function upsertFinalAssistantMessage(content: string, append = false) {
     thought: '',
     action: '',
     actionInput: null,
-    observation: null
+    observation: null,
+    executionResult: null
   })
 }
 
@@ -745,6 +783,42 @@ function applyStructuredFinalAnswer(content = finalAnswerContent.value) {
   attackGraph.value = finalAnswer.graph
   upsertFinalAssistantMessage(buildAttackGraphDisplayText(finalAnswer))
   return true
+}
+
+function attachExecutionResultToLatestMessage(result: ExecutionResult) {
+  const index = findLatestFinalAssistantMessageIndex()
+  if (index >= 0) {
+    messages.value[index].executionResult = result
+    return
+  }
+
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    executionResult: result
+  })
+}
+
+function applyParsedExecutionResultFromContent(content = finalAnswerContent.value) {
+  const parsed = parseExecutionResultText(content)
+  if (!parsed) return false
+
+  executionResult.value = parsed
+  attachExecutionResultToLatestMessage(parsed)
+  return true
+}
+
+async function loadExecutionResultForSession(targetSessionId: string, attachToMessage = false) {
+  try {
+    const result = await getExecutionResult(targetSessionId)
+    executionResult.value = result
+    if (attachToMessage) {
+      attachExecutionResultToLatestMessage(result)
+    }
+    return result
+  } catch {
+    return null
+  }
 }
 
 async function deleteSessionById(session: SessionListItem) {
@@ -758,6 +832,7 @@ async function deleteSessionById(session: SessionListItem) {
       auditResults.value = []
       reflectionResults.value = []
       correctionResults.value = []
+      executionResult.value = null
       clearCurrentSessionId()
       clearSavedConversation()
     }
@@ -783,6 +858,9 @@ async function loadSession(session: SessionListItem) {
   // Guard against double execution
   if (sessionId.value === session.session_id && messages.value.length > 0) {
     sessionHistoryVisible.value = false
+    if (!executionResult.value) {
+      void loadExecutionResultForSession(session.session_id, true)
+    }
     return
   }
 
@@ -798,12 +876,16 @@ async function loadSession(session: SessionListItem) {
   finalAnswerContent.value = ''
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
+  executionResult.value = null
   executionPlan.value = null
   auditResults.value = []
   reflectionResults.value = []
   correctionResults.value = []
   analysisAlertSnapshot.value = []
   maxIterations.value = session.max_iterations || 500
+
+  // 获取会话显示状态
+  const sessionStatus = getDisplayStatus(session)
 
   // Load messages from history
   try {
@@ -813,18 +895,34 @@ async function loadSession(session: SessionListItem) {
     const msgs = payload.messages || []
     if (msgs.length > 0) {
       messages.value = rebuildMessagesFromHistory(msgs)
-      applyStructuredFinalAnswer()
+
+      // 只有已完成的会话才应用结论相关逻辑
+      if (sessionStatus === 'completed') {
+        applyStructuredFinalAnswer()
+        applyParsedExecutionResultFromContent()
+      }
     }
     // Load execution plan from history
     if (payload.execution_plan) {
       executionPlan.value = normalizePlanEvent(payload.execution_plan)
     }
+
+    // 审计和反思：如果为空则显示空数组
     auditResults.value = payload.audits || []
     reflectionResults.value = payload.reflections || []
     correctionResults.value = payload.corrections || []
-    appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
+
+    // 只有已完成的会话才追加运行时事件消息
+    if (sessionStatus === 'completed') {
+      appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '加载会话消息失败')
+  }
+
+  // 加载执行结果（仅已完成会话）
+  if (sessionStatus === 'completed') {
+    await loadExecutionResultForSession(session.session_id, true)
   }
 
   ElMessage.success('已加载会话')
@@ -987,6 +1085,7 @@ async function startAnalysis() {
     auditResults.value = []
     reflectionResults.value = []
     correctionResults.value = []
+    executionResult.value = null
     analysisAlertSnapshot.value = analysisSnapshot
     selectedAlertIds.value = analysisSnapshot.map(alert => alert.id)
 
@@ -1279,6 +1378,10 @@ function createSSEHandler(message: string) {
         if (!applyStructuredFinalAnswer() && structuredFinalCandidate) {
           upsertFinalAssistantMessage(finalAnswerContent.value)
         }
+        applyParsedExecutionResultFromContent()
+        if (sessionId.value) {
+          void loadExecutionResultForSession(sessionId.value, true)
+        }
         isLoading.value = false
         scrollToBottom()
         break
@@ -1322,6 +1425,7 @@ function sendInitialMessage(message: string) {
   finalAnswerContent.value = ''
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
+  executionResult.value = null
 
   scrollToBottom()
   isLoading.value = true
@@ -1347,6 +1451,7 @@ function sendMessage() {
   finalAnswerContent.value = ''
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
+  executionResult.value = null
 
   scrollToBottom()
   isLoading.value = true
@@ -1990,6 +2095,30 @@ onMounted(() => {
 .final-content {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.final-execution-result {
+  width: 100%;
+}
+
+.final-execution-result :deep(.task-execution-result) {
+  padding: 0;
+}
+
+.execution-result-panel {
+  margin-top: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.execution-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  font-weight: 600;
 }
 
 .final-content pre {

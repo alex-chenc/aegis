@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,12 +24,20 @@ import (
 )
 
 func main() {
+	debug := flag.Bool("debug", false, "Enable debug logging (overrides config LogLevel)")
+	logStdout := flag.Bool("log-stdout", false, "Also log to stdout (for systemd journal or terminal)")
+	flag.Parse()
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		os.Exit(1)
 	}
 
-	if err := logger.Init("/opt/aegis-agent/logs", cfg.LogLevel); err != nil {
+	if *debug {
+		cfg.LogLevel = "debug"
+	}
+
+	if err := logger.Init("/opt/aegis-agent/logs", cfg.LogLevel, *logStdout); err != nil {
 		os.Exit(1)
 	}
 	defer logger.Sync()

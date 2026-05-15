@@ -24,11 +24,28 @@ type AgentExecutionSummary struct {
 	FinalAnswer string
 }
 
+// AgentAuditSummary is a lightweight summary of an audit correction record.
+type AgentAuditSummary struct {
+	AuditID        string
+	Decision       string
+	CorrectionHint string
+}
+
+// AgentModelErrorSummary is a lightweight summary of a recoverable model error.
+type AgentModelErrorSummary struct {
+	CallID    string
+	Purpose   string
+	ErrorKind string
+	Message   string
+}
+
 // ReflectionQuerier abstracts the repository that supplies reflection and
 // execution summaries, so the adapter does not depend on a concrete model package.
 type ReflectionQuerier interface {
 	FindFailedReflections(ctx context.Context, limit int) ([]AgentReflectionSummary, error)
 	FindSuccessfulSummaries(ctx context.Context, limit int) ([]AgentExecutionSummary, error)
+	FindRecentAudits(ctx context.Context, limit int) ([]AgentAuditSummary, error)
+	FindRecentModelErrors(ctx context.Context, limit int) ([]AgentModelErrorSummary, error)
 }
 
 // defaultMaxItems is the fallback when the caller does not specify a limit.
@@ -82,7 +99,19 @@ func (p *ExperienceProviderAdapter) Fetch(ctx context.Context, req agentruntime.
 		items = append(items, reflectionItems...)
 	}
 
-	// --- 3. Fallback: recent successes when vector store failed ---
+	// --- 3. Audit correction patterns ---
+	auditItems, auditErr := p.fetchAuditLessons(ctx)
+	if auditErr == nil {
+		items = append(items, auditItems...)
+	}
+
+	// --- 4. Model error degradation strategies ---
+	modelErrItems, modelErrErr := p.fetchModelErrorLessons(ctx)
+	if modelErrErr == nil {
+		items = append(items, modelErrItems...)
+	}
+
+	// --- 5. Fallback: recent successes when vector store failed ---
 	if vectorErr != nil {
 		recentItems, recentErr := p.fetchRecentSuccesses(ctx, limit)
 		if recentErr == nil {
@@ -91,6 +120,8 @@ func (p *ExperienceProviderAdapter) Fetch(ctx context.Context, req agentruntime.
 	}
 
 	_ = reflectionErr // reflection errors are non-fatal; return whatever we collected
+	_ = auditErr
+	_ = modelErrErr
 
 	return agentruntime.ExperienceResponse{Items: items}, nil
 }
@@ -147,6 +178,63 @@ func (p *ExperienceProviderAdapter) fetchReflectionLessons(ctx context.Context) 
 			Metadata: map[string]any{
 				"root_cause": r.RootCause,
 				"impact":     r.Impact,
+			},
+		})
+	}
+	return items, nil
+}
+
+// fetchAuditLessons retrieves recent audit correction patterns where
+// decision='correct_plan', providing insights into plan drift corrections.
+func (p *ExperienceProviderAdapter) fetchAuditLessons(ctx context.Context) ([]agentruntime.ExperienceItem, error) {
+	if p.reflectionQuerier == nil {
+		return nil, fmt.Errorf("reflection querier not configured")
+	}
+
+	audits, err := p.reflectionQuerier.FindRecentAudits(ctx, 3)
+	if err != nil {
+		return nil, fmt.Errorf("audit query failed: %w", err)
+	}
+
+	items := make([]agentruntime.ExperienceItem, 0, len(audits))
+	for _, a := range audits {
+		content := fmt.Sprintf("Decision: %s\nCorrection Hint: %s", a.Decision, a.CorrectionHint)
+		items = append(items, agentruntime.ExperienceItem{
+			ID:      a.AuditID,
+			Summary: a.CorrectionHint,
+			Content: content,
+			Tags:    []string{"audit", "correction_pattern"},
+			Metadata: map[string]any{
+				"decision": a.Decision,
+			},
+		})
+	}
+	return items, nil
+}
+
+// fetchModelErrorLessons retrieves recent recoverable model errors for
+// learning degradation strategies when LLM calls fail.
+func (p *ExperienceProviderAdapter) fetchModelErrorLessons(ctx context.Context) ([]agentruntime.ExperienceItem, error) {
+	if p.reflectionQuerier == nil {
+		return nil, fmt.Errorf("reflection querier not configured")
+	}
+
+	modelErrors, err := p.reflectionQuerier.FindRecentModelErrors(ctx, 3)
+	if err != nil {
+		return nil, fmt.Errorf("model error query failed: %w", err)
+	}
+
+	items := make([]agentruntime.ExperienceItem, 0, len(modelErrors))
+	for _, me := range modelErrors {
+		content := fmt.Sprintf("Purpose: %s\nError Kind: %s\nMessage: %s", me.Purpose, me.ErrorKind, me.Message)
+		items = append(items, agentruntime.ExperienceItem{
+			ID:      me.CallID,
+			Summary: fmt.Sprintf("[%s] %s: %s", me.Purpose, me.ErrorKind, me.Message),
+			Content: content,
+			Tags:    []string{"model_error", "degradation"},
+			Metadata: map[string]any{
+				"purpose":    me.Purpose,
+				"error_kind": me.ErrorKind,
 			},
 		})
 	}
@@ -226,6 +314,39 @@ func (a *ReflectionQuerierAdapter) FindSuccessfulSummaries(ctx context.Context, 
 		result = append(result, AgentExecutionSummary{
 			TaskID:      e.TaskID,
 			FinalAnswer: e.FinalAnswer,
+		})
+	}
+	return result, nil
+}
+
+func (a *ReflectionQuerierAdapter) FindRecentAudits(ctx context.Context, limit int) ([]AgentAuditSummary, error) {
+	audits, err := a.repo.FindRecentAudits(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AgentAuditSummary, 0, len(audits))
+	for _, au := range audits {
+		result = append(result, AgentAuditSummary{
+			AuditID:        au.AuditID,
+			Decision:       au.Decision,
+			CorrectionHint: au.CorrectionHint,
+		})
+	}
+	return result, nil
+}
+
+func (a *ReflectionQuerierAdapter) FindRecentModelErrors(ctx context.Context, limit int) ([]AgentModelErrorSummary, error) {
+	modelErrors, err := a.repo.FindRecentModelErrors(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AgentModelErrorSummary, 0, len(modelErrors))
+	for _, me := range modelErrors {
+		result = append(result, AgentModelErrorSummary{
+			CallID:    me.CallID,
+			Purpose:   me.Purpose,
+			ErrorKind: me.ErrorKind,
+			Message:   me.Message,
 		})
 	}
 	return result, nil

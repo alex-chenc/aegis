@@ -306,8 +306,10 @@ func selectorNameMatches(pattern, selectorName string) bool {
 
 func extractMitreID(tags []string) string {
 	for _, tag := range tags {
-		if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
-			return strings.TrimPrefix(strings.TrimPrefix(tag, "attack."), "T")
+		lower := strings.ToLower(tag)
+		if strings.HasPrefix(lower, "attack.t") {
+			id := strings.TrimPrefix(lower, "attack.")
+			return strings.ToUpper(id)
 		}
 	}
 	return ""

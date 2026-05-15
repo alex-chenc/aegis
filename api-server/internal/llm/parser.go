@@ -106,20 +106,6 @@ func removeMarkdownCodeBlock(script string) string {
 	return script
 }
 
-// ValidateRule validates extracted rule for required fields
-func ValidateRule(rule *ExtractedRule) error {
-	if strings.TrimSpace(rule.Title) == "" {
-		return fmt.Errorf("title is required")
-	}
-	if strings.TrimSpace(rule.CheckContent) == "" {
-		return fmt.Errorf("check_content is required")
-	}
-	if strings.TrimSpace(rule.FixContent) == "" {
-		return fmt.Errorf("fix_content is required")
-	}
-	return nil
-}
-
 // ValidateRules deduplicates rules by title
 func ValidateRules(rules []*model.AegisRule) []*model.AegisRule {
 	seen := make(map[string]bool)

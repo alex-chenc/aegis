@@ -109,6 +109,7 @@ message RuntimeEvent {
   string mitre_id = 14;
   string severity = 15;
   string process_tree = 16;   // JSON格式的进程树，Agent检测到威胁时自动采集
+  string matched_rule_title = 17; // 匹配的规则标题
 }
 
 // ReportEventRequest 事件上报请求

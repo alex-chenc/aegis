@@ -191,6 +191,12 @@ var mitreChineseMapping = map[string]struct {
 		Name:        "主动扫描",
 		Description: "攻击者主动扫描目标系统以发现漏洞",
 	},
+
+	// T888 - 反弹Shell命令行检测（自定义）
+	"T888": {
+		Name:        "反弹Shell命令行检测",
+		Description: "检测反弹Shell命令行操作",
+	},
 }
 
 // GetMITREChineseDescription returns Chinese name and description for a MITRE ID

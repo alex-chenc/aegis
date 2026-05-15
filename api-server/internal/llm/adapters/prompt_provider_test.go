@@ -178,3 +178,48 @@ func TestBuildPlanPrompt_MessagesHaveValidRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReactPrompt_IncludesExperience(t *testing.T) {
+	querier := &mockReflectionQuerier{
+		reflections: []AgentReflectionSummary{
+			{ReflectionID: "refl-1", RootCause: "timeout", Impact: "step failed", ReusableLesson: "set timeout"},
+		},
+	}
+	expProvider := NewExperienceProviderAdapter(nil, querier, 5)
+
+	provider := NewAegisPromptProvider(
+		map[string]interface{}{"rule_name": "test_rule"},
+		expProvider,
+	)
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{
+		TaskID:  "test-task",
+		Purpose: agentruntime.PurposeReact,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(bundle.SystemPrompt, "历史经验参考") {
+		t.Error("react prompt should contain historical experience section when experience provider is configured")
+	}
+	if !strings.Contains(bundle.SystemPrompt, "timeout") {
+		t.Error("react prompt should contain reflection root cause from experience")
+	}
+}
+
+func TestBuildReactPrompt_NoExperienceWhenProviderNil(t *testing.T) {
+	provider := NewAegisPromptProvider(nil, nil)
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{
+		TaskID:  "test-task",
+		Purpose: agentruntime.PurposeReact,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(bundle.SystemPrompt, "历史经验参考") {
+		t.Error("react prompt should NOT contain experience section when no provider is configured")
+	}
+}

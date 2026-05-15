@@ -1,5 +1,6 @@
 import request from './index'
 import { getAuthToken } from '@/utils/auth'
+import { normalizeExecutionResult } from '@/utils/taskExecutionResult'
 
 // AI Analysis Session types
 export interface CreateSessionRequest {
@@ -81,7 +82,7 @@ export type SSEEventType =
   | 'content' | 'flowchart_image' | 'done' | 'error'
   // agent-runtime new event types
   | 'plan' | 'step_started' | 'step_completed' | 'step_failed' | 'audit'
-  | 'reflection' | 'correction'
+  | 'reflection' | 'correction' | 'step_retrying' | 'step_skipped'
 
 export interface SSEEvent {
   type: SSEEventType
@@ -245,6 +246,56 @@ export interface ApplyConclusionRequest {
 
 export function applyConclusions(sessionId: string, conclusions: AlertConclusion[]): Promise<{ success: boolean; message: string }> {
   return request.post(`/detection/alerts/ai-analysis/${sessionId}/conclusion`, { conclusions })
+}
+
+// Execution Result types
+export interface ExecutionResult {
+  execution_id: string
+  task_id: string
+  session_id: string
+  status: string
+  exit_reason: string
+  started_at: string
+  ended_at: string
+  total_duration_ms: number
+  steps: StepResult[]
+  errors: string[]
+  conclusion: Conclusion
+}
+
+export interface StepResult {
+  step_id: string
+  status: string
+  result: string
+  started_at: string
+  ended_at: string
+  duration_ms: number
+}
+
+export interface Conclusion {
+  verdict: string
+  summary: string
+  reasoning: string
+}
+
+type ExecutionResultPayload = ExecutionResult | { success?: boolean; data?: ExecutionResult } | null | undefined
+
+export function resolveExecutionResultPayload(payload: ExecutionResultPayload): ExecutionResult | null {
+  if (!payload || typeof payload !== 'object') return null
+
+  const body = 'data' in payload && payload.data ? payload.data : payload
+  if (!body || typeof body !== 'object' || !('status' in body)) return null
+
+  return normalizeExecutionResult(body as ExecutionResult)
+}
+
+export async function getExecutionResult(sessionId: string): Promise<ExecutionResult> {
+  const payload = await request.get(`/detection/alerts/ai-analysis/${sessionId}/execution-result`)
+  const result = resolveExecutionResultPayload(payload as ExecutionResultPayload)
+  if (!result) {
+    throw new Error('执行记录不存在')
+  }
+  return result
 }
 
 // SSE Streaming function

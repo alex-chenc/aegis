@@ -28,7 +28,23 @@ type Loader struct {
 	hostname    string
 	seq         uint64
 	done        chan struct{}
+	dropCount   uint64 // atomic counter for dropped events
 }
+
+type execRuntimeReaders struct {
+	readCmdline func(pid uint32) (string, error)
+	readExe     func(pid uint32) (string, error)
+}
+
+type bpfProgramConfig struct {
+	name       string
+	tracepoint string
+	category   string
+	mapName    string
+	required   bool
+}
+
+type loadBPFProgramFunc func(name, tracepoint, category, mapName string) error
 
 // NewLoader creates a new eBPF loader
 func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
@@ -45,21 +61,25 @@ func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
 
 // LoadAll loads eBPF programs for process events (exec/fork).
 func (l *Loader) LoadAll() error {
-	programs := []struct {
-		name       string
-		tracepoint string
-		category   string
-		mapName    string
-	}{
-		{"execve", "sys_enter_execve", "syscalls", "exec_events"},
-		{"fork", "sched_process_fork", "sched", "fork_events"},
-	}
+	return l.loadConfiguredPrograms(defaultBPFPrograms(), l.loadProgram)
+}
 
+func defaultBPFPrograms() []bpfProgramConfig {
+	return []bpfProgramConfig{
+		{name: "execve", tracepoint: "sys_enter_execve", category: "syscalls", mapName: "exec_events", required: true},
+		{name: "fork", tracepoint: "sched_process_fork", category: "sched", mapName: "fork_events"},
+	}
+}
+
+func (l *Loader) loadConfiguredPrograms(programs []bpfProgramConfig, load loadBPFProgramFunc) error {
 	for _, prog := range programs {
-		if err := l.loadProgram(prog.name, prog.tracepoint, prog.category, prog.mapName); err != nil {
+		if err := load(prog.name, prog.tracepoint, prog.category, prog.mapName); err != nil {
 			logger.Warn("Failed to load eBPF program",
 				zap.String("program", prog.name),
 				zap.Error(err))
+			if prog.required {
+				return fmt.Errorf("required eBPF program %s failed to load: %w", prog.name, err)
+			}
 			continue
 		}
 	}
@@ -169,45 +189,48 @@ func (l *Loader) processExecEvent(data []byte) {
 		return
 	}
 
-	filename := bytesToString(e.Filename[:])
-	args := bytesToString(e.Args[:])
-	cmdLine := filename + " " + args
-	comm := bytesToString(e.Comm[:])
+	l.sendEvent(l.buildExecRuntimeEvent(e, execRuntimeReaders{
+		readCmdline: readProcCmdline,
+		readExe:     readProcExe,
+	}))
+}
 
-	// If eBPF failed to read cmdline (empty), try /proc
-	emptyCmd := (cmdLine == " " || cmdLine == "" || filename == "")
-	if emptyCmd {
-		procPath := fmt.Sprintf("/proc/%d/cmdline", e.Pid)
-		if procCmdline, err := os.ReadFile(procPath); err == nil {
-			cmdLine = string(bytes.ReplaceAll(procCmdline, []byte{0}, []byte(" ")))
-			cmdLine = strings.TrimSpace(cmdLine)
-			logger.Debug("Read cmdline from /proc",
-				zap.Int("pid", int(e.Pid)),
-				zap.String("comm", comm),
-				zap.String("cmdline", cmdLine))
-		} else {
-			logger.Debug("Failed to read /proc cmdline",
-				zap.Int("pid", int(e.Pid)),
-				zap.String("comm", comm),
-				zap.Error(err))
+func (l *Loader) buildExecRuntimeEvent(e ExecEvent, readers execRuntimeReaders) Event {
+	filename := bytesToString(e.Filename[:])
+	argvCmd := argvBytesToCommandLine(e.Args[:])
+	comm := strings.TrimSpace(bytesToString(e.Comm[:]))
+	eBPFFilename := filename
+
+	if filename == "" && readers.readExe != nil {
+		if exePath, err := readers.readExe(e.Pid); err == nil {
+			filename = strings.TrimSpace(exePath)
 		}
 	}
 
-	event := Event{
-		EventID:     l.nextEventID(),
-		HostID:      l.hostID,
-		Hostname:    l.hostname,
-		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "process_exec",
-		ProcessName: comm,
-		PID:         int(e.Pid),
-		PPID:        int(e.Ppid),
-		UID:         int(e.Uid),
-		CommandLine: cmdLine,
-		FilePath:    filename,
+	cmdLine := argvCmd
+	if cmdLine == "" && eBPFFilename != "" {
+		cmdLine = eBPFFilename
+	}
+	if cmdLine == "" && eBPFFilename == "" && readers.readCmdline != nil {
+		if procCmdline, err := readers.readCmdline(e.Pid); err == nil {
+			cmdLine = normalizeCommandLine(procCmdline)
+		}
 	}
 
-	l.sendEvent(event)
+	return Event{
+		EventID:       l.nextEventID(),
+		HostID:        l.hostID,
+		Hostname:      l.hostname,
+		Timestamp:     time.Now().UnixMilli(),
+		EventType:     "process_exec",
+		ProcessName:   processNameFromExec(comm, filename, cmdLine),
+		PID:           int(e.Pid),
+		PPID:          int(e.Ppid),
+		UID:           int(e.Uid),
+		CommandLine:   cmdLine,
+		FilePath:      filename,
+		ArgsTruncated: e.Flags&ExecEventArgsTruncated != 0,
+	}
 }
 
 func (l *Loader) processForkEvent(data []byte) {
@@ -236,14 +259,83 @@ func (l *Loader) sendEvent(event Event) {
 	select {
 	case l.eventChan <- event:
 	default:
-		logger.Warn("Event channel full, dropping event",
-			zap.String("type", event.EventType))
+		dropped := atomic.AddUint64(&l.dropCount, 1)
+		if dropped%1000 == 1 {
+			logger.Warn("Event channel full, events being dropped",
+				zap.Uint64("total_dropped", dropped),
+				zap.String("last_type", event.EventType),
+				zap.Int("last_pid", event.PID))
+		}
 	}
+}
+
+// DroppedCount returns the total number of dropped events
+func (l *Loader) DroppedCount() uint64 {
+	return atomic.LoadUint64(&l.dropCount)
 }
 
 func (l *Loader) nextEventID() string {
 	seq := atomic.AddUint64(&l.seq, 1)
 	return fmt.Sprintf("evt-%d-%d", time.Now().UnixNano(), seq)
+}
+
+func argvBytesToCommandLine(data []byte) string {
+	fields := make([]string, 0, 8)
+	start := 0
+
+	for i, b := range data {
+		if b != 0 {
+			continue
+		}
+		if i > start {
+			fields = append(fields, string(data[start:i]))
+		} else if len(fields) > 0 {
+			break
+		}
+		start = i + 1
+	}
+
+	if start < len(data) {
+		tail := strings.TrimRight(string(data[start:]), "\x00")
+		if tail != "" {
+			fields = append(fields, tail)
+		}
+	}
+
+	return strings.Join(fields, " ")
+}
+
+func normalizeCommandLine(cmdline string) string {
+	return strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " "))
+}
+
+func processNameFromExec(comm, filename, cmdLine string) string {
+	if filename != "" {
+		if base := filepath.Base(filename); base != "." && base != string(filepath.Separator) {
+			return base
+		}
+	}
+	if cmdLine != "" {
+		parts := strings.Fields(cmdLine)
+		if len(parts) > 0 {
+			if base := filepath.Base(parts[0]); base != "." && base != string(filepath.Separator) {
+				return base
+			}
+		}
+	}
+	return comm
+}
+
+func readProcCmdline(pid uint32) (string, error) {
+	procCmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return "", err
+	}
+	return normalizeCommandLine(string(bytes.ReplaceAll(procCmdline, []byte{0}, []byte(" ")))), nil
+}
+
+func readProcExe(pid uint32) (string, error) {
+	return os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
 }
 
 // Close unloads all eBPF programs and closes resources

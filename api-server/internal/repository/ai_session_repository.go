@@ -39,13 +39,19 @@ func (r *AISessionRepository) FindBySessionID(sessionID string) (*model.AISessio
 }
 
 // FindList finds sessions with pagination
+// status参数支持: "completed"(有结论), "active"(无结论), ""(不过滤)
 func (r *AISessionRepository) FindList(page, pageSize int, status string) ([]*model.AISession, int64, error) {
 	var sessions []*model.AISession
 	var total int64
 
 	query := r.db.Model(&model.AISession{})
-	if status != "" {
-		query = query.Where("status = ?", status)
+	switch status {
+	case "completed":
+		// 已完成：conclusion不为空（兼容PostgreSQL和SQLite）
+		query = query.Where("conclusion IS NOT NULL AND conclusion != '' AND conclusion != 'null'")
+	case "active":
+		// 未完成：conclusion为空（兼容PostgreSQL和SQLite）
+		query = query.Where("conclusion IS NULL OR conclusion = '' OR conclusion = 'null'")
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -104,4 +110,13 @@ func (r *AISessionRepository) Delete(sessionID string) error {
 		}
 		return nil
 	})
+}
+
+// GetDisplayStatus 根据conclusion字段判定会话显示状态
+// 只有conclusion不为空才算"已完成"，其他都是"未完成"
+func GetDisplayStatus(session *model.AISession) string {
+	if session.Conclusion != nil && len(session.Conclusion) > 0 {
+		return "completed"
+	}
+	return "active"
 }

@@ -601,3 +601,402 @@ func TestBuildAlertWritebackUsesConclusionSummaryAndRecommendations(t *testing.T
 		t.Fatalf("unexpected disposal strategy: %#v", writebacks[0])
 	}
 }
+
+func TestIsAllFalsePositive_AllFalsePositive(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报1"},
+			{"alert_id": "ALT-002", "action": "mark_false_positive", "summary": "误报2"}
+		]
+	}`
+	if !isAllFalsePositive(content) {
+		t.Fatal("expected all false positive to return true")
+	}
+}
+
+func TestIsAllFalsePositive_MixedActions(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报"},
+			{"alert_id": "ALT-002", "action": "confirm_threat", "summary": "确认威胁"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected mixed actions to return false")
+	}
+}
+
+func TestIsAllFalsePositive_ConfirmThreat(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "confirm_threat", "summary": "确认威胁"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected confirm_threat to return false")
+	}
+}
+
+func TestIsAllFalsePositive_EmptyConclusions(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": []
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected empty conclusions to return false")
+	}
+}
+
+func TestIsAllFalsePositive_InvalidJSON(t *testing.T) {
+	if isAllFalsePositive("not json at all") {
+		t.Fatal("expected invalid JSON to return false")
+	}
+}
+
+func TestIsAllFalsePositive_GenerateRule(t *testing.T) {
+	content := `{
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "generate_rule", "summary": "生成规则"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected generate_rule to return false")
+	}
+}
+
+func TestBuildExecutionResultResponse(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:              execID,
+		SessionID:       "session-1",
+		TaskID:          "task-1",
+		Status:          "completed",
+		ExitReason:      "normal_completed",
+		FinalAnswer:     "Benign / False Positive: 目标进程已退出",
+		TotalDurationMs: 330000,
+		StartedAt:       time.Now().Add(-5 * time.Minute),
+		EndedAt:         time.Now(),
+	}
+
+	steps := []*model.AgentStepExecution{
+		{
+			ExecutionID: execID,
+			StepID:      "step_1",
+			Status:      "completed",
+			Result:      "Process 4181522 (base64 -d) has exited",
+			DurationMs:  5000,
+		},
+		{
+			ExecutionID: execID,
+			StepID:      "step_2",
+			Status:      "completed",
+			Result:      "经分析，目标进程已退出且未留下任何活跃文件句柄",
+			DurationMs:  75000,
+		},
+	}
+
+	response := buildExecutionResultResponse(exec, steps)
+
+	if response["status"] != "已完成" {
+		t.Fatalf("expected status '已完成', got %v", response["status"])
+	}
+	if response["exit_reason"] != "正常完成" {
+		t.Fatalf("expected exit_reason '正常完成', got %v", response["exit_reason"])
+	}
+	if response["total_duration_ms"] != int64(330000) {
+		t.Fatalf("expected total_duration_ms 330000, got %v", response["total_duration_ms"])
+	}
+
+	stepList, ok := response["steps"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected steps to be a slice, got %T", response["steps"])
+	}
+	if len(stepList) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(stepList))
+	}
+	if stepList[0]["step_id"] != "step_1" {
+		t.Fatalf("expected first step_id 'step_1', got %v", stepList[0]["step_id"])
+	}
+	if stepList[0]["status"] != "已完成" {
+		t.Fatalf("expected first step status '已完成', got %v", stepList[0]["status"])
+	}
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "benign" {
+		t.Fatalf("expected verdict 'benign', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "良性/误报" {
+		t.Fatalf("expected summary '良性/误报', got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_Benign(t *testing.T) {
+	conclusion := parseConclusionFromAnswer("Benign / False Positive: 目标进程已退出")
+	if conclusion["verdict"] != "benign" {
+		t.Fatalf("expected verdict 'benign', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "良性/误报" {
+		t.Fatalf("expected summary '良性/误报', got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_Malicious(t *testing.T) {
+	conclusion := parseConclusionFromAnswer("Malicious: 检测到反弹Shell行为")
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "恶意" {
+		t.Fatalf("expected summary '恶意', got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_Empty(t *testing.T) {
+	conclusion := parseConclusionFromAnswer("")
+	if conclusion["verdict"] != "unknown" {
+		t.Fatalf("expected verdict 'unknown', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "未生成结论" {
+		t.Fatalf("expected summary '未生成结论', got %v", conclusion["summary"])
+	}
+}
+
+func TestExtractErrorsFromExecution(t *testing.T) {
+	exec := &model.AgentExecution{
+		Completion: map[string]interface{}{
+			"errors": []interface{}{
+				"open /proc/4181522/stat: no such file or directory",
+				"process 4181522 not found",
+			},
+		},
+	}
+
+	errors := extractErrorsFromExecution(exec)
+	if len(errors) != 2 {
+		t.Fatalf("expected 2 errors, got %d", len(errors))
+	}
+	if errors[0] != "open /proc/4181522/stat: no such file or directory" {
+		t.Fatalf("unexpected first error: %s", errors[0])
+	}
+}
+
+func TestExtractErrorsFromExecution_NoErrors(t *testing.T) {
+	exec := &model.AgentExecution{
+		Completion: map[string]interface{}{},
+	}
+
+	errors := extractErrorsFromExecution(exec)
+	if len(errors) != 0 {
+		t.Fatalf("expected 0 errors, got %d", len(errors))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseConclusionFromAnswer: Structured JSON verdict tests
+// ---------------------------------------------------------------------------
+
+func TestParseConclusionFromAnswer_StructuredJSON_ConfirmThreat(t *testing.T) {
+	content := `{
+  "attack_graph": {
+    "summary": "攻击者通过 bash 执行反弹 shell",
+    "threat_level": "high",
+    "recommendations": ["隔离主机"]
+  },
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "confirm_threat", "summary": "确认存在反弹 shell 行为"}
+  ]
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "确认存在反弹 shell 行为" {
+		t.Fatalf("expected summary from conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_MarkFalsePositive(t *testing.T) {
+	content := `{
+  "attack_graph": {"summary": "分析完成"},
+  "conclusions": [
+    {"alert_id": "ALT-002", "action": "mark_false_positive", "summary": "该告警为正常运维操作"}
+  ]
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "benign" {
+		t.Fatalf("expected verdict 'benign', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "该告警为正常运维操作" {
+		t.Fatalf("expected summary from conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_GenerateRule(t *testing.T) {
+	content := `{
+  "attack_graph": {"summary": "发现可疑模式"},
+  "conclusions": [
+    {"alert_id": "ALT-003", "action": "generate_rule", "summary": "建议生成新检测规则"}
+  ]
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "suspicious" {
+		t.Fatalf("expected verdict 'suspicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "建议生成新检测规则" {
+		t.Fatalf("expected summary from conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_MultipleConclusions(t *testing.T) {
+	content := `{
+  "attack_graph": {"summary": "多告警分析"},
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报"},
+    {"alert_id": "ALT-002", "action": "confirm_threat", "summary": "确认反弹 shell"},
+    {"alert_id": "ALT-003", "action": "generate_rule", "summary": "建议生成规则"}
+  ]
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	// Multiple conclusions: take most severe (malicious > suspicious > benign)
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious' (most severe), got %v", conclusion["verdict"])
+	}
+	// Summary should be the first non-empty conclusion summary
+	if conclusion["summary"] != "误报" {
+		t.Fatalf("expected summary from first conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_WithMarkdownPrefix(t *testing.T) {
+	content := "Final Answer:\n```json\n{\n  \"attack_graph\": {\"summary\": \"分析\"},\n  \"conclusions\": [\n    {\"alert_id\": \"ALT-001\", \"action\": \"confirm_threat\", \"summary\": \"确认威胁\"}\n  ]\n}\n```"
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "确认威胁" {
+		t.Fatalf("expected summary from conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_EmptyConclusions(t *testing.T) {
+	content := `{
+  "attack_graph": {"summary": "分析完成"},
+  "conclusions": []
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	// Empty conclusions should fall through to keyword matching
+	if conclusion["verdict"] != "unknown" {
+		t.Fatalf("expected verdict 'unknown' for empty conclusions, got %v", conclusion["verdict"])
+	}
+}
+
+func TestParseConclusionFromAnswer_ChineseKeywords(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"该行为属于误报", "benign"},
+		{"良性：正常运维操作", "benign"},
+		{"确认恶意攻击行为", "malicious"},
+		{"检测到可疑外联", "suspicious"},
+	}
+	for _, tt := range tests {
+		conclusion := parseConclusionFromAnswer(tt.input)
+		if conclusion["verdict"] != tt.want {
+			t.Errorf("input %q: expected verdict %q, got %v", tt.input, tt.want, conclusion["verdict"])
+		}
+	}
+}
+
+func TestParseConclusionFromAnswer_UnknownWithContent(t *testing.T) {
+	content := "分析过程中遇到了异常情况，无法形成明确结论"
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "unknown" {
+		t.Fatalf("expected verdict 'unknown', got %v", conclusion["verdict"])
+	}
+	// Should include the actual content as summary, not "未生成结论"
+	if conclusion["summary"] == "未生成结论" {
+		t.Fatalf("expected summary to contain actual content, got %v", conclusion["summary"])
+	}
+	if !strings.Contains(conclusion["summary"].(string), "分析过程中") {
+		t.Fatalf("expected summary to include input text, got %v", conclusion["summary"])
+	}
+}
+
+func TestBuildExecutionResultResponse_StructuredJSON(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:              execID,
+		SessionID:       "session-1",
+		TaskID:          "task-1",
+		Status:          "completed",
+		ExitReason:      "normal_completed",
+		FinalAnswer:     `{"attack_graph":{"summary":"攻击链分析"},"conclusions":[{"alert_id":"ALT-001","action":"confirm_threat","summary":"确认反弹shell攻击"}]}`,
+		TotalDurationMs: 330000,
+		StartedAt:       time.Now().Add(-5 * time.Minute),
+		EndedAt:         time.Now(),
+	}
+
+	response := buildExecutionResultResponse(exec, nil)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "确认反弹shell攻击" {
+		t.Fatalf("expected AI-generated summary, got %v", conclusion["summary"])
+	}
+}
+
+func TestParseConclusionFromAnswer_MultiKeywordDeterministic(t *testing.T) {
+	// When text contains both "误报" (benign, severity 0) and "恶意" (malicious, severity 2),
+	// should always pick "malicious" (most severe wins)
+	content := "经分析该行为属于误报，但同时具有恶意外联特征"
+	for i := 0; i < 100; i++ {
+		conclusion := parseConclusionFromAnswer(content)
+		if conclusion["verdict"] != "malicious" {
+			t.Fatalf("iteration %d: expected verdict 'malicious', got %v", i, conclusion["verdict"])
+		}
+	}
+}
+
+func TestParseConclusionFromAnswer_StructuredJSON_UnrecognizedAction(t *testing.T) {
+	content := `{
+  "attack_graph": {"summary": "分析完成"},
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "custom_action", "summary": "自定义操作"}
+  ]
+}`
+	conclusion := parseConclusionFromAnswer(content)
+	// Unrecognized action should produce "unknown" verdict
+	if conclusion["verdict"] != "unknown" {
+		t.Fatalf("expected verdict 'unknown' for unrecognized action, got %v", conclusion["verdict"])
+	}
+}
+
+func TestParseConclusionFromAnswer_VeryLongContent(t *testing.T) {
+	// Create content longer than 200 runes
+	content := strings.Repeat("这是一个很长的分析结果", 50) // 500 runes
+	conclusion := parseConclusionFromAnswer(content)
+	if conclusion["verdict"] != "unknown" {
+		t.Fatalf("expected verdict 'unknown', got %v", conclusion["verdict"])
+	}
+	summary, ok := conclusion["summary"].(string)
+	if !ok {
+		t.Fatalf("expected summary to be string, got %T", conclusion["summary"])
+	}
+	if !strings.HasSuffix(summary, "...") {
+		t.Fatalf("expected summary to be truncated with '...', got %q", summary)
+	}
+	if len([]rune(summary)) > 210 { // 200 chars + "..."
+		t.Fatalf("expected summary to be ~200 runes, got %d", len([]rune(summary)))
+	}
+}

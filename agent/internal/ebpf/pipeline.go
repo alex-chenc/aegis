@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -117,18 +118,28 @@ func (p *Pipeline) buildEventMap(event Event) map[string]any {
 		cmdLine = event.FilePath + " " + cmdLine
 	}
 
+	// Extract executable path for image/exe fields
+	exePath := event.FilePath
+	if exePath == "" && cmdLine != "" {
+		parts := strings.Fields(cmdLine)
+		if len(parts) > 0 {
+			exePath = parts[0]
+		}
+	}
+
 	eventMap := map[string]any{
-		"event_type":   event.EventType,
-		"pid":          event.PID,
-		"ppid":         event.PPID,
-		"uid":          event.UID,
-		"process_name": event.ProcessName,
-		"commandline":  cmdLine,
-		"image":        cmdLine,
-		"exe":          cmdLine,
-		"comm":         event.ProcessName,
-		"file_path":    event.FilePath,
-		"remote_addr":  event.RemoteAddr,
+		"event_type":     event.EventType,
+		"pid":            event.PID,
+		"ppid":           event.PPID,
+		"uid":            event.UID,
+		"process_name":   event.ProcessName,
+		"commandline":    cmdLine,
+		"image":          exePath,
+		"exe":            exePath,
+		"comm":           event.ProcessName,
+		"file_path":      event.FilePath,
+		"remote_addr":    event.RemoteAddr,
+		"args_truncated": event.ArgsTruncated,
 	}
 
 	switch event.EventType {
@@ -152,22 +163,23 @@ func (p *Pipeline) buildRuntimeEvent(event Event, match *sigma.CompiledRule) *pb
 	}
 
 	return &pb.RuntimeEvent{
-		EventId:       p.nextEventID(),
-		HostId:        event.HostID,
-		Hostname:      event.Hostname,
-		Timestamp:     event.Timestamp,
-		EventType:     event.EventType,
-		ProcessName:   event.ProcessName,
-		Pid:           int32(event.PID),
-		Ppid:          int32(event.PPID),
-		Uid:           int32(event.UID),
-		CommandLine:   event.CommandLine,
-		FilePath:      event.FilePath,
-		RemoteAddr:    event.RemoteAddr,
-		MatchedRuleId: match.ID,
-		MitreId:       match.MitreID,
-		Severity:      match.Severity,
-		ProcessTree:   processTreeJSON,
+		EventId:          p.nextEventID(),
+		HostId:           event.HostID,
+		Hostname:         event.Hostname,
+		Timestamp:        event.Timestamp,
+		EventType:        event.EventType,
+		ProcessName:      event.ProcessName,
+		Pid:              int32(event.PID),
+		Ppid:             int32(event.PPID),
+		Uid:              int32(event.UID),
+		CommandLine:      event.CommandLine,
+		FilePath:         event.FilePath,
+		RemoteAddr:       event.RemoteAddr,
+		MatchedRuleId:    match.ID,
+		MitreId:          match.MitreID,
+		Severity:         match.Severity,
+		ProcessTree:      processTreeJSON,
+		MatchedRuleTitle: match.Title,
 	}
 }
 

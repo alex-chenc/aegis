@@ -22,7 +22,7 @@ func (r *AlertRepository) FindByIDs(ids []string) ([]model.Alert, error) {
 			hosts.hostname,
 			COALESCE(
 				NULLIF(alerts.rule_title, ''),
-				(SELECT title FROM sigma_rules WHERE LOWER(mitre_id) = LOWER(alerts.mitre_id) LIMIT 1),
+				(SELECT title FROM sigma_rules WHERE rule_id = alerts.rule_id LIMIT 1),
 				alerts.mitre_name
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").

@@ -258,6 +258,7 @@ func (r *Router) Setup() {
 			detection.POST("/alerts/ai-analysis/:session_id/conclusion", r.aiAnalysisHandler.ApplyConclusion)
 			detection.POST("/alerts/ai-analysis/similar", r.aiAnalysisHandler.FindSimilarCases)
 			detection.POST("/alerts/ai-analysis/rag-context", r.aiAnalysisHandler.GetRAGContext)
+			detection.GET("/alerts/ai-analysis/:session_id/execution-result", r.aiAnalysisHandler.GetExecutionResult)
 		}
 
 		// 通知接口

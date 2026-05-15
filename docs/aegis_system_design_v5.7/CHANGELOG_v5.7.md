@@ -16,6 +16,15 @@
 - **设计文档**：[ai_analysis_alert_detail_and_connection_fix.md](ai_analysis_alert_detail_and_connection_fix.md)
 - **测试覆盖**：新增 5 个单元测试，覆盖字段映射、nil 指针处理、SSE 错误终止
 
+### process_exec cmdline 误报为 -bash 设计修正（2026-05-15）
+- **问题**：`process_exec` 事件在 `sys_enter_execve` 阶段读取 `/proc/{pid}/cmdline` 时，会得到旧进程 cmdline，可能把新 exec 事件误报为 `-bash`；同时当前 `execve.bpf.c` 只读取 `argv[1]`，无法重建真实命令行。
+- **根因**：execve syscall entry 发生在进程映像替换前，`/proc` 不是新命令行的可靠来源；`task comm` 也只适合作为短进程名，不应作为 `arguments/cmdline`。
+- **设计修正**：eBPF 在 syscall entry 使用 bounded loop 读取 `argv[0..N]` 到 `NUL-separated` args buffer；Go 侧优先解码 eBPF argv，`/proc/{pid}/cmdline` 仅在 eBPF `filename` 与 `argv` 都缺失时兜底；argv 达到 buffer/argc 上限时透传 `args_truncated`。
+- **加载策略**：`execve` 是必需 eBPF 程序，加载失败会返回错误并触发 Collector fallback，避免 agent 静默缺失 `process_exec` 覆盖。
+- **字段语义**：`FilePath` 使用 execve `filename` 或 `/proc/{pid}/exe`；`ProcessName` 优先从 `filename`/`argv[0]` 推导；`image/exe` 与 `arguments/cmdline` 分离，参考 Cilium/Tetragon 的 `process_exec` 模型。
+- **设计文档**：[agent_ebpf_detection_bugfix_design.md](agent_ebpf_detection_bugfix_design.md)、[ebpf_file_network_event_design.md](ebpf_file_network_event_design.md)
+- **已执行验证**：`go test ./internal/ebpf -count=1`、`make bpf`、`make build`。未执行本机 root/eBPF 加载验证；本次修改不涉及 HTTP API，因此未执行 curl 接口验证。
+
 ---
 
 ## 新增功能
