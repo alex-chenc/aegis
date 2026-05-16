@@ -1141,9 +1141,20 @@ func (h *AIAnalysisHandler) persistAnalysisOutcome(session *AISSESion, finalCont
 
 	result, err := extractFinalAnswerResult(finalContent)
 	if err != nil {
-		logger.Warn("failed to parse AI final answer result",
+		// Fallback: use parseConclusionFromAnswer to extract verdict via keyword matching
+		logger.Info("structured JSON parse failed, falling back to keyword-based conclusion",
 			zap.String("session_id", session.SessionID),
 			zap.Error(err))
+		conclusionMap := parseConclusionFromAnswer(finalContent)
+		session.Status = "completed"
+		if h.sessionRepo != nil {
+			conclusionJSON := model.JSONB(conclusionMap)
+			if updateErr := h.sessionRepo.UpdateConclusion(session.SessionID, conclusionJSON); updateErr != nil {
+				logger.Warn("failed to persist fallback AI session conclusion",
+					zap.String("session_id", session.SessionID),
+					zap.Error(updateErr))
+			}
+		}
 		return
 	}
 

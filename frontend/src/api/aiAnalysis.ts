@@ -183,6 +183,8 @@ export function getSessionHistory(sessionId: string): Promise<{
     audits?: AuditEvent[]
     reflections?: ReflectionEvent[]
     corrections?: CorrectionEvent[]
+    status?: string
+    conclusion?: Record<string, any> | null
   }
 }> {
   return request.get(`/detection/alerts/ai-analysis/${sessionId}/history`)

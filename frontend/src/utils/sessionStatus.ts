@@ -3,11 +3,26 @@ import type { SessionListItem } from '@/api/aiAnalysis'
 /**
  * 根据conclusion字段判定会话显示状态
  * 只有conclusion不为空才算"已完成"，其他都是"未完成"
+ * 支持conclusion为对象或JSON字符串的情况
  */
 export function getDisplayStatus(session: Pick<SessionListItem, 'conclusion'>): 'completed' | 'active' {
-  if (session.conclusion && Object.keys(session.conclusion).length > 0) {
-    return 'completed'
+  if (!session.conclusion) return 'active'
+
+  // 如果是字符串，尝试解析
+  if (typeof session.conclusion === 'string') {
+    try {
+      const parsed = JSON.parse(session.conclusion)
+      return parsed && Object.keys(parsed).length > 0 ? 'completed' : 'active'
+    } catch {
+      return session.conclusion.trim().length > 0 ? 'completed' : 'active'
+    }
   }
+
+  // 如果是对象
+  if (typeof session.conclusion === 'object') {
+    return Object.keys(session.conclusion).length > 0 ? 'completed' : 'active'
+  }
+
   return 'active'
 }
 

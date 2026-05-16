@@ -106,30 +106,37 @@ const timelineEvents = computed<TimelineEntry[]>(() => {
 
   if (props.audits) {
     for (const a of props.audits) {
+      const riskLevel = a.risk_level || 'low'
+      const decision = a.decision || '审计完成'
+      const findings = Array.isArray(a.findings) ? a.findings : []
       events.push({
-        type: a.risk_level === 'high' ? 'danger' : a.risk_level === 'medium' ? 'warning' : 'primary',
-        label: `审计 - ${a.decision}`,
-        summary: (a.findings || []).join('; ') || a.decision
+        type: riskLevel === 'high' ? 'danger' : riskLevel === 'medium' ? 'warning' : 'primary',
+        label: `审计 - ${decision}`,
+        summary: findings.length > 0 ? findings.join('; ') : decision
       })
     }
   }
 
   if (props.reflections) {
     for (const r of props.reflections) {
+      const rootCause = r.root_cause || r.summary || '反思完成'
+      const recommendation = r.recommendation || ''
       events.push({
         type: 'warning',
         label: '反思',
-        summary: `${r.root_cause} → ${r.recommendation}`
+        summary: recommendation ? `${rootCause} → ${recommendation}` : rootCause
       })
     }
   }
 
   if (props.corrections) {
     for (const c of props.corrections) {
+      const reason = c.reason || c.summary || '纠正完成'
+      const actions = Array.isArray(c.actions) ? c.actions : []
       events.push({
         type: 'success',
         label: '纠正',
-        summary: `${c.reason}${c.actions?.length ? ': ' + c.actions.join(', ') : ''}`
+        summary: actions.length > 0 ? `${reason}: ${actions.join(', ')}` : reason
       })
     }
   }

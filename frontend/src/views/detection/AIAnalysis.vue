@@ -178,7 +178,7 @@
                         <el-icon><Aim /></el-icon>
                         <span>Thought</span>
                       </div>
-                      <div class="thought-text">{{ msg.thought }}</div>
+                      <div class="thought-text" v-html="formatThoughtContent(msg.thought)"></div>
                     </div>
 
                     <!-- Action 独立显示 -->
@@ -432,7 +432,7 @@ import {
 import { buildInitialAnalysisMessage, normalizeAIAnalysisErrorMessage } from '@/utils/aiAnalysisView'
 import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterOnlineHostnames, pruneSelectedAlertIds } from '@/utils/aiAnalysisFilters'
 import { applyPlanStepStatus, getActionButtonType, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
-import { parseExecutionResultText } from '@/utils/taskExecutionResult'
+import { parseExecutionResultText, normalizeExecutionResult } from '@/utils/taskExecutionResult'
 import { getDisplayStatus, isFalsePositive, getRemediationSuggestion, getVerdictType, getVerdictText } from '@/utils/sessionStatus'
 
 const route = useRoute()
@@ -475,6 +475,33 @@ interface Message {
   reflectionResult?: ReflectionEvent
   correctionResult?: CorrectionEvent
   executionResult?: ExecutionResult | null
+}
+
+/**
+ * 格式化思考内容：检测并美化JSON显示
+ */
+function formatThoughtContent(text: string): string {
+  if (!text) return ''
+  // 尝试检测并格式化JSON块
+  return text.replace(/(\{[\s\S]*?\}|\[[\s\S]*?\])/g, (match) => {
+    try {
+      const parsed = JSON.parse(match)
+      const formatted = JSON.stringify(parsed, null, 2)
+      // 简单语法高亮
+      const highlighted = formatted
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
+        .replace(/: "([^"]*?)"/g, ': <span class="json-string">"$1"</span>')
+        .replace(/: (\d+\.?\d*)/g, ': <span class="json-number">$1</span>')
+        .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
+        .replace(/: (null)/g, ': <span class="json-null">$1</span>')
+      return `<pre class="thought-json">${highlighted}</pre>`
+    } catch {
+      return match
+    }
+  })
 }
 
 // State
@@ -808,6 +835,57 @@ function applyParsedExecutionResultFromContent(content = finalAnswerContent.valu
   return true
 }
 
+/**
+ * 从 history API 的 conclusion 字段构建 fallback ExecutionResult
+ * conclusion 结构: {attack_graph, conclusions: [{alert_id, action, summary}]}
+ */
+function buildExecutionResultFromConclusion(sessionId: string, conclusion: any): ExecutionResult | null {
+  if (!conclusion) return null
+
+  // 如果 conclusion 已经是标准 ExecutionResult 格式（有 verdict 字段）
+  if (conclusion.verdict) {
+    return normalizeExecutionResult({
+      session_id: sessionId,
+      status: 'completed',
+      conclusion: { verdict: conclusion.verdict, summary: conclusion.summary || '', reasoning: conclusion.reasoning || '' },
+      steps: [],
+      errors: []
+    } as Partial<ExecutionResult>)
+  }
+
+  // 从 {attack_graph, conclusions} 格式构建
+  const conclusions = conclusion.conclusions || []
+  if (conclusions.length === 0) return null
+
+  // action -> verdict 映射
+  const actionVerdictMap: Record<string, string> = {
+    confirm_threat: 'malicious',
+    generate_rule: 'suspicious',
+    mark_false_positive: 'benign'
+  }
+
+  // 取最高严重度的结论
+  const severityOrder: Record<string, number> = { malicious: 3, suspicious: 2, benign: 1 }
+  let worstVerdict = 'unknown'
+  let worstSummary = ''
+  for (const c of conclusions) {
+    const v = actionVerdictMap[c.action] || 'unknown'
+    if ((severityOrder[v] || 0) > (severityOrder[worstVerdict] || 0)) {
+      worstVerdict = v
+      worstSummary = c.summary || ''
+    }
+  }
+
+  return normalizeExecutionResult({
+    session_id: sessionId,
+    status: 'completed',
+    exit_reason: 'normal_completed',
+    conclusion: { verdict: worstVerdict, summary: worstSummary, reasoning: '' },
+    steps: [],
+    errors: []
+  } as Partial<ExecutionResult>)
+}
+
 async function loadExecutionResultForSession(targetSessionId: string, attachToMessage = false) {
   try {
     const result = await getExecutionResult(targetSessionId)
@@ -885,14 +963,16 @@ async function loadSession(session: SessionListItem) {
   maxIterations.value = session.max_iterations || 500
 
   // 获取会话显示状态
-  const sessionStatus = getDisplayStatus(session)
+  let sessionStatus = getDisplayStatus(session)
 
   // Load messages from history
+  let payload: any = null
+  let msgs: any[] = []
   try {
     const response = await getSessionHistory(session.session_id)
     // Backend returns {success: true, data: {session_id, messages, execution_plan}}
-    const payload = (response as any).data || response
-    const msgs = payload.messages || []
+    payload = (response as any).data || response
+    msgs = payload.messages || []
     if (msgs.length > 0) {
       messages.value = rebuildMessagesFromHistory(msgs)
 
@@ -905,6 +985,14 @@ async function loadSession(session: SessionListItem) {
     // Load execution plan from history
     if (payload.execution_plan) {
       executionPlan.value = normalizePlanEvent(payload.execution_plan)
+      // 已完成会话：将所有非失败步骤标记为已完成
+      if (sessionStatus === 'completed' && executionPlan.value) {
+        for (const step of executionPlan.value.steps) {
+          if (step.status !== 'failed') {
+            step.status = 'completed'
+          }
+        }
+      }
     }
 
     // 审计和反思：如果为空则显示空数组
@@ -920,9 +1008,33 @@ async function loadSession(session: SessionListItem) {
     ElMessage.error(error.message || '加载会话消息失败')
   }
 
-  // 加载执行结果（仅已完成会话）
-  if (sessionStatus === 'completed') {
-    await loadExecutionResultForSession(session.session_id, true)
+  // 加载执行结果：始终尝试加载，如果执行结果存在则说明分析已完成
+  const execResult = await loadExecutionResultForSession(session.session_id, true)
+  if (execResult) {
+    // 执行结果存在，说明分析已完成（即使session.conclusion为空）
+    if (sessionStatus !== 'completed') {
+      sessionStatus = 'completed'
+      // 补充应用结论相关逻辑
+      if (msgs.length > 0) {
+        applyStructuredFinalAnswer()
+        applyParsedExecutionResultFromContent()
+      }
+      if (executionPlan.value) {
+        for (const step of executionPlan.value.steps) {
+          if (step.status !== 'failed') {
+            step.status = 'completed'
+          }
+        }
+      }
+      appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
+    }
+  } else if (sessionStatus === 'completed' && payload?.conclusion) {
+    // 执行结果API返回空，使用history的conclusion构建fallback
+    const fallbackResult = buildExecutionResultFromConclusion(session.session_id, payload.conclusion)
+    if (fallbackResult) {
+      executionResult.value = fallbackResult
+      attachExecutionResultToLatestMessage(fallbackResult)
+    }
   }
 
   ElMessage.success('已加载会话')
@@ -1935,6 +2047,40 @@ onMounted(() => {
   line-height: 1.6;
   max-height: clamp(120px, 34vh, 420px);
   overflow-y: auto;
+}
+
+.thought-text :deep(.thought-json) {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.thought-text :deep(.json-key) {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.thought-text :deep(.json-string) {
+  color: #059669;
+}
+
+.thought-text :deep(.json-number) {
+  color: #d97706;
+}
+
+.thought-text :deep(.json-boolean) {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.thought-text :deep(.json-null) {
+  color: #94a3b8;
+  font-style: italic;
 }
 
 /* Action block - 独立显示工具调用 */
