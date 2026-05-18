@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAISessionStream, getExecutionResult, resolveExecutionResultPayload } from './aiAnalysis'
+import { createAISessionStream, getExecutionResult, getSessionHistory, resolveExecutionResultPayload } from './aiAnalysis'
 
 const eventSourceMock = vi.fn()
 const requestGetMock = vi.hoisted(() => vi.fn())
@@ -93,5 +93,63 @@ describe('aiAnalysis execution result API', () => {
 
     expect(result?.execution_id).toBe('exec-2')
     expect(result?.status).toBe('已完成')
+  })
+})
+
+describe('getSessionHistory API', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns alerts field in history response', async () => {
+    requestGetMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session_id: 'session-1',
+        messages: [],
+        execution_plan: null,
+        audits: [],
+        reflections: [],
+        corrections: [],
+        status: 'completed',
+        conclusion: null,
+        alerts: [
+          {
+            id: 'internal-1',
+            alert_id: 'ALT-001',
+            hostname: 'web-server-01',
+            rule_title: 'Suspicious Process',
+            mitre_id: 'T1059',
+            severity: 'high',
+            status: 'pending',
+            last_seen_at: '2026-05-18T10:00:00Z'
+          }
+        ]
+      }
+    })
+
+    const result = await getSessionHistory('session-1')
+
+    expect(requestGetMock).toHaveBeenCalledWith('/detection/alerts/ai-analysis/session-1/history')
+    expect(result.data.alerts).toBeDefined()
+    expect(result.data.alerts!.length).toBe(1)
+    expect(result.data.alerts![0].alert_id).toBe('ALT-001')
+    expect(result.data.alerts![0].hostname).toBe('web-server-01')
+  })
+
+  it('returns empty alerts when events are deleted', async () => {
+    requestGetMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        session_id: 'session-2',
+        messages: [],
+        alerts: []
+      }
+    })
+
+    const result = await getSessionHistory('session-2')
+
+    expect(result.data.alerts).toBeDefined()
+    expect(result.data.alerts!.length).toBe(0)
   })
 })

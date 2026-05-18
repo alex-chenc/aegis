@@ -778,8 +778,10 @@ function isFinalAssistantMessage(msg?: Message) {
 }
 
 function findLatestFinalAssistantMessageIndex() {
-  const index = messages.value.length - 1
-  return isFinalAssistantMessage(messages.value[index]) ? index : -1
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (isFinalAssistantMessage(messages.value[i])) return i
+  }
+  return -1
 }
 
 function upsertFinalAssistantMessage(content: string, append = false) {
@@ -979,7 +981,6 @@ async function loadSession(session: SessionListItem) {
       // 只有已完成的会话才应用结论相关逻辑
       if (sessionStatus === 'completed') {
         applyStructuredFinalAnswer()
-        applyParsedExecutionResultFromContent()
       }
     }
     // Load execution plan from history
@@ -1000,6 +1001,11 @@ async function loadSession(session: SessionListItem) {
     reflectionResults.value = payload.reflections || []
     correctionResults.value = payload.corrections || []
 
+    // 加载会话关联的告警事件快照
+    if (payload.alerts && payload.alerts.length > 0) {
+      analysisAlertSnapshot.value = payload.alerts
+    }
+
     // 只有已完成的会话才追加运行时事件消息
     if (sessionStatus === 'completed') {
       appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
@@ -1017,7 +1023,6 @@ async function loadSession(session: SessionListItem) {
       // 补充应用结论相关逻辑
       if (msgs.length > 0) {
         applyStructuredFinalAnswer()
-        applyParsedExecutionResultFromContent()
       }
       if (executionPlan.value) {
         for (const step of executionPlan.value.steps) {

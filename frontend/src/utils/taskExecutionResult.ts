@@ -140,11 +140,11 @@ export function normalizeVerdict(value: string | undefined): 'benign' | 'malicio
   if (text.includes('benign') || text.includes('false positive') || value.includes('良性') || value.includes('误报')) {
     return 'benign'
   }
-  if (text.includes('suspicious') || text.includes('potentially malicious') || value.includes('可疑')) {
-    return 'suspicious'
-  }
   if (text.includes('malicious') || text.includes('confirmed threat') || text.includes('threat') || value.includes('恶意')) {
     return 'malicious'
+  }
+  if (text.includes('suspicious') || value.includes('可疑')) {
+    return 'suspicious'
   }
   return 'unknown'
 }

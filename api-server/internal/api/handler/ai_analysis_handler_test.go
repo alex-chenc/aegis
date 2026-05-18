@@ -1000,3 +1000,123 @@ func TestParseConclusionFromAnswer_VeryLongContent(t *testing.T) {
 		t.Fatalf("expected summary to be ~200 runes, got %d", len([]rune(summary)))
 	}
 }
+
+func TestGetSessionHistoryReturnsAlerts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+
+	sessionID := "test-session-alerts"
+	now := time.Now()
+	handler.sessions[sessionID] = &AISSESion{
+		SessionID:  sessionID,
+		AlertIDs:   []string{"alert-1", "alert-2"},
+		HostIDs:    []string{"host-1"},
+		HostFilter: []string{"host-a"},
+		CreatedAt:  now,
+		Messages:   []*llm.AIMessage{},
+		AlertSnapshots: []AlertContextSnapshot{
+			{
+				ID:        "internal-1",
+				AlertID:   "ALT-001",
+				Hostname:  "web-server-01",
+				RuleTitle: "Suspicious Process Execution",
+				MitreID:   "T1059",
+				Severity:  "high",
+				Status:    "pending",
+				LastSeenAt: now,
+			},
+			{
+				ID:        "internal-2",
+				AlertID:   "ALT-002",
+				Hostname:  "db-server-01",
+				RuleTitle: "Unauthorized Access Attempt",
+				MitreID:   "T1078",
+				Severity:  "critical",
+				Status:    "pending",
+				LastSeenAt: now,
+			},
+		},
+	}
+
+	router := gin.New()
+	router.GET("/ai/:session_id/history", handler.GetSessionHistory)
+
+	req := httptest.NewRequest(http.MethodGet, "/ai/"+sessionID+"/history", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data to be a map, got %T", resp["data"])
+	}
+
+	alerts, ok := data["alerts"].([]interface{})
+	if !ok {
+		t.Fatalf("expected alerts to be an array, got %T", data["alerts"])
+	}
+	if len(alerts) != 2 {
+		t.Fatalf("expected 2 alerts, got %d", len(alerts))
+	}
+
+	firstAlert := alerts[0].(map[string]interface{})
+	if firstAlert["alert_id"] != "ALT-001" {
+		t.Fatalf("expected first alert_id to be 'ALT-001', got %v", firstAlert["alert_id"])
+	}
+	if firstAlert["hostname"] != "web-server-01" {
+		t.Fatalf("expected first hostname to be 'web-server-01', got %v", firstAlert["hostname"])
+	}
+	if firstAlert["severity"] != "high" {
+		t.Fatalf("expected first severity to be 'high', got %v", firstAlert["severity"])
+	}
+}
+
+func TestGetSessionHistoryReturnsEmptyAlertsWhenDeleted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+
+	sessionID := "test-session-no-alerts"
+	handler.sessions[sessionID] = &AISSESion{
+		SessionID:      sessionID,
+		AlertIDs:       []string{"deleted-alert-1"},
+		Messages:       []*llm.AIMessage{},
+		AlertSnapshots: []AlertContextSnapshot{}, // Alerts were deleted
+	}
+
+	router := gin.New()
+	router.GET("/ai/:session_id/history", handler.GetSessionHistory)
+
+	req := httptest.NewRequest(http.MethodGet, "/ai/"+sessionID+"/history", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data to be a map, got %T", resp["data"])
+	}
+
+	alerts, ok := data["alerts"].([]interface{})
+	if !ok {
+		t.Fatalf("expected alerts to be an array, got %T", data["alerts"])
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("expected 0 alerts when deleted, got %d", len(alerts))
+	}
+}

@@ -1654,14 +1654,24 @@ func (h *AIAnalysisHandler) loadExecutionHistoryArtifacts(sessionID string) exec
 func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 	sessionID := c.Param("session_id")
 
-	// 获取会话信息（用于状态和结论）
+	// 获取会话信息（用于状态、结论和告警快照）
 	var displayStatus string
 	var conclusion model.JSONB
+	var alertSnapshots []AlertContextSnapshot
 	if h.sessionRepo != nil {
 		session, err := h.sessionRepo.FindBySessionID(sessionID)
 		if err == nil {
 			displayStatus = repository.GetDisplayStatus(session)
 			conclusion = session.Conclusion
+			// 加载会话关联的告警快照
+			if h.alertRepo != nil && len(session.AlertIDs) > 0 {
+				alerts, err := h.alertRepo.FindByIDs(session.AlertIDs)
+				if err != nil {
+					logger.Warn("failed to load alerts for session history", zap.Error(err), zap.Strings("alert_ids", session.AlertIDs))
+				} else {
+					alertSnapshots = buildAlertSnapshots(alerts)
+				}
+			}
 		}
 	}
 
@@ -1681,6 +1691,7 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 					"corrections":    artifacts.Corrections,
 					"status":         displayStatus,
 					"conclusion":     conclusion,
+					"alerts":         alertSnapshots,
 				},
 			})
 			return
@@ -1710,6 +1721,7 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 			"corrections":    artifacts.Corrections,
 			"status":         displayStatus,
 			"conclusion":     conclusion,
+			"alerts":         session.AlertSnapshots,
 		},
 	})
 }

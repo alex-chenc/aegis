@@ -185,6 +185,17 @@ export function getSessionHistory(sessionId: string): Promise<{
     corrections?: CorrectionEvent[]
     status?: string
     conclusion?: Record<string, any> | null
+    alerts?: Array<{
+      id: string
+      alert_id: string
+      hostname?: string
+      rule_title?: string
+      mitre_id: string
+      severity: string
+      status: string
+      description?: string
+      last_seen_at: string
+    }>
   }
 }> {
   return request.get(`/detection/alerts/ai-analysis/${sessionId}/history`)
