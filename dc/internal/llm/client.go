@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -25,6 +26,11 @@ func NewClient(cfg *config.LLMConfig) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) isDashScope() bool {
+	base := strings.ToLower(c.cfg.BaseURL)
+	return strings.Contains(base, "dashscope") || strings.Contains(base, "aliyuncs")
+}
+
 func (c *Client) Analyze(ctx context.Context, prompt string) (string, error) {
 	if c.cfg.APIKey == "" {
 		return "", fmt.Errorf("LLM API key not configured")
@@ -36,6 +42,11 @@ func (c *Client) Analyze(ctx context.Context, prompt string) (string, error) {
 			{"role": "user", "content": prompt},
 		},
 		"temperature": 0.7,
+	}
+
+	// Enable JSON mode for DashScope when prompt mentions JSON
+	if c.isDashScope() && strings.Contains(strings.ToLower(prompt), "json") {
+		reqBody["response_format"] = map[string]string{"type": "json_object"}
 	}
 
 	jsonBody, err := json.Marshal(reqBody)

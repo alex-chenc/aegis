@@ -27,12 +27,27 @@ type LLMClient struct {
 }
 
 type ChatCompletionRequest struct {
-	Model          string    `json:"model"`
-	Messages       []Message `json:"messages"`
-	Temperature    float64   `json:"temperature,omitempty"`
-	MaxTokens      int       `json:"max_tokens,omitempty"`
-	Stream         bool      `json:"stream,omitempty"`
-	ReasoningSplit bool      `json:"reasoning_split,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	Temperature    float64         `json:"temperature,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	Stream         bool            `json:"stream,omitempty"`
+	ReasoningSplit bool            `json:"reasoning_split,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+}
+
+// ResponseFormat mirrors the OpenAI-compatible response_format parameter.
+type ResponseFormat struct {
+	Type       string                `json:"type"`
+	JSONSchema *ResponseFormatSchema `json:"json_schema,omitempty"`
+}
+
+// ResponseFormatSchema defines a JSON Schema for structured output.
+type ResponseFormatSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      bool            `json:"strict,omitempty"`
 }
 
 type Message struct {
@@ -131,6 +146,16 @@ func (c *LLMClient) isMiniMaxBaseURL() bool {
 func (c *LLMClient) usesAnthropicAPI() bool {
 	baseURL := strings.ToLower(c.baseURL)
 	return strings.Contains(baseURL, "/anthropic") || (c.isMiniMaxM2() && c.isMiniMaxBaseURL())
+}
+
+func (c *LLMClient) isDashScope() bool {
+	baseURL := strings.ToLower(c.baseURL)
+	return strings.Contains(baseURL, "dashscope") || strings.Contains(baseURL, "aliyuncs")
+}
+
+// IsDashScope returns true if the configured base URL points to DashScope/Alibaba Cloud.
+func (c *LLMClient) IsDashScope() bool {
+	return c.isDashScope()
 }
 
 func (c *LLMClient) chatCompletionsURL() string {
@@ -438,11 +463,18 @@ func (c *LLMClient) SetModelName(modelName string) {
 
 // ChatCompletionWithMessages performs a chat completion with full message history
 func (c *LLMClient) ChatCompletionWithMessages(ctx context.Context, messages []Message, temperature float64) (string, error) {
+	return c.ChatCompletionWithMessagesFormat(ctx, messages, temperature, nil)
+}
+
+// ChatCompletionWithMessagesFormat performs a chat completion with optional response format.
+// Pass nil for responseFormat to use the default text output mode.
+func (c *LLMClient) ChatCompletionWithMessagesFormat(ctx context.Context, messages []Message, temperature float64, responseFormat *ResponseFormat) (string, error) {
 	reqBody := ChatCompletionRequest{
-		Model:       c.modelName,
-		Messages:    messages,
-		Temperature: temperature,
-		MaxTokens:   4096,
+		Model:          c.modelName,
+		Messages:       messages,
+		Temperature:    temperature,
+		MaxTokens:      4096,
+		ResponseFormat: responseFormat,
 	}
 
 	var lastErr error

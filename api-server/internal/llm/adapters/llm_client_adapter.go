@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	agentruntime "github.com/chenchen511/agent-runtime"
 
@@ -54,7 +55,19 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 		messages = a.injectAlertContext(messages)
 	}
 
-	result, err := a.client.ChatCompletionWithMessages(ctx, messages, temperature)
+	// Auto-enable JSON mode for DashScope when the request expects structured output
+	// and the prompt contains the required "json" keyword.
+	var responseFormat *llm.ResponseFormat
+	if req.ResponseSchema != "" && a.client.IsDashScope() && containsJSONKeyword(messages) {
+		responseFormat = &llm.ResponseFormat{Type: "json_object"}
+	}
+
+	result, err := a.client.ChatCompletionWithMessagesFormat(ctx, messages, temperature, responseFormat)
+	if err != nil && responseFormat != nil {
+		// Fallback: thinking mode models (e.g., qwen3.5-plus) do not support json_object.
+		// Retry without response_format.
+		result, err = a.client.ChatCompletionWithMessagesFormat(ctx, messages, temperature, nil)
+	}
 	if err != nil {
 		return agentruntime.LLMResponse{}, fmt.Errorf("llm completion failed: %w", err)
 	}
@@ -120,4 +133,15 @@ func (a *LLMClientAdapter) injectAlertContext(messages []llm.Message) []llm.Mess
 	return append([]llm.Message{
 		{Role: "system", Content: suffix},
 	}, messages...)
+}
+
+// containsJSONKeyword checks if any message contains the word "json" (case-insensitive).
+// DashScope requires this when using json_object response format.
+func containsJSONKeyword(messages []llm.Message) bool {
+	for _, m := range messages {
+		if strings.Contains(strings.ToLower(m.Content), "json") {
+			return true
+		}
+	}
+	return false
 }

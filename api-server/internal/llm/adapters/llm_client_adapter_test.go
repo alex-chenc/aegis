@@ -117,3 +117,49 @@ func TestIsContextualPurpose(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsJSONKeyword_WithJSON(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "user", Content: "请按照JSON格式输出结果"},
+	}
+	if !containsJSONKeyword(messages) {
+		t.Error("expected JSON keyword to be found")
+	}
+}
+
+func TestContainsJSONKeyword_WithoutJSON(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "user", Content: "analyze this event"},
+	}
+	if containsJSONKeyword(messages) {
+		t.Error("expected no JSON keyword")
+	}
+}
+
+func TestContainsJSONKeyword_CaseInsensitive(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "user", Content: "return as Json format"},
+	}
+	if !containsJSONKeyword(messages) {
+		t.Error("expected case-insensitive JSON match")
+	}
+}
+
+func TestContainsJSONKeyword_InSystemMessage(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "system", Content: "You are a helper. Output valid json."},
+		{Role: "user", Content: "analyze"},
+	}
+	if !containsJSONKeyword(messages) {
+		t.Error("expected JSON keyword in system message")
+	}
+}
+
+func TestContainsJSONKeyword_EmptyMessages(t *testing.T) {
+	if containsJSONKeyword(nil) {
+		t.Error("expected false for nil messages")
+	}
+	if containsJSONKeyword([]llm.Message{}) {
+		t.Error("expected false for empty messages")
+	}
+}
