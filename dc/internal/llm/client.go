@@ -45,10 +45,32 @@ func (c *Client) Analyze(ctx context.Context, prompt string) (string, error) {
 	}
 
 	// Enable JSON mode for DashScope when prompt mentions JSON
-	if c.isDashScope() && strings.Contains(strings.ToLower(prompt), "json") {
+	jsonModeEnabled := c.isDashScope() && strings.Contains(strings.ToLower(prompt), "json")
+	if jsonModeEnabled {
 		reqBody["response_format"] = map[string]string{"type": "json_object"}
 	}
 
+	content, err := c.doAnalyze(ctx, reqBody)
+	if err != nil && jsonModeEnabled {
+		// Fallback: thinking mode models (e.g., qwen3.5-plus) do not support json_object.
+		// Retry without response_format.
+		delete(reqBody, "response_format")
+		content, err = c.doAnalyze(ctx, reqBody)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	logger.Debug("LLM analysis completed",
+		zap.String("model", c.cfg.ModelName),
+		zap.Int("prompt_length", len(prompt)),
+		zap.Int("response_length", len(content)),
+	)
+
+	return content, nil
+}
+
+func (c *Client) doAnalyze(ctx context.Context, reqBody map[string]interface{}) (string, error) {
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
@@ -97,12 +119,6 @@ func (c *Client) Analyze(ctx context.Context, prompt string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unexpected content format")
 	}
-
-	logger.Debug("LLM analysis completed",
-		zap.String("model", c.cfg.ModelName),
-		zap.Int("prompt_length", len(prompt)),
-		zap.Int("response_length", len(content)),
-	)
 
 	return content, nil
 }
