@@ -265,12 +265,14 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 	// --- context budget ---
 
 	case agentruntime.HookContextBudgetChecked:
-		payload := toMap(event.Payload)
-		if budgetJSON, err := json.Marshal(payload); err == nil {
-			_ = s.writer.Write(llm.SSEEvent{
-				Type:    "context_budget",
-				Content: string(budgetJSON),
-			})
+		// Budget data is in Snapshot.ContextBudget, not Payload
+		if event.Snapshot != nil && event.Snapshot.ContextBudget != nil {
+			if budgetJSON, err := json.Marshal(event.Snapshot.ContextBudget); err == nil {
+				_ = s.writer.Write(llm.SSEEvent{
+					Type:    "context_budget",
+					Content: string(budgetJSON),
+				})
+			}
 		}
 
 	case agentruntime.HookContextCompressed:
