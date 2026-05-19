@@ -163,3 +163,20 @@ func TestContainsJSONKeyword_EmptyMessages(t *testing.T) {
 		t.Error("expected false for empty messages")
 	}
 }
+
+// === Phase 2: Usage passthrough tests ===
+
+func TestTemperatureForPurpose_Compress(t *testing.T) {
+	adapter := &LLMClientAdapter{}
+	temp := adapter.temperatureForPurpose(agentruntime.PurposeCompress)
+	if temp < 0.2 || temp > 0.4 {
+		t.Errorf("temperatureForPurpose(compress) = %f, want [0.2, 0.4]", temp)
+	}
+}
+
+func TestIsContextualPurpose_Compress(t *testing.T) {
+	// PurposeCompress should NOT be contextual (no alert injection needed for compression calls)
+	if isContextualPurpose(agentruntime.PurposeCompress) {
+		t.Error("expected PurposeCompress to not be contextual")
+	}
+}

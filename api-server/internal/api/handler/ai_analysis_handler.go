@@ -1191,6 +1191,19 @@ func (h *AIAnalysisHandler) persistAgentResult(sessionID string, result *agentru
 	}
 
 	// 1. Save execution record
+	// Merge Metrics with ContextBudget and CompressionRecords into a single JSONB
+	metricsMap := make(map[string]interface{})
+	if metricsData, err := json.Marshal(result.Metrics); err == nil {
+		_ = json.Unmarshal(metricsData, &metricsMap)
+	}
+	if result.ContextBudget != nil {
+		metricsMap["context_budget"] = result.ContextBudget
+	}
+	if len(result.CompressionRecords) > 0 {
+		metricsMap["compression_records"] = result.CompressionRecords
+	}
+	metricsJSONB := model.JSONB(metricsMap)
+
 	exec := &model.AgentExecution{
 		SessionID:       sessionID,
 		TaskID:          result.TaskID,
@@ -1200,7 +1213,7 @@ func (h *AIAnalysisHandler) persistAgentResult(sessionID string, result *agentru
 		InitialPlan:     marshalJSONB(result.InitialPlan),
 		FinalPlan:       marshalJSONB(result.FinalPlan),
 		Completion:      marshalJSONB(result.Completion),
-		Metrics:         marshalJSONB(result.Metrics),
+		Metrics:         metricsJSONB,
 		StartedAt:       result.StartedAt,
 		EndedAt:         result.EndedAt,
 		TotalDurationMs: result.Metrics.TotalDuration.Milliseconds(),
@@ -1373,6 +1386,12 @@ func buildAnalysisSummary(result *agentruntime.TaskResult) string {
 	}
 	b.WriteString(fmt.Sprintf("完成: %d/%d 步骤\n", result.Completion.CompletedSteps, len(result.StepExecutions)))
 	b.WriteString(fmt.Sprintf("工具调用: %d次, 模型调用: %d次\n", result.Completion.ToolCalls, result.Completion.ModelCalls))
+	if result.Metrics.TotalPromptTokens > 0 || result.Metrics.TotalCompletionTokens > 0 {
+		b.WriteString(fmt.Sprintf("Token: prompt=%d, completion=%d\n", result.Metrics.TotalPromptTokens, result.Metrics.TotalCompletionTokens))
+	}
+	if len(result.CompressionRecords) > 0 {
+		b.WriteString(fmt.Sprintf("上下文压缩: %d次\n", len(result.CompressionRecords)))
+	}
 	if len(result.Reflections) > 0 {
 		b.WriteString(fmt.Sprintf("反思: %d次\n", len(result.Reflections)))
 	}
@@ -1762,14 +1781,15 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	}
 
 	exitReasonMap := map[string]string{
-		"normal_completed": "正常完成",
-		"max_iterations":   "达到最大轮次",
-		"timeout":          "执行超时",
-		"user_cancelled":   "用户取消",
-		"error":            "执行错误",
-		"audit_rejected":   "审计拒绝",
-		"drift_detected":   "检测到计划漂移",
-		"rate_limit":       "速率限制",
+		"normal_completed":  "正常完成",
+		"max_iterations":    "达到最大轮次",
+		"timeout":           "执行超时",
+		"user_cancelled":    "用户取消",
+		"error":             "执行错误",
+		"audit_rejected":    "审计拒绝",
+		"drift_detected":    "检测到计划漂移",
+		"rate_limit":        "速率限制",
+		"context_overflow":  "上下文窗口溢出",
 	}
 
 	statusDisplay := exec.Status
@@ -1800,18 +1820,37 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 
 	conclusion := parseConclusionFromAnswer(exec.FinalAnswer)
 
+	// Extract context budget and token metrics from stored metrics
+	var contextBudget interface{}
+	var compressionRecords interface{}
+	var totalPromptTokens, totalCompletionTokens int
+	if exec.Metrics != nil {
+		if cb, ok := exec.Metrics["context_budget"]; ok {
+			contextBudget = cb
+		}
+		if cr, ok := exec.Metrics["compression_records"]; ok {
+			compressionRecords = cr
+		}
+		totalPromptTokens = jsonbInt(exec.Metrics["total_prompt_tokens"])
+		totalCompletionTokens = jsonbInt(exec.Metrics["total_completion_tokens"])
+	}
+
 	return map[string]interface{}{
-		"execution_id":      exec.ID.String(),
-		"task_id":           exec.TaskID,
-		"session_id":        exec.SessionID,
-		"status":            statusDisplay,
-		"exit_reason":       exitReasonDisplay,
-		"started_at":        exec.StartedAt,
-		"ended_at":          exec.EndedAt,
-		"total_duration_ms": exec.TotalDurationMs,
-		"steps":             stepResponses,
-		"errors":            extractErrorsFromExecution(exec),
-		"conclusion":        conclusion,
+		"execution_id":          exec.ID.String(),
+		"task_id":               exec.TaskID,
+		"session_id":            exec.SessionID,
+		"status":                statusDisplay,
+		"exit_reason":           exitReasonDisplay,
+		"started_at":            exec.StartedAt,
+		"ended_at":              exec.EndedAt,
+		"total_duration_ms":     exec.TotalDurationMs,
+		"steps":                 stepResponses,
+		"errors":                extractErrorsFromExecution(exec),
+		"conclusion":            conclusion,
+		"context_budget":        contextBudget,
+		"compression_records":   compressionRecords,
+		"total_prompt_tokens":   totalPromptTokens,
+		"total_completion_tokens": totalCompletionTokens,
 	}
 }
 
@@ -2416,6 +2455,23 @@ func normalizeArgs(args map[string]interface{}) map[string]interface{} {
 	}
 
 	return result
+}
+
+// jsonbInt safely extracts an int from a JSONB value that may be float64, int, int64, or json.Number.
+func jsonbInt(v interface{}) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i)
+		}
+	}
+	return 0
 }
 
 func isPlaceholderToolValue(value string) bool {

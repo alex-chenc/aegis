@@ -76,6 +76,15 @@ func NewAegisRuntime(
 		AllowBestEffortAnswer: true,
 		AllowHighRiskTools:    false,
 		AllowDangerousTools:   false,
+		// Context budget and progressive compression
+		MaxContextTokens:      256000,
+		ReservedOutputTokens:  8192,
+		EnableContextCompress: true,
+		ToolCompressRatio:     0.70,
+		StepCompressRatio:     0.80,
+		LLMCompressRatio:      0.95,
+		CompressTargetRatio:   0.60,
+		RecentTurnsToKeep:     6,
 	}
 
 	// 6. Build options and create runtime

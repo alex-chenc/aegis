@@ -83,6 +83,8 @@ export type SSEEventType =
   // agent-runtime new event types
   | 'plan' | 'step_started' | 'step_completed' | 'step_failed' | 'audit'
   | 'reflection' | 'correction' | 'step_retrying' | 'step_skipped'
+  // context budget events
+  | 'context_budget' | 'context_compressed' | 'context_compression_failed'
 
 export interface SSEEvent {
   type: SSEEventType
@@ -139,6 +141,22 @@ export interface CorrectionEvent {
   reason: string
   actions?: string[]
   step_id?: string
+}
+
+// Context budget event payloads
+export interface ContextBudgetEvent {
+  max_context_tokens: number
+  reserved_output_tokens: number
+  estimated_tokens: number
+  context_ratio: number
+  available_tokens: number
+}
+
+export interface ContextCompressedEvent {
+  strategy: string
+  trigger_ratio: number
+  before_tokens: number
+  after_tokens: number
 }
 
 // AI Analysis API functions
@@ -274,6 +292,10 @@ export interface ExecutionResult {
   steps: StepResult[]
   errors: string[]
   conclusion: Conclusion
+  context_budget?: ContextBudgetEvent | null
+  compression_records?: ContextCompressedEvent[]
+  total_prompt_tokens?: number
+  total_completion_tokens?: number
 }
 
 export interface StepResult {

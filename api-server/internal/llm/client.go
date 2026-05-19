@@ -55,9 +55,24 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// LLMUsage holds token usage information from LLM API responses.
+type LLMUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// CompletionResult contains both the content and usage metadata from an LLM call.
+type CompletionResult struct {
+	Content string
+	Model   string
+	Usage   LLMUsage
+}
+
 type ChatCompletionResponse struct {
-	Choices []Choice `json:"choices"`
-	Error   *Error   `json:"error,omitempty"`
+	Choices []Choice   `json:"choices"`
+	Error   *Error     `json:"error,omitempty"`
+	Usage   *LLMUsage  `json:"usage,omitempty"`
 }
 
 type Choice struct {
@@ -93,6 +108,11 @@ type anthropicMessage struct {
 	Content string `json:"content"`
 }
 
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
 type anthropicMessageResponse struct {
 	Content []struct {
 		Type     string `json:"type"`
@@ -103,6 +123,7 @@ type anthropicMessageResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
+	Usage *anthropicUsage `json:"usage,omitempty"`
 }
 
 func NewLLMClient(apiKey, baseURL, modelName string, timeoutSeconds, maxRetries int) *LLMClient {
@@ -401,6 +422,137 @@ func (c *LLMClient) sendAnthropicRequest(ctx context.Context, reqBody anthropicM
 	return text.String(), nil
 }
 
+// sendRequestResult sends an OpenAI-compatible request and returns the full CompletionResult including usage.
+func (c *LLMClient) sendRequestResult(ctx context.Context, reqBody ChatCompletionRequest) (CompletionResult, error) {
+	if c.usesAnthropicAPI() {
+		return c.sendAnthropicRequestResult(ctx, c.buildAnthropicRequest(reqBody.Messages, reqBody.Temperature, reqBody.MaxTokens, false))
+	}
+
+	reqBody = c.prepareRequest(reqBody)
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.chatCompletionsURL()
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAfter := resp.Header.Get("Retry-After")
+		if retryAfter != "" {
+			if seconds, err := strconv.Atoi(retryAfter); err == nil {
+				time.Sleep(time.Duration(seconds) * time.Second)
+			}
+		}
+		return CompletionResult{}, fmt.Errorf("rate limited")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return CompletionResult{}, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var completionResp ChatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&completionResp); err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if completionResp.Error != nil {
+		return CompletionResult{}, fmt.Errorf("API error: %s", completionResp.Error.Message)
+	}
+
+	if len(completionResp.Choices) == 0 {
+		return CompletionResult{}, fmt.Errorf("no choices in response")
+	}
+
+	result := CompletionResult{
+		Content: completionResp.Choices[0].Message.Content,
+		Model:   c.modelName,
+	}
+	if completionResp.Usage != nil {
+		result.Usage = *completionResp.Usage
+	}
+	return result, nil
+}
+
+// sendAnthropicRequestResult sends an Anthropic-compatible request and returns the full CompletionResult including usage.
+func (c *LLMClient) sendAnthropicRequestResult(ctx context.Context, reqBody anthropicMessageRequest) (CompletionResult, error) {
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.anthropicMessagesURL(), bytes.NewReader(jsonData))
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return CompletionResult{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return CompletionResult{}, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var completionResp anthropicMessageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&completionResp); err != nil {
+		return CompletionResult{}, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if completionResp.Error != nil {
+		return CompletionResult{}, fmt.Errorf("API error: %s", completionResp.Error.Message)
+	}
+
+	var text strings.Builder
+	for _, block := range completionResp.Content {
+		if block.Type == "text" {
+			text.WriteString(block.Text)
+		}
+	}
+	if text.Len() == 0 {
+		for _, block := range completionResp.Content {
+			if block.Type == "thinking" {
+				text.WriteString(block.Thinking)
+			}
+		}
+	}
+	if text.Len() == 0 {
+		return CompletionResult{}, fmt.Errorf("empty response from LLM")
+	}
+
+	result := CompletionResult{
+		Content: text.String(),
+		Model:   c.modelName,
+	}
+	if completionResp.Usage != nil {
+		result.Usage = LLMUsage{
+			PromptTokens:     completionResp.Usage.InputTokens,
+			CompletionTokens: completionResp.Usage.OutputTokens,
+			TotalTokens:      completionResp.Usage.InputTokens + completionResp.Usage.OutputTokens,
+		}
+	}
+	return result, nil
+}
+
 func (c *LLMClient) isRetryableError(err error) bool {
 	errStr := err.Error()
 	return containsAny(errStr, []string{
@@ -518,6 +670,60 @@ func (c *LLMClient) ChatCompletionWithMessagesFormat(ctx context.Context, messag
 	}
 
 	return "", fmt.Errorf("LLM request failed after %d attempts: %w", c.maxRetries, lastErr)
+}
+
+// ChatCompletionWithMessagesFormatResult performs a chat completion and returns the full CompletionResult
+// including token usage. Pass nil for responseFormat to use the default text output mode.
+func (c *LLMClient) ChatCompletionWithMessagesFormatResult(ctx context.Context, messages []Message, temperature float64, responseFormat *ResponseFormat) (CompletionResult, error) {
+	reqBody := ChatCompletionRequest{
+		Model:          c.modelName,
+		Messages:       messages,
+		Temperature:    temperature,
+		MaxTokens:      4096,
+		ResponseFormat: responseFormat,
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		result, err := c.sendRequestResult(ctx, reqBody)
+		if err == nil && result.Content != "" {
+			return result, nil
+		}
+
+		if err == nil && result.Content == "" {
+			logger.Warn("LLM returned empty response, retrying",
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", c.maxRetries))
+			lastErr = fmt.Errorf("empty response from LLM")
+		} else {
+			lastErr = err
+		}
+
+		isRetryable := c.isRetryableError(lastErr) || lastErr.Error() == "empty response from LLM"
+		if !isRetryable {
+			logger.Error("LLM request failed with non-retryable error",
+				zap.Error(lastErr),
+				zap.Int("attempt", attempt+1),
+			)
+			return CompletionResult{}, lastErr
+		}
+
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		logger.Warn("LLM request failed, retrying with backoff",
+			zap.Error(lastErr),
+			zap.Int("attempt", attempt+1),
+			zap.Duration("backoff", backoff),
+		)
+
+		select {
+		case <-ctx.Done():
+			return CompletionResult{}, ctx.Err()
+		case <-time.After(backoff):
+			continue
+		}
+	}
+
+	return CompletionResult{}, fmt.Errorf("LLM request failed after %d attempts: %w", c.maxRetries, lastErr)
 }
 
 // ChatCompletionStreamWithMessages performs a streaming chat completion with full message history

@@ -261,6 +261,44 @@ func (s *SSEHookSink) Handle(ctx context.Context, event agentruntime.HookEvent) 
 
 	case agentruntime.HookConfigChanged:
 		// no-op
+
+	// --- context budget ---
+
+	case agentruntime.HookContextBudgetChecked:
+		payload := toMap(event.Payload)
+		if budgetJSON, err := json.Marshal(payload); err == nil {
+			_ = s.writer.Write(llm.SSEEvent{
+				Type:    "context_budget",
+				Content: string(budgetJSON),
+			})
+		}
+
+	case agentruntime.HookContextCompressed:
+		payload := toMap(event.Payload)
+		strategy, _ := payload["strategy"].(string)
+		var beforeTokens, afterTokens int
+		if v, ok := payload["before_tokens"].(float64); ok {
+			beforeTokens = int(v)
+		}
+		if v, ok := payload["after_tokens"].(float64); ok {
+			afterTokens = int(v)
+		}
+		s.writeThinking(fmt.Sprintf("上下文压缩 (%s): %d → %d tokens", strategy, beforeTokens, afterTokens))
+		if compressJSON, err := json.Marshal(payload); err == nil {
+			_ = s.writer.Write(llm.SSEEvent{
+				Type:    "context_compressed",
+				Content: string(compressJSON),
+			})
+		}
+
+	case agentruntime.HookContextCompressionFailed:
+		payload := toMap(event.Payload)
+		errMsg, _ := payload["error"].(string)
+		s.writeThinking(fmt.Sprintf("上下文压缩失败: %s", errMsg))
+		_ = s.writer.Write(llm.SSEEvent{
+			Type:  "context_compression_failed",
+			Error: errMsg,
+		})
 	}
 
 	return nil

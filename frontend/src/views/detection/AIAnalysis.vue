@@ -130,6 +130,12 @@
             <div class="card-header">
               <span>AI 安全分析助手</span>
               <div class="header-actions">
+                <ContextBudgetIndicator
+                  :budget="contextBudget"
+                  :compression-records="compressionRecords"
+                  :total-prompt-tokens="totalPromptTokens"
+                  :total-completion-tokens="totalCompletionTokens"
+                />
                 <el-button size="small" @click="showSessionHistory">
                   历史会话
                 </el-button>
@@ -418,8 +424,9 @@ import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
-import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, getExecutionResult, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent, type ExecutionResult } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, getExecutionResult, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent, type ExecutionResult, type ContextBudgetEvent, type ContextCompressedEvent } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
+import ContextBudgetIndicator from '@/components/ContextBudgetIndicator.vue'
 import ExecutionPlan from '@/components/ExecutionPlan.vue'
 import TaskExecutionResult from '@/components/TaskExecutionResult.vue'
 import {
@@ -533,6 +540,10 @@ const auditResults = ref<AuditEvent[]>([])
 const reflectionResults = ref<ReflectionEvent[]>([])
 const correctionResults = ref<CorrectionEvent[]>([])
 const executionResult = ref<ExecutionResult | null>(null)
+const contextBudget = ref<ContextBudgetEvent | null>(null)
+const compressionRecords = ref<ContextCompressedEvent[]>([])
+const totalPromptTokens = ref(0)
+const totalCompletionTokens = ref(0)
 const messageListRef = ref<HTMLElement | null>(null)
 const alertTableRef = ref<any>(null)
 const currentEventSource = ref<EventSource | null>(null)
@@ -892,6 +903,19 @@ async function loadExecutionResultForSession(targetSessionId: string, attachToMe
   try {
     const result = await getExecutionResult(targetSessionId)
     executionResult.value = result
+    // Populate context budget and token counts from execution result
+    if (result.context_budget) {
+      contextBudget.value = result.context_budget
+    }
+    if (result.compression_records) {
+      compressionRecords.value = result.compression_records
+    }
+    if (result.total_prompt_tokens) {
+      totalPromptTokens.value = result.total_prompt_tokens
+    }
+    if (result.total_completion_tokens) {
+      totalCompletionTokens.value = result.total_completion_tokens
+    }
     if (attachToMessage) {
       attachExecutionResultToLatestMessage(result)
     }
@@ -913,6 +937,10 @@ async function deleteSessionById(session: SessionListItem) {
       reflectionResults.value = []
       correctionResults.value = []
       executionResult.value = null
+      contextBudget.value = null
+      compressionRecords.value = []
+      totalPromptTokens.value = 0
+      totalCompletionTokens.value = 0
       clearCurrentSessionId()
       clearSavedConversation()
     }
@@ -961,6 +989,10 @@ async function loadSession(session: SessionListItem) {
   auditResults.value = []
   reflectionResults.value = []
   correctionResults.value = []
+  contextBudget.value = null
+  compressionRecords.value = []
+  totalPromptTokens.value = 0
+  totalCompletionTokens.value = 0
   analysisAlertSnapshot.value = []
   maxIterations.value = session.max_iterations || 500
 
@@ -1203,6 +1235,10 @@ async function startAnalysis() {
     reflectionResults.value = []
     correctionResults.value = []
     executionResult.value = null
+    contextBudget.value = null
+    compressionRecords.value = []
+    totalPromptTokens.value = 0
+    totalCompletionTokens.value = 0
     analysisAlertSnapshot.value = analysisSnapshot
     selectedAlertIds.value = analysisSnapshot.map(alert => alert.id)
 
@@ -1485,6 +1521,34 @@ function createSSEHandler(message: string) {
           // ignore parse errors
         }
         scrollToBottom()
+        break
+
+      case 'context_budget':
+        try {
+          const budgetData = typeof event.content === 'string' ? JSON.parse(event.content) : event.content
+          if (budgetData) {
+            contextBudget.value = budgetData as ContextBudgetEvent
+          }
+        } catch {
+          // ignore parse errors
+        }
+        break
+
+      case 'context_compressed':
+        try {
+          const compData = typeof event.content === 'string' ? JSON.parse(event.content) : event.content
+          if (compData) {
+            compressionRecords.value.push(compData as ContextCompressedEvent)
+            const strategy = (compData as ContextCompressedEvent).strategy || 'unknown'
+            ElMessage({ message: `上下文已压缩 (${strategy})`, type: 'info', duration: 3000 })
+          }
+        } catch {
+          // ignore parse errors
+        }
+        break
+
+      case 'context_compression_failed':
+        ElMessage({ message: `上下文压缩失败: ${event.error || '未知错误'}`, type: 'warning', duration: 5000 })
         break
 
       case 'done':

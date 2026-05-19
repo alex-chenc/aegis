@@ -62,18 +62,24 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 		responseFormat = &llm.ResponseFormat{Type: "json_object"}
 	}
 
-	result, err := a.client.ChatCompletionWithMessagesFormat(ctx, messages, temperature, responseFormat)
+	result, err := a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, responseFormat)
 	if err != nil && responseFormat != nil {
 		// Fallback: thinking mode models (e.g., qwen3.5-plus) do not support json_object.
 		// Retry without response_format.
-		result, err = a.client.ChatCompletionWithMessagesFormat(ctx, messages, temperature, nil)
+		result, err = a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, nil)
 	}
 	if err != nil {
 		return agentruntime.LLMResponse{}, fmt.Errorf("llm completion failed: %w", err)
 	}
 
 	return agentruntime.LLMResponse{
-		Content: result,
+		Content: result.Content,
+		Model:   result.Model,
+		Usage: agentruntime.LLMUsage{
+			PromptTokens:     result.Usage.PromptTokens,
+			CompletionTokens: result.Usage.CompletionTokens,
+			TotalTokens:      result.Usage.TotalTokens,
+		},
 	}, nil
 }
 
@@ -91,6 +97,8 @@ func (a *LLMClientAdapter) temperatureForPurpose(purpose agentruntime.LLMPurpose
 	case agentruntime.PurposeCorrect:
 		return 0.4
 	case agentruntime.PurposeSummarize:
+		return 0.3
+	case agentruntime.PurposeCompress:
 		return 0.3
 	default:
 		return 0.7

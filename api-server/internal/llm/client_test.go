@@ -108,3 +108,99 @@ func TestResponseFormat_WithSchema(t *testing.T) {
 		t.Errorf("expected schema name, got: %s", data)
 	}
 }
+
+// === Phase 1: Usage parsing tests ===
+
+func TestUsageStruct_OpenAICompatible(t *testing.T) {
+	raw := `{
+		"choices": [{"message": {"role": "assistant", "content": "hello"}}],
+		"usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+	}`
+	var resp ChatCompletionResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected Usage to be non-nil")
+	}
+	if resp.Usage.PromptTokens != 100 {
+		t.Errorf("PromptTokens = %d, want 100", resp.Usage.PromptTokens)
+	}
+	if resp.Usage.CompletionTokens != 50 {
+		t.Errorf("CompletionTokens = %d, want 50", resp.Usage.CompletionTokens)
+	}
+	if resp.Usage.TotalTokens != 150 {
+		t.Errorf("TotalTokens = %d, want 150", resp.Usage.TotalTokens)
+	}
+}
+
+func TestUsageStruct_OpenAINoUsage(t *testing.T) {
+	raw := `{
+		"choices": [{"message": {"role": "assistant", "content": "hello"}}]
+	}`
+	var resp ChatCompletionResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Usage != nil {
+		t.Errorf("expected Usage to be nil when not present, got %+v", resp.Usage)
+	}
+}
+
+func TestUsageStruct_AnthropicCompatible(t *testing.T) {
+	raw := `{
+		"content": [{"type": "text", "text": "hello"}],
+		"usage": {"input_tokens": 200, "output_tokens": 80}
+	}`
+	var resp anthropicMessageResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected Usage to be non-nil")
+	}
+	if resp.Usage.InputTokens != 200 {
+		t.Errorf("InputTokens = %d, want 200", resp.Usage.InputTokens)
+	}
+	if resp.Usage.OutputTokens != 80 {
+		t.Errorf("OutputTokens = %d, want 80", resp.Usage.OutputTokens)
+	}
+}
+
+func TestCompletionResult_StructFields(t *testing.T) {
+	result := CompletionResult{
+		Content: "test content",
+		Model:   "gpt-4",
+		Usage: LLMUsage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		},
+	}
+	if result.Content != "test content" {
+		t.Errorf("Content = %q, want %q", result.Content, "test content")
+	}
+	if result.Model != "gpt-4" {
+		t.Errorf("Model = %q, want %q", result.Model, "gpt-4")
+	}
+	if result.Usage.PromptTokens != 100 {
+		t.Errorf("PromptTokens = %d, want 100", result.Usage.PromptTokens)
+	}
+}
+
+func TestLLMUsage_Struct(t *testing.T) {
+	usage := LLMUsage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+	}
+	if usage.PromptTokens != 1000 {
+		t.Errorf("PromptTokens = %d, want 1000", usage.PromptTokens)
+	}
+	if usage.CompletionTokens != 500 {
+		t.Errorf("CompletionTokens = %d, want 500", usage.CompletionTokens)
+	}
+	if usage.TotalTokens != 1500 {
+		t.Errorf("TotalTokens = %d, want 1500", usage.TotalTokens)
+	}
+}
