@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	agentruntime "github.com/chenchen511/agent-runtime"
+	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
 // AegisPromptProvider implements agent-runtime's PromptProvider interface,

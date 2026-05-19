@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	agentruntime "github.com/chenchen511/agent-runtime"
+	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
 // mockReflectionQuerier implements ReflectionQuerier for testing.

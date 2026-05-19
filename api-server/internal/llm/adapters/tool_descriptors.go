@@ -3,7 +3,7 @@ package adapters
 import (
 	"time"
 
-	agentruntime "github.com/chenchen511/agent-runtime"
+	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
 // AegisTools defines the tool descriptors for Aegis host security operations,
