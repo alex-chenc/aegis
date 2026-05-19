@@ -38,11 +38,11 @@
         </div>
         <div class="popover-row">
           <span class="popover-key">已用 Tokens</span>
-          <span class="popover-value">{{ formatTokens(budget.estimated_tokens) }}</span>
+          <span class="popover-value">{{ formatTokens(budget.estimated_prompt_tokens) }}</span>
         </div>
         <div class="popover-row">
           <span class="popover-key">可用 Tokens</span>
-          <span class="popover-value">{{ formatTokens(budget.available_tokens) }}</span>
+          <span class="popover-value">{{ formatTokens(availableTokens) }}</span>
         </div>
         <div class="popover-row">
           <span class="popover-key">最大上下文</span>
@@ -101,6 +101,11 @@ const statusClass = computed(() => {
   if (percentage.value >= 90) return 'status-critical'
   if (percentage.value >= 70) return 'status-warning'
   return 'status-ok'
+})
+
+const availableTokens = computed(() => {
+  if (!props.budget) return 0
+  return Math.max(0, props.budget.max_context_tokens - props.budget.estimated_prompt_tokens - props.budget.reserved_output_tokens)
 })
 
 const circumference = 2 * Math.PI * 15.915

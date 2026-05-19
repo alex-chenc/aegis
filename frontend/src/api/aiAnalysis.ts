@@ -147,9 +147,12 @@ export interface CorrectionEvent {
 export interface ContextBudgetEvent {
   max_context_tokens: number
   reserved_output_tokens: number
-  estimated_tokens: number
+  estimated_prompt_tokens: number
   context_ratio: number
-  available_tokens: number
+  prompt_tokens_observed: number
+  completion_tokens: number
+  total_tokens: number
+  compression_count: number
 }
 
 export interface ContextCompressedEvent {
