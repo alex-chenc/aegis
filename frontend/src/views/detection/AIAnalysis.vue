@@ -1065,6 +1065,16 @@ async function loadSession(session: SessionListItem) {
       }
       appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
     }
+
+    // 当 verdict 为 malicious/suspicious 但无 attack_graph 时，从 final_answer 降级提取
+    if (!attackGraph.value && execResult.final_answer && execResult.conclusion?.verdict &&
+        (execResult.conclusion.verdict === 'malicious' || execResult.conclusion.verdict === 'suspicious')) {
+      const extracted = extractAttackGraphFinalAnswer(execResult.final_answer)
+      if (extracted) {
+        attackGraph.value = extracted.graph
+        upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
+      }
+    }
   } else if (sessionStatus === 'completed' && payload?.conclusion) {
     // 执行结果API返回空，使用history的conclusion构建fallback
     const fallbackResult = buildExecutionResultFromConclusion(session.session_id, payload.conclusion)
@@ -1561,7 +1571,18 @@ function createSSEHandler(message: string) {
         }
         applyParsedExecutionResultFromContent()
         if (sessionId.value) {
-          void loadExecutionResultForSession(sessionId.value, true)
+          void loadExecutionResultForSession(sessionId.value, true).then(result => {
+            // 当 verdict 为 malicious/suspicious 但无 attack_graph 时，从 final_answer 降级提取
+            if (result && !attackGraph.value && result.final_answer &&
+                result.conclusion?.verdict &&
+                (result.conclusion.verdict === 'malicious' || result.conclusion.verdict === 'suspicious')) {
+              const extracted = extractAttackGraphFinalAnswer(result.final_answer)
+              if (extracted) {
+                attackGraph.value = extracted.graph
+                upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
+              }
+            }
+          })
         }
         isLoading.value = false
         scrollToBottom()
@@ -1772,6 +1793,8 @@ onMounted(() => {
         savedSessionId.value = savedId
         sessionId.value = savedId
         if (loadConversation()) {
+          // Load execution result to restore context budget and token data
+          loadExecutionResultForSession(savedId, false)
           nextTick(() => {
             ElMessage.success('已恢复之前的会话')
           })

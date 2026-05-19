@@ -4,6 +4,8 @@ github.com/alex-chenc/agent-runtime v0.0.0-20260519012952-f9d4d50fee43 h1:Yeu+3k
 github.com/alex-chenc/agent-runtime v0.0.0-20260519012952-f9d4d50fee43/go.mod h1:pWOfljnYA19ovePRCeodrk7O5ceU0n11Gl6AtzSsSnw=
 github.com/alex-chenc/agent-runtime v0.0.0-20260519015227-71decef69c52 h1:K4mIGWSH4Tj5/q/vlnuY7ghrzHYuPMzHfLwdNCURqz4=
 github.com/alex-chenc/agent-runtime v0.0.0-20260519015227-71decef69c52/go.mod h1:pWOfljnYA19ovePRCeodrk7O5ceU0n11Gl6AtzSsSnw=
+github.com/alex-chenc/agent-runtime v0.0.0-20260519030554-166fed3487e2 h1:3C206IOlS3UpzBRRgIVeqHaX+LOTAoA4rWxipwKIm8Q=
+github.com/alex-chenc/agent-runtime v0.0.0-20260519030554-166fed3487e2/go.mod h1:pWOfljnYA19ovePRCeodrk7O5ceU0n11Gl6AtzSsSnw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
 github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
 github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
