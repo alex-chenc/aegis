@@ -614,7 +614,6 @@ function loadConversation(): boolean {
       correctionResults.value = data.correctionResults || []
       maxIterations.value = data.maxIterations || 500
       applyStructuredFinalAnswer()
-      applyParsedExecutionResultFromContent()
       return true
     } catch (e) {
       console.error('Failed to load conversation from localStorage:', e)
@@ -800,7 +799,11 @@ function upsertFinalAssistantMessage(content: string, append = false) {
   if (index >= 0) {
     messages.value[index].content = append ? (messages.value[index].content || '') + content : content
     if (append || content) {
-      messages.value[index].executionResult = null
+      // Preserve existing executionResult if it has a meaningful verdict (not 'unknown')
+      const existing = messages.value[index].executionResult
+      if (!existing || existing.conclusion?.verdict === 'unknown') {
+        messages.value[index].executionResult = null
+      }
     }
     return
   }
@@ -1793,8 +1796,8 @@ onMounted(() => {
         savedSessionId.value = savedId
         sessionId.value = savedId
         if (loadConversation()) {
-          // Load execution result to restore context budget and token data
-          loadExecutionResultForSession(savedId, false)
+          // Load execution result to restore context budget, token data, and attach to message
+          loadExecutionResultForSession(savedId, true)
           nextTick(() => {
             ElMessage.success('已恢复之前的会话')
           })

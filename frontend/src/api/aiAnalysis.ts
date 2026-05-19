@@ -295,6 +295,7 @@ export interface ExecutionResult {
   steps: StepResult[]
   errors: string[]
   conclusion: Conclusion
+  final_answer?: string
   context_budget?: ContextBudgetEvent | null
   compression_records?: ContextCompressedEvent[]
   total_prompt_tokens?: number

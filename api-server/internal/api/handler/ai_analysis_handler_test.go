@@ -698,7 +698,7 @@ func TestBuildExecutionResultResponse(t *testing.T) {
 		},
 	}
 
-	response := buildExecutionResultResponse(exec, steps)
+	response := buildExecutionResultResponse(exec, steps, nil)
 
 	if response["status"] != "已完成" {
 		t.Fatalf("expected status '已完成', got %v", response["status"])
@@ -942,7 +942,7 @@ func TestBuildExecutionResultResponse_StructuredJSON(t *testing.T) {
 		EndedAt:         time.Now(),
 	}
 
-	response := buildExecutionResultResponse(exec, nil)
+	response := buildExecutionResultResponse(exec, nil, nil)
 
 	conclusion, ok := response["conclusion"].(map[string]interface{})
 	if !ok {
@@ -1118,5 +1118,176 @@ func TestGetSessionHistoryReturnsEmptyAlertsWhenDeleted(t *testing.T) {
 	}
 	if len(alerts) != 0 {
 		t.Fatalf("expected 0 alerts when deleted, got %d", len(alerts))
+	}
+}
+
+func TestBuildExecutionResultResponse_IncludesFinalAnswer(t *testing.T) {
+	execID := uuid.New()
+	finalAnswerContent := `该进程行为属于恶意攻击，建议立即阻断。`
+	exec := &model.AgentExecution{
+		ID:              execID,
+		SessionID:       "session-fa-1",
+		TaskID:          "task-fa-1",
+		Status:          "completed",
+		ExitReason:      "normal_completed",
+		FinalAnswer:     finalAnswerContent,
+		TotalDurationMs: 120000,
+		StartedAt:       time.Now().Add(-2 * time.Minute),
+		EndedAt:         time.Now(),
+	}
+
+	response := buildExecutionResultResponse(exec, nil, nil)
+
+	fa, ok := response["final_answer"].(string)
+	if !ok {
+		t.Fatalf("expected final_answer to be a string, got %T", response["final_answer"])
+	}
+	if fa != finalAnswerContent {
+		t.Fatalf("expected final_answer '%s', got '%s'", finalAnswerContent, fa)
+	}
+}
+
+func TestBuildExecutionResultResponse_FinalAnswerWithStructuredJSON(t *testing.T) {
+	execID := uuid.New()
+	finalAnswerContent := `{"attack_graph":{"title":"反弹Shell攻击链","summary":"攻击者通过反弹shell获取权限"},"conclusions":[{"alert_id":"ALT-001","action":"confirm_threat","summary":"确认反弹shell攻击"}]}`
+	exec := &model.AgentExecution{
+		ID:              execID,
+		SessionID:       "session-fa-2",
+		TaskID:          "task-fa-2",
+		Status:          "completed",
+		ExitReason:      "normal_completed",
+		FinalAnswer:     finalAnswerContent,
+		TotalDurationMs: 180000,
+		StartedAt:       time.Now().Add(-3 * time.Minute),
+		EndedAt:         time.Now(),
+	}
+
+	response := buildExecutionResultResponse(exec, nil, nil)
+
+	fa, ok := response["final_answer"].(string)
+	if !ok {
+		t.Fatalf("expected final_answer to be a string, got %T", response["final_answer"])
+	}
+	if fa != finalAnswerContent {
+		t.Fatalf("expected final_answer to match original content, got '%s'", fa)
+	}
+
+	// Verify conclusion is also correctly parsed
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+}
+
+func TestBuildExecutionResultResponse_EmptyFinalAnswer(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:              execID,
+		SessionID:       "session-fa-3",
+		TaskID:          "task-fa-3",
+		Status:          "completed",
+		ExitReason:      "normal_completed",
+		FinalAnswer:     "",
+		TotalDurationMs: 60000,
+		StartedAt:       time.Now().Add(-1 * time.Minute),
+		EndedAt:         time.Now(),
+	}
+
+	response := buildExecutionResultResponse(exec, nil, nil)
+
+	fa, ok := response["final_answer"].(string)
+	if !ok {
+		t.Fatalf("expected final_answer to be a string, got %T", response["final_answer"])
+	}
+	if fa != "" {
+		t.Fatalf("expected final_answer to be empty, got '%s'", fa)
+	}
+}
+
+func TestBuildExecutionResultResponse_SessionConclusionTakesPrecedence(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-sc-1",
+		TaskID:      "task-sc-1",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: "some text without clear keywords",
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	// Session has a stored conclusion with malicious verdict (from persistAnalysisOutcome)
+	sessionConclusion := model.JSONB{
+		"verdict":   "malicious",
+		"summary":   "确认反弹shell攻击",
+		"reasoning": "检测到bash进程通过sshd拉起并建立外部连接",
+	}
+
+	response := buildExecutionResultResponse(exec, nil, sessionConclusion)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious' from session conclusion, got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "确认反弹shell攻击" {
+		t.Fatalf("expected summary '确认反弹shell攻击' from session conclusion, got %v", conclusion["summary"])
+	}
+}
+
+func TestBuildExecutionResultResponse_NilSessionConclusionFallsBack(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-sc-2",
+		TaskID:      "task-sc-2",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: "Benign / False Positive: 目标进程已退出",
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	// No session conclusion — should fall back to parseConclusionFromAnswer
+	response := buildExecutionResultResponse(exec, nil, nil)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "benign" {
+		t.Fatalf("expected verdict 'benign' from fallback, got %v", conclusion["verdict"])
+	}
+}
+
+func TestBuildExecutionResultResponse_EmptySessionConclusionFallsBack(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-sc-3",
+		TaskID:      "task-sc-3",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: "Malicious: 检测到反弹Shell行为",
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	// Empty session conclusion — should fall back to parseConclusionFromAnswer
+	emptyConclusion := model.JSONB{}
+	response := buildExecutionResultResponse(exec, nil, emptyConclusion)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious' from fallback, got %v", conclusion["verdict"])
 	}
 }

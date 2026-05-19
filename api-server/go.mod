@@ -3,6 +3,7 @@ module api-server
 go 1.25.0
 
 require (
+	github.com/alex-chenc/agent-runtime v0.0.0-20260519071420-d3f8855f0609
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -25,7 +26,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/alex-chenc/agent-runtime v0.0.0-20260519030554-166fed3487e2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect

@@ -1766,11 +1766,19 @@ func (h *AIAnalysisHandler) GetExecutionResult(c *gin.Context) {
 		steps = []*model.AgentStepExecution{}
 	}
 
-	response := buildExecutionResultResponse(exec, steps)
+	// Fetch session's stored conclusion (from persistAnalysisOutcome) to prefer over re-derived
+	var sessionConclusion model.JSONB
+	if h.sessionRepo != nil {
+		if session, sessErr := h.sessionRepo.FindBySessionID(sessionID); sessErr == nil {
+			sessionConclusion = session.Conclusion
+		}
+	}
+
+	response := buildExecutionResultResponse(exec, steps, sessionConclusion)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": response})
 }
 
-func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.AgentStepExecution) map[string]interface{} {
+func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.AgentStepExecution, sessionConclusion model.JSONB) map[string]interface{} {
 	statusMap := map[string]string{
 		"completed":   "已完成",
 		"failed":      "失败",
@@ -1818,7 +1826,13 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 		})
 	}
 
-	conclusion := parseConclusionFromAnswer(exec.FinalAnswer)
+	// Prefer the session's stored conclusion (from persistAnalysisOutcome) over re-derived
+	var conclusion map[string]interface{}
+	if sessionConclusion != nil && len(sessionConclusion) > 0 {
+		conclusion = map[string]interface{}(sessionConclusion)
+	} else {
+		conclusion = parseConclusionFromAnswer(exec.FinalAnswer)
+	}
 
 	// Extract context budget and token metrics from stored metrics
 	var contextBudget interface{}
@@ -1847,6 +1861,7 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 		"steps":                 stepResponses,
 		"errors":                extractErrorsFromExecution(exec),
 		"conclusion":            conclusion,
+		"final_answer":          exec.FinalAnswer,
 		"context_budget":        contextBudget,
 		"compression_records":   compressionRecords,
 		"total_prompt_tokens":   totalPromptTokens,
