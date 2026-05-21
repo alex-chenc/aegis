@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-![System Preview](docs/screenshots/ui-refresh/detection-ai-analysis.png)
+![System Preview](docs/screenshots/ui-refresh/ai_analysis.png)（docs/screenshots/ui-refresh/ai_trace.png）
 
 ## Overview
 

@@ -2,7 +2,7 @@
 
 中文 | [English](README_EN.md)
 
-![系统预览](docs/screenshots/ui-refresh/detection-ai-analysis.png)
+![系统预览](docs/screenshots/ui-refresh/ai_analysis.png)（docs/screenshots/ui-refresh/ai_trace.png）
 
 ## 项目概述
 
