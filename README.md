@@ -89,15 +89,6 @@ Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台�
 | **图片模型接入** | 「系统配置 / 模型配置」支持独立配置文本模型与图片模型，用于生成流程图图片 |
 
 
-## 界面截图
-
-V5.6 UI 视觉刷新截图保存在 `docs/screenshots/ui-refresh/`，其中 AI 分析相关截图：
-
-| 页面 | 截图 |
-| :--- | :--- |
-| AI 分析页 | `docs/screenshots/ui-refresh/detection-ai-analysis.png` |
-| 攻击溯源图 | `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png` |
-
 ## 快速开始
 
 ### 环境要求

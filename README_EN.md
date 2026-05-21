@@ -88,14 +88,6 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 | **Attack Provenance Graph**| Parse `attack_graph` from the final answer and show both interactive graph and flowchart image |
 | **Image Model Integration**| Configure text LLM and image model separately on the system settings page    |
 
-## Screenshots
-
-V5.6 UI refresh screenshots are stored in `docs/screenshots/ui-refresh/`. AI analysis screenshots:
-
-| Page | Screenshot |
-| :--- | :--------- |
-| AI Analysis | `docs/screenshots/ui-refresh/detection-ai-analysis.png` |
-| Attack Graph | `docs/screenshots/ui-refresh/detection-ai-analysis-flowchart.png` |
 
 ## Quick Start
 
