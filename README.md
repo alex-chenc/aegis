@@ -2,7 +2,8 @@
 
 中文 | [English](README_EN.md)
 
-![系统预览](docs/screenshots/ui-refresh/ai_analysis.png)（docs/screenshots/ui-refresh/ai_trace.png）
+![AI分析](docs/screenshots/ui-refresh/ai_analysis.png)
+![AI溯源图]（docs/screenshots/ui-refresh/ai_trace.png）
 
 ## 项目概述
 
