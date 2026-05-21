@@ -94,7 +94,7 @@ func TestSSEResponseCollectorHookMethodsBuildStepHistory(t *testing.T) {
 
 func TestPauseAnalysisCancelsActiveRun(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	cancelled := false
 	handler.setActiveRun("session-1", func() {
 		cancelled = true
@@ -1003,7 +1003,7 @@ func TestParseConclusionFromAnswer_VeryLongContent(t *testing.T) {
 
 func TestGetSessionHistoryReturnsAlerts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	sessionID := "test-session-alerts"
 	now := time.Now()
@@ -1081,7 +1081,7 @@ func TestGetSessionHistoryReturnsAlerts(t *testing.T) {
 
 func TestGetSessionHistoryReturnsEmptyAlertsWhenDeleted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAIAnalysisHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	sessionID := "test-session-no-alerts"
 	handler.sessions[sessionID] = &AISSESion{
@@ -1289,5 +1289,245 @@ func TestBuildExecutionResultResponse_EmptySessionConclusionFallsBack(t *testing
 	}
 	if conclusion["verdict"] != "malicious" {
 		t.Fatalf("expected verdict 'malicious' from fallback, got %v", conclusion["verdict"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// persistAnalysisOutcome: conclusion storage includes verdict field
+// ---------------------------------------------------------------------------
+
+// simulatePersistOutcome mimics the fixed persistAnalysisOutcome logic:
+// extractFinalAnswerResult → buildVerdictFromConclusions → merge with raw result.
+func simulatePersistOutcome(finalContent string) map[string]interface{} {
+	result, err := extractFinalAnswerResult(finalContent)
+	if err != nil {
+		return parseConclusionFromAnswer(finalContent)
+	}
+	conclusionMap := buildVerdictFromConclusions(result, finalContent)
+	conclusionMap["conclusions"] = result.Conclusions
+	conclusionMap["attack_graph"] = result.AttackGraph
+	return conclusionMap
+}
+
+func TestPersistOutcome_ConfirmThreatIncludesVerdict(t *testing.T) {
+	content := `{
+  "attack_graph": {
+    "title": "反弹Shell攻击链路溯源",
+    "summary": "攻击者通过 bash 执行反弹 shell",
+    "threat_level": "high",
+    "nodes": [{"id": "n1", "type": "process", "label": "bash"}],
+    "edges": [],
+    "timeline": [],
+    "recommendations": ["隔离主机"]
+  },
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "confirm_threat", "summary": "确认存在反弹 shell 行为"}
+  ]
+}`
+	stored := simulatePersistOutcome(content)
+
+	if stored["verdict"] != "malicious" {
+		t.Fatalf("expected stored verdict 'malicious', got %v", stored["verdict"])
+	}
+	if stored["summary"] != "确认存在反弹 shell 行为" {
+		t.Fatalf("expected stored summary from conclusion, got %v", stored["summary"])
+	}
+	if stored["reasoning"] == nil || stored["reasoning"] == "" {
+		t.Fatal("expected stored reasoning to be non-empty")
+	}
+	// Verify conclusions array is preserved
+	conclusions, ok := stored["conclusions"].([]AlertConclusion)
+	if !ok || len(conclusions) != 1 {
+		t.Fatalf("expected 1 conclusion in stored data, got %T %v", stored["conclusions"], stored["conclusions"])
+	}
+	// Verify attack_graph is preserved
+	ag, ok := stored["attack_graph"].(map[string]interface{})
+	if !ok || ag["title"] != "反弹Shell攻击链路溯源" {
+		t.Fatalf("expected attack_graph to be preserved, got %v", stored["attack_graph"])
+	}
+}
+
+func TestPersistOutcome_MarkFalsePositiveIncludesVerdict(t *testing.T) {
+	content := `{
+  "attack_graph": {"nodes": [], "edges": []},
+  "conclusions": [
+    {"alert_id": "ALT-002", "action": "mark_false_positive", "summary": "该告警为正常运维操作"}
+  ]
+}`
+	stored := simulatePersistOutcome(content)
+
+	if stored["verdict"] != "benign" {
+		t.Fatalf("expected stored verdict 'benign', got %v", stored["verdict"])
+	}
+	if stored["summary"] != "该告警为正常运维操作" {
+		t.Fatalf("expected stored summary, got %v", stored["summary"])
+	}
+}
+
+func TestPersistOutcome_MixedConclusionsTakesMostSevere(t *testing.T) {
+	content := `{
+  "attack_graph": {"nodes": [], "edges": []},
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报"},
+    {"alert_id": "ALT-002", "action": "confirm_threat", "summary": "确认反弹shell攻击"},
+    {"alert_id": "ALT-003", "action": "generate_rule", "summary": "建议生成规则"}
+  ]
+}`
+	stored := simulatePersistOutcome(content)
+
+	if stored["verdict"] != "malicious" {
+		t.Fatalf("expected stored verdict 'malicious' (most severe), got %v", stored["verdict"])
+	}
+}
+
+func TestPersistOutcome_FallbackToKeywordMatching(t *testing.T) {
+	content := "经分析，确认该行为属于恶意攻击，建议立即处置"
+	stored := simulatePersistOutcome(content)
+
+	if stored["verdict"] != "malicious" {
+		t.Fatalf("expected stored verdict 'malicious' from keyword fallback, got %v", stored["verdict"])
+	}
+}
+
+func TestPersistOutcome_EmptyContent(t *testing.T) {
+	stored := simulatePersistOutcome("")
+
+	if stored["verdict"] != "unknown" {
+		t.Fatalf("expected stored verdict 'unknown', got %v", stored["verdict"])
+	}
+	if stored["summary"] != "未生成结论" {
+		t.Fatalf("expected summary '未生成结论', got %v", stored["summary"])
+	}
+}
+
+func TestPersistOutcome_StoredConclusionWorksAsSessionConclusion(t *testing.T) {
+	// This is the critical integration test:
+	// 1. persistAnalysisOutcome stores a conclusion with verdict
+	// 2. buildExecutionResultResponse receives it as sessionConclusion
+	// 3. Frontend receives correct verdict
+	content := `{
+  "attack_graph": {
+    "title": "反弹Shell攻击链",
+    "nodes": [{"id": "n1", "type": "process", "label": "bash"}],
+    "edges": []
+  },
+  "conclusions": [
+    {"alert_id": "ALT-001", "action": "confirm_threat", "summary": "确认反弹shell攻击"}
+  ]
+}`
+	stored := simulatePersistOutcome(content)
+
+	// Simulate: buildExecutionResultResponse receives stored conclusion
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-integration",
+		TaskID:      "task-integration",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: content,
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	sessionConclusion := model.JSONB(stored)
+	response := buildExecutionResultResponse(exec, nil, sessionConclusion)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious', got %v", conclusion["verdict"])
+	}
+	if conclusion["summary"] != "确认反弹shell攻击" {
+		t.Fatalf("expected summary '确认反弹shell攻击', got %v", conclusion["summary"])
+	}
+	// Verify attack_graph is accessible from the stored conclusion
+	ag, ok := conclusion["attack_graph"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected attack_graph in conclusion, got %T", conclusion["attack_graph"])
+	}
+	if ag["title"] != "反弹Shell攻击链" {
+		t.Fatalf("expected attack_graph title, got %v", ag["title"])
+	}
+}
+
+func TestBuildExecutionResultResponse_BackwardCompatibleConclusionDerivesVerdict(t *testing.T) {
+	// Simulate old-format stored conclusion (no verdict field, only conclusions array)
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-bc-1",
+		TaskID:      "task-bc-1",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: "some text",
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	// Old format: conclusions array without verdict
+	oldConclusion := model.JSONB{
+		"conclusions": []interface{}{
+			map[string]interface{}{
+				"action":  "confirm_threat",
+				"summary": "确认反弹shell攻击",
+				"alert_id": "ALT-001",
+			},
+		},
+		"attack_graph": map[string]interface{}{
+			"title": "攻击链",
+			"nodes": []interface{}{},
+			"edges": []interface{}{},
+		},
+	}
+
+	response := buildExecutionResultResponse(exec, nil, oldConclusion)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	// Should derive malicious from confirm_threat action
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious' derived from conclusions, got %v", conclusion["verdict"])
+	}
+}
+
+func TestBuildExecutionResultResponse_BackwardCompatibleMixedConclusions(t *testing.T) {
+	execID := uuid.New()
+	exec := &model.AgentExecution{
+		ID:          execID,
+		SessionID:   "session-bc-2",
+		TaskID:      "task-bc-2",
+		Status:      "completed",
+		ExitReason:  "normal_completed",
+		FinalAnswer: "some text",
+		StartedAt:   time.Now().Add(-5 * time.Minute),
+		EndedAt:     time.Now(),
+	}
+
+	oldConclusion := model.JSONB{
+		"conclusions": []interface{}{
+			map[string]interface{}{
+				"action":  "mark_false_positive",
+				"summary": "误报",
+			},
+			map[string]interface{}{
+				"action":  "confirm_threat",
+				"summary": "确认威胁",
+			},
+		},
+	}
+
+	response := buildExecutionResultResponse(exec, nil, oldConclusion)
+
+	conclusion, ok := response["conclusion"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected conclusion to be a map, got %T", response["conclusion"])
+	}
+	if conclusion["verdict"] != "malicious" {
+		t.Fatalf("expected verdict 'malicious' (most severe), got %v", conclusion["verdict"])
 	}
 }

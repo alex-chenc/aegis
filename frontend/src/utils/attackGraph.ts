@@ -91,13 +91,13 @@ function collectJSONObjectCandidates(content: string): string[] {
   return candidates
 }
 
-function isAttackGraph(value: any): value is AttackGraphData {
+export function isAttackGraph(value: any): value is AttackGraphData {
   return Boolean(
     value &&
       typeof value === 'object' &&
       Array.isArray(value.nodes) &&
-      Array.isArray(value.edges) &&
-      typeof value.title === 'string'
+      value.nodes.length > 0 &&
+      Array.isArray(value.edges)
   )
 }
 

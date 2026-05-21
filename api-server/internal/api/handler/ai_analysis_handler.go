@@ -26,17 +26,20 @@ import (
 )
 
 type AIAnalysisHandler struct {
-	alertRepo     *repository.AlertRepository
-	configRepo    *repository.ConfigRepository
-	vectorService *service.VectorService
-	serverClient  *grpc.ServerClient
-	sessionRepo   *repository.AISessionRepository
-	messageRepo   *repository.AIMessageRepository
-	agentExecRepo *repository.AgentExecutionRepository
-	sessions      map[string]*AISSESion
-	sessionsMutex sync.RWMutex
-	activeRuns    map[string]activeAnalysisRun
-	activeRunsMu  sync.Mutex
+	alertRepo          *repository.AlertRepository
+	configRepo         *repository.ConfigRepository
+	vectorService      *service.VectorService
+	serverClient       *grpc.ServerClient
+	sessionRepo        *repository.AISessionRepository
+	messageRepo        *repository.AIMessageRepository
+	agentExecRepo      *repository.AgentExecutionRepository
+	blockPolicyRepo    *repository.BlockPolicyRepository
+	blockRepo          *repository.BlockRepository
+	aiAutoBlockService *service.AIAutoBlockService
+	sessions           map[string]*AISSESion
+	sessionsMutex      sync.RWMutex
+	activeRuns         map[string]activeAnalysisRun
+	activeRunsMu       sync.Mutex
 }
 
 type activeAnalysisRun struct {
@@ -719,17 +722,23 @@ func NewAIAnalysisHandler(
 	sessionRepo *repository.AISessionRepository,
 	messageRepo *repository.AIMessageRepository,
 	agentExecRepo *repository.AgentExecutionRepository,
+	blockPolicyRepo *repository.BlockPolicyRepository,
+	blockRepo *repository.BlockRepository,
+	aiAutoBlockService *service.AIAutoBlockService,
 ) *AIAnalysisHandler {
 	return &AIAnalysisHandler{
-		alertRepo:     alertRepo,
-		configRepo:    configRepo,
-		vectorService: vectorService,
-		serverClient:  serverClient,
-		sessionRepo:   sessionRepo,
-		messageRepo:   messageRepo,
-		agentExecRepo: agentExecRepo,
-		sessions:      make(map[string]*AISSESion),
-		activeRuns:    make(map[string]activeAnalysisRun),
+		alertRepo:          alertRepo,
+		configRepo:         configRepo,
+		vectorService:      vectorService,
+		serverClient:       serverClient,
+		sessionRepo:        sessionRepo,
+		messageRepo:        messageRepo,
+		agentExecRepo:      agentExecRepo,
+		blockPolicyRepo:    blockPolicyRepo,
+		blockRepo:          blockRepo,
+		aiAutoBlockService: aiAutoBlockService,
+		sessions:           make(map[string]*AISSESion),
+		activeRuns:         make(map[string]activeAnalysisRun),
 	}
 }
 
@@ -1023,6 +1032,59 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 
 	h.persistAnalysisOutcome(session, aiResponseContent)
 
+	// Execute AI auto block if service is available and conclusions exist
+	if h.aiAutoBlockService != nil && aiResponseContent != "" {
+		if result, err := extractFinalAnswerResult(aiResponseContent); err == nil && len(result.Conclusions) > 0 {
+			// Build alert ID to UUID mapping from session snapshots
+			alertIDToUUID := make(map[string]uuid.UUID, len(session.AlertSnapshots))
+			for _, snapshot := range session.AlertSnapshots {
+				if parsedUUID, parseErr := uuid.Parse(snapshot.ID); parseErr == nil {
+					alertIDToUUID[snapshot.AlertID] = parsedUUID
+				}
+			}
+
+			// Convert handler conclusions to service conclusions
+			svcConclusions := make([]service.AlertConclusion, len(result.Conclusions))
+			for i, c := range result.Conclusions {
+				svcConclusions[i] = service.AlertConclusion{
+					AlertID: c.AlertID,
+					Action:  c.Action,
+					Summary: c.Summary,
+				}
+			}
+
+			aiBlockPayload := h.aiAutoBlockService.Execute(svcConclusions, alertIDToUUID)
+
+			// Send SSE event
+			sseWriter.Write(llm.SSEEvent{
+				Type:   "ai_auto_block",
+				Result: aiBlockPayload,
+			})
+
+			// Merge ai_auto_block result into session conclusion
+			if h.sessionRepo != nil {
+				if conclusionJSON, getErr := h.sessionRepo.GetConclusion(session.SessionID); getErr == nil && conclusionJSON != nil {
+					aiBlockMap := map[string]interface{}{
+						"triggered": aiBlockPayload.Triggered,
+						"summary":   aiBlockPayload.Summary,
+						"results":   aiBlockPayload.Results,
+					}
+					conclusionJSON["ai_auto_block"] = aiBlockMap
+					_ = h.sessionRepo.UpdateConclusion(session.SessionID, conclusionJSON)
+				}
+			}
+
+			logger.Info("ai_auto_block execution completed",
+				zap.String("session_id", sessionID),
+				zap.Bool("triggered", aiBlockPayload.Triggered),
+				zap.Int("total", aiBlockPayload.Summary.Total),
+				zap.Int("success", aiBlockPayload.Summary.Success),
+				zap.Int("failed", aiBlockPayload.Summary.Failed),
+				zap.Int("skipped", aiBlockPayload.Summary.Skipped),
+			)
+		}
+	}
+
 	if aiResponseContent != "" {
 		sseWriter.WriteContent(aiResponseContent)
 	}
@@ -1158,16 +1220,18 @@ func (h *AIAnalysisHandler) persistAnalysisOutcome(session *AISSESion, finalCont
 		return
 	}
 
+	// Build verdict from structured conclusions and merge with raw result data
+	conclusionMap := buildVerdictFromConclusions(result, finalContent)
+	conclusionMap["conclusions"] = result.Conclusions
+	conclusionMap["attack_graph"] = result.AttackGraph
+
 	session.Status = "completed"
 	if h.sessionRepo != nil {
-		var conclusionJSON model.JSONB
-		if payload, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = json.Unmarshal(payload, &conclusionJSON)
-			if updateErr := h.sessionRepo.UpdateConclusion(session.SessionID, conclusionJSON); updateErr != nil {
-				logger.Warn("failed to persist AI session conclusion",
-					zap.String("session_id", session.SessionID),
-					zap.Error(updateErr))
-			}
+		conclusionJSON := model.JSONB(conclusionMap)
+		if updateErr := h.sessionRepo.UpdateConclusion(session.SessionID, conclusionJSON); updateErr != nil {
+			logger.Warn("failed to persist AI session conclusion",
+				zap.String("session_id", session.SessionID),
+				zap.Error(updateErr))
 		}
 	}
 
@@ -1830,6 +1894,23 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	var conclusion map[string]interface{}
 	if sessionConclusion != nil && len(sessionConclusion) > 0 {
 		conclusion = map[string]interface{}(sessionConclusion)
+		// Backward compatibility: if stored conclusion has conclusions but no verdict,
+		// derive verdict from the conclusions array
+		if _, hasVerdict := conclusion["verdict"]; !hasVerdict {
+			if conclusions, ok := conclusion["conclusions"].([]interface{}); ok && len(conclusions) > 0 {
+				actions := make([]string, 0, len(conclusions))
+				for _, c := range conclusions {
+					if cm, ok := c.(map[string]interface{}); ok {
+						if action, _ := cm["action"].(string); action != "" {
+							actions = append(actions, action)
+						}
+					}
+				}
+				if v := deriveVerdictFromActions(actions); v != "unknown" {
+					conclusion["verdict"] = v
+				}
+			}
+		}
 	} else {
 		conclusion = parseConclusionFromAnswer(exec.FinalAnswer)
 	}
@@ -1933,35 +2014,43 @@ func parseConclusionFromAnswer(finalAnswer string) map[string]interface{} {
 	}
 }
 
+// actionVerdictMap maps LLM conclusion actions to verdict values.
+var actionVerdictMap = map[string]string{
+	"mark_false_positive": "benign",
+	"confirm_threat":      "malicious",
+	"generate_rule":       "suspicious",
+}
+
+// verdictSeverity ranks verdict severity for "most severe wins" logic.
+var verdictSeverity = map[string]int{
+	"benign":    0,
+	"suspicious": 1,
+	"malicious": 2,
+}
+
+// deriveVerdictFromActions returns the most severe verdict from a list of action strings.
+func deriveVerdictFromActions(actions []string) string {
+	worstVerdict := "unknown"
+	worstSeverity := -1
+	for _, action := range actions {
+		if v, ok := actionVerdictMap[action]; ok {
+			if verdictSeverity[v] > worstSeverity {
+				worstSeverity = verdictSeverity[v]
+				worstVerdict = v
+			}
+		}
+	}
+	return worstVerdict
+}
+
 // buildVerdictFromConclusions maps structured JSON conclusions to a verdict.
 // When multiple conclusions exist, the most severe verdict is used:
 // malicious > suspicious > benign.
 func buildVerdictFromConclusions(result *finalAnswerResult, originalText string) map[string]interface{} {
-	actionVerdictMap := map[string]string{
-		"mark_false_positive": "benign",
-		"confirm_threat":      "malicious",
-		"generate_rule":       "suspicious",
-	}
-
-	severityOrder := map[string]int{
-		"benign":    0,
-		"suspicious": 1,
-		"malicious": 2,
-	}
-
-	worstVerdict := "unknown"
-	worstSeverity := -1
+	actions := make([]string, 0, len(result.Conclusions))
 	summary := ""
-
 	for _, c := range result.Conclusions {
-		v, ok := actionVerdictMap[c.Action]
-		if !ok {
-			continue
-		}
-		if severityOrder[v] > worstSeverity {
-			worstSeverity = severityOrder[v]
-			worstVerdict = v
-		}
+		actions = append(actions, c.Action)
 		if summary == "" && c.Summary != "" {
 			summary = c.Summary
 		}
@@ -1972,7 +2061,7 @@ func buildVerdictFromConclusions(result *finalAnswerResult, originalText string)
 	}
 
 	return map[string]interface{}{
-		"verdict":   worstVerdict,
+		"verdict":   deriveVerdictFromActions(actions),
 		"summary":   summary,
 		"reasoning": originalText,
 	}

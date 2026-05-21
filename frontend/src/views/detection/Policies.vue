@@ -52,6 +52,11 @@
             <el-switch :model-value="row.auto_block" @change="(v: boolean) => handleToggleAutoBlock(row.mitre_id, v)" />
           </template>
         </el-table-column>
+        <el-table-column label="AI自动阻断" width="120" align="center">
+          <template #default="{ row }">
+            <el-switch :model-value="row.ai_auto_block" @change="(v: boolean) => handleToggleAIAutoBlock(row.mitre_id, v)" />
+          </template>
+        </el-table-column>
         <el-table-column label="自动处置" width="100" align="center">
           <template #default="{ row }">
             <el-switch :model-value="row.auto_dispose" @change="(v: boolean) => handleToggleAutoDispose(row.mitre_id, v)" />
@@ -144,8 +149,23 @@ async function handleToggleAutoBlock(mitreId: string, autoBlock: boolean) {
     const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
     if (index !== -1) {
       blockPolicies.value[index].auto_block = autoBlock
+      if (autoBlock) blockPolicies.value[index].ai_auto_block = false
     }
     ElMessage.success('自动阻断状态已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  }
+}
+
+async function handleToggleAIAutoBlock(mitreId: string, aiAutoBlock: boolean) {
+  try {
+    await api.updateBlockPolicy(mitreId, { ai_auto_block: aiAutoBlock })
+    const index = blockPolicies.value.findIndex(p => p.mitre_id === mitreId)
+    if (index !== -1) {
+      blockPolicies.value[index].ai_auto_block = aiAutoBlock
+      if (aiAutoBlock) blockPolicies.value[index].auto_block = false
+    }
+    ElMessage.success('AI自动阻断状态已更新')
   } catch (e: any) {
     ElMessage.error(e.message || '更新失败')
   }

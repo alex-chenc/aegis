@@ -180,7 +180,8 @@ func main() {
 	aiSessionRepo := repository.NewAISessionRepository(db)
 	aiMessageRepo := repository.NewAIMessageRepository(db)
 	agentExecRepo := repository.NewAgentExecutionRepository(db)
-	aiAnalysisHandler := handler.NewAIAnalysisHandler(alertRepo, configRepo, vectorService, serverClient, aiSessionRepo, aiMessageRepo, agentExecRepo)
+	aiAutoBlockService := service.NewAIAutoBlockService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
+	aiAnalysisHandler := handler.NewAIAnalysisHandler(alertRepo, configRepo, vectorService, serverClient, aiSessionRepo, aiMessageRepo, agentExecRepo, blockPolicyRepo, blockRepo, aiAutoBlockService)
 
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())

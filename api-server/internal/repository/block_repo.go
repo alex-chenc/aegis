@@ -3,6 +3,7 @@ package repository
 import (
 	"api-server/internal/model"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -46,4 +47,18 @@ func (r *BlockRepository) GetTodayCount() (int64, error) {
 	var count int64
 	err := r.db.Model(&model.BlockRecord{}).Where("created_at >= CURRENT_DATE").Count(&count).Error
 	return count, err
+}
+
+// ExistsByAlertID checks if any block record exists for the given alert.
+// Returns true and the latest record if found, false and nil otherwise.
+func (r *BlockRepository) ExistsByAlertID(alertID uuid.UUID) (bool, *model.BlockRecord, error) {
+	var record model.BlockRecord
+	err := r.db.Where("alert_id = ?", alertID).Order("created_at DESC").First(&record).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+	return true, &record, nil
 }

@@ -115,9 +115,9 @@
             <!-- Execution plan (agent-runtime) -->
             <ExecutionPlan
               :plan="executionPlan"
-              :audits="auditResults"
-              :reflections="reflectionResults"
-              :corrections="correctionResults"
+              :audits="currentSessionStatus === 'completed' ? auditResults : []"
+              :reflections="currentSessionStatus === 'completed' ? reflectionResults : []"
+              :corrections="currentSessionStatus === 'completed' ? correctionResults : []"
             />
           </div>
         </el-card>
@@ -224,8 +224,8 @@
                     </div>
 
                     <!-- 最终回复 -->
-                    <div v-if="msg.executionResult && !msg.thought" class="final-execution-result">
-                      <TaskExecutionResult :result="msg.executionResult" />
+                    <div v-if="currentSessionStatus === 'completed' && msg.executionResult && !msg.thought" class="final-execution-result">
+                      <TaskExecutionResult :result="msg.executionResult" :ai-auto-block-result="aiAutoBlockResult" />
                     </div>
                     <div v-else-if="msg.content && !msg.thought && !msg.isError" class="final-content">
                       <pre>{{ msg.content }}</pre>
@@ -326,18 +326,18 @@
           </div>
 
           <!-- 执行结果展示区域 -->
-          <div v-if="executionResult && !hasMessageExecutionResult" class="execution-result-panel">
+          <div v-if="currentSessionStatus === 'completed' && executionResult && !hasMessageExecutionResult" class="execution-result-panel">
             <div class="execution-result-header">
               <span>任务执行结果</span>
               <el-button size="small" type="danger" @click="executionResult = null">
                 关闭
               </el-button>
             </div>
-            <TaskExecutionResult :result="executionResult" />
+            <TaskExecutionResult :result="executionResult" :ai-auto-block-result="aiAutoBlockResult" />
           </div>
 
           <!-- 溯源图展示区域 -->
-          <el-card v-if="attackGraph" class="attack-graph-card" style="margin-top: 16px;">
+          <el-card v-if="currentSessionStatus === 'completed' && attackGraph" class="attack-graph-card" style="margin-top: 16px;">
             <template #header>
               <div class="card-header">
                 <span>攻击溯源图</span>
@@ -424,7 +424,7 @@ import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
 import { getHosts } from '@/api/hosts'
-import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, getExecutionResult, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent, type ExecutionResult, type ContextBudgetEvent, type ContextCompressedEvent } from '@/api/aiAnalysis'
+import { createAISession, createAISessionStream, getSessionList, getSessionHistory, deleteSession, pauseSession, getExecutionResult, type SSEEvent, type PlanEvent, type AuditEvent, type ReflectionEvent, type CorrectionEvent, type ExecutionResult, type ContextBudgetEvent, type ContextCompressedEvent, type AIAutoBlockPayload } from '@/api/aiAnalysis'
 import AttackGraph from '@/components/AttackGraph.vue'
 import ContextBudgetIndicator from '@/components/ContextBudgetIndicator.vue'
 import ExecutionPlan from '@/components/ExecutionPlan.vue'
@@ -433,6 +433,7 @@ import {
   buildAttackGraphDisplayText,
   buildAttackGraphSvgDataUrl,
   extractAttackGraphFinalAnswer,
+  isAttackGraph,
   isLikelyAttackGraphFinalAnswer,
   type AttackGraphData
 } from '@/utils/attackGraph'
@@ -539,6 +540,7 @@ const executionPlan = ref<PlanEvent | null>(null)
 const auditResults = ref<AuditEvent[]>([])
 const reflectionResults = ref<ReflectionEvent[]>([])
 const correctionResults = ref<CorrectionEvent[]>([])
+const currentSessionStatus = ref<'completed' | 'active'>('active')
 const executionResult = ref<ExecutionResult | null>(null)
 const contextBudget = ref<ContextBudgetEvent | null>(null)
 const compressionRecords = ref<ContextCompressedEvent[]>([])
@@ -547,6 +549,7 @@ const totalCompletionTokens = ref(0)
 const messageListRef = ref<HTMLElement | null>(null)
 const alertTableRef = ref<any>(null)
 const currentEventSource = ref<EventSource | null>(null)
+const aiAutoBlockResult = ref<AIAutoBlockPayload | null>(null)
 
 // LocalStorage keys
 const CURRENT_SESSION_KEY = 'aegis_current_session_id'
@@ -586,6 +589,8 @@ function saveConversation() {
         reflectionResults: reflectionResults.value,
         correctionResults: correctionResults.value,
         maxIterations: maxIterations.value,
+        currentSessionStatus: currentSessionStatus.value,
+        aiAutoBlockResult: aiAutoBlockResult.value,
         savedAt: new Date().toISOString()
       }
       localStorage.setItem(getStorageKey(), JSON.stringify(data))
@@ -612,7 +617,11 @@ function loadConversation(): boolean {
       auditResults.value = data.auditResults || []
       reflectionResults.value = data.reflectionResults || []
       correctionResults.value = data.correctionResults || []
+      aiAutoBlockResult.value = data.aiAutoBlockResult || null
       maxIterations.value = data.maxIterations || 500
+      if (data.currentSessionStatus === 'completed') {
+        currentSessionStatus.value = 'completed'
+      }
       applyStructuredFinalAnswer()
       return true
     } catch (e) {
@@ -940,6 +949,7 @@ async function deleteSessionById(session: SessionListItem) {
       reflectionResults.value = []
       correctionResults.value = []
       executionResult.value = null
+      aiAutoBlockResult.value = null
       contextBudget.value = null
       compressionRecords.value = []
       totalPromptTokens.value = 0
@@ -969,7 +979,7 @@ async function loadSession(session: SessionListItem) {
   // Guard against double execution
   if (sessionId.value === session.session_id && messages.value.length > 0) {
     sessionHistoryVisible.value = false
-    if (!executionResult.value) {
+    if (!executionResult.value && currentSessionStatus.value === 'completed') {
       void loadExecutionResultForSession(session.session_id, true)
     }
     return
@@ -988,6 +998,7 @@ async function loadSession(session: SessionListItem) {
   attackGraph.value = null
   generatedFlowchartImageUrl.value = ''
   executionResult.value = null
+  aiAutoBlockResult.value = null
   executionPlan.value = null
   auditResults.value = []
   reflectionResults.value = []
@@ -1001,6 +1012,7 @@ async function loadSession(session: SessionListItem) {
 
   // 获取会话显示状态
   let sessionStatus = getDisplayStatus(session)
+  currentSessionStatus.value = sessionStatus
 
   // Load messages from history
   let payload: any = null
@@ -1021,14 +1033,6 @@ async function loadSession(session: SessionListItem) {
     // Load execution plan from history
     if (payload.execution_plan) {
       executionPlan.value = normalizePlanEvent(payload.execution_plan)
-      // 已完成会话：将所有非失败步骤标记为已完成
-      if (sessionStatus === 'completed' && executionPlan.value) {
-        for (const step of executionPlan.value.steps) {
-          if (step.status !== 'failed') {
-            step.status = 'completed'
-          }
-        }
-      }
     }
 
     // 审计和反思：如果为空则显示空数组
@@ -1049,33 +1053,24 @@ async function loadSession(session: SessionListItem) {
     ElMessage.error(error.message || '加载会话消息失败')
   }
 
-  // 加载执行结果：始终尝试加载，如果执行结果存在则说明分析已完成
-  const execResult = await loadExecutionResultForSession(session.session_id, true)
+  // 加载执行结果：仅用于填充上下文预算和token统计，不改变会话状态
+  // 只有已完成会话才将执行结果附加到消息中
+  const execResult = await loadExecutionResultForSession(session.session_id, sessionStatus === 'completed')
   if (execResult) {
-    // 执行结果存在，说明分析已完成（即使session.conclusion为空）
-    if (sessionStatus !== 'completed') {
-      sessionStatus = 'completed'
-      // 补充应用结论相关逻辑
-      if (msgs.length > 0) {
-        applyStructuredFinalAnswer()
+    // 只有已完成的会话才应用结论相关逻辑
+    if (sessionStatus === 'completed') {
+      // 优先从 conclusion.attack_graph 直接获取（后端已存储完整 attack_graph）
+      if (!attackGraph.value && execResult.conclusion?.attack_graph && isAttackGraph(execResult.conclusion.attack_graph)) {
+        attackGraph.value = execResult.conclusion.attack_graph
       }
-      if (executionPlan.value) {
-        for (const step of executionPlan.value.steps) {
-          if (step.status !== 'failed') {
-            step.status = 'completed'
-          }
+      // 降级：从 final_answer 文本中提取（跳过明确的良性结论）
+      const verdict = execResult.conclusion?.verdict
+      if (!attackGraph.value && execResult.final_answer && verdict !== 'benign') {
+        const extracted = extractAttackGraphFinalAnswer(execResult.final_answer)
+        if (extracted) {
+          attackGraph.value = extracted.graph
+          upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
         }
-      }
-      appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
-    }
-
-    // 当 verdict 为 malicious/suspicious 但无 attack_graph 时，从 final_answer 降级提取
-    if (!attackGraph.value && execResult.final_answer && execResult.conclusion?.verdict &&
-        (execResult.conclusion.verdict === 'malicious' || execResult.conclusion.verdict === 'suspicious')) {
-      const extracted = extractAttackGraphFinalAnswer(execResult.final_answer)
-      if (extracted) {
-        attackGraph.value = extracted.graph
-        upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
       }
     }
   } else if (sessionStatus === 'completed' && payload?.conclusion) {
@@ -1085,6 +1080,11 @@ async function loadSession(session: SessionListItem) {
       executionResult.value = fallbackResult
       attachExecutionResultToLatestMessage(fallbackResult)
     }
+  }
+
+  // Restore AI auto block result from history conclusion
+  if (payload?.conclusion?.ai_auto_block) {
+    aiAutoBlockResult.value = payload.conclusion.ai_auto_block as AIAutoBlockPayload
   }
 
   ElMessage.success('已加载会话')
@@ -1248,6 +1248,8 @@ async function startAnalysis() {
     reflectionResults.value = []
     correctionResults.value = []
     executionResult.value = null
+    aiAutoBlockResult.value = null
+    currentSessionStatus.value = 'active'
     contextBudget.value = null
     compressionRecords.value = []
     totalPromptTokens.value = 0
@@ -1564,6 +1566,29 @@ function createSSEHandler(message: string) {
         ElMessage({ message: `上下文压缩失败: ${event.error || '未知错误'}`, type: 'warning', duration: 5000 })
         break
 
+      case 'ai_auto_block':
+        try {
+          const blockData = typeof event.result === 'string' ? JSON.parse(event.result) : event.result
+          if (blockData) {
+            aiAutoBlockResult.value = blockData as AIAutoBlockPayload
+            const payload = blockData as AIAutoBlockPayload
+            if (payload.triggered && payload.summary) {
+              const parts: string[] = []
+              if (payload.summary.success > 0) parts.push(`${payload.summary.success} 个成功`)
+              if (payload.summary.failed > 0) parts.push(`${payload.summary.failed} 个失败`)
+              if (payload.summary.skipped > 0) parts.push(`${payload.summary.skipped} 个跳过`)
+              ElMessage({
+                message: `AI 自动阻断: ${parts.join('，')}`,
+                type: payload.summary.failed > 0 ? 'warning' : 'success',
+                duration: 5000
+              })
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+        break
+
       case 'done':
         cleanup()
         flushThought(true)
@@ -1575,19 +1600,25 @@ function createSSEHandler(message: string) {
         applyParsedExecutionResultFromContent()
         if (sessionId.value) {
           void loadExecutionResultForSession(sessionId.value, true).then(result => {
-            // 当 verdict 为 malicious/suspicious 但无 attack_graph 时，从 final_answer 降级提取
-            if (result && !attackGraph.value && result.final_answer &&
-                result.conclusion?.verdict &&
-                (result.conclusion.verdict === 'malicious' || result.conclusion.verdict === 'suspicious')) {
-              const extracted = extractAttackGraphFinalAnswer(result.final_answer)
-              if (extracted) {
-                attackGraph.value = extracted.graph
-                upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
+            if (result && !attackGraph.value) {
+              // 优先从 conclusion.attack_graph 直接获取
+              if (result.conclusion?.attack_graph && isAttackGraph(result.conclusion.attack_graph)) {
+                attackGraph.value = result.conclusion.attack_graph
+              }
+              // 降级：从 final_answer 文本中提取（跳过明确的良性结论）
+              const verdict = result.conclusion?.verdict
+              if (!attackGraph.value && result.final_answer && verdict !== 'benign') {
+                const extracted = extractAttackGraphFinalAnswer(result.final_answer)
+                if (extracted) {
+                  attackGraph.value = extracted.graph
+                  upsertFinalAssistantMessage(buildAttackGraphDisplayText(extracted))
+                }
               }
             }
           })
         }
         isLoading.value = false
+        currentSessionStatus.value = 'completed'
         scrollToBottom()
         break
 

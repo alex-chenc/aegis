@@ -105,18 +105,61 @@
         </div>
       </div>
     </div>
+
+    <!-- AI 自动阻断结果 -->
+    <div v-if="props.aiAutoBlockResult?.triggered" class="ai-auto-block-section">
+      <div class="section-header">
+        <el-icon><Warning /></el-icon>
+        <span>AI 自动阻断</span>
+        <template v-if="props.aiAutoBlockResult.summary">
+          <el-tag v-if="props.aiAutoBlockResult.summary.success > 0" type="success" size="small" style="margin-left: 6px;">
+            {{ props.aiAutoBlockResult.summary.success }} 个成功
+          </el-tag>
+          <el-tag v-if="props.aiAutoBlockResult.summary.failed > 0" type="danger" size="small" style="margin-left: 6px;">
+            {{ props.aiAutoBlockResult.summary.failed }} 个失败
+          </el-tag>
+          <el-tag v-if="props.aiAutoBlockResult.summary.skipped > 0" type="info" size="small" style="margin-left: 6px;">
+            {{ props.aiAutoBlockResult.summary.skipped }} 个跳过
+          </el-tag>
+        </template>
+      </div>
+      <div class="ai-auto-block-card">
+        <div v-if="props.aiAutoBlockResult.results?.length" class="ai-auto-block-list">
+          <div
+            v-for="(item, idx) in props.aiAutoBlockResult.results"
+            :key="idx"
+            class="ai-auto-block-item"
+            :class="item.status"
+          >
+            <div class="ai-auto-block-item-header">
+              <el-tag :type="item.status === 'success' ? 'success' : item.status === 'failed' ? 'danger' : 'info'" size="small">
+                {{ item.action || '-' }}
+              </el-tag>
+              <el-tag v-if="item.status === 'skipped'" type="info" size="small">跳过</el-tag>
+              <span class="ai-auto-block-alert-id">{{ item.alert_id }}</span>
+              <span v-if="item.target" class="ai-auto-block-target">{{ item.target }}</span>
+            </div>
+            <div class="ai-auto-block-message">{{ item.message }}</div>
+          </div>
+        </div>
+        <div v-else-if="props.aiAutoBlockResult.reason" class="ai-auto-block-reason">
+          {{ props.aiAutoBlockResult.reason }}
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Monitor, List, Document, DataAnalysis, Warning, CircleClose } from '@element-plus/icons-vue'
-import type { ExecutionResult } from '@/api/aiAnalysis'
+import type { ExecutionResult, AIAutoBlockPayload } from '@/api/aiAnalysis'
 import { normalizeExecutionResult, executionStatusType, stepStatusType } from '@/utils/taskExecutionResult'
 import { getVerdictType, getVerdictText } from '@/utils/sessionStatus'
 
 const props = defineProps<{
   result: ExecutionResult | null
+  aiAutoBlockResult?: AIAutoBlockPayload | null
 }>()
 
 const displayResult = computed(() => {
@@ -442,5 +485,74 @@ function formatDuration(ms: number): string {
   color: var(--el-color-danger);
   padding: 2px 0;
   font-family: monospace;
+}
+
+/* AI 自动阻断结果 */
+.ai-auto-block-section {
+  margin-bottom: 12px;
+}
+
+.ai-auto-block-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-left: 4px solid var(--el-color-primary);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--el-bg-color);
+}
+
+.ai-auto-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-auto-block-item {
+  border: 1px solid var(--el-border-color-extra-light);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-lighter);
+}
+
+.ai-auto-block-item.success {
+  border-left: 3px solid var(--el-color-success);
+}
+
+.ai-auto-block-item.failed {
+  border-left: 3px solid var(--el-color-danger);
+}
+
+.ai-auto-block-item.skipped {
+  border-left: 3px solid var(--el-color-info);
+}
+
+.ai-auto-block-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ai-auto-block-alert-id {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-family: monospace;
+}
+
+.ai-auto-block-target {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  margin-left: auto;
+}
+
+.ai-auto-block-message {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  line-height: 1.5;
+}
+
+.ai-auto-block-reason {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-style: italic;
 }
 </style>

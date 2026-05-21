@@ -108,6 +108,20 @@ func TestNormalizeImageModelConfigProviderDefaults(t *testing.T) {
 			baseURL:   "https://open.bigmodel.cn/api/paas/v4",
 			modelName: "cogview-3-flash",
 		},
+		{
+			name:      "openai uses dall-e defaults",
+			input:     ImageModelConfigRequest{Provider: "openai"},
+			provider:  "openai",
+			baseURL:   "https://api.openai.com/v1",
+			modelName: "dall-e-3",
+		},
+		{
+			name:      "openai url infers provider",
+			input:     ImageModelConfigRequest{BaseURL: "https://api.openai.com/v1"},
+			provider:  "openai",
+			baseURL:   "https://api.openai.com/v1",
+			modelName: "dall-e-3",
+		},
 	}
 
 	for _, tt := range tests {
@@ -188,5 +202,114 @@ func TestGenerateZhipuImageModelReturnsImageURL(t *testing.T) {
 	}
 	if imageURL != "https://example.test/trace.png" {
 		t.Fatalf("expected image url, got %q", imageURL)
+	}
+}
+
+func TestOpenAIImageModelConnectionUsesGenerationsEndpoint(t *testing.T) {
+	var receivedPath string
+	var receivedModel string
+	var receivedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("expected bearer auth header, got %q", got)
+		}
+
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		receivedBody = payload
+		if m, ok := payload["model"].(string); ok {
+			receivedModel = m
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":123,"data":[{"url":"https://example.test/openai.png"}]}`))
+	}))
+	defer server.Close()
+
+	req := ImageModelConfigRequest{
+		APIKey:    "test-key",
+		Provider:  "openai",
+		BaseURL:   server.URL + "/v1",
+		ModelName: "dall-e-3",
+	}
+
+	if err := testImageModel(context.Background(), req); err != nil {
+		t.Fatalf("expected openai image model test to pass, got %v", err)
+	}
+	if receivedPath != "/v1/images/generations" {
+		t.Fatalf("expected openai generations path, got %q", receivedPath)
+	}
+	if receivedModel != "dall-e-3" {
+		t.Fatalf("expected openai model, got %q", receivedModel)
+	}
+	if receivedBody["response_format"] != "url" {
+		t.Fatalf("expected response_format 'url', got %v", receivedBody["response_format"])
+	}
+	if _, ok := receivedBody["watermark_enabled"]; ok {
+		t.Fatalf("openai request should not contain watermark_enabled")
+	}
+}
+
+func TestGenerateOpenAIImageModelReturnsImageURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":123,"data":[{"url":"https://example.test/openai.png"}]}`))
+	}))
+	defer server.Close()
+
+	req := ImageModelConfigRequest{
+		APIKey:    "test-key",
+		Provider:  "openai",
+		BaseURL:   server.URL + "/v1",
+		ModelName: "dall-e-3",
+	}
+
+	imageURL, err := generateImageModel(context.Background(), req, "A security incident flowchart")
+	if err != nil {
+		t.Fatalf("expected openai image generation to pass, got %v", err)
+	}
+	if imageURL != "https://example.test/openai.png" {
+		t.Fatalf("expected image url, got %q", imageURL)
+	}
+}
+
+func TestCustomProviderUsesOpenAIFormat(t *testing.T) {
+	var receivedPath string
+	var receivedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		receivedBody = payload
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":123,"data":[{"url":"https://example.test/custom.png"}]}`))
+	}))
+	defer server.Close()
+
+	req := ImageModelConfigRequest{
+		APIKey:    "test-key",
+		Provider:  "custom",
+		BaseURL:   server.URL + "/v1",
+		ModelName: "some-model",
+	}
+
+	imageURL, err := generateImageModel(context.Background(), req, "test prompt")
+	if err != nil {
+		t.Fatalf("expected custom image generation to pass, got %v", err)
+	}
+	if imageURL != "https://example.test/custom.png" {
+		t.Fatalf("expected image url, got %q", imageURL)
+	}
+	if receivedPath != "/v1/images/generations" {
+		t.Fatalf("expected custom to use openai generations path, got %q", receivedPath)
+	}
+	if receivedBody["response_format"] != "url" {
+		t.Fatalf("expected custom to use openai response_format, got %v", receivedBody["response_format"])
 	}
 }

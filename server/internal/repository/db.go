@@ -88,6 +88,15 @@ func detectionRuntimeSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_runtime_events_host_time ON runtime_events(host_id, timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_runtime_events_aggregated ON runtime_events(aggregated)`,
 		`CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(event_type)`,
+		`ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS ai_auto_block BOOLEAN DEFAULT FALSE`,
+		`DO $$ BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'chk_block_policies_auto_exclusive'
+			) THEN
+				ALTER TABLE block_policies ADD CONSTRAINT chk_block_policies_auto_exclusive
+					CHECK (NOT (auto_block = TRUE AND ai_auto_block = TRUE));
+			END IF;
+		END $$`,
 	}
 }
 

@@ -3,6 +3,14 @@ import type { PlanEvent, PlanStep } from '@/api/aiAnalysis'
 type RuntimePlan = Record<string, any>
 
 const terminalStatuses = new Set(['completed', 'failed', 'skipped', 'replaced', 'invalidated'])
+const knownStatuses = new Set(['pending', 'running', 'retrying', ...terminalStatuses])
+
+function normalizeStepStatus(raw: unknown): PlanStep['status'] {
+  if (typeof raw === 'string' && knownStatuses.has(raw)) {
+    return raw as PlanStep['status']
+  }
+  return 'pending'
+}
 
 function fallbackStepId(index: number) {
   return `step-${index + 1}`
@@ -38,7 +46,7 @@ export function normalizePlanEvent(raw: RuntimePlan | null | undefined): PlanEve
         objective,
         tool_names: tools,
         suggested_tools: tools,
-        status: 'pending',
+        status: normalizeStepStatus(step.status),
         result_summary: step.result_summary || ''
       }
     })

@@ -85,6 +85,8 @@ export type SSEEventType =
   | 'reflection' | 'correction' | 'step_retrying' | 'step_skipped'
   // context budget events
   | 'context_budget' | 'context_compressed' | 'context_compression_failed'
+  // AI auto block event
+  | 'ai_auto_block'
 
 export interface SSEEvent {
   type: SSEEventType
@@ -160,6 +162,35 @@ export interface ContextCompressedEvent {
   trigger_ratio: number
   before_tokens: number
   after_tokens: number
+}
+
+// AI auto block event payloads
+export interface AIAutoBlockResultItem {
+  alert_id: string
+  mitre_id?: string
+  status: 'success' | 'failed' | 'skipped'
+  block_id?: string
+  action?: string
+  target?: string
+  message: string
+  issued_by?: string
+  existing_block_id?: string
+  existing_issued_by?: string
+}
+
+export interface AIAutoBlockSummary {
+  total: number
+  executed: number
+  success: number
+  failed: number
+  skipped: number
+}
+
+export interface AIAutoBlockPayload {
+  triggered: boolean
+  summary?: AIAutoBlockSummary
+  results?: AIAutoBlockResultItem[]
+  reason?: string
 }
 
 // AI Analysis API functions

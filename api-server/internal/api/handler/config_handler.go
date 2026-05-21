@@ -96,6 +96,11 @@ var imageModelProviderPresets = map[string]imageModelProviderPreset{
 		DefaultURL:   "https://open.bigmodel.cn/api/paas/v4",
 		DefaultModel: "cogview-3-flash",
 	},
+	"openai": {
+		Provider:     "openai",
+		DefaultURL:   "https://api.openai.com/v1",
+		DefaultModel: "dall-e-3",
+	},
 	"custom": {
 		Provider:     "custom",
 		DefaultURL:   "https://api.minimax.io/v1",
@@ -160,6 +165,8 @@ func normalizeImageModelProvider(provider, baseURL string) string {
 		return "minimax"
 	case strings.Contains(base, "bigmodel") || strings.Contains(base, "zhipu"):
 		return "zhipu"
+	case strings.Contains(base, "openai"):
+		return "openai"
 	default:
 		return "custom"
 	}
@@ -450,6 +457,9 @@ func generateImageModel(ctx context.Context, req ImageModelConfigRequest, prompt
 	if req.Provider == "zhipu" || strings.Contains(strings.ToLower(req.BaseURL), "bigmodel") {
 		return generateZhipuImageModel(ctx, req, prompt)
 	}
+	if req.Provider == "openai" || req.Provider == "custom" {
+		return generateOpenAIImageModel(ctx, req, prompt)
+	}
 	return generateMinimaxImageModel(ctx, req, prompt)
 }
 
@@ -561,6 +571,58 @@ func generateZhipuImageModel(ctx context.Context, req ImageModelConfigRequest, p
 	}
 	if decoded.Code != "" || decoded.Message != "" {
 		return "", fmt.Errorf("image API status %s: %s", decoded.Code, decoded.Message)
+	}
+	if len(decoded.Data) == 0 || decoded.Data[0].URL == "" {
+		return "", fmt.Errorf("image API returned no image url")
+	}
+	return decoded.Data[0].URL, nil
+}
+
+func generateOpenAIImageModel(ctx context.Context, req ImageModelConfigRequest, prompt string) (string, error) {
+	endpoint := zhipuImageEndpoint(req.BaseURL)
+	body := map[string]interface{}{
+		"model":           req.ModelName,
+		"prompt":          prompt,
+		"size":            "1024x1024",
+		"n":               1,
+		"response_format": "url",
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("image API returned HTTP %d", resp.StatusCode)
+	}
+
+	var decoded struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return "", err
+	}
+	if decoded.Error.Code != "" || decoded.Error.Message != "" {
+		return "", fmt.Errorf("image API error %s: %s", decoded.Error.Code, decoded.Error.Message)
 	}
 	if len(decoded.Data) == 0 || decoded.Data[0].URL == "" {
 		return "", fmt.Errorf("image API returned no image url")

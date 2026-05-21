@@ -704,8 +704,24 @@ func (s *GRPCServer) checkAutoActions(alert *model.Alert) {
 					zap.String("host_id", alert.HostID.String()),
 					zap.String("action", policy.Action),
 					zap.Error(err))
+				failedStatus := "failed"
+				alert.BlockStatus = &failedStatus
+				alert.BlockMessage = err.Error()
 				if updateErr := s.alertRepo.UpdateBlockStatus(alert.AlertID, "failed", err.Error()); updateErr != nil {
 					logger.Error("failed to update alert block send error",
+						zap.String("alert_id", alert.AlertID), zap.Error(updateErr))
+				}
+			} else {
+				logger.Info("auto-block command executed successfully",
+					zap.String("alert_id", alert.AlertID),
+					zap.String("host_id", alert.HostID.String()),
+					zap.String("action", policy.Action))
+				successStatus := "success"
+				alert.BlockStatus = &successStatus
+				alert.BlockMessage = "自动阻断执行成功"
+				alert.Status = "resolved"
+				if updateErr := s.alertRepo.UpdateBlockStatus(alert.AlertID, "success", "自动阻断执行成功"); updateErr != nil {
+					logger.Error("failed to update alert block success status",
 						zap.String("alert_id", alert.AlertID), zap.Error(updateErr))
 				}
 			}

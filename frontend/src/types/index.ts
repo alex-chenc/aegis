@@ -100,6 +100,7 @@ export interface BlockPolicy {
   mitre_name?: string
   enabled: boolean
   auto_block: boolean
+  ai_auto_block: boolean
   auto_dispose: boolean
   action: string
   updated_at: string

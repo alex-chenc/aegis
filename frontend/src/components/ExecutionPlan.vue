@@ -148,6 +148,7 @@ function statusTagType(status: string): string {
   const map: Record<string, string> = {
     completed: 'success',
     running: '',
+    retrying: 'warning',
     failed: 'danger',
     skipped: 'info',
     replaced: 'warning',
@@ -161,6 +162,7 @@ function statusLabel(status: string): string {
   const map: Record<string, string> = {
     completed: '完成',
     running: '执行中',
+    retrying: '重试中',
     failed: '失败',
     skipped: '跳过',
     replaced: '替换',
@@ -248,6 +250,11 @@ function statusLabel(status: string): string {
 .step-item.step-running {
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
+}
+
+.step-item.step-retrying {
+  border-color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
 }
 
 .step-item.step-completed {

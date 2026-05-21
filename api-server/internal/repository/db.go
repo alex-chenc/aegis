@@ -100,6 +100,15 @@ func detectionEnhancementSchemaStatements() []string {
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS command_line TEXT`,
 		`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS process_tree JSONB`,
 		`ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS ai_auto_block BOOLEAN DEFAULT FALSE`,
+		`DO $$ BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'chk_block_policies_auto_exclusive'
+			) THEN
+				ALTER TABLE block_policies ADD CONSTRAINT chk_block_policies_auto_exclusive
+					CHECK (NOT (auto_block = TRUE AND ai_auto_block = TRUE));
+			END IF;
+		END $$`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_judgment_source ON alerts(judgment_source)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_block_status ON alerts(block_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id)`,

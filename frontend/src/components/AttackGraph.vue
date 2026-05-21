@@ -3,7 +3,7 @@
     <!-- 头部信息 -->
     <div class="graph-header">
       <div class="header-left">
-        <h3>{{ graphData.title }}</h3>
+        <h3>{{ graphData.title || '攻击溯源图' }}</h3>
         <el-tag :type="threatLevelType" size="small">
           {{ threatLevelLabel }}
         </el-tag>
@@ -334,8 +334,14 @@ function initGraph() {
     .attr('d', 'M0,-5L10,0L0,5')
 
   // Prepare data - create deep copies to avoid mutation
+  // Normalize node id field (some LLM outputs use different id formats)
   const nodes = props.graphData.nodes.map(d => ({ ...d }))
-  const edges = props.graphData.edges.map(d => ({ ...d }))
+  // Normalize edge source/target (LLM uses from/to, D3 needs source/target)
+  const edges = props.graphData.edges.map(d => ({
+    ...d,
+    source: (d as any).source || (d as any).from,
+    target: (d as any).target || (d as any).to,
+  }))
 
   // Create links
   const link = g.append('g')

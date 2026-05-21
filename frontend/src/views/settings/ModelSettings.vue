@@ -183,6 +183,12 @@ const imageProviderOptions = [
     modelName: 'cogview-3-flash'
   },
   {
+    value: 'openai',
+    label: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    modelName: 'dall-e-3'
+  },
+  {
     value: 'custom',
     label: '自定义',
     baseURL: '',
@@ -226,6 +232,7 @@ const inferImageProvider = (baseURL: string) => {
   const url = baseURL.toLowerCase()
   if (url.includes('minimaxi') || url.includes('minimax')) return 'minimax'
   if (url.includes('bigmodel') || url.includes('zhipu')) return 'zhipu'
+  if (url.includes('openai')) return 'openai'
   return 'custom'
 }
 

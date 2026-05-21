@@ -371,6 +371,7 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 	var body struct {
 		Enabled     *bool   `json:"enabled"`
 		AutoBlock   *bool   `json:"auto_block"`
+		AIAutoBlock *bool   `json:"ai_auto_block"`
 		AutoDispose *bool   `json:"auto_dispose"`
 		Action      *string `json:"action"`
 	}
@@ -381,12 +382,31 @@ func (h *DetectionHandler) UpdateBlockPolicy(c *gin.Context) {
 
 	mitreID := c.Param("mitre_id")
 
+	// Mutual exclusivity: auto_block and ai_auto_block cannot both be true
+	autoBlockVal := body.AutoBlock != nil && *body.AutoBlock
+	aiAutoBlockVal := body.AIAutoBlock != nil && *body.AIAutoBlock
+	if autoBlockVal && aiAutoBlockVal {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "auto_block and ai_auto_block cannot both be true"})
+		return
+	}
+
 	updates := make(map[string]interface{})
 	if body.Enabled != nil {
 		updates["enabled"] = *body.Enabled
 	}
 	if body.AutoBlock != nil {
 		updates["auto_block"] = *body.AutoBlock
+		// If enabling auto_block, disable ai_auto_block
+		if *body.AutoBlock {
+			updates["ai_auto_block"] = false
+		}
+	}
+	if body.AIAutoBlock != nil {
+		updates["ai_auto_block"] = *body.AIAutoBlock
+		// If enabling ai_auto_block, disable auto_block
+		if *body.AIAutoBlock {
+			updates["auto_block"] = false
+		}
 	}
 	if body.AutoDispose != nil {
 		updates["auto_dispose"] = *body.AutoDispose

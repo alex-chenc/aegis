@@ -87,6 +87,16 @@ func (r *AISessionRepository) UpdateConclusion(sessionID string, conclusion mode
 		}).Error
 }
 
+// GetConclusion returns the conclusion JSONB for a session, or nil if not set.
+func (r *AISessionRepository) GetConclusion(sessionID string) (model.JSONB, error) {
+	var session model.AISession
+	err := r.db.Select("conclusion").Where("session_id = ?", sessionID).First(&session).Error
+	if err != nil {
+		return nil, err
+	}
+	return session.Conclusion, nil
+}
+
 // IncrementMessageCount increments message count
 func (r *AISessionRepository) IncrementMessageCount(sessionID string) error {
 	return r.db.Model(&model.AISession{}).Where("session_id = ?", sessionID).

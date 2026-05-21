@@ -138,8 +138,12 @@ func TestCheckAutoActions_AutoBlockWhenEnabled(t *testing.T) {
 	if !alert.AutoBlocked {
 		t.Fatal("expected AutoBlocked=true")
 	}
-	if alert.BlockStatus == nil || *alert.BlockStatus != "blocking" {
-		t.Fatal("expected BlockStatus=blocking")
+	if alert.BlockStatus == nil || *alert.BlockStatus != "success" {
+		blockStatusStr := "<nil>"
+		if alert.BlockStatus != nil {
+			blockStatusStr = *alert.BlockStatus
+		}
+		t.Fatalf("expected BlockStatus=success, got %s", blockStatusStr)
 	}
 	if len(stream.sent) != 1 || stream.sent[0].GetBlock() == nil {
 		t.Fatal("expected auto-block command to be sent")
