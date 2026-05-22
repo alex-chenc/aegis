@@ -1,0 +1,723 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="${1:-${VERSION:-v5.7}}"
+RELEASE_ROOT="${RELEASE_ROOT:-${ROOT_DIR}/release}"
+RELEASE_DIR="${RELEASE_ROOT}/${VERSION}"
+ZIP_NAME="aegis-${VERSION}-linux-amd64-release.zip"
+ZIP_PATH="${RELEASE_ROOT}/${ZIP_NAME}"
+
+info() {
+  printf '[release] %s\n' "$*"
+}
+
+die() {
+  printf '[release] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+confirm_replace_zip() {
+  if [ ! -f "${ZIP_PATH}" ]; then
+    return
+  fi
+
+  if [ "${FORCE:-0}" = "1" ]; then
+    rm -f "${ZIP_PATH}"
+    return
+  fi
+
+  if [ ! -t 0 ]; then
+    die "${ZIP_PATH} already exists; remove it manually or run from an interactive shell"
+  fi
+
+  read -r -p "${ZIP_PATH} already exists. Replace it? [y/N] " answer
+  case "${answer}" in
+    y|Y|yes|YES) rm -f "${ZIP_PATH}" ;;
+    *) die "aborted by user" ;;
+  esac
+}
+
+confirm_replace_release_dir() {
+  if [ ! -d "${RELEASE_DIR}" ] || ! find "${RELEASE_DIR}" -mindepth 1 -print -quit | grep -q .; then
+    return
+  fi
+
+  if [ "${FORCE:-0}" = "1" ]; then
+    rm -rf "${RELEASE_DIR}"
+    return
+  fi
+
+  if [ ! -t 0 ]; then
+    die "${RELEASE_DIR} already exists; set FORCE=1 to replace it or remove it manually"
+  fi
+
+  read -r -p "${RELEASE_DIR} already exists. Replace it? [y/N] " answer
+  case "${answer}" in
+    y|Y|yes|YES) rm -rf "${RELEASE_DIR}" ;;
+    *) die "aborted by user" ;;
+  esac
+}
+
+prepare_release_dir() {
+  confirm_replace_release_dir
+  mkdir -p \
+    "${RELEASE_DIR}/images" \
+    "${RELEASE_DIR}/build-context/bpf" \
+    "${RELEASE_DIR}/backend/scripts"
+}
+
+build_agent_artifact() {
+  info "building agent and eBPF artifacts"
+  (
+    cd "${ROOT_DIR}/agent"
+    make bpf
+    make build
+    make package
+  )
+
+  cp "${ROOT_DIR}/agent/dist/aegis-agent-linux-amd64" \
+    "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64"
+  cp "${ROOT_DIR}/agent/dist/aegis-agent.tar.gz" \
+    "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz"
+  cp "${ROOT_DIR}"/agent/internal/ebpf/bpf/obj/*.bpf.o \
+    "${RELEASE_DIR}/build-context/bpf/"
+}
+
+write_minio_context() {
+  cat > "${RELEASE_DIR}/build-context/minio-entrypoint.sh" <<'EOF'
+#!/bin/sh
+set -eu
+
+"$@" &
+minio_pid="$!"
+
+cleanup() {
+  kill "${minio_pid}" 2>/dev/null || true
+  wait "${minio_pid}" 2>/dev/null || true
+}
+trap cleanup INT TERM
+
+until mc alias set myminio http://127.0.0.1:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
+  sleep 2
+done
+
+mc mb myminio/aegis-templates --ignore-existing >/dev/null 2>&1 || true
+mc mb myminio/agent-artifacts --ignore-existing >/dev/null 2>&1 || true
+mc mb myminio/generated-scripts --ignore-existing >/dev/null 2>&1 || true
+mc anonymous set download myminio/agent-artifacts >/dev/null 2>&1 || true
+
+if [ -f /agent-artifacts/aegis-agent-linux-amd64.tar.gz ]; then
+  mc cp /agent-artifacts/aegis-agent-linux-amd64.tar.gz myminio/agent-artifacts/aegis-agent.tar.gz >/dev/null
+fi
+
+wait "${minio_pid}"
+EOF
+  chmod +x "${RELEASE_DIR}/build-context/minio-entrypoint.sh"
+
+  cat > "${RELEASE_DIR}/Dockerfile.minio" <<'EOF'
+FROM minio/mc:latest AS mc
+FROM minio/minio:latest
+COPY --from=mc /usr/bin/mc /usr/bin/mc
+COPY build-context/aegis-agent-linux-amd64.tar.gz /agent-artifacts/
+COPY build-context/minio-entrypoint.sh /usr/bin/minio-entrypoint.sh
+RUN chmod +x /usr/bin/minio-entrypoint.sh
+ENTRYPOINT ["/usr/bin/minio-entrypoint.sh"]
+CMD ["minio", "server", "/data", "--console-address", ":9001"]
+EOF
+}
+
+write_init_sql() {
+  {
+    printf '%s\n' '-- Generated release database init script.'
+    printf '%s\n' '-- Source files are concatenated from migrations/*.sql in lexical order.'
+    find "${ROOT_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' | sort | while read -r migration; do
+      printf '\n-- ============================================================\n'
+      printf -- '-- Source: %s\n' "$(basename "${migration}")"
+      printf -- '-- ============================================================\n'
+      cat "${migration}"
+      printf '\n'
+    done
+  } > "${RELEASE_DIR}/backend/scripts/init.sql"
+}
+
+write_release_compose() {
+  cat > "${RELEASE_DIR}/docker-compose.yml" <<'EOF'
+version: "3.8"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aegis-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aegis_db
+      POSTGRES_USER: aegis_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "work_mem=4MB"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis_user -d aegis_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "${REDIS_PASSWORD:-a_strong_redis_password}"
+      - "--maxmemory"
+      - "256mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-a_strong_redis_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio:
+    image: aegis-system/minio-with-agent:latest
+    container_name: aegis-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "mc alias set health http://127.0.0.1:9000 \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" >/dev/null 2>&1 && mc ready health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: aegis-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: aegis-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_started
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "29092:9092"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  server:
+    image: aegis-system/server:latest
+    container_name: aegis-server
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 223.5.5.5
+    dns_search:
+      - .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: aegis_user
+      DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      DATABASE_DBNAME: aegis_db
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 25
+      DATABASE_MAX_IDLE_CONNS: 10
+      DATABASE_CONN_MAX_LIFETIME: 300
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-a_strong_redis_password}
+      REDIS_DB: 0
+      REDIS_POOL_SIZE: 20
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-server-consumer
+      SERVER_GRPC_PORT: 19090
+      SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
+      SERVER_EXTERNAL_GRPC_PORT: 19090
+      AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
+      AGENT_HEARTBEAT_TIMEOUT: 90
+      AGENT_SCRIPT_TIMEOUT: 300
+    ports:
+      - "19090:19090"
+      - "19094:19094"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 19090 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  api-server:
+    image: aegis-system/api-server:latest
+    container_name: aegis-api-server
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 223.5.5.5
+    dns_search:
+      - .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: aegis_user
+      DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      DATABASE_DBNAME: aegis_db
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 25
+      DATABASE_MAX_IDLE_CONNS: 10
+      DATABASE_CONN_MAX_LIFETIME: 300
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-a_strong_redis_password}
+      REDIS_DB: 0
+      REDIS_POOL_SIZE: 20
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
+      MINIO_USE_SSL: "false"
+      SERVER_HTTP_PORT: 8082
+      SERVER_GRPC_PORT: 19093
+      AGENT_HUB_PORT: 19090
+      SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
+      GRPC_SERVER_ADDRESS: server:19094
+      AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-api-server-consumer
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+    ports:
+      - "8082:8082"
+      - "19093:19093"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  dc:
+    image: aegis-system/dc:latest
+    container_name: aegis-dc
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: aegis_user
+      DATABASE_PASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+      DATABASE_DBNAME: aegis_db
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 25
+      DATABASE_MAX_IDLE_CONNS: 5
+      DATABASE_CONN_MAX_LIFETIME: 300
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: aegis-dc-consumer
+      KAFKA_TOPIC: aegis.security.events
+      GRPC_SERVER_PORT: 19092
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+    ports:
+      - "19092:19092"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 19092 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    image: aegis-system/frontend:latest
+    container_name: aegis-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8081:80"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+networks:
+  aegis-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+EOF
+}
+
+write_start_script() {
+  cat > "${RELEASE_DIR}/start.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+log() {
+  printf '[aegis-start] %s\n' "$*"
+}
+
+die() {
+  printf '[aegis-start] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    die "Docker Compose is not available"
+  fi
+}
+
+is_usable_ip() {
+  case "$1" in
+    ""|127.*|0.*|169.254.*) return 1 ;;
+  esac
+  return 0
+}
+
+is_virtual_iface() {
+  case "$1" in
+    lo|docker*|br-*|veth*|virbr*|cni*|flannel*|kube*|calico*|podman*) return 0 ;;
+  esac
+  return 1
+}
+
+detect_ip_from_default_route() {
+  if command -v ip >/dev/null 2>&1; then
+    for target in 1.1.1.1 8.8.8.8; do
+      ip route get "${target}" 2>/dev/null | awk '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "src" && (i + 1) <= NF) {
+              print $(i + 1)
+              exit
+            }
+          }
+        }'
+    done
+  fi
+}
+
+detect_ip_from_interfaces() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -o -4 addr show scope global 2>/dev/null | while read -r _ iface _ cidr _; do
+      if is_virtual_iface "${iface}"; then
+        continue
+      fi
+      printf '%s\n' "${cidr%%/*}"
+    done
+  elif command -v hostname >/dev/null 2>&1; then
+    hostname -I 2>/dev/null | tr ' ' '\n'
+  fi
+}
+
+detect_external_ip() {
+  {
+    detect_ip_from_default_route
+    detect_ip_from_interfaces
+  } | while read -r candidate; do
+    if is_usable_ip "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+}
+
+upsert_env() {
+  key="$1"
+  value="$2"
+  env_file=".env"
+
+  if [ ! -f "${env_file}" ]; then
+    cp .env.example "${env_file}"
+  fi
+
+  if grep -q "^${key}=" "${env_file}"; then
+    sed -i.bak "s|^${key}=.*|${key}=${value}|" "${env_file}"
+    rm -f "${env_file}.bak"
+  else
+    printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
+  fi
+}
+
+load_images() {
+  found=0
+  for image in images/*.tar.gz; do
+    [ -f "${image}" ] || continue
+    found=1
+    log "loading ${image}"
+    gzip -dc "${image}" | docker load
+  done
+
+  [ "${found}" -eq 1 ] || die "no Docker image archives found in images/"
+}
+
+require_cmd docker
+require_cmd gzip
+
+docker info >/dev/null 2>&1 || die "Docker daemon is not available"
+
+if [ ! -f .env.example ]; then
+  die ".env.example is missing"
+fi
+
+external_ip="$(detect_external_ip | head -n 1 || true)"
+if [ -z "${external_ip}" ]; then
+  die "could not detect a usable local IP address; set EXTERNAL_IP manually in .env"
+fi
+
+upsert_env EXTERNAL_IP "${external_ip}"
+log "wrote EXTERNAL_IP=${external_ip} to .env"
+
+load_images
+compose up -d
+
+sleep "${AEGIS_START_WAIT_SECONDS:-20}"
+compose ps
+
+log "frontend: http://${external_ip}:8081"
+log "api health: http://${external_ip}:8082/health"
+EOF
+  chmod +x "${RELEASE_DIR}/start.sh"
+}
+
+write_release_readme() {
+  cat > "${RELEASE_DIR}/README.md" <<EOF
+# Aegis ${VERSION} Offline Release
+
+## Start
+
+\`\`\`bash
+chmod +x ./start.sh
+./start.sh
+\`\`\`
+
+\`start.sh\` automatically detects a usable local IPv4 address and writes it to
+\`.env\` as \`EXTERNAL_IP\` before starting Docker Compose. The API server and
+agent hub read this value through \`SERVER_EXTERNAL_IP\`, so generated Agent
+install commands point back to this host instead of an internal container IP.
+
+## Useful Checks
+
+\`\`\`bash
+docker compose ps
+curl http://localhost:8082/health
+curl -s http://localhost:8082/api/v1/agent/install.sh | grep SERVER_ADDR
+\`\`\`
+EOF
+}
+
+copy_env_example() {
+  cp "${ROOT_DIR}/.env.example" "${RELEASE_DIR}/.env.example"
+}
+
+build_images() {
+  info "building application images"
+  docker build -f "${ROOT_DIR}/api-server/Dockerfile" -t aegis-system/api-server:latest "${ROOT_DIR}/api-server"
+  docker build -f "${ROOT_DIR}/server/Dockerfile" -t aegis-system/server:latest "${ROOT_DIR}/server"
+  docker build -f "${ROOT_DIR}/dc/Dockerfile" -t aegis-system/dc:latest "${ROOT_DIR}/dc"
+  docker build -f "${ROOT_DIR}/frontend/Dockerfile" -t aegis-system/frontend:latest "${ROOT_DIR}/frontend"
+
+  info "pulling base images"
+  docker pull pgvector/pgvector:pg16
+  docker pull redis:7-alpine
+  docker pull confluentinc/cp-kafka:7.5.0
+  docker pull confluentinc/cp-zookeeper:7.5.0
+  docker pull minio/minio:latest
+  docker pull minio/mc:latest
+
+  info "building MinIO image with preloaded agent artifact"
+  docker build -f "${RELEASE_DIR}/Dockerfile.minio" -t aegis-system/minio-with-agent:latest "${RELEASE_DIR}"
+}
+
+save_image() {
+  image="$1"
+  archive="$2"
+  info "saving ${image} -> images/${archive}"
+  docker save "${image}" | gzip > "${RELEASE_DIR}/images/${archive}"
+}
+
+export_images() {
+  save_image aegis-system/api-server:latest api-server.tar.gz
+  save_image aegis-system/server:latest server.tar.gz
+  save_image aegis-system/dc:latest dc.tar.gz
+  save_image aegis-system/frontend:latest frontend.tar.gz
+  save_image aegis-system/minio-with-agent:latest minio-with-agent.tar.gz
+  save_image pgvector/pgvector:pg16 pgvector.tar.gz
+  save_image redis:7-alpine redis.tar.gz
+  save_image confluentinc/cp-kafka:7.5.0 kafka.tar.gz
+  save_image confluentinc/cp-zookeeper:7.5.0 zookeeper.tar.gz
+  save_image minio/minio:latest minio.tar.gz
+  save_image minio/mc:latest minio-mc.tar.gz
+}
+
+zip_release() {
+  confirm_replace_zip
+  (
+    cd "${RELEASE_ROOT}"
+    zip -r "${ZIP_NAME}" "${VERSION}/"
+  )
+}
+
+main() {
+  prepare_release_dir
+  write_minio_context
+  write_init_sql
+  write_release_compose
+  write_start_script
+  write_release_readme
+  copy_env_example
+
+  if [ "${GENERATE_ONLY:-0}" = "1" ]; then
+    info "release files generated without building Docker images: ${RELEASE_DIR}"
+    return
+  fi
+
+  require_cmd docker
+  require_cmd gzip
+  require_cmd zip
+  docker info >/dev/null 2>&1 || die "Docker daemon is not available"
+
+  build_agent_artifact
+  build_images
+  export_images
+  zip_release
+
+  info "release package created: ${ZIP_PATH}"
+}
+
+main "$@"

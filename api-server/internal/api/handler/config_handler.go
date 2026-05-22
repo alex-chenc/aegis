@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type ConfigHandler struct {
@@ -197,6 +199,10 @@ func displayLLMProvider(provider, baseURL string) string {
 func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
 	config, err := h.configRepo.GetActive()
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeDefaultLLMConfig(c)
+			return
+		}
 		logger.Error("failed to get LLM config", zap.Error(err))
 		c.JSON(http.StatusOK, gin.H{
 			"code":    500,
@@ -221,6 +227,10 @@ func (h *ConfigHandler) GetLLMConfig(c *gin.Context) {
 func (h *ConfigHandler) GetImageModelConfig(c *gin.Context) {
 	config, err := h.configRepo.GetActiveImageModel()
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeDefaultImageModelConfig(c)
+			return
+		}
 		logger.Error("failed to get image model config", zap.Error(err))
 		c.JSON(http.StatusOK, gin.H{
 			"code":    500,
@@ -238,6 +248,36 @@ func (h *ConfigHandler) GetImageModelConfig(c *gin.Context) {
 			"base_url":       config.BaseURL,
 			"model_name":     config.ModelName,
 			"is_active":      config.IsActive,
+		},
+	})
+}
+
+func writeDefaultLLMConfig(c *gin.Context) {
+	preset := llmProviderPresets["deepseek"]
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"api_key_masked": "",
+			"provider":       preset.Provider,
+			"base_url":       preset.DefaultURL,
+			"model_name":     preset.DefaultModel,
+			"is_active":      false,
+		},
+	})
+}
+
+func writeDefaultImageModelConfig(c *gin.Context) {
+	preset := imageModelProviderPresets["zhipu"]
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"api_key_masked": "",
+			"provider":       preset.Provider,
+			"base_url":       preset.DefaultURL,
+			"model_name":     preset.DefaultModel,
+			"is_active":      false,
 		},
 	})
 }

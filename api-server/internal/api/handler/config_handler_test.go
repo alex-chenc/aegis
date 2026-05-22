@@ -6,7 +6,163 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"api-server/internal/repository"
+	"api-server/pkg/logger"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
+
+func newTestConfigRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+
+	if logger.Logger == nil {
+		logger.Logger = zap.NewNop()
+		logger.Sugar = logger.Logger.Sugar()
+	}
+
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	createLLMConfigTable := `
+		CREATE TABLE llm_configs (
+			id text PRIMARY KEY,
+			api_key_encrypted text NOT NULL,
+			api_key_masked text NOT NULL,
+			provider text NOT NULL,
+			base_url text NOT NULL,
+			model_name text NOT NULL,
+			is_active boolean NOT NULL,
+			last_test_status text,
+			last_test_at datetime,
+			created_at datetime,
+			updated_at datetime
+		)`
+	if err := db.Exec(createLLMConfigTable).Error; err != nil {
+		t.Fatalf("failed to create llm config table: %v", err)
+	}
+	createImageModelConfigTable := `
+		CREATE TABLE image_model_configs (
+			id text PRIMARY KEY,
+			api_key_encrypted text NOT NULL,
+			api_key_masked text NOT NULL,
+			provider text NOT NULL,
+			base_url text NOT NULL,
+			model_name text NOT NULL,
+			is_active boolean NOT NULL,
+			last_test_status text,
+			last_test_at datetime,
+			created_at datetime,
+			updated_at datetime
+		)`
+	if err := db.Exec(createImageModelConfigTable).Error; err != nil {
+		t.Fatalf("failed to create image model config table: %v", err)
+	}
+
+	configHandler := NewConfigHandler(repository.NewConfigRepository(db, "test-encryption-key"), "test-encryption-key")
+	router := gin.New()
+	group := router.Group("/api/v1/config")
+	group.GET("/llm", configHandler.GetLLMConfig)
+	group.GET("/image-model", configHandler.GetImageModelConfig)
+	return router
+}
+
+func TestGetLLMConfigReturnsDefaultWhenEmpty(t *testing.T) {
+	router := newTestConfigRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/llm", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			APIKeyMasked string `json:"api_key_masked"`
+			Provider     string `json:"provider"`
+			BaseURL      string `json:"base_url"`
+			ModelName    string `json:"model_name"`
+			IsActive     bool   `json:"is_active"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Code != 0 {
+		t.Fatalf("expected code 0, got %d with message %q", response.Code, response.Message)
+	}
+	if response.Data.APIKeyMasked != "" {
+		t.Fatalf("expected empty masked key, got %q", response.Data.APIKeyMasked)
+	}
+	if response.Data.IsActive {
+		t.Fatal("expected inactive default config")
+	}
+	if response.Data.Provider != "deepseek" {
+		t.Fatalf("expected default provider deepseek, got %q", response.Data.Provider)
+	}
+	if response.Data.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("expected deepseek base url, got %q", response.Data.BaseURL)
+	}
+	if response.Data.ModelName != "deepseek-chat" {
+		t.Fatalf("expected deepseek-chat model, got %q", response.Data.ModelName)
+	}
+}
+
+func TestGetImageModelConfigReturnsDefaultWhenEmpty(t *testing.T) {
+	router := newTestConfigRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/image-model", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			APIKeyMasked string `json:"api_key_masked"`
+			Provider     string `json:"provider"`
+			BaseURL      string `json:"base_url"`
+			ModelName    string `json:"model_name"`
+			IsActive     bool   `json:"is_active"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Code != 0 {
+		t.Fatalf("expected code 0, got %d with message %q", response.Code, response.Message)
+	}
+	if response.Data.APIKeyMasked != "" {
+		t.Fatalf("expected empty masked key, got %q", response.Data.APIKeyMasked)
+	}
+	if response.Data.IsActive {
+		t.Fatal("expected inactive default image model config")
+	}
+	if response.Data.Provider != "zhipu" {
+		t.Fatalf("expected default image provider zhipu, got %q", response.Data.Provider)
+	}
+	if response.Data.BaseURL != "https://open.bigmodel.cn/api/paas/v4" {
+		t.Fatalf("expected zhipu base url, got %q", response.Data.BaseURL)
+	}
+	if response.Data.ModelName != "cogview-3-flash" {
+		t.Fatalf("expected cogview-3-flash model, got %q", response.Data.ModelName)
+	}
+}
 
 func TestNormalizeLLMConfigProviderDefaults(t *testing.T) {
 	tests := []struct {

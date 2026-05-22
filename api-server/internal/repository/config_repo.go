@@ -77,6 +77,9 @@ func (r *ConfigRepository) GetActive() (*model.LLMConfig, error) {
 	var cfg model.LLMConfig
 	result := r.db.Where("is_active = ?", true).First(&cfg)
 	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, result.Error
+		}
 		logger.Error("failed to get active LLM config", zap.Error(result.Error))
 		return nil, result.Error
 	}
@@ -89,6 +92,9 @@ func (r *ConfigRepository) GetActiveImageModel() (*model.ImageModelConfig, error
 	var cfg model.ImageModelConfig
 	result := r.db.Where("is_active = ?", true).First(&cfg)
 	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, result.Error
+		}
 		logger.Error("failed to get active image model config", zap.Error(result.Error))
 		return nil, result.Error
 	}
