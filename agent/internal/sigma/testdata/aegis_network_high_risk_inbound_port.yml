@@ -23,4 +23,4 @@ detection:
   condition: selection and not filter_local
 level: high
 tags:
-  - attack.t1043
+  - attack.t1190
