@@ -55,7 +55,8 @@ type FileEvent struct {
 	OldPath     [256]byte
 }
 
-// ConnEvent matches the BPF conn_event struct.
+// ConnEvent matches the BPF conn_event (tcp_connect) and accept_event (accept) structs.
+// Layout must be kept in sync with both BPF structs.
 type ConnEvent struct {
 	TimestampNs uint64
 	Pid         uint32

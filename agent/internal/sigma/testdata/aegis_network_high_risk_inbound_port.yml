@@ -14,6 +14,7 @@ detection:
       - 1234
       - 8443
       - 8081
+      - 80
     network.transport: tcp
   filter_local:
     SourceIp|startswith:

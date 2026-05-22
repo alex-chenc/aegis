@@ -3,6 +3,8 @@
 #include "common.h"
 #include "event_output.h"
 
+// conn_event: layout-compatible with accept_event in accept.bpf.c.
+// Changes here must be mirrored in accept.bpf.c and Go ConnEvent struct.
 struct conn_event {
     __u64 timestamp_ns;
     __u32 pid;
