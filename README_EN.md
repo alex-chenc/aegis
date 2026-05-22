@@ -12,81 +12,74 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 
 ## Core Features
 
-### Intelligent Document Parsing
+### Host and Agent Management
 
-| Feature                  | Description                                                                     |
-| :----------------------- | :------------------------------------------------------------------------------ |
-| **Multi-format Support** | Support PDF, Word, YAML, Excel, TXT baseline documents                          |
-| **LLM Auto Parsing**     | Automatically extract check rules and remediation methods after document upload |
-| **MD5 Deduplication**    | Automatically detect duplicate files to avoid repeated parsing                  |
-| **Real-time Progress**   | Polling display of parsing progress and status                                  |
+- Host list, Agent online status, host metadata, and runtime status management
+- One-click Agent installation command generation and distribution
+- Task dispatch and result reporting across API Server, Server, and Agent through gRPC
 
-### Automatic Script Generation
+### Intelligent Baseline Check and Fix
 
-| Feature                  | Description                                              |
-| :----------------------- | :------------------------------------------------------- |
-| **One-click Generation** | Batch generate check scripts and fix scripts             |
-| **Online Editing**       | Support online viewing and editing of script content     |
-| **Version Management**   | Keep script version history for traceability             |
-| **Security Validation**  | Automatically detect dangerous commands to ensure safety |
+- Supports uploading baseline documents in PDF, Word, YAML, Excel, TXT, and other formats
+- Uses LLMs to automatically parse check rules, detection methods, and remediation suggestions
+- Document MD5 deduplication, parsing progress tracking, and parsing status display
+- Batch LLM generation of check scripts and fix scripts, with online viewing, editing, and version traceability
+- Batch dispatch check or fix tasks by selecting multiple rules and hosts
+- Task status, execution progress, output logs, task type filtering, and sorting
+- Failed tasks support re-dispatching checks, one-click fix task creation, and remediation suggestion viewing
 
-### Task Execution Management
+### Intelligent Vulnerability Check and Fix
 
-| Feature              | Description                                                       |
-| :------------------- | :---------------------------------------------------------------- |
-| **Batch Execution**  | Select multiple rules and hosts for batch task dispatch           |
-| **Real-time Status** | Real-time view of task execution status, progress, output logs    |
-| **Type Labels**      | Task group type column shows "Check" and "Fix" labels at a glance |
-| **Filter & Sort**    | Support filtering tasks by status and type                        |
+- Collects host software inventory and calls LLMs to identify known CVE vulnerabilities
+- Vulnerability list supports severity filtering, search, and time-based sorting
+- Supports manually entering custom CVEs and calling LLMs to complete vulnerability details
+- Automatically calls LLMs to generate POC verification scripts and confirm whether vulnerabilities truly exist
+- Automatically calls LLMs to generate targeted remediation scripts, with batch dispatch and progress tracking
+
+### Script Security Audit
+
+- Unified script audit service covers baseline checks, baseline fixes, vulnerability fixes, POC verification, and self-healing scripts
+- Command audit blacklist supports create, edit, enable/disable, delete, search, and batch operations
+- Blacklist rules support regex matching, exact command matching, category tags, severity levels, and applicable script types
+- Preset high-risk command rules cover file system destruction, permission abuse, network egress, reverse shells, and other risks
+- Generated scripts go through blacklist audit first, then AI security audit
+- When an audit fails, the failure reason is fed back to the LLM for regeneration, with up to 3 retries
+- A second blacklist validation runs before task dispatch, and a final validation runs on the Agent side before execution
+- Audit logs record script content, matched rules, AI analysis results, risk levels, and audit timelines
 
 ### Intelligent Self-healing
 
-| Feature             | Description                                                               |
-| :------------------ | :------------------------------------------------------------------------ |
-| **Auto Trigger**    | Automatically trigger LLM self-healing process when check/fix fails       |
-| **Error Analysis**  | LLM analyzes error causes and generates fixed scripts                     |
-| **Auto Retry**      | Up to 3 retries, automatically execute fixed scripts                      |
-| **Status Tracking** | Real-time display of "Script healing", "Script healed" and other statuses |
+- Automatically triggers the LLM self-healing flow when checks or fixes fail
+- Automatically analyzes error causes and generates repaired scripts
+- Automatically retries repaired scripts and tracks self-healing status
+- Self-healing scripts are included in the unified script security audit flow
 
-### Enhanced Task Details
+### Real-time Threat Detection and Response
 
-| Feature             | Description                                                      |
-| :------------------ | :--------------------------------------------------------------- |
-| **Re-dispatch**     | Failed tasks support re-dispatching checks to verify remediation |
-| **One-click Fix**   | Failed tasks support one-click creation of fix tasks             |
-| **Type Filter**     | Task detail page supports filtering by type (check/fix)          |
-| **Fix Suggestions** | Display fix suggestions generated by LLM                         |
+- Uses eBPF to collect process execution, file access, and network connection events in real time
+- File events support sensitive path access monitoring; network events support IPv4, IPv6, source address, and destination port collection
+- eBPF automatically adapts to ringbuf or perf buffer based on kernel capabilities
+- Built-in Sigma matching on the Agent side supports process, file, and network event pre-filtering
+- Alerts are automatically aggregated and deduplicated by host, process, rule, and MITRE technique
+- Alert center supports filtering, search, detail view, and real-time WebSocket push
+- Blocking policies support manual blocking, rule-hit auto blocking, and AI-analysis-based auto blocking by MITRE ATT&CK technique
 
-### Intelligent Vulnerability Check & Fix (V3.0 New)
+### AI Alert Analysis and Attack Trace
 
-| Feature                | Description                                                                            |
-| :--------------------- | :------------------------------------------------------------------------------------- |
-| **One-click Scan**     | Collect host software inventory, LLM analyzes and identifies known CVE vulnerabilities |
-| **Vulnerability List** | Sorted by discovery time, support severity filtering and search                        |
-| **Custom CVE**         | Manually input CVE ID, query details via LLM and save to database                      |
-| **POC Verification**   | Generate safe verification scripts to confirm vulnerability existence                  |
-| **One-click Fix**      | Generate targeted fix scripts, batch execute remediation tasks                         |
-| **Status Tracking**    | Real-time display of script generation and execution progress                          |
+- Supports multi-alert AI analysis by time range, host, and selected alerts
+- Uses a ReAct agent for execution planning, tool calls, reflection, auditing, correction, and summarization
+- Streams reasoning, tool calls, observations, execution plans, and final conclusions through SSE
+- Historical sessions can restore analysis process, conclusions, disposal suggestions, and execution results
+- Supports attack trace graphs, attack flowchart images, and structured disposal suggestions
+- Supports context compression, batch event analysis, and observability for large-context analysis
 
-### Real-time Threat Detection & Response (V5.0 New)
+### System Configuration and Observability
 
-| Feature                  | Description                                                                       |
-| :----------------------- | :-------------------------------------------------------------------------------- |
-| **eBPF Event Collection**| Real-time collection of process execution, network connections via eBPF           |
-| **Sigma Rule Matching**  | Built-in Sigma rule library for initial filtering on Agent side                   |
-| **Alert Deduplication**  | Auto deduplication by host+pid+mitre_id to reduce alert noise                     |
-| **Manual AI Noise Reduction** | User selects time range and manually triggers LLM analysis for alert validity |
-| **Auto Blocking**        | Support configuring auto-block switch by MITRE ATT&CK policy                      |
-| **Real-time Push**       | WebSocket real-time push alerts to frontend                                       |
-
-### AI Alert Analysis & Attack Graph (V5.6 New)
-
-| Feature                    | Description                                                                 |
-| :------------------------- | :-------------------------------------------------------------------------- |
-| **Multi-alert Analysis**   | Select multiple alerts and start AI analysis with time range and host filters |
-| **Streaming Reasoning**    | Display Thought, Action, Observation, and final answer through SSE           |
-| **Attack Provenance Graph**| Parse `attack_graph` from the final answer and show both interactive graph and flowchart image |
-| **Image Model Integration**| Configure text LLM and image model separately on the system settings page    |
+- Model configuration supports separate text model and image model settings, connection tests, and secure saving
+- When no model has been configured for the first time, the page shows an editable empty state instead of reporting it as a system error
+- Supports OpenAI-compatible models, DashScope, and other LLM services
+- Audit log page displays total audit count, pass rate, failure count, retry distribution, and detail drawer
+- Agent analysis records iteration count, tool call count, failure rate, session duration, and token usage
 
 
 ## Quick Start
@@ -96,7 +89,6 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Docker 20.10+
 - Docker Compose 2.0+
 - 2GB+ available memory
-- Install `fonts-noto-cjk` or `fonts-wqy-microhei` when generating Chinese UI screenshots
 
 ### Source Code Deployment
 
@@ -123,31 +115,24 @@ Visit http://localhost:8081 in your browser.
 ```bash
 # 1. Download release package
 
-# 2. Configure environment variables
-cp .env.example .env
-vim .env
-
-# 3. Start services
-docker compose up -d
-
-# 4. Verify service
-curl http://localhost:8082/health
+# 2. Run the deployment script
+  ./start.sh
 ```
 
 Visit http://localhost:8081 in your browser.
 
 ### Configure LLM
 
-For first-time use, configure the LLM service on the "System Configuration" page:
+For first-time use, configure the LLM service on the "System Configuration / Model Configuration" page:
 
-1. Go to "System Configuration" page
+1. Go to "System Configuration / Model Configuration"
 2. Enter API Key and Base URL (supports Alibaba Cloud DashScope, OpenAI, etc.)
 3. Click "Connection Test" to verify configuration
 4. Save configuration
 
 ### Deploy Agent
 
-Get the Agent installation command from "System Configuration" page and execute on target server:
+Get the Agent installation command from "System Configuration / Agent Installation" and execute it on the target server:
 
 ```bash
 curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
@@ -167,3 +152,6 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | Redis | 6379 |
 | MinIO API | 9000 |
 | MinIO Console | 9001 |
+
+
+## Fully AI-designed, developed, and tested project
