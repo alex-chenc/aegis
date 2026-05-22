@@ -1,0 +1,25 @@
+title: High Risk Inbound TCP Port
+id: aegis-network-high-risk-inbound-port
+status: experimental
+description: Detects inbound TCP connections to known high-risk ports
+logsource:
+  product: linux
+  category: network_connection
+detection:
+  selection:
+    SourcePort:
+      - 4444
+      - 5555
+      - 31337
+      - 1234
+      - 8443
+      - 8081
+    network.transport: tcp
+  filter_local:
+    SourceIp|startswith:
+      - '127.'
+      - '::1'
+  condition: selection and not filter_local
+level: high
+tags:
+  - attack.t1043

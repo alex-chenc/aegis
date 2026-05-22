@@ -1,0 +1,14 @@
+title: SSH Key File Access
+id: aegis-file-ssh-key-access
+status: experimental
+description: Detects access to SSH key files
+logsource:
+  product: linux
+  category: file_event
+detection:
+  selection:
+    TargetFilename|re: '(/\.ssh/|/\.ssh/authorized_keys)'
+  condition: selection
+level: high
+tags:
+  - attack.t1552

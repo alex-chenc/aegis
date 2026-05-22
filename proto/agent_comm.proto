@@ -110,6 +110,7 @@ message RuntimeEvent {
   string severity = 15;
   string process_tree = 16;   // JSON格式的进程树，Agent检测到威胁时自动采集
   string matched_rule_title = 17; // 匹配的规则标题
+  string event_data_json = 18;    // 完整规范化事件 JSON，用于入库、LLM 分析和审计
 }
 
 // ReportEventRequest 事件上报请求

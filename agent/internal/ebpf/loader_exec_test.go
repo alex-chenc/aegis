@@ -16,6 +16,19 @@ func TestArgvBytesToCommandLineDecodesNULSeparatedArgv(t *testing.T) {
 	}
 }
 
+func TestArgvBytesToCommandLineDecodesFixedSlots(t *testing.T) {
+	raw := make([]byte, 512)
+	copy(raw[0:64], []byte("nc\x00"))
+	copy(raw[64:128], []byte("-lvnp\x00"))
+	copy(raw[128:192], []byte("1234\x00"))
+
+	got := argvBytesToCommandLine(raw)
+	want := "nc -lvnp 1234"
+	if got != want {
+		t.Fatalf("argvBytesToCommandLine() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildExecEventPrefersEBPFArgvOverStaleProcCmdline(t *testing.T) {
 	loader := &Loader{
 		hostID:   "host-1",

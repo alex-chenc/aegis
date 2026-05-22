@@ -483,26 +483,32 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		}
 
 		if s.runtimeEventRepo != nil {
-			// Properly marshal event data to JSON to handle escaping correctly
-			eventData := map[string]interface{}{
-				"process_name": event.ProcessName,
-				"file_path":    event.FilePath,
-				"remote_addr":  event.RemoteAddr,
-				"process_tree": event.ProcessTree,
-			}
-			eventDataJSON, err := json.Marshal(eventData)
-			if err != nil {
-				logger.Error("failed to marshal event data",
-					zap.String("event_id", event.EventId),
-					zap.Error(err),
-				)
-				eventDataJSON = []byte("{}")
+			// Use event_data_json from agent if available, otherwise build legacy event data
+			var eventDataStr string
+			if event.EventDataJson != "" {
+				eventDataStr = event.EventDataJson
+			} else {
+				eventData := map[string]interface{}{
+					"process_name": event.ProcessName,
+					"file_path":    event.FilePath,
+					"remote_addr":  event.RemoteAddr,
+					"process_tree": event.ProcessTree,
+				}
+				eventDataJSON, err := json.Marshal(eventData)
+				if err != nil {
+					logger.Error("failed to marshal event data",
+						zap.String("event_id", event.EventId),
+						zap.Error(err),
+					)
+					eventDataJSON = []byte("{}")
+				}
+				eventDataStr = string(eventDataJSON)
 			}
 			runtimeEvent := &model.RuntimeEvent{
 				EventID:       event.EventId,
 				HostID:        hostID,
 				EventType:     event.EventType,
-				EventData:     string(eventDataJSON),
+				EventData:     eventDataStr,
 				MatchedRuleID: event.MatchedRuleId,
 				MitreID:       event.MitreId,
 				Severity:      event.Severity,

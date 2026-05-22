@@ -1,0 +1,21 @@
+title: Sensitive File Modification
+id: aegis-file-sensitive-write
+status: experimental
+description: Detects modifications to sensitive system files
+logsource:
+  product: linux
+  category: file_event
+detection:
+  selection_path:
+    TargetFilename|re: '^/etc/(passwd|shadow|sudoers|hosts)$'
+  selection_action:
+    event.action:
+      - open_write
+      - create
+      - truncate
+      - chmod
+  condition: selection_path and selection_action
+level: high
+tags:
+  - attack.t1222
+  - attack.t1565

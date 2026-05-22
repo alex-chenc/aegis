@@ -1,0 +1,14 @@
+title: Cron File Modification
+id: aegis-file-cron-modification
+status: experimental
+description: Detects modifications to cron-related files
+logsource:
+  product: linux
+  category: file_event
+detection:
+  selection:
+    TargetFilename|contains: '/cron'
+  condition: selection
+level: medium
+tags:
+  - attack.t1053

@@ -236,6 +236,7 @@ func (r *Router) Setup() {
 
 				// 注意：/:id 路由必须放在所有具体路径路由之后，避免被提前匹配
 				detectionRules.GET("/:id", r.detectionHandler.GetRule)
+				detectionRules.PUT("/:id", r.detectionHandler.UpdateRuleContent)
 				detectionRules.PUT("/:id/status", r.detectionHandler.UpdateRuleStatus)
 			}
 

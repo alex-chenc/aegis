@@ -1,0 +1,22 @@
+title: Potential Reverse Shell Connection
+id: aegis-network-reverse-shell
+status: experimental
+description: Detects potential reverse shell connections on common shell ports
+logsource:
+  product: linux
+  category: network_connection
+detection:
+  selection_ports:
+    DestinationPort:
+      - 4444
+      - 5555
+      - 1234
+      - 9999
+  filter_local:
+    DestinationIp|startswith:
+      - '127.'
+      - '::1'
+  condition: selection_ports and not filter_local
+level: critical
+tags:
+  - attack.t1059

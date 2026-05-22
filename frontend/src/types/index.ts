@@ -89,6 +89,7 @@ export interface Alert {
   judgment_source: 'system' | 'ai'
   block_status?: 'pending' | 'blocking' | 'success' | 'failed'
   block_message?: string
+  process_tree?: string
   first_seen_at: string
   last_seen_at: string
   created_at: string

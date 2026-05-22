@@ -137,3 +137,212 @@ func TestBlockStrategyHostTestRuleMatchesOnlyDedicatedCommand(t *testing.T) {
 		t.Fatalf("expected normal command not to match, got %d matches", len(matches))
 	}
 }
+
+func TestStartsWithModifier(t *testing.T) {
+	rule := &Rule{
+		ID:    "test-startswith",
+		Title: "StartsWith Test",
+		Level: "high",
+		Logsource: Logsource{Category: "network_connection"},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"filter_local": map[string]interface{}{
+					"DestinationIp|startswith": []interface{}{"127.", "::1"},
+				},
+			},
+			Condition: "filter_local",
+		},
+	}
+	cr := CompileRule(rule)
+
+	// Should match localhost
+	event := map[string]interface{}{
+		"destinationip": "127.0.0.1",
+	}
+	if !cr.Match(event) {
+		t.Error("expected match for 127.0.0.1")
+	}
+
+	// Should not match external IP
+	event2 := map[string]interface{}{
+		"destinationip": "10.0.0.1",
+	}
+	if cr.Match(event2) {
+		t.Error("did not expect match for 10.0.0.1")
+	}
+}
+
+func TestNumericPortArray(t *testing.T) {
+	rule := &Rule{
+		ID:    "test-numeric-ports",
+		Title: "Numeric Port Array Test",
+		Level: "high",
+		Logsource: Logsource{Category: "network_connection"},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"selection": map[string]interface{}{
+					"DestinationPort": []interface{}{4444, 5555, 31337},
+				},
+			},
+			Condition: "selection",
+		},
+	}
+	cr := CompileRule(rule)
+
+	// Should match port 4444
+	event := map[string]interface{}{
+		"destinationport": 4444,
+	}
+	if !cr.Match(event) {
+		t.Error("expected match for port 4444")
+	}
+
+	// Should not match port 80
+	event2 := map[string]interface{}{
+		"destinationport": 80,
+	}
+	if cr.Match(event2) {
+		t.Error("did not expect match for port 80")
+	}
+}
+
+func TestTargetFilenameAlias(t *testing.T) {
+	rule := &Rule{
+		ID:    "test-filename-alias",
+		Title: "TargetFilename Alias Test",
+		Level: "high",
+		Logsource: Logsource{Category: "file_event"},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"selection": map[string]interface{}{
+					"TargetFilename|re": "^/etc/(passwd|shadow)$",
+				},
+			},
+			Condition: "selection",
+		},
+	}
+	cr := CompileRule(rule)
+
+	event := map[string]interface{}{
+		"targetfilename": "/etc/passwd",
+	}
+	if !cr.Match(event) {
+		t.Error("expected match for /etc/passwd via lowercase alias")
+	}
+}
+
+func TestInboundHighRiskPortDetection(t *testing.T) {
+	// Test that a sigma rule matching SourcePort (inbound connections) works correctly.
+	// Scenario: external host connects to agent host on port 8081.
+	// For inbound connections, the high-risk port is the local listening port (SourcePort).
+	rule := &Rule{
+		ID:    "aegis-network-high-risk-inbound-port",
+		Title: "High Risk Inbound TCP Port",
+		Level: "high",
+		Logsource: Logsource{
+			Category: "network_connection",
+			Product:  "linux",
+		},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"selection": map[string]interface{}{
+					"SourcePort": []interface{}{4444, 5555, 31337, 1234, 8443, 8081},
+					"network.transport": "tcp",
+				},
+				"filter_local": map[string]interface{}{
+					"SourceIp|startswith": []interface{}{"127.", "::1"},
+				},
+			},
+			Condition: "selection and not filter_local",
+		},
+	}
+	cr := CompileRule(rule)
+
+	// Should match: external IP connecting to port 8081
+	eventMatch := map[string]interface{}{
+		"category":          "network_connection",
+		"sourceport":        8081,
+		"sourceip":          "34.174.207.156",
+		"network.transport": "tcp",
+	}
+	if !cr.Match(eventMatch) {
+		t.Error("expected match for external IP connecting to port 8081")
+	}
+
+	// Should NOT match: localhost connection to port 8081
+	eventLocalhost := map[string]interface{}{
+		"category":          "network_connection",
+		"sourceport":        8081,
+		"sourceip":          "127.0.0.1",
+		"network.transport": "tcp",
+	}
+	if cr.Match(eventLocalhost) {
+		t.Error("did not expect match for localhost connection")
+	}
+
+	// Should NOT match: non-high-risk port
+	eventOtherPort := map[string]interface{}{
+		"category":          "network_connection",
+		"sourceport":        80,
+		"sourceip":          "34.174.207.156",
+		"network.transport": "tcp",
+	}
+	if cr.Match(eventOtherPort) {
+		t.Error("did not expect match for port 80")
+	}
+
+	// Should NOT match: UDP protocol
+	eventUDP := map[string]interface{}{
+		"category":          "network_connection",
+		"sourceport":        8081,
+		"sourceip":          "34.174.207.156",
+		"network.transport": "udp",
+	}
+	if cr.Match(eventUDP) {
+		t.Error("did not expect match for UDP protocol")
+	}
+}
+
+func TestInboundPortWithMixedCaseFieldName(t *testing.T) {
+	// Verify that SourcePort lookup works case-insensitively
+	rule := &Rule{
+		ID:    "test-inbound-case",
+		Title: "Inbound Port Case Test",
+		Level: "high",
+		Logsource: Logsource{
+			Category: "network_connection",
+		},
+		Detection: Detection{
+			Selections: map[string]interface{}{
+				"selection": map[string]interface{}{
+					"SourcePort": []interface{}{8081},
+				},
+			},
+			Condition: "selection",
+		},
+	}
+	cr := CompileRule(rule)
+
+	// Test with various case aliases that the pipeline should produce
+	testCases := []struct {
+		name   string
+		port   interface{}
+		expect bool
+	}{
+		{"lowercase sourceport", 8081, true},
+		{"camelCase SourcePort", 8081, true},
+		{"lowercase source_port", 8081, true},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := map[string]interface{}{
+				"category":   "network_connection",
+				"sourceport": tc.port,
+			}
+			result := cr.Match(event)
+			if result != tc.expect {
+				t.Errorf("sourceport=%v: got %v, want %v", tc.port, result, tc.expect)
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package sigma
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -18,9 +19,10 @@ type CompiledRule struct {
 }
 
 type PatternMatcher struct {
-	Pattern string
-	IsRegex bool
-	Regex   *regexp.Regexp
+	Pattern    string
+	IsRegex    bool
+	Regex      *regexp.Regexp
+	StartsWith bool
 }
 
 func CompileRule(rule *Rule) *CompiledRule {
@@ -44,17 +46,23 @@ func CompileRule(rule *Rule) *CompiledRule {
 			for field, values := range m {
 				fieldKey := normalizeFieldName(field)
 				isRegex := strings.Contains(field, "|re")
+				isStartsWith := strings.Contains(field, "|startswith")
 
 				if list, ok := values.([]interface{}); ok {
 					for _, v := range list {
-						if s, ok := v.(string); ok {
-							pm := compilePattern(s, isRegex)
-							cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
-							selector[fieldKey] = append(selector[fieldKey], pm)
+						s := fmt.Sprintf("%v", v)
+						pm := compilePattern(s, isRegex)
+						if isStartsWith {
+							pm.StartsWith = true
 						}
+						cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
+						selector[fieldKey] = append(selector[fieldKey], pm)
 					}
 				} else if s, ok := values.(string); ok {
 					pm := compilePattern(s, isRegex)
+					if isStartsWith {
+						pm.StartsWith = true
+					}
 					cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
 					selector[fieldKey] = append(selector[fieldKey], pm)
 				}
@@ -80,6 +88,68 @@ func compilePattern(pattern string, isRegex bool) PatternMatcher {
 	}
 
 	return pm
+}
+
+func matchValue(eventVal string, eventRaw interface{}, pm PatternMatcher) bool {
+	if pm.IsRegex && pm.Regex != nil {
+		return pm.Regex.MatchString(eventVal)
+	}
+	if pm.StartsWith {
+		return strings.HasPrefix(eventVal, strings.ToLower(pm.Pattern))
+	}
+	// Try numeric comparison for integer fields
+	if eventRaw != nil {
+		if isNumericType(eventRaw) && isNumericPattern(pm.Pattern) {
+			return numericMatch(eventRaw, pm.Pattern)
+		}
+	}
+	return strings.Contains(eventVal, strings.ToLower(pm.Pattern))
+}
+
+func isNumericType(v interface{}) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	}
+	return false
+}
+
+func isNumericPattern(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
+func numericMatch(eventRaw interface{}, pattern string) bool {
+	patternVal, err := strconv.ParseFloat(pattern, 64)
+	if err != nil {
+		return false
+	}
+	eventVal := toFloat64(eventRaw)
+	return eventVal == patternVal
+}
+
+func toFloat64(v interface{}) float64 {
+	switch val := v.(type) {
+	case int:
+		return float64(val)
+	case int32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case uint:
+		return float64(val)
+	case uint16:
+		return float64(val)
+	case uint32:
+		return float64(val)
+	case uint64:
+		return float64(val)
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	}
+	return 0
 }
 
 func normalizeFieldName(field string) string {
@@ -112,7 +182,10 @@ func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]in
 
 	for field, patterns := range selector {
 		eventVal := ""
-		if v, ok := event[field]; ok {
+		var eventRaw interface{}
+		// Try case-insensitive lookup
+		if v, found := lookupFieldCaseInsensitive(event, field); found {
+			eventRaw = v
 			eventVal = strings.ToLower(fmt.Sprint(v))
 		}
 		if eventVal == "" {
@@ -120,16 +193,9 @@ func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]in
 		}
 		fieldMatched := false
 		for _, pm := range patterns {
-			if pm.IsRegex && pm.Regex != nil {
-				if pm.Regex.MatchString(eventVal) {
-					fieldMatched = true
-					break
-				}
-			} else {
-				if strings.Contains(eventVal, strings.ToLower(pm.Pattern)) {
-					fieldMatched = true
-					break
-				}
+			if matchValue(eventVal, eventRaw, pm) {
+				fieldMatched = true
+				break
 			}
 		}
 		if !fieldMatched {
@@ -137,6 +203,22 @@ func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]in
 		}
 	}
 	return true
+}
+
+// lookupFieldCaseInsensitive does case-insensitive field name lookup in event map
+func lookupFieldCaseInsensitive(event map[string]interface{}, field string) (interface{}, bool) {
+	// Try exact match first (fast path)
+	if v, ok := event[field]; ok {
+		return v, true
+	}
+	// Try case-insensitive match
+	lowerField := strings.ToLower(field)
+	for k, v := range event {
+		if strings.ToLower(k) == lowerField {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 func (cr *CompiledRule) evaluateCondition(event map[string]interface{}) (bool, bool) {

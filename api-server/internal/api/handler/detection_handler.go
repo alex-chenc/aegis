@@ -1629,3 +1629,58 @@ func (h *DetectionHandler) UploadRules(c *gin.Context) {
 		"data":    result,
 	})
 }
+
+// UpdateRuleContent updates the content of an existing Sigma rule by its ID.
+func (h *DetectionHandler) UpdateRuleContent(c *gin.Context) {
+	ruleID := c.Param("id")
+
+	var body struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	rule, err := h.sigmaRuleRepo.FindByRuleID(ruleID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "rule not found"})
+		return
+	}
+
+	// Parse the YAML to extract title, description, severity, mitre_id
+	var parsed struct {
+		Title       string   `yaml:"title"`
+		Description string   `yaml:"description"`
+		Level       string   `yaml:"level"`
+		Tags        []string `yaml:"tags"`
+	}
+	if err := yaml.Unmarshal([]byte(body.Content), &parsed); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid YAML content: " + err.Error()})
+		return
+	}
+
+	rule.Content = body.Content
+	if parsed.Title != "" {
+		rule.Title = parsed.Title
+	}
+	if parsed.Description != "" {
+		rule.Description = parsed.Description
+	}
+	if parsed.Level != "" {
+		rule.Severity = parsed.Level
+	}
+	for _, tag := range parsed.Tags {
+		if strings.HasPrefix(tag, "attack.t") || strings.HasPrefix(tag, "attack.T") {
+			rule.MitreID = strings.ToUpper(strings.TrimPrefix(tag, "attack."))
+			break
+		}
+	}
+
+	if err := h.sigmaRuleRepo.Update(rule); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": rule})
+}

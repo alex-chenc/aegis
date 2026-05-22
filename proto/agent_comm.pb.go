@@ -806,6 +806,7 @@ type RuntimeEvent struct {
 	Severity         string                 `protobuf:"bytes,15,opt,name=severity,proto3" json:"severity,omitempty"`
 	ProcessTree      string                 `protobuf:"bytes,16,opt,name=process_tree,json=processTree,proto3" json:"process_tree,omitempty"`                  // JSON格式的进程树，Agent检测到威胁时自动采集
 	MatchedRuleTitle string                 `protobuf:"bytes,17,opt,name=matched_rule_title,json=matchedRuleTitle,proto3" json:"matched_rule_title,omitempty"` // 匹配的规则标题
+	EventDataJson    string                 `protobuf:"bytes,18,opt,name=event_data_json,json=eventDataJson,proto3" json:"event_data_json,omitempty"`          // 完整规范化事件 JSON，用于入库、LLM 分析和审计
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -955,6 +956,13 @@ func (x *RuntimeEvent) GetProcessTree() string {
 func (x *RuntimeEvent) GetMatchedRuleTitle() string {
 	if x != nil {
 		return x.MatchedRuleTitle
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetEventDataJson() string {
+	if x != nil {
+		return x.EventDataJson
 	}
 	return ""
 }
@@ -1743,7 +1751,7 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\x0fpackage_manager\x18\x03 \x01(\tR\x0epackageManager\x12\"\n" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\"X\n" +
 	"\x14SoftwareListResponse\x12@\n" +
-	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\x87\x04\n" +
+	"\rsoftware_list\x18\x01 \x03(\v2\x1b.agent_comm.v1.SoftwareInfoR\fsoftwareList\"\xaf\x04\n" +
 	"\fRuntimeEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12\x1a\n" +
@@ -1764,7 +1772,8 @@ const file_proto_agent_comm_proto_rawDesc = "" +
 	"\bmitre_id\x18\x0e \x01(\tR\amitreId\x12\x1a\n" +
 	"\bseverity\x18\x0f \x01(\tR\bseverity\x12!\n" +
 	"\fprocess_tree\x18\x10 \x01(\tR\vprocessTree\x12,\n" +
-	"\x12matched_rule_title\x18\x11 \x01(\tR\x10matchedRuleTitle\"b\n" +
+	"\x12matched_rule_title\x18\x11 \x01(\tR\x10matchedRuleTitle\x12&\n" +
+	"\x0fevent_data_json\x18\x12 \x01(\tR\reventDataJson\"b\n" +
 	"\x12ReportEventRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x123\n" +
 	"\x06events\x18\x02 \x03(\v2\x1b.agent_comm.v1.RuntimeEventR\x06events\"V\n" +

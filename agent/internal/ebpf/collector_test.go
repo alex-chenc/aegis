@@ -1,53 +1,76 @@
 package ebpf
 
 import (
-	"os"
 	"testing"
 )
 
-func TestSnapshotExistingProcesses(t *testing.T) {
+func TestNewCollector(t *testing.T) {
 	c := NewCollector("test-host", 10000)
-	knownPIDs := make(map[int]struct{})
-	c.snapshotExistingProcesses(knownPIDs)
-
-	// Current process should be in the snapshot
-	myPID := os.Getpid()
-	if _, ok := knownPIDs[myPID]; !ok {
-		t.Errorf("current PID %d not found in snapshot", myPID)
+	if c == nil {
+		t.Fatal("NewCollector returned nil")
 	}
-
-	// Drain events and verify our process is among them
-	foundMyPID := false
-	for {
-		select {
-		case event := <-c.events:
-			if event.PID == myPID {
-				foundMyPID = true
-			}
-			if event.EventType != "process_exec" {
-				t.Errorf("expected event type process_exec, got %q", event.EventType)
-			}
-		default:
-			if !foundMyPID {
-				t.Errorf("event for current PID %d not found in snapshot events", myPID)
-			}
-			return
-		}
+	if c.hostID != "test-host" {
+		t.Errorf("hostID: got %q, want %q", c.hostID, "test-host")
+	}
+	if c.IsRunning() {
+		t.Error("new collector should not be running")
 	}
 }
 
-func TestSnapshotExistingProcessesPopulatesKnownPIDs(t *testing.T) {
-	c := NewCollector("test-host", 10000)
-	knownPIDs := make(map[int]struct{})
-	c.snapshotExistingProcesses(knownPIDs)
-
-	// Should have multiple PIDs (at least our process and system processes)
-	if len(knownPIDs) < 2 {
-		t.Errorf("expected at least 2 known PIDs, got %d", len(knownPIDs))
+func TestNewCollectorDefaultBufferSize(t *testing.T) {
+	c := NewCollector("test-host", 0)
+	if cap(c.events) != 10000 {
+		t.Errorf("default buffer size: got %d, want 10000", cap(c.events))
 	}
+}
 
-	// PID 1 (init) should be present on Linux
-	if _, ok := knownPIDs[1]; !ok {
-		t.Log("PID 1 not found (may be expected in containers)")
+func TestCollectorStartWithoutEBPF(t *testing.T) {
+	c := NewCollector("test-host", 1000)
+	err := c.Start()
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if c.IsRunning() {
+		t.Log("eBPF loaded successfully in test environment")
+	}
+}
+
+func TestCollectorStopIdempotent(t *testing.T) {
+	c := NewCollector("test-host", 1000)
+	c.Stop()
+	c.Stop()
+}
+
+func TestEventsChannel(t *testing.T) {
+	c := NewCollector("test-host", 100)
+	ch := c.Events()
+	if ch == nil {
+		t.Fatal("Events channel is nil")
+	}
+}
+
+func TestParsePID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+		wantErr  bool
+	}{
+		{"1234", 1234, false},
+		{"1", 1, false},
+		{"0", 0, false},
+		{"abc", 0, true},
+		{"12ab", 0, true},
+		{"", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			pid, err := parsePID(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parsePID(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if pid != tt.expected {
+				t.Errorf("parsePID(%q) = %d, want %d", tt.input, pid, tt.expected)
+			}
+		})
 	}
 }

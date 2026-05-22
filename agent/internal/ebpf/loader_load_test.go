@@ -1,38 +1,62 @@
 package ebpf
 
 import (
-	"errors"
 	"testing"
+
+	"aegis-agent/internal/ebpf/kernel"
 )
 
-func TestLoadConfiguredProgramsReturnsExecveLoadError(t *testing.T) {
-	loader := &Loader{}
-	execErr := errors.New("verifier rejected execve")
 
-	err := loader.loadConfiguredPrograms(defaultBPFPrograms(), func(name, tracepoint, category, mapName string) error {
-		if name == "execve" {
-			return execErr
+
+func TestDefaultBPFPrograms(t *testing.T) {
+	progs := defaultBPFPrograms()
+	if len(progs) < 2 {
+		t.Fatalf("expected at least 2 default programs, got %d", len(progs))
+	}
+
+	found := false
+	for _, p := range progs {
+		if p.name == "execve" {
+			found = true
+			if !p.required {
+				t.Error("execve should be required")
+			}
+			if p.mapName != "exec_events" {
+				t.Errorf("execve mapName: got %q, want %q", p.mapName, "exec_events")
+			}
 		}
-		return nil
-	})
-
-	if !errors.Is(err, execErr) {
-		t.Fatalf("loadConfiguredPrograms error = %v, want %v", err, execErr)
+	}
+	if !found {
+		t.Error("execve not found in default programs")
 	}
 }
 
-func TestLoadConfiguredProgramsAllowsOptionalForkLoadError(t *testing.T) {
-	loader := &Loader{}
-	forkErr := errors.New("fork unavailable")
-
-	err := loader.loadConfiguredPrograms(defaultBPFPrograms(), func(name, tracepoint, category, mapName string) error {
-		if name == "fork" {
-			return forkErr
+func TestBPFObjectSuffix(t *testing.T) {
+	tests := []struct {
+		transport kernel.EventTransport
+		expected  string
+	}{
+		{kernel.TransportRingbuf, ".ringbuf.bpf.o"},
+		{kernel.TransportPerf, ".perf.bpf.o"},
+		{kernel.TransportDisabled, ".bpf.o"},
+	}
+	for _, tt := range tests {
+		caps := &kernel.Capabilities{Transport: tt.transport}
+		result := BPFObjectSuffix(caps)
+		if result != tt.expected {
+			t.Errorf("BPFObjectSuffix(%s) = %q, want %q", tt.transport, result, tt.expected)
 		}
-		return nil
-	})
+	}
+}
 
+func TestNewLoaderDisabled(t *testing.T) {
+	ch := make(chan Event, 10)
+	loader, err := NewLoader("test-host", ch)
 	if err != nil {
-		t.Fatalf("loadConfiguredPrograms error = %v, want nil", err)
+		t.Logf("NewLoader returned error (expected in test env): %v", err)
+		return
+	}
+	if loader != nil {
+		loader.Close()
 	}
 }

@@ -1,10 +1,8 @@
 package ebpf
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +22,32 @@ type Event struct {
 	PID           int
 	PPID          int
 	UID           int
+	GID           int
 	CommandLine   string
 	FilePath      string
-	RemoteAddr    string
+	Image         string
 	ArgsTruncated bool
+
+	// File event fields
+	FileName    string
+	FileDir     string
+	FileAction  string
+	FileFlags   string
+	OldFilePath string
+
+	// Network event fields
+	SrcIP            string
+	DstIP            string
+	SrcPort          uint16
+	DstPort          uint16
+	Protocol         string
+	NetworkDirection string
+	ConnectStatus    string
+	ReturnCode       int32
+	RemoteAddr       string
+
+	// Process tree JSON (captured at event time for short-lived processes)
+	ProcessTreeJSON string
 }
 
 // Collector manages eBPF event collection
@@ -47,7 +67,6 @@ func NewCollector(hostID string, bufferSize int) *Collector {
 	if bufferSize <= 0 {
 		bufferSize = 10000
 	}
-
 	return &Collector{
 		hostID:   hostID,
 		hostname: hostname,
@@ -56,7 +75,8 @@ func NewCollector(hostID string, bufferSize int) *Collector {
 	}
 }
 
-// Start initializes eBPF and begins event collection
+// Start initializes eBPF and begins event collection.
+// Returns nil if eBPF is not available — agent continues without event engine.
 func (c *Collector) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -65,20 +85,19 @@ func (c *Collector) Start() error {
 		return fmt.Errorf("collector already running")
 	}
 
-	// Create eBPF loader
 	loader, err := NewLoader(c.hostID, c.events)
 	if err != nil {
-		logger.Warn("Failed to create eBPF loader, falling back to /proc monitor",
-			zap.Error(err))
-		go c.monitorProc()
+		logger.Warn("[eBPF] event engine disabled",
+			zap.Error(err),
+			zap.String("note", "agent other functions remain enabled"))
 		return nil
 	}
 
-	// Load all eBPF programs
 	if err := loader.LoadAll(); err != nil {
-		logger.Warn("Failed to load eBPF programs, falling back to /proc monitor",
-			zap.Error(err))
-		go c.monitorProc()
+		loader.Close()
+		logger.Warn("[eBPF] event engine disabled due to load failure",
+			zap.Error(err),
+			zap.String("note", "agent other functions remain enabled"))
 		return nil
 	}
 
@@ -125,123 +144,10 @@ func (c *Collector) IsRunning() bool {
 	return c.running
 }
 
-// monitorProc is a fallback method that monitors /proc
-func (c *Collector) monitorProc() {
-	logger.Info("Starting /proc fallback monitor")
-
-	knownPIDs := make(map[int]struct{})
-	c.snapshotExistingProcesses(knownPIDs)
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-ticker.C:
-		}
-
-		entries, err := os.ReadDir("/proc")
-		if err != nil {
-			continue
-		}
-
-		for _, entry := range entries {
-			pid, err := parsePID(entry.Name())
-			if err != nil {
-				continue
-			}
-
-			if _, ok := knownPIDs[pid]; ok {
-				continue
-			}
-			knownPIDs[pid] = struct{}{}
-
-			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-			cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-			cmdlineStr := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte(" ")))
-			cmdlineStr = strings.TrimSpace(cmdlineStr)
-
-			event := Event{
-				EventID:     generateEventID(),
-				HostID:      c.hostID,
-				Hostname:    c.hostname,
-				Timestamp:   time.Now().UnixMilli(),
-				EventType:   "process_exec",
-				PID:         pid,
-				ProcessName: strings.TrimSpace(string(comm)),
-				CommandLine: cmdlineStr,
-			}
-
-			select {
-			case c.events <- event:
-			default:
-			}
-		}
-
-		// Clean up exited processes
-		for pid := range knownPIDs {
-			if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); os.IsNotExist(err) {
-				delete(knownPIDs, pid)
-			}
-		}
-	}
-}
-
-// snapshotExistingProcesses captures all currently running processes
-// to ensure we don't miss processes that were already running before monitoring started.
-func (c *Collector) snapshotExistingProcesses(knownPIDs map[int]struct{}) {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		logger.Warn("Failed to read /proc for initial snapshot", zap.Error(err))
-		return
-	}
-
-	count := 0
-	for _, entry := range entries {
-		pid, err := parsePID(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		knownPIDs[pid] = struct{}{}
-
-		comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-		cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-		cmdlineStr := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte(" ")))
-		cmdlineStr = strings.TrimSpace(cmdlineStr)
-
-		if cmdlineStr == "" {
-			continue // Skip kernel threads
-		}
-
-		event := Event{
-			EventID:     generateEventID(),
-			HostID:      c.hostID,
-			Hostname:    c.hostname,
-			Timestamp:   time.Now().UnixMilli(),
-			EventType:   "process_exec",
-			PID:         pid,
-			ProcessName: strings.TrimSpace(string(comm)),
-			CommandLine: cmdlineStr,
-		}
-
-		select {
-		case c.events <- event:
-			count++
-		default:
-			logger.Warn("Event channel full during snapshot, dropping event",
-				zap.Int("pid", pid))
-		}
-	}
-
-	logger.Info("Initial /proc snapshot complete",
-		zap.Int("total_pids", len(knownPIDs)),
-		zap.Int("events_sent", count))
-}
-
 func parsePID(name string) (int, error) {
+	if len(name) == 0 {
+		return 0, fmt.Errorf("empty pid")
+	}
 	pid := 0
 	for i := 0; i < len(name); i++ {
 		if name[i] < '0' || name[i] > '9' {
