@@ -63,6 +63,10 @@ func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.T
 	}
 }
 
+func (c *Client) ConfigManager() *configmgr.ConfigManager {
+	return c.configManager
+}
+
 func (c *Client) Run() error {
 	reconnectInterval := 5 * time.Second
 	maxReconnectInterval := 5 * time.Minute

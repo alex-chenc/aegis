@@ -42,6 +42,10 @@ type ConfigManager struct {
 	auditRules    []AuditRule
 	auditSettings AuditSettings
 	mu            sync.RWMutex
+
+	// Callbacks for V5.8 detection package handling
+	onDetectionPackage func(action, payload string) error
+	onAllowlistUpdate  func(payload string) error
 }
 
 func NewConfigManager() *ConfigManager {
@@ -49,6 +53,20 @@ func NewConfigManager() *ConfigManager {
 		auditRules:    []AuditRule{},
 		auditSettings: DefaultAuditSettings(),
 	}
+}
+
+// SetDetectionPackageHandler sets the callback for detection package commands
+func (m *ConfigManager) SetDetectionPackageHandler(fn func(action, payload string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDetectionPackage = fn
+}
+
+// SetAllowlistUpdateHandler sets the callback for allowlist updates
+func (m *ConfigManager) SetAllowlistUpdateHandler(fn func(payload string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAllowlistUpdate = fn
 }
 
 func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
@@ -62,6 +80,16 @@ func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 		return m.applyAuditSettings(sync)
 	case "sigma_rules":
 		// Handled by the existing rule loader, not here
+		return nil
+	case "detection_package":
+		if m.onDetectionPackage != nil {
+			return m.onDetectionPackage(sync.Action, sync.Payload)
+		}
+		return nil
+	case "dynamic_ebpf_hook_allowlist":
+		if m.onAllowlistUpdate != nil {
+			return m.onAllowlistUpdate(sync.Payload)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown config type: %s", sync.ConfigType)

@@ -68,6 +68,7 @@ message CommandRequest {
     RuleUpdateRequest rule_update = 3;
     BlockCommand block = 4;
     ConfigSync config_sync = 5;
+    // V5.8: DetectionPackageCommand is sent via config_sync with config_type="detection_package"
   }
 }
 
@@ -179,9 +180,20 @@ message BlockResponse {
 
 // ConfigSync 配置同步
 message ConfigSync {
-  string config_type = 1;    // "sigma_rules", "audit_rules", "audit_settings"
+  string config_type = 1;    // "sigma_rules", "audit_rules", "audit_settings", "dynamic_ebpf_hook_allowlist"
   string action = 2;         // "full_sync", "incremental"
   string payload = 3;        // JSON格式配置内容
+}
+
+// DetectionPackageStatus 检测包状态上报
+message DetectionPackageStatus {
+  string package_id = 1;
+  string version = 2;
+  string status = 3;           // active, degraded, load_failed, etc.
+  string active_artifact = 4;  // ringbuf, perf
+  repeated string loaded_hooks = 5;
+  string error_message = 6;
+  int64 reported_at = 7;
 }
 
 // ConfigSyncRequest 配置同步请求

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -20,14 +22,16 @@ import (
 func main() {
 	port := flag.Int("port", 19096, "gRPC port")
 	workDir := flag.String("work-dir", "/tmp/aegis-builder", "Working directory")
+	keyFile := flag.String("key-file", envOr("BUILDER_KEY_FILE", "/data/builder.key"), "Ed25519 key file path (hex encoded)")
 	minioEndpoint := flag.String("minio-endpoint", envOr("MINIO_ENDPOINT", "minio:9000"), "MinIO endpoint")
 	minioAccessKey := flag.String("minio-access-key", envOr("MINIO_ACCESS_KEY", "minio_admin"), "MinIO access key")
 	minioSecretKey := flag.String("minio-secret-key", envOr("MINIO_SECRET_KEY", "a_third_strong_secret_password"), "MinIO secret key")
 	flag.Parse()
 
-	publicKey, privateKey, err := signer.GenerateKeyPair()
+	// Load or generate Ed25519 key pair
+	publicKey, privateKey, err := loadOrGenerateKey(*keyFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to generate key pair: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load/generate key pair: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -78,4 +82,35 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func loadOrGenerateKey(keyFile string) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	data, err := os.ReadFile(keyFile)
+	if err == nil {
+		// Try to load existing key (hex encoded private key, 64 bytes)
+		keyBytes, err := hex.DecodeString(string(data))
+		if err == nil && len(keyBytes) == ed25519.PrivateKeySize {
+			privateKey := ed25519.PrivateKey(keyBytes)
+			publicKey := privateKey.Public().(ed25519.PublicKey)
+			fmt.Printf("Loaded existing key from %s\n", keyFile)
+			return publicKey, privateKey, nil
+		}
+	}
+
+	// Generate new key pair
+	publicKey, privateKey, err := signer.GenerateKeyPair()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate key pair: %w", err)
+	}
+
+	// Save to file
+	if err := os.MkdirAll("/data", 0755); err == nil {
+		if err := os.WriteFile(keyFile, []byte(hex.EncodeToString(privateKey)), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save key to %s: %v\n", keyFile, err)
+		} else {
+			fmt.Printf("Generated and saved new key to %s\n", keyFile)
+		}
+	}
+
+	return publicKey, privateKey, nil
 }

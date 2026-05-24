@@ -58,6 +58,13 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AgentCorrection{},
 		&model.AgentToolCallRecord{},
 		&model.AgentModelError{},
+		&model.DetectionPackageDraft{},
+		&model.DetectionPackage{},
+		&model.DetectionPackageBuild{},
+		&model.DetectionPackageHostStatus{},
+		&model.DetectionPackageOperation{},
+		&model.EBPFHookAllowlistConfig{},
+		&model.CorrelationRule{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

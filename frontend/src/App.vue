@@ -76,6 +76,10 @@
             <el-icon><Tickets /></el-icon>
             <span>规则管理</span>
           </el-menu-item>
+          <el-menu-item index="/detection/packages">
+            <el-icon><Box /></el-icon>
+            <span>动态检测包</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="settings">
@@ -99,12 +103,16 @@
             <el-icon><Document /></el-icon>
             <span>审计日志</span>
           </el-menu-item>
+          <el-menu-item index="/settings/ebpf-hooks">
+            <el-icon><Connection /></el-icon>
+            <span>eBPF Hook 白名单</span>
+          </el-menu-item>
         </el-sub-menu>
       </el-menu>
 
       <div class="sidebar-footer">
         <span class="status-dot" />
-        <span class="version">控制面在线 · V5.7</span>
+        <span class="version">控制面在线 · V5.8</span>
       </div>
     </el-aside>
 
@@ -142,7 +150,7 @@
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'

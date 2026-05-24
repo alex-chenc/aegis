@@ -36,6 +36,12 @@ service APIServerToServer {
 
     // CollectSoftware 收集主机软件清单
     rpc CollectSoftware(CollectSoftwareRequest) returns (CollectSoftwareResponse);
+
+    // V5.8 Detection Package Management
+    rpc InstallDetectionPackage(InstallDetectionPackageRequest) returns (InstallDetectionPackageResponse);
+    rpc UninstallDetectionPackage(UninstallDetectionPackageRequest) returns (UninstallDetectionPackageResponse);
+    rpc SyncAgentConfig(SyncAgentConfigRequest) returns (SyncAgentConfigResponse);
+    rpc ReportDetectionPackageStatus(ReportDetectionPackageStatusRequest) returns (ReportDetectionPackageStatusResponse);
 }
 
 // ============================================================
@@ -219,4 +225,70 @@ message AgentStatusChangeNotification {
     string previous_status = 3;   // online, offline
     string current_status = 4;
     int64 timestamp = 5;
+}
+
+// ============================================================
+// V5.8 Detection Package Messages
+// ============================================================
+
+message DetectionPackageCommand {
+    string command_id = 1;
+    string action = 2;           // install, uninstall, disable
+    string package_id = 3;
+    string version = 4;
+    string package_url = 5;
+    string signature_url = 6;
+    int64 package_size = 7;
+    bool rollback = 8;
+}
+
+message InstallDetectionPackageRequest {
+    string host_id = 1;          // empty means all online agents
+    DetectionPackageCommand command = 2;
+}
+
+message InstallDetectionPackageResponse {
+    bool success = 1;
+    int32 affected_agents = 2;
+    string message = 3;
+}
+
+message UninstallDetectionPackageRequest {
+    string host_id = 1;
+    string package_id = 2;
+    string version = 3;
+}
+
+message UninstallDetectionPackageResponse {
+    bool success = 1;
+    int32 affected_agents = 2;
+    string message = 3;
+}
+
+message SyncAgentConfigRequest {
+    string host_id = 1;          // empty means all online agents
+    string config_type = 2;      // dynamic_ebpf_hook_allowlist
+    string config_json = 3;
+}
+
+message SyncAgentConfigResponse {
+    bool success = 1;
+    int32 affected_agents = 2;
+    string message = 3;
+}
+
+message ReportDetectionPackageStatusRequest {
+    string host_id = 1;
+    string package_id = 2;
+    string version = 3;
+    string status = 4;
+    string active_artifact = 5;  // ringbuf, perf
+    repeated string loaded_hooks = 6;
+    string error_message = 7;
+    int64 reported_at = 8;
+}
+
+message ReportDetectionPackageStatusResponse {
+    bool success = 1;
+    string message = 2;
 }

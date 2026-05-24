@@ -273,6 +273,9 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
+      BUILDER_KEY_FILE: /data/builder.key
+    volumes:
+      - builder_data:/data
     ports:
       - "19096:19096"
     networks:
@@ -414,4 +417,6 @@ volumes:
   redis_data:
     driver: local
   minio_data:
+    driver: local
+  builder_data:
     driver: local

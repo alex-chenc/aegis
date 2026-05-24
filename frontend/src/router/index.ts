@@ -16,6 +16,10 @@ import DetectionRules from '../views/detection/Rules.vue'
 import AIAnalysis from '../views/detection/AIAnalysis.vue'
 import CommandAudit from '../views/settings/CommandAudit/index.vue'
 import AuditLogs from '../views/settings/AuditLogs/index.vue'
+import DetectionPackages from '../views/detection/DetectionPackages/index.vue'
+import PackageDetail from '../views/detection/DetectionPackages/PackageDetail.vue'
+import PackageEditor from '../views/detection/DetectionPackages/PackageEditor.vue'
+import EBPFHooks from '../views/settings/EBPFHooks/index.vue'
 
 const routes = [
   {
@@ -112,6 +116,30 @@ const routes = [
     meta: { title: '规则管理' }
   },
   {
+    path: '/detection/packages',
+    name: 'DetectionPackages',
+    component: DetectionPackages,
+    meta: { title: '动态检测包' }
+  },
+  {
+    path: '/detection/packages/new',
+    name: 'DetectionPackageNew',
+    component: PackageEditor,
+    meta: { title: '新建检测包' }
+  },
+  {
+    path: '/detection/packages/:id',
+    name: 'DetectionPackageDetail',
+    component: PackageDetail,
+    meta: { title: '检测包详情' }
+  },
+  {
+    path: '/detection/packages/:id/edit',
+    name: 'DetectionPackageEdit',
+    component: PackageEditor,
+    meta: { title: '编辑检测包' }
+  },
+  {
     path: '/settings/command-audit',
     name: 'CommandAudit',
     component: CommandAudit,
@@ -139,6 +167,12 @@ const routes = [
     name: 'AgentInstall',
     component: AgentInstall,
     meta: { title: 'Agent 安装' }
+  },
+  {
+    path: '/settings/ebpf-hooks',
+    name: 'EBPFHooks',
+    component: EBPFHooks,
+    meta: { title: 'eBPF Hook 白名单' }
   }
 ]
 

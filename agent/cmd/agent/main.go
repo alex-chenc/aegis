@@ -117,7 +117,8 @@ func main() {
 		logger.Info("signing public key loaded", zap.Int("key_len", len(signingPubKey)))
 	}
 	corrAdapter := dynpkg.NewCorrelationEngineAdapter(corrEngine)
-	dynpkgManager := dynpkg.NewManager(signingPubKey, "", nil, corrAdapter)
+	sigmaAdapter := dynpkg.NewSigmaMatcherAdapter(ruleLoader)
+	dynpkgManager := dynpkg.NewManager(signingPubKey, "", sigmaAdapter, corrAdapter)
 	dynpkgManager.SetAlertCallback(func(alert interface{}) {
 		logger.Info("Correlation alert triggered", zap.Any("alert", alert))
 		// TODO: Report alert to server via gRPC
