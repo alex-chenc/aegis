@@ -1,16 +1,24 @@
 package main
 
 import (
+	"context"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"aegis-agent/internal/asset"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
 	"aegis-agent/internal/config"
+	"aegis-agent/internal/correlation"
+	"aegis-agent/internal/dynpkg"
 	"aegis-agent/internal/ebpf"
 	"aegis-agent/internal/executor"
 	"aegis-agent/internal/logger"
@@ -26,6 +34,7 @@ import (
 func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging (overrides config LogLevel)")
 	logStdout := flag.Bool("log-stdout", false, "Also log to stdout (for systemd journal or terminal)")
+	signingPubKeyHex := flag.String("signing-public-key", "", "Ed25519 public key (hex) for package signature verification")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig()
@@ -89,7 +98,90 @@ func main() {
 		zap.Int("event_buffer_size", cfg.EventBufferSize),
 	)
 
+	// V5.8: Initialize correlation engine
+	corrEngine := correlation.NewEngine(correlation.CorrelationLimits{
+		Window:          60 * time.Second,
+		EventsPerKey:    128,
+		GlobalCacheSize: 10000,
+	})
+	logger.Info("Correlation engine initialized")
+
+	// V5.8: Initialize dynamic package manager
+	var signingPubKey ed25519.PublicKey
+	if *signingPubKeyHex != "" {
+		keyBytes, err := hex.DecodeString(*signingPubKeyHex)
+		if err != nil {
+			logger.Fatal("invalid signing public key hex", zap.Error(err))
+		}
+		signingPubKey = ed25519.PublicKey(keyBytes)
+		logger.Info("signing public key loaded", zap.Int("key_len", len(signingPubKey)))
+	}
+	corrAdapter := dynpkg.NewCorrelationEngineAdapter(corrEngine)
+	dynpkgManager := dynpkg.NewManager(signingPubKey, "", nil, corrAdapter)
+	dynpkgManager.SetAlertCallback(func(alert interface{}) {
+		logger.Info("Correlation alert triggered", zap.Any("alert", alert))
+		// TODO: Report alert to server via gRPC
+	})
+	dynpkgManager.SetStatusChangeCallback(func(packageID, version, status string) {
+		logger.Info("Detection package status changed",
+			zap.String("package_id", packageID),
+			zap.String("version", version),
+			zap.String("status", status))
+	})
+	logger.Info("Dynamic package manager initialized")
+
 	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
+
+	// Set up detection package handler - parse payload and call dynpkgManager
+	c.ConfigManager().SetDetectionPackageHandler(func(action, payload string) error {
+		logger.Info("Detection package command received",
+			zap.String("action", action),
+			zap.Int("payload_len", len(payload)))
+
+		var cmd dynpkg.DetectionPackageCommand
+		if err := json.Unmarshal([]byte(payload), &cmd); err != nil {
+			logger.Error("failed to parse detection package command", zap.Error(err))
+			return fmt.Errorf("parse command: %w", err)
+		}
+		cmd.Action = action
+
+		ctx := context.Background()
+		switch action {
+		case "install":
+			if err := dynpkgManager.Install(ctx, cmd); err != nil {
+				logger.Error("failed to install detection package", zap.Error(err), zap.String("package_id", cmd.PackageID))
+				return fmt.Errorf("install: %w", err)
+			}
+		case "uninstall":
+			if err := dynpkgManager.Uninstall(ctx, cmd.PackageID, cmd.Version); err != nil {
+				logger.Error("failed to uninstall detection package", zap.Error(err), zap.String("package_id", cmd.PackageID))
+				return fmt.Errorf("uninstall: %w", err)
+			}
+		default:
+			logger.Warn("unknown detection package action", zap.String("action", action))
+			return fmt.Errorf("unknown action: %s", action)
+		}
+		return nil
+	})
+
+	// Set up allowlist update handler - parse payload and call dynpkgManager
+	c.ConfigManager().SetAllowlistUpdateHandler(func(payload string) error {
+		logger.Info("Allowlist update received",
+			zap.Int("payload_len", len(payload)))
+
+		var allowlist dynpkg.HookAllowlist
+		if err := json.Unmarshal([]byte(payload), &allowlist); err != nil {
+			logger.Error("failed to parse allowlist", zap.Error(err))
+			return fmt.Errorf("parse allowlist: %w", err)
+		}
+
+		ctx := context.Background()
+		if err := dynpkgManager.ApplyAllowlist(ctx, allowlist); err != nil {
+			logger.Error("failed to apply allowlist", zap.Error(err))
+			return fmt.Errorf("apply allowlist: %w", err)
+		}
+		return nil
+	})
 
 	collector := ebpf.NewCollector(cfg.HostID, cfg.EventBufferSize)
 	if err := collector.Start(); err != nil {

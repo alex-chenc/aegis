@@ -1,9 +1,13 @@
 package grpc_server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
+	"time"
 
 	"server/internal/repository"
 	"server/internal/storage"
@@ -449,4 +453,280 @@ func (s *APIServerToServerImpl) CollectSoftware(ctx context.Context, req *pb.Col
 		SoftwareJson: string(softwareJSON),
 		Error:        "",
 	}, nil
+}
+
+// InstallDetectionPackage installs a detection package on agents
+func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req *pb.InstallDetectionPackageRequest) (*pb.InstallDetectionPackageResponse, error) {
+	if req.Command == nil {
+		return &pb.InstallDetectionPackageResponse{
+			Success: false,
+			Message: "command is required",
+		}, nil
+	}
+
+	affected := int32(0)
+	// Use ConfigSync with config_type="detection_package" to send the command
+	commandJSON, _ := json.Marshal(req.Command)
+	configReq := &pb.CommandRequest{
+		Request: &pb.CommandRequest_ConfigSync{
+			ConfigSync: &pb.ConfigSync{
+				ConfigType: "detection_package",
+				Action:     req.Command.Action,
+				Payload:    string(commandJSON),
+			},
+		},
+	}
+
+	if req.HostId == "" {
+		s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
+			hostID := key.(uuid.UUID)
+			conn := value.(*AgentConnection)
+			if conn.Stream != nil {
+				if err := conn.Stream.Send(configReq); err != nil {
+					logger.Error("failed to send detection package command",
+						zap.Stringer("host_id", hostID),
+						zap.Error(err),
+					)
+				} else {
+					affected++
+				}
+			}
+			return true
+		})
+	} else {
+		hostID, err := uuid.Parse(req.HostId)
+		if err != nil {
+			return &pb.InstallDetectionPackageResponse{
+				Success: false,
+				Message: "invalid host_id",
+			}, nil
+		}
+		value, ok := s.grpcServer.agentConnections.Load(hostID)
+		if !ok {
+			return &pb.InstallDetectionPackageResponse{
+				Success: false,
+				Message: "agent not connected",
+			}, nil
+		}
+		conn := value.(*AgentConnection)
+		if conn.Stream != nil {
+			if err := conn.Stream.Send(configReq); err != nil {
+				return &pb.InstallDetectionPackageResponse{
+					Success: false,
+					Message: err.Error(),
+				}, nil
+			}
+			affected = 1
+		}
+	}
+
+	logger.Info("detection package install command sent",
+		zap.String("package_id", req.Command.PackageId),
+		zap.String("version", req.Command.Version),
+		zap.Int32("affected_agents", affected),
+	)
+
+	return &pb.InstallDetectionPackageResponse{
+		Success:        true,
+		AffectedAgents: affected,
+		Message:        "install command sent",
+	}, nil
+}
+
+// UninstallDetectionPackage uninstalls a detection package from agents
+func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, req *pb.UninstallDetectionPackageRequest) (*pb.UninstallDetectionPackageResponse, error) {
+	affected := int32(0)
+	commandJSON, _ := json.Marshal(map[string]string{
+		"action":     "uninstall",
+		"package_id": req.PackageId,
+		"version":    req.Version,
+	})
+	configReq := &pb.CommandRequest{
+		Request: &pb.CommandRequest_ConfigSync{
+			ConfigSync: &pb.ConfigSync{
+				ConfigType: "detection_package",
+				Action:     "uninstall",
+				Payload:    string(commandJSON),
+			},
+		},
+	}
+
+	if req.HostId == "" {
+		s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
+			conn := value.(*AgentConnection)
+			if conn.Stream != nil {
+				if err := conn.Stream.Send(configReq); err != nil {
+					logger.Error("failed to send uninstall command",
+						zap.Stringer("host_id", key.(uuid.UUID)),
+						zap.Error(err),
+					)
+				} else {
+					affected++
+				}
+			}
+			return true
+		})
+	} else {
+		hostID, err := uuid.Parse(req.HostId)
+		if err != nil {
+			return &pb.UninstallDetectionPackageResponse{
+				Success: false,
+				Message: fmt.Sprintf("invalid host_id: %v", err),
+			}, nil
+		}
+		value, ok := s.grpcServer.agentConnections.Load(hostID)
+		if !ok {
+			return &pb.UninstallDetectionPackageResponse{
+				Success: false,
+				Message: "agent not connected",
+			}, nil
+		}
+		conn := value.(*AgentConnection)
+		if conn.Stream != nil {
+			if err := conn.Stream.Send(configReq); err != nil {
+				return &pb.UninstallDetectionPackageResponse{
+					Success: false,
+					Message: err.Error(),
+				}, nil
+			}
+			affected = 1
+		}
+	}
+
+	return &pb.UninstallDetectionPackageResponse{
+		Success:        true,
+		AffectedAgents: affected,
+		Message:        "uninstall command sent",
+	}, nil
+}
+
+// SyncAgentConfig syncs configuration to agents
+func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.SyncAgentConfigRequest) (*pb.SyncAgentConfigResponse, error) {
+	affected := int32(0)
+	commandReq := &pb.CommandRequest{
+		Request: &pb.CommandRequest_ConfigSync{
+			ConfigSync: &pb.ConfigSync{
+				ConfigType: req.ConfigType,
+				Action:     "full_sync",
+				Payload:    req.ConfigJson,
+			},
+		},
+	}
+
+	if req.HostId == "" {
+		s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
+			conn := value.(*AgentConnection)
+			if conn.Stream != nil {
+				if err := conn.Stream.Send(commandReq); err != nil {
+					logger.Error("failed to send config sync",
+						zap.Stringer("host_id", key.(uuid.UUID)),
+						zap.Error(err),
+					)
+				} else {
+					affected++
+				}
+			}
+			return true
+		})
+	} else {
+		hostID, err := uuid.Parse(req.HostId)
+		if err != nil {
+			return &pb.SyncAgentConfigResponse{
+				Success: false,
+				Message: fmt.Sprintf("invalid host_id: %v", err),
+			}, nil
+		}
+		value, ok := s.grpcServer.agentConnections.Load(hostID)
+		if !ok {
+			return &pb.SyncAgentConfigResponse{
+				Success: false,
+				Message: "agent not connected",
+			}, nil
+		}
+		conn := value.(*AgentConnection)
+		if conn.Stream != nil {
+			if err := conn.Stream.Send(commandReq); err != nil {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: err.Error(),
+				}, nil
+			}
+			affected = 1
+		}
+	}
+
+	logger.Info("config sync sent",
+		zap.String("config_type", req.ConfigType),
+		zap.Int32("affected_agents", affected),
+	)
+
+	return &pb.SyncAgentConfigResponse{
+		Success:        true,
+		AffectedAgents: affected,
+		Message:        "config sync sent",
+	}, nil
+}
+
+// ReportDetectionPackageStatus receives package status from agent
+func (s *APIServerToServerImpl) ReportDetectionPackageStatus(ctx context.Context, req *pb.ReportDetectionPackageStatusRequest) (*pb.ReportDetectionPackageStatusResponse, error) {
+	logger.Info("detection package status reported",
+		zap.String("host_id", req.HostId),
+		zap.String("package_id", req.PackageId),
+		zap.String("version", req.Version),
+		zap.String("status", req.Status),
+		zap.String("active_artifact", req.ActiveArtifact),
+		zap.Strings("loaded_hooks", req.LoadedHooks),
+		zap.String("error_message", req.ErrorMessage),
+	)
+
+	// Store in sync.Map
+	key := req.HostId + ":" + req.PackageId + ":" + req.Version
+	s.grpcServer.detectionPackageStatuses.Store(key, req)
+
+	// Forward to API Server for DB persistence
+	go s.forwardStatusToAPIServer(req)
+
+	return &pb.ReportDetectionPackageStatusResponse{
+		Success: true,
+		Message: "status received",
+	}, nil
+}
+
+func (s *APIServerToServerImpl) forwardStatusToAPIServer(req *pb.ReportDetectionPackageStatusRequest) {
+	apiServerAddr := os.Getenv("API_SERVER_HTTP_ADDR")
+	if apiServerAddr == "" {
+		apiServerAddr = "http://api-server:8082"
+	}
+
+	payload := map[string]interface{}{
+		"host_id":         req.HostId,
+		"package_id":      req.PackageId,
+		"version":         req.Version,
+		"status":          req.Status,
+		"active_artifact": req.ActiveArtifact,
+		"loaded_hooks":    req.LoadedHooks,
+		"error_message":   req.ErrorMessage,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("failed to marshal status report", zap.Error(err))
+		return
+	}
+
+	url := apiServerAddr + "/api/v1/detection/packages/hosts/report"
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		logger.Warn("failed to forward status to API Server", zap.Error(err), zap.String("url", url))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Warn("API Server returned non-200 for status report",
+			zap.Int("status", resp.StatusCode),
+			zap.String("url", url),
+		)
+	}
 }

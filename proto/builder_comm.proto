@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package builder_comm.v1;
+
+option go_package = "builder/pkg/api/v1;builderpb";
+
+// BuilderService - eBPF Detection Package Builder
+service BuilderService {
+    rpc GetBuilderInfo(GetBuilderInfoRequest) returns (GetBuilderInfoResponse);
+    rpc StartBuild(StartBuildRequest) returns (StartBuildResponse);
+    rpc SignPackage(SignPackageRequest) returns (SignPackageResponse);
+}
+
+message GetBuilderInfoRequest {}
+
+message GetBuilderInfoResponse {
+    string builder_version = 1;
+    string builder_image = 2;
+    string clang_version = 3;
+    string bpftool_version = 4;
+    repeated string supported_arches = 5;
+    repeated string supported_transports = 6;
+    string signing_key_fingerprint = 7;
+}
+
+message StartBuildRequest {
+    string build_id = 1;
+    string package_id = 2;
+    string version = 3;
+    string title = 4;
+    repeated string cve_ids = 5;
+    string operator = 6;
+    string builder_profile = 7;
+    string target_arch = 8;
+    string hook_plan_yaml = 9;
+    string ebpf_source = 10;
+    string sigma_rules_yaml = 11;
+    string correlation_yaml = 12;
+    string package_metadata_json = 13;
+}
+
+message StartBuildResponse {
+    string build_id = 1;
+    string status = 2;
+    string error_message = 3;
+    string builder_image_digest = 4;
+    string clang_version = 5;
+    string build_log_object_key = 6;
+    string build_log_tail = 7;
+    repeated BuildArtifact artifacts = 8;
+    repeated HookSummary hook_summary = 9;
+    string event_schema_json = 10;
+    string unsigned_package_object_key = 11;
+    string unsigned_package_sha256 = 12;
+    int64 unsigned_package_size = 13;
+}
+
+message BuildArtifact {
+    string name = 1;
+    string transport = 2;
+    string object_key = 3;
+    string sha256 = 4;
+    int64 size = 5;
+}
+
+message HookSummary {
+    string hook_type = 1;
+    string attach_point = 2;
+    string program_section = 3;
+    string risk_level = 4;
+}
+
+message SignPackageRequest {
+    string build_id = 1;
+    string package_id = 2;
+    string version = 3;
+    string operator = 4;
+    bool confirm = 5;
+}
+
+message SignPackageResponse {
+    bool success = 1;
+    string message = 2;
+    string package_object_key = 3;
+    string signature_object_key = 4;
+    string package_sha256 = 5;
+    int64 package_size = 6;
+    string signature_algorithm = 7;
+    string signing_key_fingerprint = 8;
+    int64 signed_at = 9;
+}

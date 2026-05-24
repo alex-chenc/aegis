@@ -15,6 +15,7 @@ import (
 	"api-server/internal/checker"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/ipdetect"
+	"api-server/internal/llm"
 	"api-server/internal/queue"
 	"api-server/internal/repository"
 	"api-server/internal/seed"
@@ -214,13 +215,37 @@ func main() {
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)
 	detectionHandler := handler.NewDetectionHandler(alertRepo, blockRepo, blockPolicyRepo, sigmaRuleRepo, toolCallRepo, alertService, sigmaRuleService, sigmaRuleUploadService, llmAggregationRepo, runtimeEventRepo, configRepo, serverClient, wsService, aiRuleConfigService, ruleGenerationService)
+
+	// V5.8 Detection Package
+	detectionPkgRepo := repository.NewDetectionPackageRepo(db)
+
+	// Builder gRPC client
+	builderAddr := os.Getenv("BUILDER_GRPC_ADDRESS")
+	if builderAddr == "" {
+		builderAddr = "builder:19096"
+	}
+	var builderSvcClient service.BuilderClient
+	if bc, err := grpcclient.NewBuilderClient(builderAddr); err != nil {
+		logger.Warn("failed to connect to builder gRPC, builds will be DB-only", zap.Error(err), zap.String("addr", builderAddr))
+	} else {
+		builderSvcClient = bc
+		defer bc.Close()
+		logger.Info("Builder gRPC client initialized", zap.String("addr", builderAddr))
+	}
+
+	detectionPkgService := service.NewDetectionPackageService(detectionPkgRepo, db, serverClient, builderSvcClient)
+
+	// LLM client for AI generation
+	llmGenClient := llm.NewLLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.ModelName, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, llmGenClient)
+
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
 	authHandler := handler.NewAuthHandler(authService)
 	commandAuditHandler := handler.NewCommandAuditHandler(commandAuditRuleRepo, systemConfigRepo, scriptAuditService)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
 
 	// Initialize HTTP router
-	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
+	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
 	router.Setup()
 
 	// Start HTTP server

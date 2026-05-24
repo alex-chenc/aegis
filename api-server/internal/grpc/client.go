@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -119,4 +120,63 @@ func (c *ServerClient) ExecuteTool(ctx context.Context, callID, hostID, tool, ar
 		Arguments:      arguments,
 		TimeoutSeconds: timeoutSeconds,
 	})
+}
+
+// InstallDetectionPackage installs a detection package on agents
+func (c *ServerClient) InstallDetectionPackage(ctx context.Context, hostID string, command *pb.DetectionPackageCommand) (int32, error) {
+	resp, err := c.client.InstallDetectionPackage(ctx, &pb.InstallDetectionPackageRequest{
+		HostId:  hostID,
+		Command: command,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return resp.AffectedAgents, nil
+}
+
+// InstallDetectionPackageFromService installs a detection package using service types
+func (c *ServerClient) InstallDetectionPackageFromService(ctx context.Context, hostID string, command interface{}) (int32, error) {
+	// Convert service.DetectionPackageCommand to pb.DetectionPackageCommand via JSON
+	if cmd, ok := command.(*pb.DetectionPackageCommand); ok {
+		return c.InstallDetectionPackage(ctx, hostID, cmd)
+	}
+
+	// Use JSON roundtrip to convert any struct to pb type
+	jsonData, err := json.Marshal(command)
+	if err != nil {
+		return 0, fmt.Errorf("marshal command: %w", err)
+	}
+
+	cmd := &pb.DetectionPackageCommand{}
+	if err := json.Unmarshal(jsonData, cmd); err != nil {
+		return 0, fmt.Errorf("unmarshal command: %w", err)
+	}
+
+	return c.InstallDetectionPackage(ctx, hostID, cmd)
+}
+
+// SyncAgentConfig syncs config to agents
+func (c *ServerClient) SyncAgentConfig(ctx context.Context, hostID, configType, configJSON string) (int32, error) {
+	resp, err := c.client.SyncAgentConfig(ctx, &pb.SyncAgentConfigRequest{
+		HostId:     hostID,
+		ConfigType: configType,
+		ConfigJson: configJSON,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return resp.AffectedAgents, nil
+}
+
+// UninstallDetectionPackage uninstalls a detection package from agents
+func (c *ServerClient) UninstallDetectionPackage(ctx context.Context, hostID, packageID, version string) (int32, error) {
+	resp, err := c.client.UninstallDetectionPackage(ctx, &pb.UninstallDetectionPackageRequest{
+		HostId:    hostID,
+		PackageId: packageID,
+		Version:   version,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return resp.AffectedAgents, nil
 }

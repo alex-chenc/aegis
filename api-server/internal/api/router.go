@@ -11,23 +11,24 @@ import (
 )
 
 type Router struct {
-	engine                 *gin.Engine
-	authService            *service.AuthService
-	authHandler            *handler.AuthHandler
-	configHandler          *handler.ConfigHandler
-	hostHandler            *handler.HostHandler
-	templateHandler        *handler.TemplateHandler
-	taskHandler            *handler.TaskHandler
-	taskHandlerWithHealing *handler.TaskHandlerWithHealing
-	agentHandler           *handler.AgentHandler
-	ruleHandler            *handler.RuleHandler
-	vulnerabilityHandler   *handler.VulnerabilityHandler
-	detectionHandler       *handler.DetectionHandler
-	websocketHandler       *handler.WebSocketHandler
-	notificationHandler    *handler.NotificationHandler
-	aiAnalysisHandler      *handler.AIAnalysisHandler
-	commandAuditHandler    *handler.CommandAuditHandler
-	auditLogHandler        *handler.AuditLogHandler
+	engine                  *gin.Engine
+	authService             *service.AuthService
+	authHandler             *handler.AuthHandler
+	configHandler           *handler.ConfigHandler
+	hostHandler             *handler.HostHandler
+	templateHandler         *handler.TemplateHandler
+	taskHandler             *handler.TaskHandler
+	taskHandlerWithHealing  *handler.TaskHandlerWithHealing
+	agentHandler            *handler.AgentHandler
+	ruleHandler             *handler.RuleHandler
+	vulnerabilityHandler    *handler.VulnerabilityHandler
+	detectionHandler        *handler.DetectionHandler
+	detectionPkgHandler     *handler.DetectionPackageHandler
+	websocketHandler        *handler.WebSocketHandler
+	notificationHandler     *handler.NotificationHandler
+	aiAnalysisHandler       *handler.AIAnalysisHandler
+	commandAuditHandler     *handler.CommandAuditHandler
+	auditLogHandler         *handler.AuditLogHandler
 }
 
 func NewRouter(
@@ -42,6 +43,7 @@ func NewRouter(
 	ruleHandler *handler.RuleHandler,
 	vulnerabilityHandler *handler.VulnerabilityHandler,
 	detectionHandler *handler.DetectionHandler,
+	detectionPkgHandler *handler.DetectionPackageHandler,
 	websocketHandler *handler.WebSocketHandler,
 	notificationHandler *handler.NotificationHandler,
 	aiAnalysisHandler *handler.AIAnalysisHandler,
@@ -60,6 +62,7 @@ func NewRouter(
 		ruleHandler:            ruleHandler,
 		vulnerabilityHandler:   vulnerabilityHandler,
 		detectionHandler:       detectionHandler,
+		detectionPkgHandler:    detectionPkgHandler,
 		websocketHandler:       websocketHandler,
 		notificationHandler:    notificationHandler,
 		aiAnalysisHandler:      aiAnalysisHandler,
@@ -260,6 +263,25 @@ func (r *Router) Setup() {
 			detection.POST("/alerts/ai-analysis/similar", r.aiAnalysisHandler.FindSimilarCases)
 			detection.POST("/alerts/ai-analysis/rag-context", r.aiAnalysisHandler.GetRAGContext)
 			detection.GET("/alerts/ai-analysis/:session_id/execution-result", r.aiAnalysisHandler.GetExecutionResult)
+
+			// V5.8 Detection Package routes
+			packages := detection.Group("/packages")
+			{
+				packages.GET("", r.detectionPkgHandler.ListPackages)
+				packages.POST("/ai-generate", r.detectionPkgHandler.AIGenerateDraft)
+				packages.POST("/drafts", r.detectionPkgHandler.CreateDraft)
+				packages.PUT("/drafts/:draft_id", r.detectionPkgHandler.UpdateDraft)
+				packages.GET("/drafts/:package_id", r.detectionPkgHandler.GetDraft)
+				packages.GET("/builds/:build_id", r.detectionPkgHandler.GetBuild)
+				packages.POST("/:package_id/build", r.detectionPkgHandler.StartBuild)
+				packages.POST("/:package_id/sign", r.detectionPkgHandler.SignPackage)
+				packages.POST("/:package_id/enable", r.detectionPkgHandler.EnablePackage)
+				packages.POST("/:package_id/disable", r.detectionPkgHandler.DisablePackage)
+				packages.POST("/:package_id/uninstall", r.detectionPkgHandler.UninstallPackage)
+				packages.GET("/:package_id/hosts", r.detectionPkgHandler.ListHostStatus)
+				packages.POST("/hosts/report", r.detectionPkgHandler.ReportHostStatus)
+				packages.GET("/:package_id", r.detectionPkgHandler.GetPackage)
+			}
 		}
 
 		// 通知接口
@@ -290,6 +312,13 @@ func (r *Router) Setup() {
 			auditLogs.GET("/stats", r.auditLogHandler.GetStats)
 			auditLogs.GET("/:id", r.auditLogHandler.GetLog)
 			auditLogs.DELETE("", r.auditLogHandler.DeleteLogs)
+		}
+
+		// V5.8 eBPF Hook Allowlist
+		ebpfHooks := v1.Group("/settings/ebpf-hooks")
+		{
+			ebpfHooks.GET("/allowlist", r.detectionPkgHandler.GetAllowlist)
+			ebpfHooks.PUT("/allowlist", r.detectionPkgHandler.UpdateAllowlist)
 		}
 	}
 }
