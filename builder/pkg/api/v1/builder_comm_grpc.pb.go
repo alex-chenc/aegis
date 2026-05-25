@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.24.4
-// source: builder_comm.proto
+// source: proto/builder_comm.proto
 
 package builderpb
 
@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BuilderService_GetBuilderInfo_FullMethodName = "/builder_comm.v1.BuilderService/GetBuilderInfo"
-	BuilderService_StartBuild_FullMethodName     = "/builder_comm.v1.BuilderService/StartBuild"
-	BuilderService_SignPackage_FullMethodName    = "/builder_comm.v1.BuilderService/SignPackage"
+	BuilderService_GetBuilderInfo_FullMethodName        = "/builder_comm.v1.BuilderService/GetBuilderInfo"
+	BuilderService_StartBuild_FullMethodName            = "/builder_comm.v1.BuilderService/StartBuild"
+	BuilderService_GetPackageBuildStatus_FullMethodName = "/builder_comm.v1.BuilderService/GetPackageBuildStatus"
+	BuilderService_ReviewBuild_FullMethodName           = "/builder_comm.v1.BuilderService/ReviewBuild"
+	BuilderService_SignPackage_FullMethodName           = "/builder_comm.v1.BuilderService/SignPackage"
 )
 
 // BuilderServiceClient is the client API for BuilderService service.
@@ -31,7 +33,10 @@ const (
 // BuilderService - eBPF Detection Package Builder
 type BuilderServiceClient interface {
 	GetBuilderInfo(ctx context.Context, in *GetBuilderInfoRequest, opts ...grpc.CallOption) (*GetBuilderInfoResponse, error)
+	// NOTE: 设计文档中命名为 StartPackageBuild，保持当前命名以兼容现有客户端
 	StartBuild(ctx context.Context, in *StartBuildRequest, opts ...grpc.CallOption) (*StartBuildResponse, error)
+	GetPackageBuildStatus(ctx context.Context, in *GetPackageBuildStatusRequest, opts ...grpc.CallOption) (*GetPackageBuildStatusResponse, error)
+	ReviewBuild(ctx context.Context, in *ReviewBuildRequest, opts ...grpc.CallOption) (*ReviewBuildResponse, error)
 	SignPackage(ctx context.Context, in *SignPackageRequest, opts ...grpc.CallOption) (*SignPackageResponse, error)
 }
 
@@ -63,6 +68,26 @@ func (c *builderServiceClient) StartBuild(ctx context.Context, in *StartBuildReq
 	return out, nil
 }
 
+func (c *builderServiceClient) GetPackageBuildStatus(ctx context.Context, in *GetPackageBuildStatusRequest, opts ...grpc.CallOption) (*GetPackageBuildStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPackageBuildStatusResponse)
+	err := c.cc.Invoke(ctx, BuilderService_GetPackageBuildStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *builderServiceClient) ReviewBuild(ctx context.Context, in *ReviewBuildRequest, opts ...grpc.CallOption) (*ReviewBuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReviewBuildResponse)
+	err := c.cc.Invoke(ctx, BuilderService_ReviewBuild_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *builderServiceClient) SignPackage(ctx context.Context, in *SignPackageRequest, opts ...grpc.CallOption) (*SignPackageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SignPackageResponse)
@@ -80,7 +105,10 @@ func (c *builderServiceClient) SignPackage(ctx context.Context, in *SignPackageR
 // BuilderService - eBPF Detection Package Builder
 type BuilderServiceServer interface {
 	GetBuilderInfo(context.Context, *GetBuilderInfoRequest) (*GetBuilderInfoResponse, error)
+	// NOTE: 设计文档中命名为 StartPackageBuild，保持当前命名以兼容现有客户端
 	StartBuild(context.Context, *StartBuildRequest) (*StartBuildResponse, error)
+	GetPackageBuildStatus(context.Context, *GetPackageBuildStatusRequest) (*GetPackageBuildStatusResponse, error)
+	ReviewBuild(context.Context, *ReviewBuildRequest) (*ReviewBuildResponse, error)
 	SignPackage(context.Context, *SignPackageRequest) (*SignPackageResponse, error)
 	mustEmbedUnimplementedBuilderServiceServer()
 }
@@ -97,6 +125,12 @@ func (UnimplementedBuilderServiceServer) GetBuilderInfo(context.Context, *GetBui
 }
 func (UnimplementedBuilderServiceServer) StartBuild(context.Context, *StartBuildRequest) (*StartBuildResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartBuild not implemented")
+}
+func (UnimplementedBuilderServiceServer) GetPackageBuildStatus(context.Context, *GetPackageBuildStatusRequest) (*GetPackageBuildStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPackageBuildStatus not implemented")
+}
+func (UnimplementedBuilderServiceServer) ReviewBuild(context.Context, *ReviewBuildRequest) (*ReviewBuildResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReviewBuild not implemented")
 }
 func (UnimplementedBuilderServiceServer) SignPackage(context.Context, *SignPackageRequest) (*SignPackageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignPackage not implemented")
@@ -158,6 +192,42 @@ func _BuilderService_StartBuild_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BuilderService_GetPackageBuildStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPackageBuildStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuilderServiceServer).GetPackageBuildStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuilderService_GetPackageBuildStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuilderServiceServer).GetPackageBuildStatus(ctx, req.(*GetPackageBuildStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BuilderService_ReviewBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReviewBuildRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuilderServiceServer).ReviewBuild(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuilderService_ReviewBuild_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuilderServiceServer).ReviewBuild(ctx, req.(*ReviewBuildRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BuilderService_SignPackage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SignPackageRequest)
 	if err := dec(in); err != nil {
@@ -192,10 +262,18 @@ var BuilderService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BuilderService_StartBuild_Handler,
 		},
 		{
+			MethodName: "GetPackageBuildStatus",
+			Handler:    _BuilderService_GetPackageBuildStatus_Handler,
+		},
+		{
+			MethodName: "ReviewBuild",
+			Handler:    _BuilderService_ReviewBuild_Handler,
+		},
+		{
 			MethodName: "SignPackage",
 			Handler:    _BuilderService_SignPackage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "builder_comm.proto",
+	Metadata: "proto/builder_comm.proto",
 }

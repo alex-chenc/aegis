@@ -7,7 +7,10 @@ option go_package = "builder/pkg/api/v1;builderpb";
 // BuilderService - eBPF Detection Package Builder
 service BuilderService {
     rpc GetBuilderInfo(GetBuilderInfoRequest) returns (GetBuilderInfoResponse);
+    // NOTE: 设计文档中命名为 StartPackageBuild，保持当前命名以兼容现有客户端
     rpc StartBuild(StartBuildRequest) returns (StartBuildResponse);
+    rpc GetPackageBuildStatus(GetPackageBuildStatusRequest) returns (GetPackageBuildStatusResponse);
+    rpc ReviewBuild(ReviewBuildRequest) returns (ReviewBuildResponse);
     rpc SignPackage(SignPackageRequest) returns (SignPackageResponse);
 }
 
@@ -21,6 +24,9 @@ message GetBuilderInfoResponse {
     repeated string supported_arches = 5;
     repeated string supported_transports = 6;
     string signing_key_fingerprint = 7;
+    string builder_image_digest = 8;
+    string llvm_version = 9;
+    string libbpf_version = 10;
 }
 
 message StartBuildRequest {
@@ -88,4 +94,32 @@ message SignPackageResponse {
     string signature_algorithm = 7;
     string signing_key_fingerprint = 8;
     int64 signed_at = 9;
+}
+
+message GetPackageBuildStatusRequest {
+    string package_id = 1;
+    string version = 2;
+    string build_id = 3;
+}
+
+message GetPackageBuildStatusResponse {
+    string build_id = 1;
+    string status = 2;
+    string error_message = 3;
+    int32 progress_percent = 4;
+}
+
+message ReviewBuildRequest {
+    string build_id = 1;
+    string package_id = 2;
+    string version = 3;
+    bool approved = 4;
+    string comment = 5;
+    string reviewer = 6;
+}
+
+message ReviewBuildResponse {
+    bool success = 1;
+    string message = 2;
+    string new_status = 3;
 }
