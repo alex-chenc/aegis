@@ -9,6 +9,7 @@ import (
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
+	pb "api-server/pkg/api/v1"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -24,7 +25,7 @@ type DetectionPackageService struct {
 
 type GRPCServerClient interface {
 	InstallDetectionPackageFromService(ctx context.Context, hostID string, command interface{}) (int32, error)
-	SyncAgentConfig(ctx context.Context, hostID, configType, configJSON string) (int32, error)
+	SyncAgentConfig(ctx context.Context, hostID string, configs []*pb.AgentConfig) (int32, error)
 	UninstallDetectionPackage(ctx context.Context, hostID, packageID, version string) (int32, error)
 }
 
@@ -86,20 +87,20 @@ func (s *DetectionPackageService) CreateDraft(ctx context.Context, req CreateDra
 	}
 
 	draft := &model.DetectionPackageDraft{
-		ID:               uuid.New(),
-		PackageID:        req.PackageID,
-		TargetVersion:    req.TargetVersion,
-		Title:            req.Title,
-		Description:      req.Description,
-		CVEIDs:           datatypes.JSON(cveIDs),
-		HookPlanYAML:     req.HookPlanYAML,
-		EBPFSource:       req.EBPFSource,
-		SigmaRulesYAML:   req.SigmaRulesYAML,
-		CorrelationYAML:  req.CorrelationYAML,
-		BuildParams:      datatypes.JSON(buildParams),
-		Status:           "draft",
-		CreatedBy:        operator,
-		UpdatedBy:        operator,
+		ID:              uuid.New(),
+		PackageID:       req.PackageID,
+		TargetVersion:   req.TargetVersion,
+		Title:           req.Title,
+		Description:     req.Description,
+		CVEIDs:          datatypes.JSON(cveIDs),
+		HookPlanYAML:    req.HookPlanYAML,
+		EBPFSource:      req.EBPFSource,
+		SigmaRulesYAML:  req.SigmaRulesYAML,
+		CorrelationYAML: req.CorrelationYAML,
+		BuildParams:     datatypes.JSON(buildParams),
+		Status:          "draft",
+		CreatedBy:       operator,
+		UpdatedBy:       operator,
 	}
 
 	if err := s.repo.CreateDraft(draft); err != nil {
@@ -456,7 +457,10 @@ func (s *DetectionPackageService) UpdateAllowlist(ctx context.Context, configJSO
 	var syncErr error
 	if s.serverClient != nil {
 		configJSONStr := string(config.ConfigJSON)
-		affected, err := s.serverClient.SyncAgentConfig(ctx, "", "dynamic_ebpf_hook_allowlist", configJSONStr)
+		configs := []*pb.AgentConfig{
+			{ConfigType: "dynamic_ebpf_hook_allowlist", ConfigJson: configJSONStr},
+		}
+		affected, err := s.serverClient.SyncAgentConfig(ctx, "", configs)
 		if err != nil {
 			syncErr = fmt.Errorf("sync to agents failed (affected=%d): %w", affected, err)
 			s.recordOperation("", "", "allowlist_update", operator, nil, false, syncErr.Error())

@@ -49,7 +49,7 @@ type GRPCServer struct {
 	taskResultCallback   TaskResultCallback
 
 	// V5.8: Detection package status storage
-	detectionPackageStatuses sync.Map // key: "hostID:packageID:version" -> *pb.ReportDetectionPackageStatusRequest
+	detectionPackageStatuses sync.Map // key: "hostID:packageID:version" -> *pb.DetectionPackageHostStatus
 }
 
 type AgentConnection struct {

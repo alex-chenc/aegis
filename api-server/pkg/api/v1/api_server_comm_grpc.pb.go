@@ -31,6 +31,7 @@ const (
 	APIServerToServer_UninstallDetectionPackage_FullMethodName    = "/api_server_comm.v1.APIServerToServer/UninstallDetectionPackage"
 	APIServerToServer_SyncAgentConfig_FullMethodName              = "/api_server_comm.v1.APIServerToServer/SyncAgentConfig"
 	APIServerToServer_ReportDetectionPackageStatus_FullMethodName = "/api_server_comm.v1.APIServerToServer/ReportDetectionPackageStatus"
+	APIServerToServer_ReportCorrelationAlert_FullMethodName       = "/api_server_comm.v1.APIServerToServer/ReportCorrelationAlert"
 )
 
 // APIServerToServerClient is the client API for APIServerToServer service.
@@ -61,6 +62,7 @@ type APIServerToServerClient interface {
 	UninstallDetectionPackage(ctx context.Context, in *UninstallDetectionPackageRequest, opts ...grpc.CallOption) (*UninstallDetectionPackageResponse, error)
 	SyncAgentConfig(ctx context.Context, in *SyncAgentConfigRequest, opts ...grpc.CallOption) (*SyncAgentConfigResponse, error)
 	ReportDetectionPackageStatus(ctx context.Context, in *ReportDetectionPackageStatusRequest, opts ...grpc.CallOption) (*ReportDetectionPackageStatusResponse, error)
+	ReportCorrelationAlert(ctx context.Context, in *ReportCorrelationAlertRequest, opts ...grpc.CallOption) (*ReportCorrelationAlertResponse, error)
 }
 
 type aPIServerToServerClient struct {
@@ -191,6 +193,16 @@ func (c *aPIServerToServerClient) ReportDetectionPackageStatus(ctx context.Conte
 	return out, nil
 }
 
+func (c *aPIServerToServerClient) ReportCorrelationAlert(ctx context.Context, in *ReportCorrelationAlertRequest, opts ...grpc.CallOption) (*ReportCorrelationAlertResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportCorrelationAlertResponse)
+	err := c.cc.Invoke(ctx, APIServerToServer_ReportCorrelationAlert_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // APIServerToServerServer is the server API for APIServerToServer service.
 // All implementations must embed UnimplementedAPIServerToServerServer
 // for forward compatibility.
@@ -219,6 +231,7 @@ type APIServerToServerServer interface {
 	UninstallDetectionPackage(context.Context, *UninstallDetectionPackageRequest) (*UninstallDetectionPackageResponse, error)
 	SyncAgentConfig(context.Context, *SyncAgentConfigRequest) (*SyncAgentConfigResponse, error)
 	ReportDetectionPackageStatus(context.Context, *ReportDetectionPackageStatusRequest) (*ReportDetectionPackageStatusResponse, error)
+	ReportCorrelationAlert(context.Context, *ReportCorrelationAlertRequest) (*ReportCorrelationAlertResponse, error)
 	mustEmbedUnimplementedAPIServerToServerServer()
 }
 
@@ -264,6 +277,9 @@ func (UnimplementedAPIServerToServerServer) SyncAgentConfig(context.Context, *Sy
 }
 func (UnimplementedAPIServerToServerServer) ReportDetectionPackageStatus(context.Context, *ReportDetectionPackageStatusRequest) (*ReportDetectionPackageStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportDetectionPackageStatus not implemented")
+}
+func (UnimplementedAPIServerToServerServer) ReportCorrelationAlert(context.Context, *ReportCorrelationAlertRequest) (*ReportCorrelationAlertResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportCorrelationAlert not implemented")
 }
 func (UnimplementedAPIServerToServerServer) mustEmbedUnimplementedAPIServerToServerServer() {}
 func (UnimplementedAPIServerToServerServer) testEmbeddedByValue()                           {}
@@ -502,6 +518,24 @@ func _APIServerToServer_ReportDetectionPackageStatus_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _APIServerToServer_ReportCorrelationAlert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportCorrelationAlertRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(APIServerToServerServer).ReportCorrelationAlert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: APIServerToServer_ReportCorrelationAlert_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(APIServerToServerServer).ReportCorrelationAlert(ctx, req.(*ReportCorrelationAlertRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // APIServerToServer_ServiceDesc is the grpc.ServiceDesc for APIServerToServer service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -556,6 +590,10 @@ var APIServerToServer_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportDetectionPackageStatus",
 			Handler:    _APIServerToServer_ReportDetectionPackageStatus_Handler,
+		},
+		{
+			MethodName: "ReportCorrelationAlert",
+			Handler:    _APIServerToServer_ReportCorrelationAlert_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

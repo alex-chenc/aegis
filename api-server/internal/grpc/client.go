@@ -156,11 +156,10 @@ func (c *ServerClient) InstallDetectionPackageFromService(ctx context.Context, h
 }
 
 // SyncAgentConfig syncs config to agents
-func (c *ServerClient) SyncAgentConfig(ctx context.Context, hostID, configType, configJSON string) (int32, error) {
+func (c *ServerClient) SyncAgentConfig(ctx context.Context, hostID string, configs []*pb.AgentConfig) (int32, error) {
 	resp, err := c.client.SyncAgentConfig(ctx, &pb.SyncAgentConfigRequest{
-		HostId:     hostID,
-		ConfigType: configType,
-		ConfigJson: configJSON,
+		HostId:  hostID,
+		Configs: configs,
 	})
 	if err != nil {
 		return 0, err

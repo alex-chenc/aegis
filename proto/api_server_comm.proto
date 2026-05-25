@@ -42,6 +42,7 @@ service APIServerToServer {
     rpc UninstallDetectionPackage(UninstallDetectionPackageRequest) returns (UninstallDetectionPackageResponse);
     rpc SyncAgentConfig(SyncAgentConfigRequest) returns (SyncAgentConfigResponse);
     rpc ReportDetectionPackageStatus(ReportDetectionPackageStatusRequest) returns (ReportDetectionPackageStatusResponse);
+    rpc ReportCorrelationAlert(ReportCorrelationAlertRequest) returns (ReportCorrelationAlertResponse);
 }
 
 // ============================================================
@@ -267,8 +268,12 @@ message UninstallDetectionPackageResponse {
 
 message SyncAgentConfigRequest {
     string host_id = 1;          // empty means all online agents
-    string config_type = 2;      // dynamic_ebpf_hook_allowlist
-    string config_json = 3;
+    repeated AgentConfig configs = 2;
+}
+
+message AgentConfig {
+    string config_type = 1;
+    string config_json = 2;
 }
 
 message SyncAgentConfigResponse {
@@ -277,7 +282,7 @@ message SyncAgentConfigResponse {
     string message = 3;
 }
 
-message ReportDetectionPackageStatusRequest {
+message DetectionPackageHostStatus {
     string host_id = 1;
     string package_id = 2;
     string version = 3;
@@ -288,7 +293,28 @@ message ReportDetectionPackageStatusRequest {
     int64 reported_at = 8;
 }
 
+message ReportDetectionPackageStatusRequest {
+    repeated DetectionPackageHostStatus statuses = 1;
+}
+
 message ReportDetectionPackageStatusResponse {
     bool success = 1;
     string message = 2;
+}
+
+// ============================================================
+// V5.8 Correlation Alert Messages
+// ============================================================
+
+message ReportCorrelationAlertRequest {
+    string agent_id = 1;
+    string package_id = 2;
+    string correlation_rule_id = 3;
+    string severity = 4;
+    string evidence_chain_json = 5;
+    string event_data_json = 6;
+}
+
+message ReportCorrelationAlertResponse {
+    bool accepted = 1;
 }

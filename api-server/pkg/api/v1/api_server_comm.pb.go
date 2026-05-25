@@ -1757,9 +1757,8 @@ func (x *UninstallDetectionPackageResponse) GetMessage() string {
 
 type SyncAgentConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`             // empty means all online agents
-	ConfigType    string                 `protobuf:"bytes,2,opt,name=config_type,json=configType,proto3" json:"config_type,omitempty"` // dynamic_ebpf_hook_allowlist
-	ConfigJson    string                 `protobuf:"bytes,3,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"` // empty means all online agents
+	Configs       []*AgentConfig         `protobuf:"bytes,2,rep,name=configs,proto3" json:"configs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1801,14 +1800,59 @@ func (x *SyncAgentConfigRequest) GetHostId() string {
 	return ""
 }
 
-func (x *SyncAgentConfigRequest) GetConfigType() string {
+func (x *SyncAgentConfigRequest) GetConfigs() []*AgentConfig {
+	if x != nil {
+		return x.Configs
+	}
+	return nil
+}
+
+type AgentConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConfigType    string                 `protobuf:"bytes,1,opt,name=config_type,json=configType,proto3" json:"config_type,omitempty"`
+	ConfigJson    string                 `protobuf:"bytes,2,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentConfig) Reset() {
+	*x = AgentConfig{}
+	mi := &file_api_server_comm_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentConfig) ProtoMessage() {}
+
+func (x *AgentConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_api_server_comm_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentConfig.ProtoReflect.Descriptor instead.
+func (*AgentConfig) Descriptor() ([]byte, []int) {
+	return file_api_server_comm_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *AgentConfig) GetConfigType() string {
 	if x != nil {
 		return x.ConfigType
 	}
 	return ""
 }
 
-func (x *SyncAgentConfigRequest) GetConfigJson() string {
+func (x *AgentConfig) GetConfigJson() string {
 	if x != nil {
 		return x.ConfigJson
 	}
@@ -1826,7 +1870,7 @@ type SyncAgentConfigResponse struct {
 
 func (x *SyncAgentConfigResponse) Reset() {
 	*x = SyncAgentConfigResponse{}
-	mi := &file_api_server_comm_proto_msgTypes[26]
+	mi := &file_api_server_comm_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1838,7 +1882,7 @@ func (x *SyncAgentConfigResponse) String() string {
 func (*SyncAgentConfigResponse) ProtoMessage() {}
 
 func (x *SyncAgentConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_server_comm_proto_msgTypes[26]
+	mi := &file_api_server_comm_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1851,7 +1895,7 @@ func (x *SyncAgentConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncAgentConfigResponse.ProtoReflect.Descriptor instead.
 func (*SyncAgentConfigResponse) Descriptor() ([]byte, []int) {
-	return file_api_server_comm_proto_rawDescGZIP(), []int{26}
+	return file_api_server_comm_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SyncAgentConfigResponse) GetSuccess() bool {
@@ -1875,7 +1919,7 @@ func (x *SyncAgentConfigResponse) GetMessage() string {
 	return ""
 }
 
-type ReportDetectionPackageStatusRequest struct {
+type DetectionPackageHostStatus struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	HostId         string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	PackageId      string                 `protobuf:"bytes,2,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
@@ -1889,9 +1933,102 @@ type ReportDetectionPackageStatusRequest struct {
 	sizeCache      protoimpl.SizeCache
 }
 
+func (x *DetectionPackageHostStatus) Reset() {
+	*x = DetectionPackageHostStatus{}
+	mi := &file_api_server_comm_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetectionPackageHostStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetectionPackageHostStatus) ProtoMessage() {}
+
+func (x *DetectionPackageHostStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_api_server_comm_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetectionPackageHostStatus.ProtoReflect.Descriptor instead.
+func (*DetectionPackageHostStatus) Descriptor() ([]byte, []int) {
+	return file_api_server_comm_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *DetectionPackageHostStatus) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetActiveArtifact() string {
+	if x != nil {
+		return x.ActiveArtifact
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetLoadedHooks() []string {
+	if x != nil {
+		return x.LoadedHooks
+	}
+	return nil
+}
+
+func (x *DetectionPackageHostStatus) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *DetectionPackageHostStatus) GetReportedAt() int64 {
+	if x != nil {
+		return x.ReportedAt
+	}
+	return 0
+}
+
+type ReportDetectionPackageStatusRequest struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	Statuses      []*DetectionPackageHostStatus `protobuf:"bytes,1,rep,name=statuses,proto3" json:"statuses,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
 func (x *ReportDetectionPackageStatusRequest) Reset() {
 	*x = ReportDetectionPackageStatusRequest{}
-	mi := &file_api_server_comm_proto_msgTypes[27]
+	mi := &file_api_server_comm_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1903,7 +2040,7 @@ func (x *ReportDetectionPackageStatusRequest) String() string {
 func (*ReportDetectionPackageStatusRequest) ProtoMessage() {}
 
 func (x *ReportDetectionPackageStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_server_comm_proto_msgTypes[27]
+	mi := &file_api_server_comm_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1916,63 +2053,14 @@ func (x *ReportDetectionPackageStatusRequest) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ReportDetectionPackageStatusRequest.ProtoReflect.Descriptor instead.
 func (*ReportDetectionPackageStatusRequest) Descriptor() ([]byte, []int) {
-	return file_api_server_comm_proto_rawDescGZIP(), []int{27}
+	return file_api_server_comm_proto_rawDescGZIP(), []int{29}
 }
 
-func (x *ReportDetectionPackageStatusRequest) GetHostId() string {
+func (x *ReportDetectionPackageStatusRequest) GetStatuses() []*DetectionPackageHostStatus {
 	if x != nil {
-		return x.HostId
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetPackageId() string {
-	if x != nil {
-		return x.PackageId
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetActiveArtifact() string {
-	if x != nil {
-		return x.ActiveArtifact
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetLoadedHooks() []string {
-	if x != nil {
-		return x.LoadedHooks
+		return x.Statuses
 	}
 	return nil
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetErrorMessage() string {
-	if x != nil {
-		return x.ErrorMessage
-	}
-	return ""
-}
-
-func (x *ReportDetectionPackageStatusRequest) GetReportedAt() int64 {
-	if x != nil {
-		return x.ReportedAt
-	}
-	return 0
 }
 
 type ReportDetectionPackageStatusResponse struct {
@@ -1985,7 +2073,7 @@ type ReportDetectionPackageStatusResponse struct {
 
 func (x *ReportDetectionPackageStatusResponse) Reset() {
 	*x = ReportDetectionPackageStatusResponse{}
-	mi := &file_api_server_comm_proto_msgTypes[28]
+	mi := &file_api_server_comm_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1997,7 +2085,7 @@ func (x *ReportDetectionPackageStatusResponse) String() string {
 func (*ReportDetectionPackageStatusResponse) ProtoMessage() {}
 
 func (x *ReportDetectionPackageStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_server_comm_proto_msgTypes[28]
+	mi := &file_api_server_comm_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2010,7 +2098,7 @@ func (x *ReportDetectionPackageStatusResponse) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use ReportDetectionPackageStatusResponse.ProtoReflect.Descriptor instead.
 func (*ReportDetectionPackageStatusResponse) Descriptor() ([]byte, []int) {
-	return file_api_server_comm_proto_rawDescGZIP(), []int{28}
+	return file_api_server_comm_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ReportDetectionPackageStatusResponse) GetSuccess() bool {
@@ -2025,6 +2113,134 @@ func (x *ReportDetectionPackageStatusResponse) GetMessage() string {
 		return x.Message
 	}
 	return ""
+}
+
+type ReportCorrelationAlertRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	AgentId           string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	PackageId         string                 `protobuf:"bytes,2,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	CorrelationRuleId string                 `protobuf:"bytes,3,opt,name=correlation_rule_id,json=correlationRuleId,proto3" json:"correlation_rule_id,omitempty"`
+	Severity          string                 `protobuf:"bytes,4,opt,name=severity,proto3" json:"severity,omitempty"`
+	EvidenceChainJson string                 `protobuf:"bytes,5,opt,name=evidence_chain_json,json=evidenceChainJson,proto3" json:"evidence_chain_json,omitempty"`
+	EventDataJson     string                 `protobuf:"bytes,6,opt,name=event_data_json,json=eventDataJson,proto3" json:"event_data_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ReportCorrelationAlertRequest) Reset() {
+	*x = ReportCorrelationAlertRequest{}
+	mi := &file_api_server_comm_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportCorrelationAlertRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportCorrelationAlertRequest) ProtoMessage() {}
+
+func (x *ReportCorrelationAlertRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_server_comm_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportCorrelationAlertRequest.ProtoReflect.Descriptor instead.
+func (*ReportCorrelationAlertRequest) Descriptor() ([]byte, []int) {
+	return file_api_server_comm_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ReportCorrelationAlertRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ReportCorrelationAlertRequest) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *ReportCorrelationAlertRequest) GetCorrelationRuleId() string {
+	if x != nil {
+		return x.CorrelationRuleId
+	}
+	return ""
+}
+
+func (x *ReportCorrelationAlertRequest) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *ReportCorrelationAlertRequest) GetEvidenceChainJson() string {
+	if x != nil {
+		return x.EvidenceChainJson
+	}
+	return ""
+}
+
+func (x *ReportCorrelationAlertRequest) GetEventDataJson() string {
+	if x != nil {
+		return x.EventDataJson
+	}
+	return ""
+}
+
+type ReportCorrelationAlertResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportCorrelationAlertResponse) Reset() {
+	*x = ReportCorrelationAlertResponse{}
+	mi := &file_api_server_comm_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportCorrelationAlertResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportCorrelationAlertResponse) ProtoMessage() {}
+
+func (x *ReportCorrelationAlertResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_server_comm_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportCorrelationAlertResponse.ProtoReflect.Descriptor instead.
+func (*ReportCorrelationAlertResponse) Descriptor() ([]byte, []int) {
+	return file_api_server_comm_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ReportCorrelationAlertResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
 }
 
 var File_api_server_comm_proto protoreflect.FileDescriptor
@@ -2174,18 +2390,20 @@ const file_api_server_comm_proto_rawDesc = "" +
 	"!UninstallDetectionPackageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
 	"\x0faffected_agents\x18\x02 \x01(\x05R\x0eaffectedAgents\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"s\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"l\n" +
 	"\x16SyncAgentConfigRequest\x12\x17\n" +
-	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x1f\n" +
-	"\vconfig_type\x18\x02 \x01(\tR\n" +
+	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x129\n" +
+	"\aconfigs\x18\x02 \x03(\v2\x1f.api_server_comm.v1.AgentConfigR\aconfigs\"O\n" +
+	"\vAgentConfig\x12\x1f\n" +
+	"\vconfig_type\x18\x01 \x01(\tR\n" +
 	"configType\x12\x1f\n" +
-	"\vconfig_json\x18\x03 \x01(\tR\n" +
+	"\vconfig_json\x18\x02 \x01(\tR\n" +
 	"configJson\"v\n" +
 	"\x17SyncAgentConfigResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
 	"\x0faffected_agents\x18\x02 \x01(\x05R\x0eaffectedAgents\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\xa1\x02\n" +
-	"#ReportDetectionPackageStatusRequest\x12\x17\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x98\x02\n" +
+	"\x1aDetectionPackageHostStatus\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x1d\n" +
 	"\n" +
 	"package_id\x18\x02 \x01(\tR\tpackageId\x12\x18\n" +
@@ -2195,10 +2413,22 @@ const file_api_server_comm_proto_rawDesc = "" +
 	"\floaded_hooks\x18\x06 \x03(\tR\vloadedHooks\x12#\n" +
 	"\rerror_message\x18\a \x01(\tR\ferrorMessage\x12\x1f\n" +
 	"\vreported_at\x18\b \x01(\x03R\n" +
-	"reportedAt\"Z\n" +
+	"reportedAt\"q\n" +
+	"#ReportDetectionPackageStatusRequest\x12J\n" +
+	"\bstatuses\x18\x01 \x03(\v2..api_server_comm.v1.DetectionPackageHostStatusR\bstatuses\"Z\n" +
 	"$ReportDetectionPackageStatusResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\x80\v\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xfd\x01\n" +
+	"\x1dReportCorrelationAlertRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
+	"\n" +
+	"package_id\x18\x02 \x01(\tR\tpackageId\x12.\n" +
+	"\x13correlation_rule_id\x18\x03 \x01(\tR\x11correlationRuleId\x12\x1a\n" +
+	"\bseverity\x18\x04 \x01(\tR\bseverity\x12.\n" +
+	"\x13evidence_chain_json\x18\x05 \x01(\tR\x11evidenceChainJson\x12&\n" +
+	"\x0fevent_data_json\x18\x06 \x01(\tR\reventDataJson\"<\n" +
+	"\x1eReportCorrelationAlertResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted2\x81\f\n" +
 	"\x11APIServerToServer\x12g\n" +
 	"\x0eForwardCommand\x12).api_server_comm.v1.ForwardCommandRequest\x1a*.api_server_comm.v1.ForwardCommandResponse\x12^\n" +
 	"\vExecuteTool\x12&.api_server_comm.v1.ToolExecuteRequest\x1a'.api_server_comm.v1.ToolExecuteResponse\x12g\n" +
@@ -2211,7 +2441,8 @@ const file_api_server_comm_proto_rawDesc = "" +
 	"\x17InstallDetectionPackage\x122.api_server_comm.v1.InstallDetectionPackageRequest\x1a3.api_server_comm.v1.InstallDetectionPackageResponse\x12\x88\x01\n" +
 	"\x19UninstallDetectionPackage\x124.api_server_comm.v1.UninstallDetectionPackageRequest\x1a5.api_server_comm.v1.UninstallDetectionPackageResponse\x12j\n" +
 	"\x0fSyncAgentConfig\x12*.api_server_comm.v1.SyncAgentConfigRequest\x1a+.api_server_comm.v1.SyncAgentConfigResponse\x12\x91\x01\n" +
-	"\x1cReportDetectionPackageStatus\x127.api_server_comm.v1.ReportDetectionPackageStatusRequest\x1a8.api_server_comm.v1.ReportDetectionPackageStatusResponseB\x1aZ\x18api-server/pkg/api/v1;pbb\x06proto3"
+	"\x1cReportDetectionPackageStatus\x127.api_server_comm.v1.ReportDetectionPackageStatusRequest\x1a8.api_server_comm.v1.ReportDetectionPackageStatusResponse\x12\x7f\n" +
+	"\x16ReportCorrelationAlert\x121.api_server_comm.v1.ReportCorrelationAlertRequest\x1a2.api_server_comm.v1.ReportCorrelationAlertResponseB\x1aZ\x18api-server/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_api_server_comm_proto_rawDescOnce sync.Once
@@ -2225,7 +2456,7 @@ func file_api_server_comm_proto_rawDescGZIP() []byte {
 	return file_api_server_comm_proto_rawDescData
 }
 
-var file_api_server_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_api_server_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_api_server_comm_proto_goTypes = []any{
 	(*ForwardCommandRequest)(nil),                // 0: api_server_comm.v1.ForwardCommandRequest
 	(*ForwardCommandResponse)(nil),               // 1: api_server_comm.v1.ForwardCommandResponse
@@ -2253,45 +2484,53 @@ var file_api_server_comm_proto_goTypes = []any{
 	(*UninstallDetectionPackageRequest)(nil),     // 23: api_server_comm.v1.UninstallDetectionPackageRequest
 	(*UninstallDetectionPackageResponse)(nil),    // 24: api_server_comm.v1.UninstallDetectionPackageResponse
 	(*SyncAgentConfigRequest)(nil),               // 25: api_server_comm.v1.SyncAgentConfigRequest
-	(*SyncAgentConfigResponse)(nil),              // 26: api_server_comm.v1.SyncAgentConfigResponse
-	(*ReportDetectionPackageStatusRequest)(nil),  // 27: api_server_comm.v1.ReportDetectionPackageStatusRequest
-	(*ReportDetectionPackageStatusResponse)(nil), // 28: api_server_comm.v1.ReportDetectionPackageStatusResponse
-	nil, // 29: api_server_comm.v1.HealthCheckResponse.DetailsEntry
+	(*AgentConfig)(nil),                          // 26: api_server_comm.v1.AgentConfig
+	(*SyncAgentConfigResponse)(nil),              // 27: api_server_comm.v1.SyncAgentConfigResponse
+	(*DetectionPackageHostStatus)(nil),           // 28: api_server_comm.v1.DetectionPackageHostStatus
+	(*ReportDetectionPackageStatusRequest)(nil),  // 29: api_server_comm.v1.ReportDetectionPackageStatusRequest
+	(*ReportDetectionPackageStatusResponse)(nil), // 30: api_server_comm.v1.ReportDetectionPackageStatusResponse
+	(*ReportCorrelationAlertRequest)(nil),        // 31: api_server_comm.v1.ReportCorrelationAlertRequest
+	(*ReportCorrelationAlertResponse)(nil),       // 32: api_server_comm.v1.ReportCorrelationAlertResponse
+	nil,                                          // 33: api_server_comm.v1.HealthCheckResponse.DetailsEntry
 }
 var file_api_server_comm_proto_depIdxs = []int32{
 	8,  // 0: api_server_comm.v1.ListConnectedAgentsResponse.agents:type_name -> api_server_comm.v1.AgentInfo
-	29, // 1: api_server_comm.v1.HealthCheckResponse.details:type_name -> api_server_comm.v1.HealthCheckResponse.DetailsEntry
+	33, // 1: api_server_comm.v1.HealthCheckResponse.details:type_name -> api_server_comm.v1.HealthCheckResponse.DetailsEntry
 	12, // 2: api_server_comm.v1.UpdateAgentRulesRequest.rules:type_name -> api_server_comm.v1.AgentRuleUpdate
 	20, // 3: api_server_comm.v1.InstallDetectionPackageRequest.command:type_name -> api_server_comm.v1.DetectionPackageCommand
-	0,  // 4: api_server_comm.v1.APIServerToServer.ForwardCommand:input_type -> api_server_comm.v1.ForwardCommandRequest
-	2,  // 5: api_server_comm.v1.APIServerToServer.ExecuteTool:input_type -> api_server_comm.v1.ToolExecuteRequest
-	4,  // 6: api_server_comm.v1.APIServerToServer.GetAgentStatus:input_type -> api_server_comm.v1.GetAgentStatusRequest
-	6,  // 7: api_server_comm.v1.APIServerToServer.ListConnectedAgents:input_type -> api_server_comm.v1.ListConnectedAgentsRequest
-	9,  // 8: api_server_comm.v1.APIServerToServer.HealthCheck:input_type -> api_server_comm.v1.HealthCheckRequest
-	11, // 9: api_server_comm.v1.APIServerToServer.UpdateAgentRules:input_type -> api_server_comm.v1.UpdateAgentRulesRequest
-	14, // 10: api_server_comm.v1.APIServerToServer.ExecuteBlockCommand:input_type -> api_server_comm.v1.ExecuteBlockCommandRequest
-	16, // 11: api_server_comm.v1.APIServerToServer.CollectSoftware:input_type -> api_server_comm.v1.CollectSoftwareRequest
-	21, // 12: api_server_comm.v1.APIServerToServer.InstallDetectionPackage:input_type -> api_server_comm.v1.InstallDetectionPackageRequest
-	23, // 13: api_server_comm.v1.APIServerToServer.UninstallDetectionPackage:input_type -> api_server_comm.v1.UninstallDetectionPackageRequest
-	25, // 14: api_server_comm.v1.APIServerToServer.SyncAgentConfig:input_type -> api_server_comm.v1.SyncAgentConfigRequest
-	27, // 15: api_server_comm.v1.APIServerToServer.ReportDetectionPackageStatus:input_type -> api_server_comm.v1.ReportDetectionPackageStatusRequest
-	1,  // 16: api_server_comm.v1.APIServerToServer.ForwardCommand:output_type -> api_server_comm.v1.ForwardCommandResponse
-	3,  // 17: api_server_comm.v1.APIServerToServer.ExecuteTool:output_type -> api_server_comm.v1.ToolExecuteResponse
-	5,  // 18: api_server_comm.v1.APIServerToServer.GetAgentStatus:output_type -> api_server_comm.v1.GetAgentStatusResponse
-	7,  // 19: api_server_comm.v1.APIServerToServer.ListConnectedAgents:output_type -> api_server_comm.v1.ListConnectedAgentsResponse
-	10, // 20: api_server_comm.v1.APIServerToServer.HealthCheck:output_type -> api_server_comm.v1.HealthCheckResponse
-	13, // 21: api_server_comm.v1.APIServerToServer.UpdateAgentRules:output_type -> api_server_comm.v1.UpdateAgentRulesResponse
-	15, // 22: api_server_comm.v1.APIServerToServer.ExecuteBlockCommand:output_type -> api_server_comm.v1.ExecuteBlockCommandResponse
-	17, // 23: api_server_comm.v1.APIServerToServer.CollectSoftware:output_type -> api_server_comm.v1.CollectSoftwareResponse
-	22, // 24: api_server_comm.v1.APIServerToServer.InstallDetectionPackage:output_type -> api_server_comm.v1.InstallDetectionPackageResponse
-	24, // 25: api_server_comm.v1.APIServerToServer.UninstallDetectionPackage:output_type -> api_server_comm.v1.UninstallDetectionPackageResponse
-	26, // 26: api_server_comm.v1.APIServerToServer.SyncAgentConfig:output_type -> api_server_comm.v1.SyncAgentConfigResponse
-	28, // 27: api_server_comm.v1.APIServerToServer.ReportDetectionPackageStatus:output_type -> api_server_comm.v1.ReportDetectionPackageStatusResponse
-	16, // [16:28] is the sub-list for method output_type
-	4,  // [4:16] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	26, // 4: api_server_comm.v1.SyncAgentConfigRequest.configs:type_name -> api_server_comm.v1.AgentConfig
+	28, // 5: api_server_comm.v1.ReportDetectionPackageStatusRequest.statuses:type_name -> api_server_comm.v1.DetectionPackageHostStatus
+	0,  // 6: api_server_comm.v1.APIServerToServer.ForwardCommand:input_type -> api_server_comm.v1.ForwardCommandRequest
+	2,  // 7: api_server_comm.v1.APIServerToServer.ExecuteTool:input_type -> api_server_comm.v1.ToolExecuteRequest
+	4,  // 8: api_server_comm.v1.APIServerToServer.GetAgentStatus:input_type -> api_server_comm.v1.GetAgentStatusRequest
+	6,  // 9: api_server_comm.v1.APIServerToServer.ListConnectedAgents:input_type -> api_server_comm.v1.ListConnectedAgentsRequest
+	9,  // 10: api_server_comm.v1.APIServerToServer.HealthCheck:input_type -> api_server_comm.v1.HealthCheckRequest
+	11, // 11: api_server_comm.v1.APIServerToServer.UpdateAgentRules:input_type -> api_server_comm.v1.UpdateAgentRulesRequest
+	14, // 12: api_server_comm.v1.APIServerToServer.ExecuteBlockCommand:input_type -> api_server_comm.v1.ExecuteBlockCommandRequest
+	16, // 13: api_server_comm.v1.APIServerToServer.CollectSoftware:input_type -> api_server_comm.v1.CollectSoftwareRequest
+	21, // 14: api_server_comm.v1.APIServerToServer.InstallDetectionPackage:input_type -> api_server_comm.v1.InstallDetectionPackageRequest
+	23, // 15: api_server_comm.v1.APIServerToServer.UninstallDetectionPackage:input_type -> api_server_comm.v1.UninstallDetectionPackageRequest
+	25, // 16: api_server_comm.v1.APIServerToServer.SyncAgentConfig:input_type -> api_server_comm.v1.SyncAgentConfigRequest
+	29, // 17: api_server_comm.v1.APIServerToServer.ReportDetectionPackageStatus:input_type -> api_server_comm.v1.ReportDetectionPackageStatusRequest
+	31, // 18: api_server_comm.v1.APIServerToServer.ReportCorrelationAlert:input_type -> api_server_comm.v1.ReportCorrelationAlertRequest
+	1,  // 19: api_server_comm.v1.APIServerToServer.ForwardCommand:output_type -> api_server_comm.v1.ForwardCommandResponse
+	3,  // 20: api_server_comm.v1.APIServerToServer.ExecuteTool:output_type -> api_server_comm.v1.ToolExecuteResponse
+	5,  // 21: api_server_comm.v1.APIServerToServer.GetAgentStatus:output_type -> api_server_comm.v1.GetAgentStatusResponse
+	7,  // 22: api_server_comm.v1.APIServerToServer.ListConnectedAgents:output_type -> api_server_comm.v1.ListConnectedAgentsResponse
+	10, // 23: api_server_comm.v1.APIServerToServer.HealthCheck:output_type -> api_server_comm.v1.HealthCheckResponse
+	13, // 24: api_server_comm.v1.APIServerToServer.UpdateAgentRules:output_type -> api_server_comm.v1.UpdateAgentRulesResponse
+	15, // 25: api_server_comm.v1.APIServerToServer.ExecuteBlockCommand:output_type -> api_server_comm.v1.ExecuteBlockCommandResponse
+	17, // 26: api_server_comm.v1.APIServerToServer.CollectSoftware:output_type -> api_server_comm.v1.CollectSoftwareResponse
+	22, // 27: api_server_comm.v1.APIServerToServer.InstallDetectionPackage:output_type -> api_server_comm.v1.InstallDetectionPackageResponse
+	24, // 28: api_server_comm.v1.APIServerToServer.UninstallDetectionPackage:output_type -> api_server_comm.v1.UninstallDetectionPackageResponse
+	27, // 29: api_server_comm.v1.APIServerToServer.SyncAgentConfig:output_type -> api_server_comm.v1.SyncAgentConfigResponse
+	30, // 30: api_server_comm.v1.APIServerToServer.ReportDetectionPackageStatus:output_type -> api_server_comm.v1.ReportDetectionPackageStatusResponse
+	32, // 31: api_server_comm.v1.APIServerToServer.ReportCorrelationAlert:output_type -> api_server_comm.v1.ReportCorrelationAlertResponse
+	19, // [19:32] is the sub-list for method output_type
+	6,  // [6:19] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_api_server_comm_proto_init() }
@@ -2305,7 +2544,7 @@ func file_api_server_comm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_server_comm_proto_rawDesc), len(file_api_server_comm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

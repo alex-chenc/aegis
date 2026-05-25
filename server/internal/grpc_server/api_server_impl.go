@@ -603,62 +603,66 @@ func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, r
 // SyncAgentConfig syncs configuration to agents
 func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.SyncAgentConfigRequest) (*pb.SyncAgentConfigResponse, error) {
 	affected := int32(0)
-	commandReq := &pb.CommandRequest{
-		Request: &pb.CommandRequest_ConfigSync{
-			ConfigSync: &pb.ConfigSync{
-				ConfigType: req.ConfigType,
-				Action:     "full_sync",
-				Payload:    req.ConfigJson,
-			},
-		},
-	}
 
-	if req.HostId == "" {
-		s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
+	for _, cfg := range req.Configs {
+		commandReq := &pb.CommandRequest{
+			Request: &pb.CommandRequest_ConfigSync{
+				ConfigSync: &pb.ConfigSync{
+					ConfigType: cfg.ConfigType,
+					Action:     "full_sync",
+					Payload:    cfg.ConfigJson,
+				},
+			},
+		}
+
+		if req.HostId == "" {
+			s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
+				conn := value.(*AgentConnection)
+				if conn.Stream != nil {
+					if err := conn.Stream.Send(commandReq); err != nil {
+						logger.Error("failed to send config sync",
+							zap.Stringer("host_id", key.(uuid.UUID)),
+							zap.String("config_type", cfg.ConfigType),
+							zap.Error(err),
+						)
+					} else {
+						affected++
+					}
+				}
+				return true
+			})
+		} else {
+			hostID, err := uuid.Parse(req.HostId)
+			if err != nil {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: fmt.Sprintf("invalid host_id: %v", err),
+				}, nil
+			}
+			value, ok := s.grpcServer.agentConnections.Load(hostID)
+			if !ok {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: "agent not connected",
+				}, nil
+			}
 			conn := value.(*AgentConnection)
 			if conn.Stream != nil {
 				if err := conn.Stream.Send(commandReq); err != nil {
-					logger.Error("failed to send config sync",
-						zap.Stringer("host_id", key.(uuid.UUID)),
-						zap.Error(err),
-					)
-				} else {
-					affected++
+					return &pb.SyncAgentConfigResponse{
+						Success: false,
+						Message: err.Error(),
+					}, nil
 				}
+				affected = 1
 			}
-			return true
-		})
-	} else {
-		hostID, err := uuid.Parse(req.HostId)
-		if err != nil {
-			return &pb.SyncAgentConfigResponse{
-				Success: false,
-				Message: fmt.Sprintf("invalid host_id: %v", err),
-			}, nil
 		}
-		value, ok := s.grpcServer.agentConnections.Load(hostID)
-		if !ok {
-			return &pb.SyncAgentConfigResponse{
-				Success: false,
-				Message: "agent not connected",
-			}, nil
-		}
-		conn := value.(*AgentConnection)
-		if conn.Stream != nil {
-			if err := conn.Stream.Send(commandReq); err != nil {
-				return &pb.SyncAgentConfigResponse{
-					Success: false,
-					Message: err.Error(),
-				}, nil
-			}
-			affected = 1
-		}
-	}
 
-	logger.Info("config sync sent",
-		zap.String("config_type", req.ConfigType),
-		zap.Int32("affected_agents", affected),
-	)
+		logger.Info("config sync sent",
+			zap.String("config_type", cfg.ConfigType),
+			zap.Int32("affected_agents", affected),
+		)
+	}
 
 	return &pb.SyncAgentConfigResponse{
 		Success:        true,
@@ -669,43 +673,43 @@ func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.Syn
 
 // ReportDetectionPackageStatus receives package status from agent
 func (s *APIServerToServerImpl) ReportDetectionPackageStatus(ctx context.Context, req *pb.ReportDetectionPackageStatusRequest) (*pb.ReportDetectionPackageStatusResponse, error) {
-	logger.Info("detection package status reported",
-		zap.String("host_id", req.HostId),
-		zap.String("package_id", req.PackageId),
-		zap.String("version", req.Version),
-		zap.String("status", req.Status),
-		zap.String("active_artifact", req.ActiveArtifact),
-		zap.Strings("loaded_hooks", req.LoadedHooks),
-		zap.String("error_message", req.ErrorMessage),
-	)
+	for _, status := range req.Statuses {
+		logger.Info("detection package status reported",
+			zap.String("host_id", status.HostId),
+			zap.String("package_id", status.PackageId),
+			zap.String("version", status.Version),
+			zap.String("status", status.Status),
+			zap.String("active_artifact", status.ActiveArtifact),
+			zap.Strings("loaded_hooks", status.LoadedHooks),
+			zap.String("error_message", status.ErrorMessage),
+		)
 
-	// Store in sync.Map
-	key := req.HostId + ":" + req.PackageId + ":" + req.Version
-	s.grpcServer.detectionPackageStatuses.Store(key, req)
+		key := status.HostId + ":" + status.PackageId + ":" + status.Version
+		s.grpcServer.detectionPackageStatuses.Store(key, status)
 
-	// Forward to API Server for DB persistence
-	go s.forwardStatusToAPIServer(req)
+		go s.forwardStatusToAPIServer(status)
+	}
 
 	return &pb.ReportDetectionPackageStatusResponse{
 		Success: true,
-		Message: "status received",
+		Message: "statuses received",
 	}, nil
 }
 
-func (s *APIServerToServerImpl) forwardStatusToAPIServer(req *pb.ReportDetectionPackageStatusRequest) {
+func (s *APIServerToServerImpl) forwardStatusToAPIServer(status *pb.DetectionPackageHostStatus) {
 	apiServerAddr := os.Getenv("API_SERVER_HTTP_ADDR")
 	if apiServerAddr == "" {
 		apiServerAddr = "http://api-server:8082"
 	}
 
 	payload := map[string]interface{}{
-		"host_id":         req.HostId,
-		"package_id":      req.PackageId,
-		"version":         req.Version,
-		"status":          req.Status,
-		"active_artifact": req.ActiveArtifact,
-		"loaded_hooks":    req.LoadedHooks,
-		"error_message":   req.ErrorMessage,
+		"host_id":         status.HostId,
+		"package_id":      status.PackageId,
+		"version":         status.Version,
+		"status":          status.Status,
+		"active_artifact": status.ActiveArtifact,
+		"loaded_hooks":    status.LoadedHooks,
+		"error_message":   status.ErrorMessage,
 	}
 
 	body, err := json.Marshal(payload)
