@@ -9,64 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type AtomicFinding struct {
-	PackageID string
-	Version   string
-	RuleID    string
-	EventType string
-	Timestamp int64
-	HostID    string
-	Hostname  string
-	PID       int
-	PPID      int
-	UID       int
-	Process   ProcessContext
-	EventMap  map[string]interface{}
-}
-
-type ProcessContext struct {
-	Name        string
-	CommandLine string
-	ExePath     string
-}
-
-type CorrelationSpec struct {
-	ID          string
-	PackageID   string
-	Requires    []string
-	Correlation CorrelationClause
-	Alert       AlertSpec
-}
-
-type CorrelationClause struct {
-	By       string
-	Window   time.Duration
-	Ordered  bool
-	Sequence []SequenceStep
-}
-
-type SequenceStep struct {
-	RuleID string
-}
-
-type AlertSpec struct {
-	Title    string
-	Severity string
-	MitreID  string
-	CVEID    string
-}
-
-type CorrelationAlert struct {
-	SpecID      string
-	PackageID   string
-	Title       string
-	Severity    string
-	MitreID     string
-	CVEID       string
-	Evidence    []AtomicFinding
-	TriggeredAt time.Time
-}
-
 type Engine struct {
 	mu      sync.RWMutex
 	specs   map[string]CorrelationSpec
@@ -157,7 +99,6 @@ func (e *Engine) checkSpec(spec CorrelationSpec, finding AtomicFinding) *Correla
 		return nil
 	}
 
-	// Trigger when the LAST event arrives, not the first
 	lastStep := spec.Correlation.Sequence[len(spec.Correlation.Sequence)-1]
 	if finding.RuleID != lastStep.RuleID {
 		return nil
@@ -166,7 +107,6 @@ func (e *Engine) checkSpec(spec CorrelationSpec, finding AtomicFinding) *Correla
 	key := e.getCorrelationKey(spec.Correlation.By, finding)
 	windowNs := spec.Correlation.Window.Nanoseconds()
 
-	// Build sequence backwards from current finding
 	matchedFindings := make([]AtomicFinding, len(spec.Correlation.Sequence))
 	matchedFindings[len(spec.Correlation.Sequence)-1] = finding
 	now := finding.Timestamp
@@ -231,7 +171,7 @@ func (e *Engine) getCorrelationKey(by string, finding AtomicFinding) string {
 	case "pid":
 		return fmt.Sprintf("%d", finding.PID)
 	case "pid_tree":
-		return fmt.Sprintf("%d", finding.PPID)
+		return ComputeTreeKey(finding.HostID, finding.Process)
 	case "host":
 		return finding.HostID
 	default:
