@@ -47,6 +47,8 @@ type DetectionPackage struct {
 	SignedAt           *time.Time     `json:"signed_at"`
 	EnabledAt          *time.Time     `json:"enabled_at"`
 	DisabledAt         *time.Time     `json:"disabled_at"`
+	ReviewedBy         *string        `json:"reviewed_by" gorm:"column:reviewed_by"`
+	ReviewedAt         *time.Time     `json:"reviewed_at" gorm:"column:reviewed_at"`
 	BuildID            *uuid.UUID     `gorm:"type:uuid" json:"build_id"`
 	BuilderImage       string         `gorm:"type:varchar(255)" json:"builder_image"`
 	BuilderDigest      string         `gorm:"type:varchar(128)" json:"builder_digest"`
@@ -82,6 +84,9 @@ type DetectionPackageBuild struct {
 	BuildLog                 string         `gorm:"type:text" json:"build_log"`
 	ErrorMessage             string         `gorm:"type:text" json:"error_message"`
 	CreatedBy                string         `gorm:"type:varchar(100)" json:"created_by"`
+	ReviewedBy               *string        `json:"reviewed_by" gorm:"column:reviewed_by"`
+	ReviewedAt               *time.Time     `json:"reviewed_at" gorm:"column:reviewed_at"`
+	ReviewComment            *string        `json:"review_comment" gorm:"column:review_comment"`
 	CreatedAt                time.Time      `gorm:"not null;default:now()" json:"created_at"`
 }
 
@@ -126,13 +131,14 @@ type DetectionPackageOperation struct {
 func (DetectionPackageOperation) TableName() string { return "detection_package_operations" }
 
 type EBPFHookAllowlistConfig struct {
-	ID          uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	Version     int64          `gorm:"type:bigint;uniqueIndex;autoIncrement" json:"version"`
-	ConfigJSON  datatypes.JSON `gorm:"type:jsonb;not null" json:"config_json"`
-	Description string         `gorm:"type:text" json:"description"`
-	UpdatedBy   string         `gorm:"type:varchar(100)" json:"updated_by"`
-	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	ActivatedAt *time.Time     `json:"activated_at"`
+	ID           uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	Version      int64          `gorm:"type:bigint;uniqueIndex;autoIncrement" json:"version"`
+	ConfigJSON   datatypes.JSON `gorm:"type:jsonb;not null" json:"config_json"`
+	Description  string         `gorm:"type:text" json:"description"`
+	UpdatedBy    string         `gorm:"type:varchar(100)" json:"updated_by"`
+	ChangeReason *string        `json:"change_reason" gorm:"column:change_reason"`
+	CreatedAt    time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	ActivatedAt  *time.Time     `json:"activated_at"`
 }
 
 func (EBPFHookAllowlistConfig) TableName() string { return "ebpf_hook_allowlist_configs" }
@@ -153,3 +159,9 @@ type CorrelationRule struct {
 }
 
 func (CorrelationRule) TableName() string { return "correlation_rules" }
+
+const (
+	StatusAwaitingReview = "awaiting_review"
+	StatusReviewRejected = "review_rejected"
+	OperationTypeReview  = "review"
+)
