@@ -26,7 +26,7 @@ import (
 	"aegis-agent/internal/sigma"
 	"aegis-agent/internal/tools"
 
-	_ "aegis-agent/pkg/api/v1"
+	pb "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
 )
@@ -119,10 +119,6 @@ func main() {
 	corrAdapter := dynpkg.NewCorrelationEngineAdapter(corrEngine)
 	sigmaAdapter := dynpkg.NewSigmaMatcherAdapter(ruleLoader)
 	dynpkgManager := dynpkg.NewManager(signingPubKey, "", sigmaAdapter, corrAdapter)
-	dynpkgManager.SetAlertCallback(func(alert interface{}) {
-		logger.Info("Correlation alert triggered", zap.Any("alert", alert))
-		// TODO: Report alert to server via gRPC
-	})
 	dynpkgManager.SetStatusChangeCallback(func(packageID, version, status string) {
 		logger.Info("Detection package status changed",
 			zap.String("package_id", packageID),
@@ -133,7 +129,32 @@ func main() {
 
 	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
 
-	// Set up detection package handler - parse payload and call dynpkgManager
+	dynpkgManager.SetAlertCallback(func(alert interface{}) {
+		logger.Info("Correlation alert triggered", zap.Any("alert", alert))
+		corrAlert, ok := alert.(correlation.CorrelationAlert)
+		if !ok {
+			logger.Error("unexpected alert type in callback")
+			return
+		}
+		evidenceJSON, _ := json.Marshal(corrAlert.Evidence)
+		req := &pb.ReportEventRequest{
+			HostId: cfg.HostID,
+			Events: []*pb.RuntimeEvent{
+				{
+					EventType:        "correlation_alert",
+					MatchedRuleId:    corrAlert.SpecID,
+					MitreId:          corrAlert.MitreID,
+					Severity:         corrAlert.Severity,
+					EventDataJson:    string(evidenceJSON),
+					MatchedRuleTitle: corrAlert.Title,
+				},
+			},
+		}
+		if _, err := c.ReportEvent(context.Background(), req); err != nil {
+			logger.Error("failed to report correlation alert", zap.Error(err))
+		}
+	})
+
 	c.ConfigManager().SetDetectionPackageHandler(func(action, payload string) error {
 		logger.Info("Detection package command received",
 			zap.String("action", action),
