@@ -29,8 +29,8 @@ type Manager struct {
 	onAlert        func(alert interface{})
 
 	// V5.8: Sigma and Correlation integration
-	sigmaMatcher    SigmaMatcher
-	corrEngine      CorrelationEngine
+	sigmaMatcher SigmaMatcher
+	corrEngine   CorrelationEngine
 }
 
 type SigmaMatcher interface {
@@ -51,15 +51,6 @@ type CorrelationEngine interface {
 	AddFinding(finding interface{}) []interface{}
 }
 
-type HookAllowlist struct {
-	Version     int64    `json:"version"`
-	Tracepoints []string `json:"tracepoints"`
-	Kprobes     []string `json:"kprobes"`
-	LSM         []string `json:"lsm"`
-	XDP         []string `json:"xdp"`
-	TC          []string `json:"tc"`
-}
-
 type InstalledPackage struct {
 	PackageID      string
 	Version        string
@@ -69,65 +60,6 @@ type InstalledPackage struct {
 	Status         string
 	LoadedHooks    []string
 	ErrorMessage   string
-}
-
-type PackageManifest struct {
-	SchemaVersion    string        `yaml:"schema_version"`
-	PackageID        string        `yaml:"package_id"`
-	Version          string        `yaml:"version"`
-	Title            string        `yaml:"title"`
-	Description      string        `yaml:"description"`
-	MinAgentVersion  string        `yaml:"min_agent_version"`
-	Plugin           PluginRef     `yaml:"plugin"`
-	Artifacts        ArtifactRefs  `yaml:"artifacts"`
-	SigmaRules       []string      `yaml:"sigma_rules"`
-	CorrelationRules []string      `yaml:"correlation_rules"`
-	Limits           PackageLimits `yaml:"limits"`
-}
-
-type PluginRef struct {
-	Manifest string `yaml:"manifest"`
-}
-
-type ArtifactRefs struct {
-	Perf    string `yaml:"perf"`
-	Ringbuf string `yaml:"ringbuf"`
-}
-
-type PackageLimits struct {
-	MaxEventsPerSecond           int  `yaml:"max_events_per_second"`
-	MaxEventsPerPidPerSecond     int  `yaml:"max_events_per_pid_per_second"`
-	AutoDisableOnSustainedOverflow bool `yaml:"auto_disable_on_sustained_overflow"`
-}
-
-type PluginManifest struct {
-	SchemaVersion string           `yaml:"schema_version"`
-	PluginID      string           `yaml:"plugin_id"`
-	PackageID     string           `yaml:"package_id"`
-	EventMap      string           `yaml:"event_map"`
-	Hooks         []PluginHook     `yaml:"hooks"`
-	EventSchema   PluginEventSchema `yaml:"event_schema"`
-}
-
-type PluginHook struct {
-	Name       string `yaml:"name"`
-	AttachType string `yaml:"attach_type"`
-	Attach     string `yaml:"attach"`
-	Program    string `yaml:"program"`
-}
-
-type PluginEventSchema struct {
-	Events map[int]EventDef `yaml:"events"`
-}
-
-type EventDef struct {
-	Name   string          `yaml:"name"`
-	Fields map[int]FieldDef `yaml:"fields"`
-}
-
-type FieldDef struct {
-	Name string `yaml:"name"`
-	Type string `yaml:"type"`
 }
 
 type DetectionPackageCommand struct {
