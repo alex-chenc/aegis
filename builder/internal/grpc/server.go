@@ -30,6 +30,9 @@ func (s *BuilderGRPCServer) GetBuilderInfo(ctx context.Context, req *pb.GetBuild
 		SupportedArches:       info.SupportedArches,
 		SupportedTransports:   info.SupportedTransports,
 		SigningKeyFingerprint: info.SigningPublicKeyFingerprint,
+		BuilderImageDigest:    info.BuilderImageDigest,
+		LlvmVersion:           info.LlvmVersion,
+		LibbpfVersion:         info.LibbpfVersion,
 	}, nil
 }
 
@@ -88,6 +91,41 @@ func (s *BuilderGRPCServer) StartBuild(ctx context.Context, req *pb.StartBuildRe
 		UnsignedPackageObjectKey: result.UnsignedPackageObjectKey,
 		UnsignedPackageSha256:    result.UnsignedPackageSHA256,
 		UnsignedPackageSize:      result.UnsignedPackageSize,
+	}, nil
+}
+
+func (s *BuilderGRPCServer) GetPackageBuildStatus(ctx context.Context, req *pb.GetPackageBuildStatusRequest) (*pb.GetPackageBuildStatusResponse, error) {
+	info, err := s.service.GetPackageBuildStatus(ctx, req.PackageId, req.Version, req.BuildId)
+	if err != nil {
+		return nil, fmt.Errorf("get package build status: %w", err)
+	}
+	return &pb.GetPackageBuildStatusResponse{
+		BuildId:         info.BuildID,
+		Status:          info.Status,
+		ErrorMessage:    info.ErrorMessage,
+		ProgressPercent: info.ProgressPercent,
+	}, nil
+}
+
+func (s *BuilderGRPCServer) ReviewBuild(ctx context.Context, req *pb.ReviewBuildRequest) (*pb.ReviewBuildResponse, error) {
+	err := s.service.ReviewBuild(ctx, req.BuildId, req.PackageId, req.Version, req.Approved, req.Comment, req.Reviewer)
+	if err != nil {
+		return &pb.ReviewBuildResponse{
+			Success:   false,
+			Message:   err.Error(),
+			NewStatus: "",
+		}, nil
+	}
+
+	newStatus := "rejected"
+	if req.Approved {
+		newStatus = "success"
+	}
+
+	return &pb.ReviewBuildResponse{
+		Success:   true,
+		Message:   "review processed",
+		NewStatus: newStatus,
 	}, nil
 }
 
