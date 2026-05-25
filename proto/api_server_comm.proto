@@ -232,7 +232,7 @@ message AgentStatusChangeNotification {
 // V5.8 Detection Package Messages
 // ============================================================
 
-message DetectionPackageCommand {
+message DetectionPackageCommandRequest {
     string command_id = 1;
     string action = 2;           // install, uninstall, disable
     string package_id = 3;
@@ -245,7 +245,7 @@ message DetectionPackageCommand {
 
 message InstallDetectionPackageRequest {
     string host_id = 1;          // empty means all online agents
-    DetectionPackageCommand command = 2;
+    DetectionPackageCommandRequest command = 2;
 }
 
 message InstallDetectionPackageResponse {

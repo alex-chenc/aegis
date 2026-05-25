@@ -123,7 +123,7 @@ func (c *ServerClient) ExecuteTool(ctx context.Context, callID, hostID, tool, ar
 }
 
 // InstallDetectionPackage installs a detection package on agents
-func (c *ServerClient) InstallDetectionPackage(ctx context.Context, hostID string, command *pb.DetectionPackageCommand) (int32, error) {
+func (c *ServerClient) InstallDetectionPackage(ctx context.Context, hostID string, command *pb.DetectionPackageCommandRequest) (int32, error) {
 	resp, err := c.client.InstallDetectionPackage(ctx, &pb.InstallDetectionPackageRequest{
 		HostId:  hostID,
 		Command: command,
@@ -136,8 +136,8 @@ func (c *ServerClient) InstallDetectionPackage(ctx context.Context, hostID strin
 
 // InstallDetectionPackageFromService installs a detection package using service types
 func (c *ServerClient) InstallDetectionPackageFromService(ctx context.Context, hostID string, command interface{}) (int32, error) {
-	// Convert service.DetectionPackageCommand to pb.DetectionPackageCommand via JSON
-	if cmd, ok := command.(*pb.DetectionPackageCommand); ok {
+	// Convert service.DetectionPackageCommand to pb.DetectionPackageCommandRequest via JSON
+	if cmd, ok := command.(*pb.DetectionPackageCommandRequest); ok {
 		return c.InstallDetectionPackage(ctx, hostID, cmd)
 	}
 
@@ -147,7 +147,7 @@ func (c *ServerClient) InstallDetectionPackageFromService(ctx context.Context, h
 		return 0, fmt.Errorf("marshal command: %w", err)
 	}
 
-	cmd := &pb.DetectionPackageCommand{}
+	cmd := &pb.DetectionPackageCommandRequest{}
 	if err := json.Unmarshal(jsonData, cmd); err != nil {
 		return 0, fmt.Errorf("unmarshal command: %w", err)
 	}

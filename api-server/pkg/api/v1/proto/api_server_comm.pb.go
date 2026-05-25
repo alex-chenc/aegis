@@ -1423,7 +1423,7 @@ func (x *AgentStatusChangeNotification) GetTimestamp() int64 {
 	return 0
 }
 
-type DetectionPackageCommand struct {
+type DetectionPackageCommandRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
 	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"` // install, uninstall, disable
@@ -1437,20 +1437,20 @@ type DetectionPackageCommand struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DetectionPackageCommand) Reset() {
-	*x = DetectionPackageCommand{}
+func (x *DetectionPackageCommandRequest) Reset() {
+	*x = DetectionPackageCommandRequest{}
 	mi := &file_proto_api_server_comm_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DetectionPackageCommand) String() string {
+func (x *DetectionPackageCommandRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DetectionPackageCommand) ProtoMessage() {}
+func (*DetectionPackageCommandRequest) ProtoMessage() {}
 
-func (x *DetectionPackageCommand) ProtoReflect() protoreflect.Message {
+func (x *DetectionPackageCommandRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_api_server_comm_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1462,61 +1462,61 @@ func (x *DetectionPackageCommand) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DetectionPackageCommand.ProtoReflect.Descriptor instead.
-func (*DetectionPackageCommand) Descriptor() ([]byte, []int) {
+// Deprecated: Use DetectionPackageCommandRequest.ProtoReflect.Descriptor instead.
+func (*DetectionPackageCommandRequest) Descriptor() ([]byte, []int) {
 	return file_proto_api_server_comm_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *DetectionPackageCommand) GetCommandId() string {
+func (x *DetectionPackageCommandRequest) GetCommandId() string {
 	if x != nil {
 		return x.CommandId
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetAction() string {
+func (x *DetectionPackageCommandRequest) GetAction() string {
 	if x != nil {
 		return x.Action
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetPackageId() string {
+func (x *DetectionPackageCommandRequest) GetPackageId() string {
 	if x != nil {
 		return x.PackageId
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetVersion() string {
+func (x *DetectionPackageCommandRequest) GetVersion() string {
 	if x != nil {
 		return x.Version
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetPackageUrl() string {
+func (x *DetectionPackageCommandRequest) GetPackageUrl() string {
 	if x != nil {
 		return x.PackageUrl
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetSignatureUrl() string {
+func (x *DetectionPackageCommandRequest) GetSignatureUrl() string {
 	if x != nil {
 		return x.SignatureUrl
 	}
 	return ""
 }
 
-func (x *DetectionPackageCommand) GetPackageSize() int64 {
+func (x *DetectionPackageCommandRequest) GetPackageSize() int64 {
 	if x != nil {
 		return x.PackageSize
 	}
 	return 0
 }
 
-func (x *DetectionPackageCommand) GetRollback() bool {
+func (x *DetectionPackageCommandRequest) GetRollback() bool {
 	if x != nil {
 		return x.Rollback
 	}
@@ -1524,9 +1524,9 @@ func (x *DetectionPackageCommand) GetRollback() bool {
 }
 
 type InstallDetectionPackageRequest struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	HostId        string                   `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"` // empty means all online agents
-	Command       *DetectionPackageCommand `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	HostId        string                          `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"` // empty means all online agents
+	Command       *DetectionPackageCommandRequest `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1568,7 +1568,7 @@ func (x *InstallDetectionPackageRequest) GetHostId() string {
 	return ""
 }
 
-func (x *InstallDetectionPackageRequest) GetCommand() *DetectionPackageCommand {
+func (x *InstallDetectionPackageRequest) GetCommand() *DetectionPackageCommandRequest {
 	if x != nil {
 		return x.Command
 	}
@@ -2147,7 +2147,7 @@ const file_proto_api_server_comm_proto_rawDesc = "" +
 	"\x0fprevious_status\x18\x03 \x01(\tR\x0epreviousStatus\x12%\n" +
 	"\x0ecurrent_status\x18\x04 \x01(\tR\rcurrentStatus\x12\x1c\n" +
 	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"\x8e\x02\n" +
-	"\x17DetectionPackageCommand\x12\x1d\n" +
+	"\x17DetectionPackageCommandRequest\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x1d\n" +
@@ -2161,7 +2161,7 @@ const file_proto_api_server_comm_proto_rawDesc = "" +
 	"\brollback\x18\b \x01(\bR\brollback\"\x80\x01\n" +
 	"\x1eInstallDetectionPackageRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12E\n" +
-	"\acommand\x18\x02 \x01(\v2+.api_server_comm.v1.DetectionPackageCommandR\acommand\"~\n" +
+	"\acommand\x18\x02 \x01(\v2+.api_server_comm.v1.DetectionPackageCommandRequestR\acommand\"~\n" +
 	"\x1fInstallDetectionPackageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
 	"\x0faffected_agents\x18\x02 \x01(\x05R\x0eaffectedAgents\x12\x18\n" +
@@ -2247,7 +2247,7 @@ var file_proto_api_server_comm_proto_goTypes = []any{
 	(*CollectSoftwareResponse)(nil),              // 17: api_server_comm.v1.CollectSoftwareResponse
 	(*CommandResultNotification)(nil),            // 18: api_server_comm.v1.CommandResultNotification
 	(*AgentStatusChangeNotification)(nil),        // 19: api_server_comm.v1.AgentStatusChangeNotification
-	(*DetectionPackageCommand)(nil),              // 20: api_server_comm.v1.DetectionPackageCommand
+	(*DetectionPackageCommandRequest)(nil),       // 20: api_server_comm.v1.DetectionPackageCommandRequest
 	(*InstallDetectionPackageRequest)(nil),       // 21: api_server_comm.v1.InstallDetectionPackageRequest
 	(*InstallDetectionPackageResponse)(nil),      // 22: api_server_comm.v1.InstallDetectionPackageResponse
 	(*UninstallDetectionPackageRequest)(nil),     // 23: api_server_comm.v1.UninstallDetectionPackageRequest
@@ -2262,7 +2262,7 @@ var file_proto_api_server_comm_proto_depIdxs = []int32{
 	8,  // 0: api_server_comm.v1.ListConnectedAgentsResponse.agents:type_name -> api_server_comm.v1.AgentInfo
 	29, // 1: api_server_comm.v1.HealthCheckResponse.details:type_name -> api_server_comm.v1.HealthCheckResponse.DetailsEntry
 	12, // 2: api_server_comm.v1.UpdateAgentRulesRequest.rules:type_name -> api_server_comm.v1.AgentRuleUpdate
-	20, // 3: api_server_comm.v1.InstallDetectionPackageRequest.command:type_name -> api_server_comm.v1.DetectionPackageCommand
+	20, // 3: api_server_comm.v1.InstallDetectionPackageRequest.command:type_name -> api_server_comm.v1.DetectionPackageCommandRequest
 	0,  // 4: api_server_comm.v1.APIServerToServer.ForwardCommand:input_type -> api_server_comm.v1.ForwardCommandRequest
 	2,  // 5: api_server_comm.v1.APIServerToServer.ExecuteTool:input_type -> api_server_comm.v1.ToolExecuteRequest
 	4,  // 6: api_server_comm.v1.APIServerToServer.GetAgentStatus:input_type -> api_server_comm.v1.GetAgentStatusRequest
