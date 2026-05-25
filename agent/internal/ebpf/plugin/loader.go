@@ -11,6 +11,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
 	"go.uber.org/zap"
 )
@@ -175,12 +176,50 @@ func decodeValue(data []byte, fieldType string) interface{} {
 }
 
 // PluginInstance holds the runtime state of a loaded eBPF plugin
+type EventReader interface {
+	Read() (rawSample []byte, err error)
+	Close() error
+}
+
+type ringbufReader struct {
+	r *ringbuf.Reader
+}
+
+func (r *ringbufReader) Read() ([]byte, error) {
+	rec, err := r.r.Read()
+	if err != nil {
+		return nil, err
+	}
+	return rec.RawSample, nil
+}
+
+func (r *ringbufReader) Close() error {
+	return r.r.Close()
+}
+
+type perfReader struct {
+	r *perf.Reader
+}
+
+func (r *perfReader) Read() ([]byte, error) {
+	rec, err := r.r.Read()
+	if err != nil {
+		return nil, err
+	}
+	return rec.RawSample, nil
+}
+
+func (r *perfReader) Close() error {
+	return r.r.Close()
+}
+
 type PluginInstance struct {
 	mu         sync.Mutex
 	Collection *ebpf.Collection
 	Links      []link.Link
-	Reader     *ringbuf.Reader
+	Reader     EventReader
 	PackageID  string
+	Transport  string
 	Done       chan struct{}
 }
 
@@ -254,16 +293,32 @@ func LoadPlugin(pkg *PackageInfo, artifactPath string, onEvent func(pkgID string
 	for mapName, m := range coll.Maps {
 		if m.Type() == ebpf.RingBuf {
 			reader, err := ringbuf.NewReader(m)
-			if err != nil {
-				logger.Warn("failed to open ringbuf", zap.String("map", mapName), zap.Error(err))
-				continue
+			if err == nil {
+				inst.Reader = &ringbufReader{r: reader}
+				inst.Transport = "ringbuf"
+				logger.Info("ringbuf reader opened", zap.String("map", mapName), zap.String("package_id", pkg.PackageID))
+				go readEvents(inst, pkg, onEvent)
+				break
 			}
-			inst.Reader = reader
-			logger.Info("ringbuf reader opened", zap.String("map", mapName), zap.String("package_id", pkg.PackageID))
-
-			// Start event reading goroutine
-			go readEvents(inst, pkg, onEvent)
-			break
+			logger.Warn("ringbuf not available, trying perf buffer fallback",
+				zap.String("map", mapName),
+				zap.Error(err),
+			)
+		}
+		if m.Type() == ebpf.PerfEventArray {
+			const perfPageSize = 4096
+			reader, err := perf.NewReader(m, perfPageSize)
+			if err == nil {
+				inst.Reader = &perfReader{r: reader}
+				inst.Transport = "perf"
+				logger.Info("perf buffer reader opened", zap.String("map", mapName), zap.String("package_id", pkg.PackageID))
+				go readEvents(inst, pkg, onEvent)
+				break
+			}
+			logger.Warn("perf buffer fallback failed",
+				zap.String("map", mapName),
+				zap.Error(err),
+			)
 		}
 	}
 
@@ -363,16 +418,18 @@ func readEvents(inst *PluginInstance, pkg *PackageInfo, onEvent func(pkgID strin
 		default:
 		}
 
-		record, err := inst.Reader.Read()
+		rawSample, err := inst.Reader.Read()
 		if err != nil {
-			if err.Error() == "ringbuf reader closed" {
+			select {
+			case <-inst.Done:
 				return
+			default:
 			}
-			logger.Error("ringbuf read error", zap.String("package_id", pkg.PackageID), zap.Error(err))
+			logger.Error("event read error", zap.String("package_id", pkg.PackageID), zap.String("transport", inst.Transport), zap.Error(err))
 			continue
 		}
 
-		decoded, err := DecodeEnvelope(record.RawSample)
+		decoded, err := DecodeEnvelope(rawSample)
 		if err != nil {
 			logger.Error("decode envelope error", zap.String("package_id", pkg.PackageID), zap.Error(err))
 			continue
