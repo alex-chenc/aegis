@@ -1,12 +1,9 @@
 package grpc_server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"os"
 	"time"
 
 	"server/internal/repository"
@@ -22,17 +19,18 @@ import (
 // This service is used by the API Server to query agent status and forward commands
 type APIServerToServerImpl struct {
 	pb.UnimplementedAPIServerToServerServer
-	grpcServer  *GRPCServer
-	hostRepo    *repository.HostRepository
-	redisClient *storage.RedisClient
+	grpcServer      *GRPCServer
+	hostRepo        *repository.HostRepository
+	redisClient     *storage.RedisClient
+	apiServerClient pb.APIServerToServerClient
 }
 
-// NewAPIServerToServerImpl creates a new APIServerToServer implementation
-func NewAPIServerToServerImpl(grpcServer *GRPCServer, hostRepo *repository.HostRepository, redisClient *storage.RedisClient) *APIServerToServerImpl {
+func NewAPIServerToServerImpl(grpcServer *GRPCServer, hostRepo *repository.HostRepository, redisClient *storage.RedisClient, apiServerClient pb.APIServerToServerClient) *APIServerToServerImpl {
 	return &APIServerToServerImpl{
-		grpcServer:  grpcServer,
-		hostRepo:    hostRepo,
-		redisClient: redisClient,
+		grpcServer:      grpcServer,
+		hostRepo:        hostRepo,
+		redisClient:     redisClient,
+		apiServerClient: apiServerClient,
 	}
 }
 
@@ -465,14 +463,15 @@ func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req
 	}
 
 	affected := int32(0)
-	// Use ConfigSync with config_type="detection_package" to send the command
-	commandJSON, _ := json.Marshal(req.Command)
-	configReq := &pb.CommandRequest{
-		Request: &pb.CommandRequest_ConfigSync{
-			ConfigSync: &pb.ConfigSync{
-				ConfigType: "detection_package",
-				Action:     req.Command.Action,
-				Payload:    string(commandJSON),
+	cmd := &pb.CommandRequest{
+		Request: &pb.CommandRequest_DetectionPackageCommand{
+			DetectionPackageCommand: &pb.DetectionPackageCommand{
+				Action:       req.Command.Action,
+				PackageId:    req.Command.PackageId,
+				Version:      req.Command.Version,
+				PackageUrl:   req.Command.PackageUrl,
+				SignatureUrl: req.Command.SignatureUrl,
+				PackageSize:  req.Command.PackageSize,
 			},
 		},
 	}
@@ -482,7 +481,7 @@ func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req
 			hostID := key.(uuid.UUID)
 			conn := value.(*AgentConnection)
 			if conn.Stream != nil {
-				if err := conn.Stream.Send(configReq); err != nil {
+				if err := conn.Stream.Send(cmd); err != nil {
 					logger.Error("failed to send detection package command",
 						zap.Stringer("host_id", hostID),
 						zap.Error(err),
@@ -510,7 +509,7 @@ func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req
 		}
 		conn := value.(*AgentConnection)
 		if conn.Stream != nil {
-			if err := conn.Stream.Send(configReq); err != nil {
+			if err := conn.Stream.Send(cmd); err != nil {
 				return &pb.InstallDetectionPackageResponse{
 					Success: false,
 					Message: err.Error(),
@@ -536,17 +535,12 @@ func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req
 // UninstallDetectionPackage uninstalls a detection package from agents
 func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, req *pb.UninstallDetectionPackageRequest) (*pb.UninstallDetectionPackageResponse, error) {
 	affected := int32(0)
-	commandJSON, _ := json.Marshal(map[string]string{
-		"action":     "uninstall",
-		"package_id": req.PackageId,
-		"version":    req.Version,
-	})
-	configReq := &pb.CommandRequest{
-		Request: &pb.CommandRequest_ConfigSync{
-			ConfigSync: &pb.ConfigSync{
-				ConfigType: "detection_package",
-				Action:     "uninstall",
-				Payload:    string(commandJSON),
+	cmd := &pb.CommandRequest{
+		Request: &pb.CommandRequest_DetectionPackageCommand{
+			DetectionPackageCommand: &pb.DetectionPackageCommand{
+				Action:    "uninstall",
+				PackageId: req.PackageId,
+				Version:   req.Version,
 			},
 		},
 	}
@@ -555,7 +549,7 @@ func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, r
 		s.grpcServer.agentConnections.Range(func(key, value interface{}) bool {
 			conn := value.(*AgentConnection)
 			if conn.Stream != nil {
-				if err := conn.Stream.Send(configReq); err != nil {
+				if err := conn.Stream.Send(cmd); err != nil {
 					logger.Error("failed to send uninstall command",
 						zap.Stringer("host_id", key.(uuid.UUID)),
 						zap.Error(err),
@@ -583,7 +577,7 @@ func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, r
 		}
 		conn := value.(*AgentConnection)
 		if conn.Stream != nil {
-			if err := conn.Stream.Send(configReq); err != nil {
+			if err := conn.Stream.Send(cmd); err != nil {
 				return &pb.UninstallDetectionPackageResponse{
 					Success: false,
 					Message: err.Error(),
@@ -605,14 +599,27 @@ func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.Syn
 	affected := int32(0)
 
 	for _, cfg := range req.Configs {
-		commandReq := &pb.CommandRequest{
-			Request: &pb.CommandRequest_ConfigSync{
-				ConfigSync: &pb.ConfigSync{
-					ConfigType: cfg.ConfigType,
-					Action:     "full_sync",
-					Payload:    cfg.ConfigJson,
+		var commandReq *pb.CommandRequest
+
+		if cfg.ConfigType == "dynamic_ebpf_hook_allowlist" {
+			commandReq = &pb.CommandRequest{
+				Request: &pb.CommandRequest_AllowlistUpdate{
+					AllowlistUpdate: &pb.AllowlistUpdate{
+						Version:       fmt.Sprintf("%d", time.Now().Unix()),
+						AllowlistJson: cfg.ConfigJson,
+					},
 				},
-			},
+			}
+		} else {
+			commandReq = &pb.CommandRequest{
+				Request: &pb.CommandRequest_ConfigSync{
+					ConfigSync: &pb.ConfigSync{
+						ConfigType: cfg.ConfigType,
+						Action:     "full_sync",
+						Payload:    cfg.ConfigJson,
+					},
+				},
+			}
 		}
 
 		if req.HostId == "" {
@@ -686,9 +693,9 @@ func (s *APIServerToServerImpl) ReportDetectionPackageStatus(ctx context.Context
 
 		key := status.HostId + ":" + status.PackageId + ":" + status.Version
 		s.grpcServer.detectionPackageStatuses.Store(key, status)
-
-		go s.forwardStatusToAPIServer(status)
 	}
+
+	go s.forwardStatusToAPIServer(req.Statuses)
 
 	return &pb.ReportDetectionPackageStatusResponse{
 		Success: true,
@@ -696,41 +703,20 @@ func (s *APIServerToServerImpl) ReportDetectionPackageStatus(ctx context.Context
 	}, nil
 }
 
-func (s *APIServerToServerImpl) forwardStatusToAPIServer(status *pb.DetectionPackageHostStatus) {
-	apiServerAddr := os.Getenv("API_SERVER_HTTP_ADDR")
-	if apiServerAddr == "" {
-		apiServerAddr = "http://api-server:8082"
-	}
-
-	payload := map[string]interface{}{
-		"host_id":         status.HostId,
-		"package_id":      status.PackageId,
-		"version":         status.Version,
-		"status":          status.Status,
-		"active_artifact": status.ActiveArtifact,
-		"loaded_hooks":    status.LoadedHooks,
-		"error_message":   status.ErrorMessage,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		logger.Error("failed to marshal status report", zap.Error(err))
+func (s *APIServerToServerImpl) forwardStatusToAPIServer(statuses []*pb.DetectionPackageHostStatus) {
+	if s.apiServerClient == nil {
+		logger.Warn("api server client not available, skipping status forward")
 		return
 	}
 
-	url := apiServerAddr + "/api/v1/detection/packages/hosts/report"
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
-		logger.Warn("failed to forward status to API Server", zap.Error(err), zap.String("url", url))
-		return
-	}
-	defer resp.Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if resp.StatusCode != http.StatusOK {
-		logger.Warn("API Server returned non-200 for status report",
-			zap.Int("status", resp.StatusCode),
-			zap.String("url", url),
-		)
+	req := &pb.ReportDetectionPackageStatusRequest{
+		Statuses: statuses,
+	}
+	_, err := s.apiServerClient.ReportDetectionPackageStatus(ctx, req)
+	if err != nil {
+		logger.Warn("failed to forward status to API Server via gRPC", zap.Error(err))
 	}
 }

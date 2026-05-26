@@ -12,11 +12,12 @@ import (
 	"server/internal/queue"
 	"server/internal/repository"
 	"server/internal/storage"
-	"server/pkg/api/v1"
+	pb "server/pkg/api/v1"
 	"server/pkg/logger"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -98,7 +99,18 @@ func main() {
 	}
 
 	apiServerGRPCServer := grpc.NewServer()
-	apiServerImpl := grpc_server.NewAPIServerToServerImpl(grpcServer, hostRepo, redisClient)
+
+	apiServerClientAddr := os.Getenv("API_SERVER_GRPC_ADDR")
+	if apiServerClientAddr == "" {
+		apiServerClientAddr = "api-server:19093"
+	}
+	apiServerClientConn, err := grpc.NewClient(apiServerClientAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Fatal("Failed to create API Server gRPC client", zap.Error(err))
+	}
+	apiServerClient := pb.NewAPIServerToServerClient(apiServerClientConn)
+
+	apiServerImpl := grpc_server.NewAPIServerToServerImpl(grpcServer, hostRepo, redisClient, apiServerClient)
 	pb.RegisterAPIServerToServerServer(apiServerGRPCServer, apiServerImpl)
 
 	go func() {
