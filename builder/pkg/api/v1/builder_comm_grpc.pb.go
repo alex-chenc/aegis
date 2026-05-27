@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.24.4
-// source: proto/builder_comm.proto
+// source: builder_comm.proto
 
 package builderpb
 
@@ -275,5 +275,5 @@ var BuilderService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/builder_comm.proto",
+	Metadata: "builder_comm.proto",
 }

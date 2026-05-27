@@ -514,6 +514,8 @@ type CommandRequest struct {
 	//	*CommandRequest_RuleUpdate
 	//	*CommandRequest_Block
 	//	*CommandRequest_ConfigSync
+	//	*CommandRequest_DetectionPackageCommand
+	//	*CommandRequest_AllowlistUpdate
 	Request       isCommandRequest_Request `protobuf_oneof:"request"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -601,6 +603,24 @@ func (x *CommandRequest) GetConfigSync() *ConfigSync {
 	return nil
 }
 
+func (x *CommandRequest) GetDetectionPackageCommand() *DetectionPackageCommand {
+	if x != nil {
+		if x, ok := x.Request.(*CommandRequest_DetectionPackageCommand); ok {
+			return x.DetectionPackageCommand
+		}
+	}
+	return nil
+}
+
+func (x *CommandRequest) GetAllowlistUpdate() *AllowlistUpdate {
+	if x != nil {
+		if x, ok := x.Request.(*CommandRequest_AllowlistUpdate); ok {
+			return x.AllowlistUpdate
+		}
+	}
+	return nil
+}
+
 type isCommandRequest_Request interface {
 	isCommandRequest_Request()
 }
@@ -622,7 +642,15 @@ type CommandRequest_Block struct {
 }
 
 type CommandRequest_ConfigSync struct {
-	ConfigSync *ConfigSync `protobuf:"bytes,5,opt,name=config_sync,json=configSync,proto3,oneof"` // V5.8: DetectionPackageCommand is sent via config_sync with config_type="detection_package"
+	ConfigSync *ConfigSync `protobuf:"bytes,5,opt,name=config_sync,json=configSync,proto3,oneof"`
+}
+
+type CommandRequest_DetectionPackageCommand struct {
+	DetectionPackageCommand *DetectionPackageCommand `protobuf:"bytes,6,opt,name=detection_package_command,json=detectionPackageCommand,proto3,oneof"`
+}
+
+type CommandRequest_AllowlistUpdate struct {
+	AllowlistUpdate *AllowlistUpdate `protobuf:"bytes,7,opt,name=allowlist_update,json=allowlistUpdate,proto3,oneof"`
 }
 
 func (*CommandRequest_Execute) isCommandRequest_Request() {}
@@ -634,6 +662,10 @@ func (*CommandRequest_RuleUpdate) isCommandRequest_Request() {}
 func (*CommandRequest_Block) isCommandRequest_Request() {}
 
 func (*CommandRequest_ConfigSync) isCommandRequest_Request() {}
+
+func (*CommandRequest_DetectionPackageCommand) isCommandRequest_Request() {}
+
+func (*CommandRequest_AllowlistUpdate) isCommandRequest_Request() {}
 
 // SoftwareListRequest 软件列表采集请求
 type SoftwareListRequest struct {
@@ -1585,6 +1617,152 @@ func (x *ConfigSync) GetPayload() string {
 	return ""
 }
 
+// DetectionPackageCommand 检测包命令
+type DetectionPackageCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
+	PackageId     string                 `protobuf:"bytes,2,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	PackageUrl    string                 `protobuf:"bytes,4,opt,name=package_url,json=packageUrl,proto3" json:"package_url,omitempty"`
+	SignatureUrl  string                 `protobuf:"bytes,5,opt,name=signature_url,json=signatureUrl,proto3" json:"signature_url,omitempty"`
+	PackageSize   int64                  `protobuf:"varint,6,opt,name=package_size,json=packageSize,proto3" json:"package_size,omitempty"`
+	Reason        string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DetectionPackageCommand) Reset() {
+	*x = DetectionPackageCommand{}
+	mi := &file_agent_comm_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetectionPackageCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetectionPackageCommand) ProtoMessage() {}
+
+func (x *DetectionPackageCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetectionPackageCommand.ProtoReflect.Descriptor instead.
+func (*DetectionPackageCommand) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DetectionPackageCommand) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *DetectionPackageCommand) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *DetectionPackageCommand) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *DetectionPackageCommand) GetPackageUrl() string {
+	if x != nil {
+		return x.PackageUrl
+	}
+	return ""
+}
+
+func (x *DetectionPackageCommand) GetSignatureUrl() string {
+	if x != nil {
+		return x.SignatureUrl
+	}
+	return ""
+}
+
+func (x *DetectionPackageCommand) GetPackageSize() int64 {
+	if x != nil {
+		return x.PackageSize
+	}
+	return 0
+}
+
+func (x *DetectionPackageCommand) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// AllowlistUpdate 白名单更新
+type AllowlistUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	AllowlistJson string                 `protobuf:"bytes,2,opt,name=allowlist_json,json=allowlistJson,proto3" json:"allowlist_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AllowlistUpdate) Reset() {
+	*x = AllowlistUpdate{}
+	mi := &file_agent_comm_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AllowlistUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AllowlistUpdate) ProtoMessage() {}
+
+func (x *AllowlistUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_comm_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AllowlistUpdate.ProtoReflect.Descriptor instead.
+func (*AllowlistUpdate) Descriptor() ([]byte, []int) {
+	return file_agent_comm_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AllowlistUpdate) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *AllowlistUpdate) GetAllowlistJson() string {
+	if x != nil {
+		return x.AllowlistJson
+	}
+	return ""
+}
+
 // DetectionPackageStatus 检测包状态上报
 type DetectionPackageStatus struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -1601,7 +1779,7 @@ type DetectionPackageStatus struct {
 
 func (x *DetectionPackageStatus) Reset() {
 	*x = DetectionPackageStatus{}
-	mi := &file_agent_comm_proto_msgTypes[22]
+	mi := &file_agent_comm_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1613,7 +1791,7 @@ func (x *DetectionPackageStatus) String() string {
 func (*DetectionPackageStatus) ProtoMessage() {}
 
 func (x *DetectionPackageStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_comm_proto_msgTypes[22]
+	mi := &file_agent_comm_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1626,7 +1804,7 @@ func (x *DetectionPackageStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetectionPackageStatus.ProtoReflect.Descriptor instead.
 func (*DetectionPackageStatus) Descriptor() ([]byte, []int) {
-	return file_agent_comm_proto_rawDescGZIP(), []int{22}
+	return file_agent_comm_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DetectionPackageStatus) GetPackageId() string {
@@ -1688,7 +1866,7 @@ type ConfigSyncRequest struct {
 
 func (x *ConfigSyncRequest) Reset() {
 	*x = ConfigSyncRequest{}
-	mi := &file_agent_comm_proto_msgTypes[23]
+	mi := &file_agent_comm_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1700,7 +1878,7 @@ func (x *ConfigSyncRequest) String() string {
 func (*ConfigSyncRequest) ProtoMessage() {}
 
 func (x *ConfigSyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_comm_proto_msgTypes[23]
+	mi := &file_agent_comm_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1713,7 +1891,7 @@ func (x *ConfigSyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSyncRequest.ProtoReflect.Descriptor instead.
 func (*ConfigSyncRequest) Descriptor() ([]byte, []int) {
-	return file_agent_comm_proto_rawDescGZIP(), []int{23}
+	return file_agent_comm_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ConfigSyncRequest) GetConfigs() []*ConfigSync {
@@ -1735,7 +1913,7 @@ type ConfigSyncResponse struct {
 
 func (x *ConfigSyncResponse) Reset() {
 	*x = ConfigSyncResponse{}
-	mi := &file_agent_comm_proto_msgTypes[24]
+	mi := &file_agent_comm_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1925,7 @@ func (x *ConfigSyncResponse) String() string {
 func (*ConfigSyncResponse) ProtoMessage() {}
 
 func (x *ConfigSyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_comm_proto_msgTypes[24]
+	mi := &file_agent_comm_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1938,7 @@ func (x *ConfigSyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSyncResponse.ProtoReflect.Descriptor instead.
 func (*ConfigSyncResponse) Descriptor() ([]byte, []int) {
-	return file_agent_comm_proto_rawDescGZIP(), []int{24}
+	return file_agent_comm_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ConfigSyncResponse) GetSuccess() bool {
@@ -1827,7 +2005,7 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12\x16\n" +
 	"\x06stdout\x18\x04 \x01(\tR\x06stdout\x12\x16\n" +
 	"\x06stderr\x18\x05 \x01(\tR\x06stderr\x12\x19\n" +
-	"\bis_final\x18\x06 \x01(\bR\aisFinal\"\xc6\x02\n" +
+	"\bis_final\x18\x06 \x01(\bR\aisFinal\"\xf9\x03\n" +
 	"\x0eCommandRequest\x129\n" +
 	"\aexecute\x18\x01 \x01(\v2\x1d.agent_comm.v1.CommandExecuteH\x00R\aexecute\x126\n" +
 	"\x06result\x18\x02 \x01(\v2\x1c.agent_comm.v1.CommandResultH\x00R\x06result\x12C\n" +
@@ -1835,7 +2013,9 @@ const file_agent_comm_proto_rawDesc = "" +
 	"ruleUpdate\x123\n" +
 	"\x05block\x18\x04 \x01(\v2\x1b.agent_comm.v1.BlockCommandH\x00R\x05block\x12<\n" +
 	"\vconfig_sync\x18\x05 \x01(\v2\x19.agent_comm.v1.ConfigSyncH\x00R\n" +
-	"configSyncB\t\n" +
+	"configSync\x12d\n" +
+	"\x19detection_package_command\x18\x06 \x01(\v2&.agent_comm.v1.DetectionPackageCommandH\x00R\x17detectionPackageCommand\x12K\n" +
+	"\x10allowlist_update\x18\a \x01(\v2\x1e.agent_comm.v1.AllowlistUpdateH\x00R\x0fallowlistUpdateB\t\n" +
 	"\arequest\"\x15\n" +
 	"\x13SoftwareListRequest\"\x89\x01\n" +
 	"\fSoftwareInfo\x12\x12\n" +
@@ -1914,7 +2094,20 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\vconfig_type\x18\x01 \x01(\tR\n" +
 	"configType\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\tR\apayload\"\xfb\x01\n" +
+	"\apayload\x18\x03 \x01(\tR\apayload\"\xeb\x01\n" +
+	"\x17DetectionPackageCommand\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12\x1d\n" +
+	"\n" +
+	"package_id\x18\x02 \x01(\tR\tpackageId\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12\x1f\n" +
+	"\vpackage_url\x18\x04 \x01(\tR\n" +
+	"packageUrl\x12#\n" +
+	"\rsignature_url\x18\x05 \x01(\tR\fsignatureUrl\x12!\n" +
+	"\fpackage_size\x18\x06 \x01(\x03R\vpackageSize\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"R\n" +
+	"\x0fAllowlistUpdate\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12%\n" +
+	"\x0eallowlist_json\x18\x02 \x01(\tR\rallowlistJson\"\xfb\x01\n" +
 	"\x16DetectionPackageStatus\x12\x1d\n" +
 	"\n" +
 	"package_id\x18\x01 \x01(\tR\tpackageId\x12\x18\n" +
@@ -1944,7 +2137,7 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\vUpdateRules\x12 .agent_comm.v1.RuleUpdateRequest\x1a!.agent_comm.v1.RuleUpdateResponse\x12P\n" +
 	"\x13ExecuteBlockCommand\x12\x1b.agent_comm.v1.BlockCommand\x1a\x1c.agent_comm.v1.BlockResponse\x12Q\n" +
 	"\n" +
-	"SyncConfig\x12 .agent_comm.v1.ConfigSyncRequest\x1a!.agent_comm.v1.ConfigSyncResponseB\x16Z\x14server/pkg/api/v1;pbb\x06proto3"
+	"SyncConfig\x12 .agent_comm.v1.ConfigSyncRequest\x1a!.agent_comm.v1.ConfigSyncResponseB\x1aZ\x18api-server/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_agent_comm_proto_rawDescOnce sync.Once
@@ -1958,34 +2151,36 @@ func file_agent_comm_proto_rawDescGZIP() []byte {
 	return file_agent_comm_proto_rawDescData
 }
 
-var file_agent_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_agent_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_agent_comm_proto_goTypes = []any{
-	(*AssetInfo)(nil),              // 0: agent_comm.v1.AssetInfo
-	(*RegisterRequest)(nil),        // 1: agent_comm.v1.RegisterRequest
-	(*RegisterResponse)(nil),       // 2: agent_comm.v1.RegisterResponse
-	(*HeartbeatRequest)(nil),       // 3: agent_comm.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 4: agent_comm.v1.HeartbeatResponse
-	(*CommandExecute)(nil),         // 5: agent_comm.v1.CommandExecute
-	(*CommandResult)(nil),          // 6: agent_comm.v1.CommandResult
-	(*CommandRequest)(nil),         // 7: agent_comm.v1.CommandRequest
-	(*SoftwareListRequest)(nil),    // 8: agent_comm.v1.SoftwareListRequest
-	(*SoftwareInfo)(nil),           // 9: agent_comm.v1.SoftwareInfo
-	(*SoftwareListResponse)(nil),   // 10: agent_comm.v1.SoftwareListResponse
-	(*RuntimeEvent)(nil),           // 11: agent_comm.v1.RuntimeEvent
-	(*ReportEventRequest)(nil),     // 12: agent_comm.v1.ReportEventRequest
-	(*ReportEventResponse)(nil),    // 13: agent_comm.v1.ReportEventResponse
-	(*ToolRequest)(nil),            // 14: agent_comm.v1.ToolRequest
-	(*ToolResponse)(nil),           // 15: agent_comm.v1.ToolResponse
-	(*RuleUpdate)(nil),             // 16: agent_comm.v1.RuleUpdate
-	(*RuleUpdateRequest)(nil),      // 17: agent_comm.v1.RuleUpdateRequest
-	(*RuleUpdateResponse)(nil),     // 18: agent_comm.v1.RuleUpdateResponse
-	(*BlockCommand)(nil),           // 19: agent_comm.v1.BlockCommand
-	(*BlockResponse)(nil),          // 20: agent_comm.v1.BlockResponse
-	(*ConfigSync)(nil),             // 21: agent_comm.v1.ConfigSync
-	(*DetectionPackageStatus)(nil), // 22: agent_comm.v1.DetectionPackageStatus
-	(*ConfigSyncRequest)(nil),      // 23: agent_comm.v1.ConfigSyncRequest
-	(*ConfigSyncResponse)(nil),     // 24: agent_comm.v1.ConfigSyncResponse
-	nil,                            // 25: agent_comm.v1.ConfigSyncResponse.AppliedEntry
+	(*AssetInfo)(nil),               // 0: agent_comm.v1.AssetInfo
+	(*RegisterRequest)(nil),         // 1: agent_comm.v1.RegisterRequest
+	(*RegisterResponse)(nil),        // 2: agent_comm.v1.RegisterResponse
+	(*HeartbeatRequest)(nil),        // 3: agent_comm.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),       // 4: agent_comm.v1.HeartbeatResponse
+	(*CommandExecute)(nil),          // 5: agent_comm.v1.CommandExecute
+	(*CommandResult)(nil),           // 6: agent_comm.v1.CommandResult
+	(*CommandRequest)(nil),          // 7: agent_comm.v1.CommandRequest
+	(*SoftwareListRequest)(nil),     // 8: agent_comm.v1.SoftwareListRequest
+	(*SoftwareInfo)(nil),            // 9: agent_comm.v1.SoftwareInfo
+	(*SoftwareListResponse)(nil),    // 10: agent_comm.v1.SoftwareListResponse
+	(*RuntimeEvent)(nil),            // 11: agent_comm.v1.RuntimeEvent
+	(*ReportEventRequest)(nil),      // 12: agent_comm.v1.ReportEventRequest
+	(*ReportEventResponse)(nil),     // 13: agent_comm.v1.ReportEventResponse
+	(*ToolRequest)(nil),             // 14: agent_comm.v1.ToolRequest
+	(*ToolResponse)(nil),            // 15: agent_comm.v1.ToolResponse
+	(*RuleUpdate)(nil),              // 16: agent_comm.v1.RuleUpdate
+	(*RuleUpdateRequest)(nil),       // 17: agent_comm.v1.RuleUpdateRequest
+	(*RuleUpdateResponse)(nil),      // 18: agent_comm.v1.RuleUpdateResponse
+	(*BlockCommand)(nil),            // 19: agent_comm.v1.BlockCommand
+	(*BlockResponse)(nil),           // 20: agent_comm.v1.BlockResponse
+	(*ConfigSync)(nil),              // 21: agent_comm.v1.ConfigSync
+	(*DetectionPackageCommand)(nil), // 22: agent_comm.v1.DetectionPackageCommand
+	(*AllowlistUpdate)(nil),         // 23: agent_comm.v1.AllowlistUpdate
+	(*DetectionPackageStatus)(nil),  // 24: agent_comm.v1.DetectionPackageStatus
+	(*ConfigSyncRequest)(nil),       // 25: agent_comm.v1.ConfigSyncRequest
+	(*ConfigSyncResponse)(nil),      // 26: agent_comm.v1.ConfigSyncResponse
+	nil,                             // 27: agent_comm.v1.ConfigSyncResponse.AppliedEntry
 }
 var file_agent_comm_proto_depIdxs = []int32{
 	0,  // 0: agent_comm.v1.RegisterRequest.asset_info:type_name -> agent_comm.v1.AssetInfo
@@ -1994,35 +2189,37 @@ var file_agent_comm_proto_depIdxs = []int32{
 	17, // 3: agent_comm.v1.CommandRequest.rule_update:type_name -> agent_comm.v1.RuleUpdateRequest
 	19, // 4: agent_comm.v1.CommandRequest.block:type_name -> agent_comm.v1.BlockCommand
 	21, // 5: agent_comm.v1.CommandRequest.config_sync:type_name -> agent_comm.v1.ConfigSync
-	9,  // 6: agent_comm.v1.SoftwareListResponse.software_list:type_name -> agent_comm.v1.SoftwareInfo
-	11, // 7: agent_comm.v1.ReportEventRequest.events:type_name -> agent_comm.v1.RuntimeEvent
-	16, // 8: agent_comm.v1.RuleUpdateRequest.rules:type_name -> agent_comm.v1.RuleUpdate
-	16, // 9: agent_comm.v1.RuleUpdateResponse.rules:type_name -> agent_comm.v1.RuleUpdate
-	21, // 10: agent_comm.v1.ConfigSyncRequest.configs:type_name -> agent_comm.v1.ConfigSync
-	25, // 11: agent_comm.v1.ConfigSyncResponse.applied:type_name -> agent_comm.v1.ConfigSyncResponse.AppliedEntry
-	1,  // 12: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
-	3,  // 13: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
-	7,  // 14: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
-	8,  // 15: agent_comm.v1.AgentService.CollectSoftwareList:input_type -> agent_comm.v1.SoftwareListRequest
-	12, // 16: agent_comm.v1.AgentService.ReportEvent:input_type -> agent_comm.v1.ReportEventRequest
-	14, // 17: agent_comm.v1.AgentService.ExecuteTool:input_type -> agent_comm.v1.ToolRequest
-	17, // 18: agent_comm.v1.AgentService.UpdateRules:input_type -> agent_comm.v1.RuleUpdateRequest
-	19, // 19: agent_comm.v1.AgentService.ExecuteBlockCommand:input_type -> agent_comm.v1.BlockCommand
-	23, // 20: agent_comm.v1.AgentService.SyncConfig:input_type -> agent_comm.v1.ConfigSyncRequest
-	2,  // 21: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
-	4,  // 22: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
-	7,  // 23: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
-	10, // 24: agent_comm.v1.AgentService.CollectSoftwareList:output_type -> agent_comm.v1.SoftwareListResponse
-	13, // 25: agent_comm.v1.AgentService.ReportEvent:output_type -> agent_comm.v1.ReportEventResponse
-	15, // 26: agent_comm.v1.AgentService.ExecuteTool:output_type -> agent_comm.v1.ToolResponse
-	18, // 27: agent_comm.v1.AgentService.UpdateRules:output_type -> agent_comm.v1.RuleUpdateResponse
-	20, // 28: agent_comm.v1.AgentService.ExecuteBlockCommand:output_type -> agent_comm.v1.BlockResponse
-	24, // 29: agent_comm.v1.AgentService.SyncConfig:output_type -> agent_comm.v1.ConfigSyncResponse
-	21, // [21:30] is the sub-list for method output_type
-	12, // [12:21] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	22, // 6: agent_comm.v1.CommandRequest.detection_package_command:type_name -> agent_comm.v1.DetectionPackageCommand
+	23, // 7: agent_comm.v1.CommandRequest.allowlist_update:type_name -> agent_comm.v1.AllowlistUpdate
+	9,  // 8: agent_comm.v1.SoftwareListResponse.software_list:type_name -> agent_comm.v1.SoftwareInfo
+	11, // 9: agent_comm.v1.ReportEventRequest.events:type_name -> agent_comm.v1.RuntimeEvent
+	16, // 10: agent_comm.v1.RuleUpdateRequest.rules:type_name -> agent_comm.v1.RuleUpdate
+	16, // 11: agent_comm.v1.RuleUpdateResponse.rules:type_name -> agent_comm.v1.RuleUpdate
+	21, // 12: agent_comm.v1.ConfigSyncRequest.configs:type_name -> agent_comm.v1.ConfigSync
+	27, // 13: agent_comm.v1.ConfigSyncResponse.applied:type_name -> agent_comm.v1.ConfigSyncResponse.AppliedEntry
+	1,  // 14: agent_comm.v1.AgentService.Register:input_type -> agent_comm.v1.RegisterRequest
+	3,  // 15: agent_comm.v1.AgentService.Heartbeat:input_type -> agent_comm.v1.HeartbeatRequest
+	7,  // 16: agent_comm.v1.AgentService.ExecuteCommand:input_type -> agent_comm.v1.CommandRequest
+	8,  // 17: agent_comm.v1.AgentService.CollectSoftwareList:input_type -> agent_comm.v1.SoftwareListRequest
+	12, // 18: agent_comm.v1.AgentService.ReportEvent:input_type -> agent_comm.v1.ReportEventRequest
+	14, // 19: agent_comm.v1.AgentService.ExecuteTool:input_type -> agent_comm.v1.ToolRequest
+	17, // 20: agent_comm.v1.AgentService.UpdateRules:input_type -> agent_comm.v1.RuleUpdateRequest
+	19, // 21: agent_comm.v1.AgentService.ExecuteBlockCommand:input_type -> agent_comm.v1.BlockCommand
+	25, // 22: agent_comm.v1.AgentService.SyncConfig:input_type -> agent_comm.v1.ConfigSyncRequest
+	2,  // 23: agent_comm.v1.AgentService.Register:output_type -> agent_comm.v1.RegisterResponse
+	4,  // 24: agent_comm.v1.AgentService.Heartbeat:output_type -> agent_comm.v1.HeartbeatResponse
+	7,  // 25: agent_comm.v1.AgentService.ExecuteCommand:output_type -> agent_comm.v1.CommandRequest
+	10, // 26: agent_comm.v1.AgentService.CollectSoftwareList:output_type -> agent_comm.v1.SoftwareListResponse
+	13, // 27: agent_comm.v1.AgentService.ReportEvent:output_type -> agent_comm.v1.ReportEventResponse
+	15, // 28: agent_comm.v1.AgentService.ExecuteTool:output_type -> agent_comm.v1.ToolResponse
+	18, // 29: agent_comm.v1.AgentService.UpdateRules:output_type -> agent_comm.v1.RuleUpdateResponse
+	20, // 30: agent_comm.v1.AgentService.ExecuteBlockCommand:output_type -> agent_comm.v1.BlockResponse
+	26, // 31: agent_comm.v1.AgentService.SyncConfig:output_type -> agent_comm.v1.ConfigSyncResponse
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_agent_comm_proto_init() }
@@ -2036,6 +2233,8 @@ func file_agent_comm_proto_init() {
 		(*CommandRequest_RuleUpdate)(nil),
 		(*CommandRequest_Block)(nil),
 		(*CommandRequest_ConfigSync)(nil),
+		(*CommandRequest_DetectionPackageCommand)(nil),
+		(*CommandRequest_AllowlistUpdate)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2043,7 +2242,7 @@ func file_agent_comm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_comm_proto_rawDesc), len(file_agent_comm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

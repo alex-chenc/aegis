@@ -31,6 +31,12 @@ func (c *AllowlistChecker) Get() HookAllowlist {
 	return c.allowlist
 }
 
+func (c *AllowlistChecker) GetPtr() *HookAllowlist {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return &c.allowlist
+}
+
 func (c *AllowlistChecker) IsHookAllowed(hookName string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -84,4 +90,13 @@ func checkHooksAgainstAllowlist(hooks []PluginHook, allowlist *HookAllowlist) er
 		}
 	}
 	return nil
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

@@ -108,95 +108,85 @@ func (c *BuilderClient) Close() error {
 }
 
 // StartBuild sends a build request to the builder service.
-func (c *BuilderClient) StartBuild(ctx context.Context, req interface{}) (interface{}, error) {
-	pbReq := &pb.StartBuildRequest{}
-	switch r := req.(type) {
-	case *BuilderStartBuildRequest:
-		pbReq = &pb.StartBuildRequest{
-			BuildId: r.BuildID, PackageId: r.PackageID, Version: r.Version,
-			Title: r.Title, CveIds: r.CVEIDs, Operator: r.Operator,
-			TargetArch: r.TargetArch, HookPlanYaml: r.HookPlanYAML,
-			EbpfSource: r.EBPFSource, SigmaRulesYaml: r.SigmaRulesYAML,
-			CorrelationYaml: r.CorrelationYAML, PackageMetadataJson: r.PackageMetadataJSON,
-		}
-	case map[string]interface{}:
-		pbReq = &pb.StartBuildRequest{
-			BuildId:             mapStr(r, "BuildID"),
-			PackageId:           mapStr(r, "PackageID"),
-			Version:             mapStr(r, "Version"),
-			Title:               mapStr(r, "Title"),
-			Operator:            mapStr(r, "Operator"),
-			TargetArch:          mapStr(r, "TargetArch"),
-			HookPlanYaml:        mapStr(r, "HookPlanYAML"),
-			EbpfSource:          mapStr(r, "EBPFSource"),
-			SigmaRulesYaml:      mapStr(r, "SigmaRulesYAML"),
-			CorrelationYaml:     mapStr(r, "CorrelationYAML"),
-			PackageMetadataJson: mapStr(r, "PackageMetadataJSON"),
-		}
-	default:
-		return nil, fmt.Errorf("invalid request type: %T", req)
+func (c *BuilderClient) StartBuild(ctx context.Context, req *BuilderStartBuildRequest) (*BuilderStartBuildResponse, error) {
+	pbReq := &pb.StartBuildRequest{
+		BuildId:             req.BuildID,
+		PackageId:           req.PackageID,
+		Version:             req.Version,
+		Title:               req.Title,
+		CveIds:              req.CVEIDs,
+		Operator:            req.Operator,
+		BuilderProfile:      req.BuilderProfile,
+		TargetArch:          req.TargetArch,
+		HookPlanYaml:        req.HookPlanYAML,
+		EbpfSource:          req.EBPFSource,
+		SigmaRulesYaml:      req.SigmaRulesYAML,
+		CorrelationYaml:     req.CorrelationYAML,
+		PackageMetadataJson: req.PackageMetadataJSON,
 	}
 
 	resp, err := c.client.StartBuild(ctx, pbReq)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"BuildID":                  resp.BuildId,
-		"Status":                   resp.Status,
-		"ErrorMessage":             resp.ErrorMessage,
-		"BuilderImageDigest":       resp.BuilderImageDigest,
-		"ClangVersion":             resp.ClangVersion,
-		"BuildLogObjectKey":        resp.BuildLogObjectKey,
-		"BuildLogTail":             resp.BuildLogTail,
-		"UnsignedPackageObjectKey": resp.UnsignedPackageObjectKey,
-		"UnsignedPackageSHA256":    resp.UnsignedPackageSha256,
-		"UnsignedPackageSize":      resp.UnsignedPackageSize,
+	return &BuilderStartBuildResponse{
+		BuildID:                  resp.BuildId,
+		Status:                   resp.Status,
+		ErrorMessage:             resp.ErrorMessage,
+		BuilderImageDigest:       resp.BuilderImageDigest,
+		ClangVersion:             resp.ClangVersion,
+		BuildLogObjectKey:        resp.BuildLogObjectKey,
+		BuildLogTail:             resp.BuildLogTail,
+		UnsignedPackageObjectKey: resp.UnsignedPackageObjectKey,
+		UnsignedPackageSHA256:    resp.UnsignedPackageSha256,
+		UnsignedPackageSize:      resp.UnsignedPackageSize,
 	}, nil
 }
 
 // SignPackage sends a sign request to the builder service.
-func (c *BuilderClient) SignPackage(ctx context.Context, req interface{}) (interface{}, error) {
-	pbReq := &pb.SignPackageRequest{}
-	switch r := req.(type) {
-	case *BuilderSignRequest:
-		pbReq = &pb.SignPackageRequest{
-			BuildId: r.BuildID, PackageId: r.PackageID, Version: r.Version,
-			Operator: r.Operator, Confirm: r.Confirm,
-		}
-	case map[string]interface{}:
-		confirm, _ := r["Confirm"].(bool)
-		pbReq = &pb.SignPackageRequest{
-			BuildId: mapStr(r, "BuildID"), PackageId: mapStr(r, "PackageID"),
-			Version: mapStr(r, "Version"), Operator: mapStr(r, "Operator"),
-			Confirm: confirm,
-		}
-	default:
-		return nil, fmt.Errorf("invalid request type: %T", req)
+func (c *BuilderClient) SignPackage(ctx context.Context, req *BuilderSignRequest) (*BuilderSignResponse, error) {
+	pbReq := &pb.SignPackageRequest{
+		BuildId:   req.BuildID,
+		PackageId: req.PackageID,
+		Version:   req.Version,
+		Operator:  req.Operator,
+		Confirm:   req.Confirm,
 	}
 
 	resp, err := c.client.SignPackage(ctx, pbReq)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"Success":               resp.Success,
-		"Message":               resp.Message,
-		"PackageObjectKey":      resp.PackageObjectKey,
-		"SignatureObjectKey":    resp.SignatureObjectKey,
-		"PackageSHA256":         resp.PackageSha256,
-		"PackageSize":           resp.PackageSize,
-		"SignatureAlgorithm":    resp.SignatureAlgorithm,
-		"SigningKeyFingerprint": resp.SigningKeyFingerprint,
-		"SignedAt":              resp.SignedAt,
+	return &BuilderSignResponse{
+		Success:               resp.Success,
+		Message:               resp.Message,
+		PackageObjectKey:      resp.PackageObjectKey,
+		SignatureObjectKey:    resp.SignatureObjectKey,
+		PackageSHA256:         resp.PackageSha256,
+		PackageSize:           resp.PackageSize,
+		SignatureAlgorithm:    resp.SignatureAlgorithm,
+		SigningKeyFingerprint: resp.SigningKeyFingerprint,
+		SignedAt:              resp.SignedAt,
 	}, nil
 }
 
-func mapStr(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+// GetPackageBuildStatus queries the build status from the builder service.
+func (c *BuilderClient) GetPackageBuildStatus(ctx context.Context, packageID, version, buildID string) (*pb.GetPackageBuildStatusResponse, error) {
+	return c.client.GetPackageBuildStatus(ctx, &pb.GetPackageBuildStatusRequest{
+		PackageId: packageID,
+		Version:   version,
+		BuildId:   buildID,
+	})
+}
+
+// ReviewBuild submits a build review to the builder service.
+func (c *BuilderClient) ReviewBuild(ctx context.Context, buildID, packageID, version string, approved bool, comment, reviewer string) (*pb.ReviewBuildResponse, error) {
+	return c.client.ReviewBuild(ctx, &pb.ReviewBuildRequest{
+		BuildId:   buildID,
+		PackageId: packageID,
+		Version:   version,
+		Approved:  approved,
+		Comment:   comment,
+		Reviewer:  reviewer,
+	})
 }

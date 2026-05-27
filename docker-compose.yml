@@ -387,7 +387,6 @@ services:
     container_name: aegis-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
       - "8081:80"
     networks:
       - aegis-network

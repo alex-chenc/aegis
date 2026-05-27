@@ -15,24 +15,28 @@
               v-if="currentPackage?.status === 'signed'"
               type="success"
               :loading="loading"
+              :disabled="!canOperate('enable')"
               @click="enableDialogVisible = true"
             >启用</el-button>
             <el-button
               v-if="['enabled', 'active'].includes(currentPackage?.status || '')"
               type="warning"
               :loading="loading"
+              :disabled="!canOperate('disable')"
               @click="disableDialogVisible = true"
             >禁用</el-button>
             <el-button
               v-if="['enabled', 'active', 'disabled'].includes(currentPackage?.status || '')"
               type="danger"
               :loading="loading"
+              :disabled="!canOperate('uninstall')"
               @click="uninstallDialogVisible = true"
             >卸载</el-button>
             <el-button
               v-if="currentPackage?.status === 'built'"
               type="primary"
               :loading="loading"
+              :disabled="!canOperate('sign')"
               @click="signDialogVisible = true"
             >签名发布</el-button>
             <el-button
@@ -45,7 +49,7 @@
         </div>
       </template>
 
-      <el-tabs v-model="activeTab">
+      <el-tabs v-model="activeTab" @tab-change="handleTabChange">
         <el-tab-pane label="基础信息" name="info">
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="Package ID">{{ currentPackage?.package_id }}</el-descriptions-item>
@@ -66,7 +70,7 @@
           <div v-if="!currentBuild && currentPackage?.status === 'draft'" style="text-align: center; padding: 40px;">
             <el-text type="info">草稿状态，尚未构建</el-text>
             <div style="margin-top: 16px;">
-              <el-button type="primary" :loading="loading" @click="handleBuild">提交构建</el-button>
+              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">提交构建</el-button>
             </div>
           </div>
           <BuildReviewPanel v-else :build="currentBuild" />
@@ -86,6 +90,53 @@
 
         <el-tab-pane label="Event Schema" name="schema">
           <pre class="schema-json">{{ JSON.stringify(currentPackage?.event_schema || {}, null, 2) }}</pre>
+        </el-tab-pane>
+
+        <el-tab-pane label="告警证据" name="alerts">
+          <div v-loading="alertsLoading">
+            <el-empty v-if="!alertsLoading && alerts.length === 0" description="暂无告警数据" />
+            <el-collapse v-else>
+              <el-collapse-item
+                v-for="(alert, index) in alerts"
+                :key="index"
+                :title="alert.title || `告警 ${index + 1}`"
+              >
+                <EvidenceTimeline :evidence="alert.evidence || []" />
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="版本历史" name="versions">
+          <el-table :data="versionHistory" border size="small">
+            <el-table-column prop="version" label="版本号" />
+            <el-table-column prop="status" label="状态">
+              <template #default="{ row }">
+                <PackageStatusTag :status="row.status" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="build_time" label="构建时间">
+              <template #default="{ row }">{{ row.build_time ? new Date(row.build_time).toLocaleString() : '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="sign_time" label="签名时间">
+              <template #default="{ row }">{{ row.sign_time && row.sign_time !== '-' ? new Date(row.sign_time).toLocaleString() : '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="enable_time" label="启用时间">
+              <template #default="{ row }">{{ row.enable_time && row.enable_time !== '-' ? new Date(row.enable_time).toLocaleString() : '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="operator" label="操作人" />
+            <el-table-column label="操作" width="160">
+              <template #default="{ row }">
+                <el-button
+                  v-if="canOperate('rollback')"
+                  type="warning"
+                  size="small"
+                  link
+                  @click="handleRollback(row)"
+                >回滚到此版本</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -140,13 +191,18 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
+import { useRole } from '@/composables/useRole'
+import { detectionPackageApi } from '@/api/detection-packages'
 import { useDetectionPackages } from './composables/useDetectionPackages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 import BuildReviewPanel from './components/BuildReviewPanel.vue'
 import HookSummaryTable from './components/HookSummaryTable.vue'
 import HostStatusTable from './components/HostStatusTable.vue'
+import EvidenceTimeline from './components/EvidenceTimeline.vue'
 
 const route = useRoute()
+const { canOperate } = useRole()
 const {
   currentPackage, currentBuild, hostStatuses, hostTotal, loading,
   fetchPackage, fetchBuild, startBuild, signPackage,
@@ -161,10 +217,51 @@ const enableDialogVisible = ref(false)
 const disableDialogVisible = ref(false)
 const uninstallDialogVisible = ref(false)
 
+const alerts = ref<any[]>([])
+const alertsLoading = ref(false)
+const versionHistory = ref<any[]>([])
+
+function handleTabChange(tab: string) {
+  if (tab === 'alerts') {
+    loadAlerts()
+  }
+}
+
+async function loadAlerts() {
+  alertsLoading.value = true
+  try {
+    alerts.value = await detectionPackageApi.getPackageAlerts(packageId.value)
+  } finally {
+    alertsLoading.value = false
+  }
+}
+
+async function handleRollback(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要回滚到版本 ${row.version} 吗？`,
+      '确认回滚',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' }
+    )
+    await detectionPackageApi.rollbackPackage(packageId.value, row.version)
+    loadPackage()
+  } catch {}
+}
+
 async function loadPackage() {
   await fetchPackage(packageId.value)
   if (currentPackage.value?.status !== 'draft') {
     fetchHostStatus(packageId.value)
+  }
+  if (currentPackage.value) {
+    versionHistory.value = [{
+      version: currentPackage.value.version,
+      status: currentPackage.value.status,
+      build_time: currentPackage.value.created_at,
+      sign_time: currentPackage.value.status === 'signed' || currentPackage.value.status === 'enabled' || currentPackage.value.status === 'active' || currentPackage.value.status === 'disabled' ? currentPackage.value.updated_at : '-',
+      enable_time: ['enabled', 'active', 'disabled'].includes(currentPackage.value.status) ? currentPackage.value.updated_at : '-',
+      operator: '-',
+    }]
   }
 }
 

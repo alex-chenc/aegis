@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"api-server/internal/grpc"
 	"api-server/internal/model"
 	"api-server/internal/repository"
 	pb "api-server/pkg/api/v1"
 
 	"github.com/google/uuid"
+	goversion "github.com/hashicorp/go-version"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -30,10 +32,11 @@ type GRPCServerClient interface {
 }
 
 // BuilderClient is the interface for calling the builder gRPC service.
-// Uses interface{} for request/response to avoid circular imports with grpc package.
 type BuilderClient interface {
-	StartBuild(ctx context.Context, req interface{}) (interface{}, error)
-	SignPackage(ctx context.Context, req interface{}) (interface{}, error)
+	StartBuild(ctx context.Context, req *grpc.BuilderStartBuildRequest) (*grpc.BuilderStartBuildResponse, error)
+	SignPackage(ctx context.Context, req *grpc.BuilderSignRequest) (*grpc.BuilderSignResponse, error)
+	GetPackageBuildStatus(ctx context.Context, packageID, version, buildID string) (*pb.GetPackageBuildStatusResponse, error)
+	ReviewBuild(ctx context.Context, buildID, packageID, version string, approved bool, comment, reviewer string) (*pb.ReviewBuildResponse, error)
 }
 
 type DetectionPackageCommand struct {
@@ -152,6 +155,14 @@ func (s *DetectionPackageService) GetDraft(ctx context.Context, packageID string
 	return s.repo.GetDraftByPackageID(packageID)
 }
 
+func (s *DetectionPackageService) DeleteDraftByPackageID(ctx context.Context, packageID string, operator string) error {
+	if err := s.repo.DeleteDraftByPackageID(packageID); err != nil {
+		return fmt.Errorf("delete draft: %w", err)
+	}
+	s.recordOperation(packageID, "", "delete_draft", operator, nil, true, "")
+	return nil
+}
+
 func (s *DetectionPackageService) StartBuild(ctx context.Context, packageID string, operator string) (*model.DetectionPackageBuild, error) {
 	draft, err := s.repo.GetDraftByPackageID(packageID)
 	if err != nil {
@@ -191,17 +202,17 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 	build.Status = "running"
 	s.repo.UpdateBuild(build)
 
-	result, err := s.builderClient.StartBuild(ctx, map[string]interface{}{
-		"BuildID":         build.ID.String(),
-		"PackageID":       build.PackageID,
-		"Version":         build.Version,
-		"Title":           draft.Title,
-		"Operator":        operator,
-		"TargetArch":      "amd64",
-		"HookPlanYAML":    draft.HookPlanYAML,
-		"EBPFSource":      draft.EBPFSource,
-		"SigmaRulesYAML":  draft.SigmaRulesYAML,
-		"CorrelationYAML": draft.CorrelationYAML,
+	result, err := s.builderClient.StartBuild(ctx, &grpc.BuilderStartBuildRequest{
+		BuildID:         build.ID.String(),
+		PackageID:       build.PackageID,
+		Version:         build.Version,
+		Title:           draft.Title,
+		Operator:        operator,
+		TargetArch:      "amd64",
+		HookPlanYAML:    draft.HookPlanYAML,
+		EBPFSource:      draft.EBPFSource,
+		SigmaRulesYAML:  draft.SigmaRulesYAML,
+		CorrelationYAML: draft.CorrelationYAML,
 	})
 
 	finished := time.Now()
@@ -217,55 +228,22 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 		return
 	}
 
-	resp, ok := result.(map[string]interface{})
-	if !ok {
-		build.Status = "failed"
-		build.ErrorMessage = "invalid builder response type"
-		s.repo.UpdateBuild(build)
-		draft.Status = "build_failed"
-		s.repo.UpdateDraft(draft)
-		return
-	}
-
-	build.Status = getString(resp, "Status")
-	build.ErrorMessage = getString(resp, "ErrorMessage")
-	build.BuilderDigest = getString(resp, "BuilderImageDigest")
-	build.ClangVersion = getString(resp, "ClangVersion")
-	build.BuildLogObjectKey = getString(resp, "BuildLogObjectKey")
-	build.UnsignedPackageObjectKey = getString(resp, "UnsignedPackageObjectKey")
-	build.UnsignedPackageSHA256 = getString(resp, "UnsignedPackageSHA256")
-	build.UnsignedPackageSize = getInt64(resp, "UnsignedPackageSize")
+	build.Status = result.Status
+	build.ErrorMessage = result.ErrorMessage
+	build.BuilderDigest = result.BuilderImageDigest
+	build.ClangVersion = result.ClangVersion
+	build.BuildLogObjectKey = result.BuildLogObjectKey
+	build.UnsignedPackageObjectKey = result.UnsignedPackageObjectKey
+	build.UnsignedPackageSHA256 = result.UnsignedPackageSHA256
+	build.UnsignedPackageSize = result.UnsignedPackageSize
 	s.repo.UpdateBuild(build)
 
-	if build.Status == "success" {
+	if build.Status == "success" || build.Status == "awaiting_review" {
 		draft.Status = "build_success"
 	} else {
 		draft.Status = "build_failed"
 	}
 	s.repo.UpdateDraft(draft)
-}
-
-func getString(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func getInt64(m map[string]interface{}, key string) int64 {
-	if v, ok := m[key]; ok {
-		switch n := v.(type) {
-		case int64:
-			return n
-		case float64:
-			return int64(n)
-		case int:
-			return int64(n)
-		}
-	}
-	return 0
 }
 
 func (s *DetectionPackageService) GetBuild(ctx context.Context, buildID uuid.UUID) (*model.DetectionPackageBuild, error) {
@@ -281,24 +259,20 @@ func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID str
 		return nil, errors.New("build not successful, cannot sign")
 	}
 
-	// Call builder to sign the package
-	var signData map[string]interface{}
+	var signResult *grpc.BuilderSignResponse
 	if s.builderClient != nil {
-		result, err := s.builderClient.SignPackage(ctx, map[string]interface{}{
-			"BuildID":   build.ID.String(),
-			"PackageID": build.PackageID,
-			"Version":   build.Version,
-			"Operator":  operator,
-			"Confirm":   true,
+		signResult, err = s.builderClient.SignPackage(ctx, &grpc.BuilderSignRequest{
+			BuildID:   build.ID.String(),
+			PackageID: build.PackageID,
+			Version:   build.Version,
+			Operator:  operator,
+			Confirm:   true,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("builder sign: %w", err)
 		}
-		signData, _ = result.(map[string]interface{})
-		if signData != nil {
-			if success, ok := signData["Success"].(bool); ok && !success {
-				return nil, fmt.Errorf("builder sign failed: %s", getString(signData, "Message"))
-			}
+		if !signResult.Success {
+			return nil, fmt.Errorf("builder sign failed: %s", signResult.Message)
 		}
 	}
 
@@ -316,11 +290,11 @@ func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID str
 		SignedAt:     timePtr(time.Now()),
 	}
 
-	if signData != nil {
-		pkg.PackageObjectKey = getString(signData, "PackageObjectKey")
-		pkg.SignatureObjectKey = getString(signData, "SignatureObjectKey")
-		pkg.PackageSHA256 = getString(signData, "PackageSHA256")
-		pkg.PackageSize = getInt64(signData, "PackageSize")
+	if signResult != nil {
+		pkg.PackageObjectKey = signResult.PackageObjectKey
+		pkg.SignatureObjectKey = signResult.SignatureObjectKey
+		pkg.PackageSHA256 = signResult.PackageSHA256
+		pkg.PackageSize = signResult.PackageSize
 	}
 
 	if err := s.repo.CreatePackage(pkg); err != nil {
@@ -338,6 +312,15 @@ func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID s
 	}
 	if pkg.Status != "signed" && pkg.Status != "disabled" {
 		return errors.New("package not signed or disabled, cannot enable")
+	}
+
+	currentEnabled, err := s.repo.GetEnabledPackage(packageID)
+	if err == nil && currentEnabled != nil {
+		currentVer, cerr1 := goversion.NewVersion(currentEnabled.Version)
+		newVer, cerr2 := goversion.NewVersion(pkg.Version)
+		if cerr1 == nil && cerr2 == nil && newVer.LessThan(currentVer) {
+			return fmt.Errorf("version downgrade not allowed: current=%s, requested=%s (use rollback instead)", currentEnabled.Version, pkg.Version)
+		}
 	}
 
 	if err := s.repo.DisableOtherVersions(packageID, pkg.Version); err != nil {
@@ -401,6 +384,62 @@ func (s *DetectionPackageService) DisablePackage(ctx context.Context, packageID 
 	return nil
 }
 
+func (s *DetectionPackageService) RollbackPackage(ctx context.Context, packageID, targetVersion, operator string) error {
+	currentPkg, err := s.repo.GetEnabledPackage(packageID)
+	if err != nil {
+		return fmt.Errorf("no enabled version found for package %s: %w", packageID, err)
+	}
+
+	targetPkg, err := s.repo.GetPackageByVersion(packageID, targetVersion)
+	if err != nil {
+		return fmt.Errorf("target version %s not found: %w", targetVersion, err)
+	}
+	if targetPkg.Status != "signed" && targetPkg.Status != "disabled" {
+		return fmt.Errorf("target version %s status is %s, must be signed or disabled", targetVersion, targetPkg.Status)
+	}
+
+	if targetPkg.Version == currentPkg.Version {
+		return fmt.Errorf("target version %s is the same as current enabled version", targetVersion)
+	}
+
+	currentPkg.Status = "disabled"
+	now := time.Now()
+	currentPkg.DisabledAt = &now
+	if err := s.repo.UpdatePackage(currentPkg); err != nil {
+		return fmt.Errorf("disable current version: %w", err)
+	}
+
+	if s.serverClient != nil {
+		s.serverClient.UninstallDetectionPackage(ctx, "", currentPkg.PackageID, currentPkg.Version)
+	}
+
+	targetPkg.Status = "enabled"
+	targetPkg.EnabledAt = &now
+	if err := s.repo.UpdatePackage(targetPkg); err != nil {
+		return fmt.Errorf("enable target version: %w", err)
+	}
+
+	if s.serverClient != nil {
+		_, err := s.serverClient.InstallDetectionPackageFromService(ctx, "", &DetectionPackageCommand{
+			CommandID:    uuid.New().String(),
+			Action:       "rollback",
+			PackageID:    targetPkg.PackageID,
+			Version:      targetPkg.Version,
+			PackageURL:   targetPkg.PackageObjectKey,
+			SignatureURL: targetPkg.SignatureObjectKey,
+			PackageSize:  targetPkg.PackageSize,
+			Rollback:     true,
+		})
+		if err != nil {
+			s.recordOperation(packageID, targetVersion, "rollback", operator, nil, false, err.Error())
+			return fmt.Errorf("install rollback version on agents failed: %w", err)
+		}
+	}
+
+	s.recordOperation(packageID, targetVersion, "rollback", operator, nil, true, "")
+	return nil
+}
+
 func (s *DetectionPackageService) UninstallPackage(ctx context.Context, packageID string, operator string) error {
 	pkg, err := s.repo.GetLatestPackage(packageID)
 	if err != nil {
@@ -429,7 +468,38 @@ func (s *DetectionPackageService) GetPackage(ctx context.Context, packageID stri
 }
 
 func (s *DetectionPackageService) ListPackages(ctx context.Context, page, pageSize int, status, search string) ([]model.DetectionPackage, int64, error) {
-	return s.repo.ListPackages(page, pageSize, status, search)
+	packages, pkgTotal, err := s.repo.ListPackages(page, pageSize, status, search)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if status != "" && status != "draft" {
+		return packages, pkgTotal, nil
+	}
+
+	drafts, draftTotal, err := s.repo.ListDrafts(page, pageSize, status, search)
+	if err != nil {
+		return packages, pkgTotal, nil
+	}
+
+	var result []model.DetectionPackage
+	for _, d := range drafts {
+		result = append(result, model.DetectionPackage{
+			ID:          d.ID,
+			PackageID:   d.PackageID,
+			Version:     d.TargetVersion,
+			Title:       d.Title,
+			Description: d.Description,
+			CVEIDs:      d.CVEIDs,
+			Status:      d.Status,
+			CreatedAt:   d.CreatedAt,
+			UpdatedAt:   d.UpdatedAt,
+		})
+	}
+	result = append(result, packages...)
+
+	total := pkgTotal + draftTotal
+	return result, total, nil
 }
 
 func (s *DetectionPackageService) ListHostStatus(ctx context.Context, packageID, version string, page, pageSize int) ([]model.DetectionPackageHostStatus, int64, error) {
@@ -530,6 +600,49 @@ func (s *DetectionPackageService) recordOperation(packageID, version, operation,
 		ErrorMessage: errMsg,
 	}
 	s.repo.CreateOperation(op)
+}
+
+func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.UUID, approved bool, comment, operator string) error {
+	build, err := s.repo.GetBuild(buildID)
+	if err != nil {
+		return fmt.Errorf("get build: %w", err)
+	}
+	if build.Status != "awaiting_review" {
+		return fmt.Errorf("build status is %s, not awaiting_review", build.Status)
+	}
+	if approved {
+		build.Status = "success"
+	} else {
+		build.Status = "review_rejected"
+	}
+	build.ReviewedBy = &operator
+	now := time.Now()
+	build.ReviewedAt = &now
+	build.ReviewComment = &comment
+	if err := s.repo.UpdateBuild(build); err != nil {
+		return fmt.Errorf("update build: %w", err)
+	}
+	s.recordOperation(build.PackageID, build.Version, "review", operator, nil, true, "")
+	return nil
+}
+
+func (s *DetectionPackageService) ListPackageAlerts(ctx context.Context, packageID string, page, pageSize int) ([]model.RuntimeEvent, int64, error) {
+	return s.repo.ListAlertsByPackageID(packageID, page, pageSize)
+}
+
+func (s *DetectionPackageService) GetBuildLogURL(ctx context.Context, buildID uuid.UUID) (string, error) {
+	build, err := s.repo.GetBuild(buildID)
+	if err != nil {
+		return "", fmt.Errorf("get build: %w", err)
+	}
+	if build.BuildLogObjectKey == "" {
+		return "", fmt.Errorf("build log not available")
+	}
+	return build.BuildLogObjectKey, nil
+}
+
+func (s *DetectionPackageService) ListAllowlistHistory(ctx context.Context, page, pageSize int) ([]model.EBPFHookAllowlistConfig, int64, error) {
+	return s.repo.ListAllowlistHistory(page, pageSize)
 }
 
 func timePtr(t time.Time) *time.Time {

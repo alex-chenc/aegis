@@ -38,6 +38,23 @@
       readonly
       class="log-textarea"
     />
+    <div style="margin-top: 8px; text-align: right;">
+      <el-button size="small" @click="handleDownloadLog" :loading="downloadingLog" :disabled="!build?.build_log_object_key">下载完整日志</el-button>
+    </div>
+
+    <template v-if="build?.status === 'awaiting_review'">
+      <el-divider content-position="left">构建审核</el-divider>
+      <el-input type="textarea" :rows="3" v-model="reviewComment" placeholder="审核意见" style="margin-bottom: 8px;" />
+      <div v-if="canOperate('review')" style="display: flex; gap: 8px;">
+        <el-button type="success" :loading="reviewing" @click="handleReview(true)">审核通过</el-button>
+        <el-button type="danger" :loading="reviewing" @click="handleReview(false)">审核拒绝</el-button>
+      </div>
+    </template>
+
+    <template v-if="build?.status === 'built'">
+      <el-divider content-position="left">签名发布</el-divider>
+      <el-button v-if="canOperate('sign')" type="warning" @click="emit('sign')">签名发布</el-button>
+    </template>
 
     <div v-if="build?.error_message" style="margin-top: 12px;">
       <el-alert :title="build.error_message" type="error" show-icon :closable="false" />
@@ -46,13 +63,48 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { DetectionPackageBuild } from '@/api/detection-packages'
+import { detectionPackageApi } from '@/api/detection-packages'
+import { useRole } from '@/composables/useRole'
+import { ElMessage } from 'element-plus'
 import HookSummaryTable from './HookSummaryTable.vue'
 import PackageStatusTag from './PackageStatusTag.vue'
 
-defineProps<{
+const props = defineProps<{
   build: DetectionPackageBuild | null
 }>()
+
+const emit = defineEmits<{ (e: 'sign'): void }>()
+
+const { canOperate } = useRole()
+const reviewComment = ref('')
+const reviewing = ref(false)
+const downloadingLog = ref(false)
+
+async function handleReview(approved: boolean) {
+  reviewing.value = true
+  try {
+    await detectionPackageApi.reviewBuild(props.build!.id, { approved, comment: reviewComment.value })
+    ElMessage.success(approved ? '审核通过' : '审核拒绝')
+  } catch (e: any) {
+    ElMessage.error(e.message || '审核失败')
+  } finally {
+    reviewing.value = false
+  }
+}
+
+async function handleDownloadLog() {
+  downloadingLog.value = true
+  try {
+    const res = await detectionPackageApi.getBuildLog(props.build!.id)
+    window.open(res.log_url, '_blank')
+  } catch (e: any) {
+    ElMessage.error(e.message || '下载日志失败')
+  } finally {
+    downloadingLog.value = false
+  }
+}
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return bytes + ' B'

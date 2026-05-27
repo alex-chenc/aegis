@@ -120,6 +120,23 @@
           </el-table>
         </el-tab-pane>
       </el-tabs>
+
+      <el-collapse style="margin-top: 24px;">
+        <el-collapse-item title="白名单变更历史" name="history">
+          <el-table :data="historyRecords" border size="small" v-loading="loadingHistory">
+            <el-table-column prop="operator" label="操作人" width="120" />
+            <el-table-column prop="operated_at" label="操作时间" width="180">
+              <template #default="{ row }">{{ new Date(row.operated_at).toLocaleString() }}</template>
+            </el-table-column>
+            <el-table-column prop="change_reason" label="变更原因" min-width="200" />
+            <el-table-column label="变更内容" min-width="300">
+              <template #default="{ row }">
+                <pre class="diff-content">{{ formatChangeContent(row) }}</pre>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
   </div>
 </template>
@@ -131,6 +148,8 @@ import { ElMessage } from 'element-plus'
 
 const activeTab = ref('tracepoints')
 const saving = ref(false)
+const historyRecords = ref<any[]>([])
+const loadingHistory = ref(false)
 
 const allowlist = reactive({
   tracepoints: [] as { value: string }[],
@@ -161,6 +180,24 @@ function removeHook(type: keyof typeof allowlist, index: number) {
   allowlist[type].splice(index, 1)
 }
 
+async function loadHistory() {
+  loadingHistory.value = true
+  try {
+    historyRecords.value = await ebpfHookApi.getAllowlistHistory()
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载变更历史失败')
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+function formatChangeContent(row: any) {
+  if (row.change_detail) {
+    return typeof row.change_detail === 'string' ? row.change_detail : JSON.stringify(row.change_detail, null, 2)
+  }
+  return '-'
+}
+
 async function handleSave() {
   saving.value = true
   try {
@@ -181,6 +218,7 @@ async function handleSave() {
 
 onMounted(() => {
   loadAllowlist()
+  loadHistory()
 })
 </script>
 
@@ -195,5 +233,12 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 12px;
   gap: 8px;
+}
+.diff-content {
+  font-family: monospace;
+  font-size: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

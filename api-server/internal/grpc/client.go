@@ -179,3 +179,8 @@ func (c *ServerClient) UninstallDetectionPackage(ctx context.Context, hostID, pa
 	}
 	return resp.AffectedAgents, nil
 }
+
+// ReportCorrelationAlert reports a correlation alert from the DC pipeline
+func (c *ServerClient) ReportCorrelationAlert(ctx context.Context, req *pb.ReportCorrelationAlertRequest) (*pb.ReportCorrelationAlertResponse, error) {
+	return c.client.ReportCorrelationAlert(ctx, req)
+}

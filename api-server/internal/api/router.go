@@ -5,33 +5,36 @@ import (
 
 	"api-server/internal/api/handler"
 	"api-server/internal/api/middleware"
+	"api-server/internal/repository"
 	"api-server/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Router struct {
-	engine                  *gin.Engine
-	authService             *service.AuthService
-	authHandler             *handler.AuthHandler
-	configHandler           *handler.ConfigHandler
-	hostHandler             *handler.HostHandler
-	templateHandler         *handler.TemplateHandler
-	taskHandler             *handler.TaskHandler
-	taskHandlerWithHealing  *handler.TaskHandlerWithHealing
-	agentHandler            *handler.AgentHandler
-	ruleHandler             *handler.RuleHandler
-	vulnerabilityHandler    *handler.VulnerabilityHandler
-	detectionHandler        *handler.DetectionHandler
-	detectionPkgHandler     *handler.DetectionPackageHandler
-	websocketHandler        *handler.WebSocketHandler
-	notificationHandler     *handler.NotificationHandler
-	aiAnalysisHandler       *handler.AIAnalysisHandler
-	commandAuditHandler     *handler.CommandAuditHandler
-	auditLogHandler         *handler.AuditLogHandler
+	engine                 *gin.Engine
+	roleRepo               *repository.RoleRepo
+	authService            *service.AuthService
+	authHandler            *handler.AuthHandler
+	configHandler          *handler.ConfigHandler
+	hostHandler            *handler.HostHandler
+	templateHandler        *handler.TemplateHandler
+	taskHandler            *handler.TaskHandler
+	taskHandlerWithHealing *handler.TaskHandlerWithHealing
+	agentHandler           *handler.AgentHandler
+	ruleHandler            *handler.RuleHandler
+	vulnerabilityHandler   *handler.VulnerabilityHandler
+	detectionHandler       *handler.DetectionHandler
+	detectionPkgHandler    *handler.DetectionPackageHandler
+	websocketHandler       *handler.WebSocketHandler
+	notificationHandler    *handler.NotificationHandler
+	aiAnalysisHandler      *handler.AIAnalysisHandler
+	commandAuditHandler    *handler.CommandAuditHandler
+	auditLogHandler        *handler.AuditLogHandler
 }
 
 func NewRouter(
+	roleRepo *repository.RoleRepo,
 	authService *service.AuthService,
 	authHandler *handler.AuthHandler,
 	configHandler *handler.ConfigHandler,
@@ -51,6 +54,7 @@ func NewRouter(
 	auditLogHandler *handler.AuditLogHandler,
 ) *Router {
 	return &Router{
+		roleRepo:               roleRepo,
 		authService:            authService,
 		authHandler:            authHandler,
 		configHandler:          configHandler,
@@ -281,6 +285,10 @@ func (r *Router) Setup() {
 				packages.GET("/:package_id/hosts", r.detectionPkgHandler.ListHostStatus)
 				packages.POST("/hosts/report", r.detectionPkgHandler.ReportHostStatus)
 				packages.GET("/:package_id", r.detectionPkgHandler.GetPackage)
+				packages.POST("/builds/:build_id/review", r.roleMiddleware("review"), r.detectionPkgHandler.ReviewBuild)
+				packages.POST("/:package_id/rollback", r.roleMiddleware("rollback"), r.detectionPkgHandler.RollbackPackage)
+				packages.GET("/:package_id/alerts", r.roleMiddleware("view"), r.detectionPkgHandler.ListPackageAlerts)
+				packages.GET("/builds/:build_id/log", r.roleMiddleware("review"), r.detectionPkgHandler.GetBuildLog)
 			}
 		}
 
@@ -319,8 +327,16 @@ func (r *Router) Setup() {
 		{
 			ebpfHooks.GET("/allowlist", r.detectionPkgHandler.GetAllowlist)
 			ebpfHooks.PUT("/allowlist", r.detectionPkgHandler.UpdateAllowlist)
+			ebpfHooks.GET("/allowlist/history", r.roleMiddleware("allowlist"), r.detectionPkgHandler.GetAllowlistHistory)
 		}
 	}
+}
+
+func (r *Router) roleMiddleware(operation string) gin.HandlerFunc {
+	if r.roleRepo != nil {
+		return middleware.RoleMiddleware(r.roleRepo, operation)
+	}
+	return func(c *gin.Context) { c.Next() }
 }
 
 // GetEngine 返回 Gin 引擎

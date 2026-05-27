@@ -35,6 +35,10 @@ func (r *DetectionPackageRepo) GetDraftByID(id uuid.UUID) (*model.DetectionPacka
 	return &draft, err
 }
 
+func (r *DetectionPackageRepo) DeleteDraftByPackageID(packageID string) error {
+	return r.db.Where("package_id = ?", packageID).Delete(&model.DetectionPackageDraft{}).Error
+}
+
 func (r *DetectionPackageRepo) CreatePackage(pkg *model.DetectionPackage) error {
 	return r.db.Create(pkg).Error
 }
@@ -70,9 +74,30 @@ func (r *DetectionPackageRepo) ListPackages(page, pageSize int, status, search s
 	return packages, total, err
 }
 
+func (r *DetectionPackageRepo) ListDrafts(page, pageSize int, status, search string) ([]model.DetectionPackageDraft, int64, error) {
+	var drafts []model.DetectionPackageDraft
+	var total int64
+	query := r.db.Model(&model.DetectionPackageDraft{})
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if search != "" {
+		query = query.Where("package_id LIKE ? OR title LIKE ? OR cve_ids::text LIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+	}
+	query.Count(&total)
+	err := query.Order("updated_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&drafts).Error
+	return drafts, total, err
+}
+
 func (r *DetectionPackageRepo) GetEnabledPackage(packageID string) (*model.DetectionPackage, error) {
 	var pkg model.DetectionPackage
 	err := r.db.Where("package_id = ? AND status = ?", packageID, "enabled").First(&pkg).Error
+	return &pkg, err
+}
+
+func (r *DetectionPackageRepo) GetPackageByVersion(packageID, version string) (*model.DetectionPackage, error) {
+	var pkg model.DetectionPackage
+	err := r.db.Where("package_id = ? AND version = ?", packageID, version).First(&pkg).Error
 	return &pkg, err
 }
 
@@ -155,4 +180,22 @@ func (r *DetectionPackageRepo) ListCorrelationRules(packageID, version string) (
 	var rules []model.CorrelationRule
 	err := r.db.Where("package_id = ? AND package_version = ?", packageID, version).Find(&rules).Error
 	return rules, err
+}
+
+func (r *DetectionPackageRepo) ListAlertsByPackageID(packageID string, page, pageSize int) ([]model.RuntimeEvent, int64, error) {
+	var events []model.RuntimeEvent
+	var total int64
+	query := r.db.Model(&model.RuntimeEvent{}).Where("event_type = ? AND matched_rule_id LIKE ?", "correlation_alert", packageID+"%")
+	query.Count(&total)
+	err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&events).Error
+	return events, total, err
+}
+
+func (r *DetectionPackageRepo) ListAllowlistHistory(page, pageSize int) ([]model.EBPFHookAllowlistConfig, int64, error) {
+	var configs []model.EBPFHookAllowlistConfig
+	var total int64
+	query := r.db.Model(&model.EBPFHookAllowlistConfig{})
+	query.Count(&total)
+	err := query.Order("version DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&configs).Error
+	return configs, total, err
 }

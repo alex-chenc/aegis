@@ -165,4 +165,16 @@ export const detectionPackageApi = {
 
   hostStatus: (packageId: string, params?: PageQuery): Promise<{ data: PackageHostStatus[]; total: number }> =>
     request.get(`/detection/packages/${packageId}/hosts`, { params }),
+
+  reviewBuild: (buildId: string, data: { approved: boolean; comment: string }): Promise<void> =>
+    request.post(`/detection/packages/builds/${buildId}/review`, data),
+
+  rollbackPackage: (packageId: string, targetVersion: string): Promise<void> =>
+    request.post(`/detection/packages/${packageId}/rollback`, { target_version: targetVersion }),
+
+  getPackageAlerts: (packageId: string): Promise<any[]> =>
+    request.get(`/detection/packages/${packageId}/alerts`),
+
+  getBuildLog: (buildId: string): Promise<{ log_url: string }> =>
+    request.get(`/detection/packages/builds/${buildId}/log`),
 }

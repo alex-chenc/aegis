@@ -720,3 +720,33 @@ func (s *APIServerToServerImpl) forwardStatusToAPIServer(statuses []*pb.Detectio
 		logger.Warn("failed to forward status to API Server via gRPC", zap.Error(err))
 	}
 }
+
+func (s *APIServerToServerImpl) ReportCorrelationAlert(ctx context.Context, req *pb.ReportCorrelationAlertRequest) (*pb.ReportCorrelationAlertResponse, error) {
+	logger.Info("correlation alert reported",
+		zap.String("agent_id", req.AgentId),
+		zap.String("package_id", req.PackageId),
+		zap.String("correlation_rule_id", req.CorrelationRuleId),
+		zap.String("severity", req.Severity),
+	)
+
+	go s.forwardCorrelationAlertToAPIServer(req)
+
+	return &pb.ReportCorrelationAlertResponse{
+		Accepted: true,
+	}, nil
+}
+
+func (s *APIServerToServerImpl) forwardCorrelationAlertToAPIServer(req *pb.ReportCorrelationAlertRequest) {
+	if s.apiServerClient == nil {
+		logger.Warn("api server client not available, skipping correlation alert forward")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := s.apiServerClient.ReportCorrelationAlert(ctx, req)
+	if err != nil {
+		logger.Warn("failed to forward correlation alert to API Server via gRPC", zap.Error(err))
+	}
+}

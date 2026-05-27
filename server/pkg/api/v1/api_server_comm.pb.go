@@ -2362,8 +2362,8 @@ const file_api_server_comm_proto_rawDesc = "" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12'\n" +
 	"\x0fprevious_status\x18\x03 \x01(\tR\x0epreviousStatus\x12%\n" +
 	"\x0ecurrent_status\x18\x04 \x01(\tR\rcurrentStatus\x12\x1c\n" +
-	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"\x8e\x02\n" +
-	"\x17DetectionPackageCommandRequest\x12\x1d\n" +
+	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"\x95\x02\n" +
+	"\x1eDetectionPackageCommandRequest\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x1d\n" +
@@ -2374,10 +2374,10 @@ const file_api_server_comm_proto_rawDesc = "" +
 	"packageUrl\x12#\n" +
 	"\rsignature_url\x18\x06 \x01(\tR\fsignatureUrl\x12!\n" +
 	"\fpackage_size\x18\a \x01(\x03R\vpackageSize\x12\x1a\n" +
-	"\brollback\x18\b \x01(\bR\brollback\"\x80\x01\n" +
+	"\brollback\x18\b \x01(\bR\brollback\"\x87\x01\n" +
 	"\x1eInstallDetectionPackageRequest\x12\x17\n" +
-	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12E\n" +
-	"\acommand\x18\x02 \x01(\v2+.api_server_comm.v1.DetectionPackageCommandRequestR\acommand\"~\n" +
+	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12L\n" +
+	"\acommand\x18\x02 \x01(\v22.api_server_comm.v1.DetectionPackageCommandRequestR\acommand\"~\n" +
 	"\x1fInstallDetectionPackageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
 	"\x0faffected_agents\x18\x02 \x01(\x05R\x0eaffectedAgents\x12\x18\n" +

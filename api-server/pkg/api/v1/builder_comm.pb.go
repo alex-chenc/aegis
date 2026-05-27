@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v4.24.4
-// source: builder_comm_apiserver.proto
+// source: builder_comm.proto
 
 package pb
 
@@ -29,7 +29,7 @@ type GetBuilderInfoRequest struct {
 
 func (x *GetBuilderInfoRequest) Reset() {
 	*x = GetBuilderInfoRequest{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[0]
+	mi := &file_builder_comm_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *GetBuilderInfoRequest) String() string {
 func (*GetBuilderInfoRequest) ProtoMessage() {}
 
 func (x *GetBuilderInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[0]
+	mi := &file_builder_comm_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,7 +54,7 @@ func (x *GetBuilderInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBuilderInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetBuilderInfoRequest) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{0}
+	return file_builder_comm_proto_rawDescGZIP(), []int{0}
 }
 
 type GetBuilderInfoResponse struct {
@@ -66,13 +66,16 @@ type GetBuilderInfoResponse struct {
 	SupportedArches       []string               `protobuf:"bytes,5,rep,name=supported_arches,json=supportedArches,proto3" json:"supported_arches,omitempty"`
 	SupportedTransports   []string               `protobuf:"bytes,6,rep,name=supported_transports,json=supportedTransports,proto3" json:"supported_transports,omitempty"`
 	SigningKeyFingerprint string                 `protobuf:"bytes,7,opt,name=signing_key_fingerprint,json=signingKeyFingerprint,proto3" json:"signing_key_fingerprint,omitempty"`
+	BuilderImageDigest    string                 `protobuf:"bytes,8,opt,name=builder_image_digest,json=builderImageDigest,proto3" json:"builder_image_digest,omitempty"`
+	LlvmVersion           string                 `protobuf:"bytes,9,opt,name=llvm_version,json=llvmVersion,proto3" json:"llvm_version,omitempty"`
+	LibbpfVersion         string                 `protobuf:"bytes,10,opt,name=libbpf_version,json=libbpfVersion,proto3" json:"libbpf_version,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
 
 func (x *GetBuilderInfoResponse) Reset() {
 	*x = GetBuilderInfoResponse{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[1]
+	mi := &file_builder_comm_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -84,7 +87,7 @@ func (x *GetBuilderInfoResponse) String() string {
 func (*GetBuilderInfoResponse) ProtoMessage() {}
 
 func (x *GetBuilderInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[1]
+	mi := &file_builder_comm_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -97,7 +100,7 @@ func (x *GetBuilderInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBuilderInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetBuilderInfoResponse) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{1}
+	return file_builder_comm_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetBuilderInfoResponse) GetBuilderVersion() string {
@@ -149,6 +152,27 @@ func (x *GetBuilderInfoResponse) GetSigningKeyFingerprint() string {
 	return ""
 }
 
+func (x *GetBuilderInfoResponse) GetBuilderImageDigest() string {
+	if x != nil {
+		return x.BuilderImageDigest
+	}
+	return ""
+}
+
+func (x *GetBuilderInfoResponse) GetLlvmVersion() string {
+	if x != nil {
+		return x.LlvmVersion
+	}
+	return ""
+}
+
+func (x *GetBuilderInfoResponse) GetLibbpfVersion() string {
+	if x != nil {
+		return x.LibbpfVersion
+	}
+	return ""
+}
+
 type StartBuildRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	BuildId             string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
@@ -170,7 +194,7 @@ type StartBuildRequest struct {
 
 func (x *StartBuildRequest) Reset() {
 	*x = StartBuildRequest{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[2]
+	mi := &file_builder_comm_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -182,7 +206,7 @@ func (x *StartBuildRequest) String() string {
 func (*StartBuildRequest) ProtoMessage() {}
 
 func (x *StartBuildRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[2]
+	mi := &file_builder_comm_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -195,7 +219,7 @@ func (x *StartBuildRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartBuildRequest.ProtoReflect.Descriptor instead.
 func (*StartBuildRequest) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{2}
+	return file_builder_comm_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *StartBuildRequest) GetBuildId() string {
@@ -310,7 +334,7 @@ type StartBuildResponse struct {
 
 func (x *StartBuildResponse) Reset() {
 	*x = StartBuildResponse{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[3]
+	mi := &file_builder_comm_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +346,7 @@ func (x *StartBuildResponse) String() string {
 func (*StartBuildResponse) ProtoMessage() {}
 
 func (x *StartBuildResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[3]
+	mi := &file_builder_comm_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,7 +359,7 @@ func (x *StartBuildResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartBuildResponse.ProtoReflect.Descriptor instead.
 func (*StartBuildResponse) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{3}
+	return file_builder_comm_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StartBuildResponse) GetBuildId() string {
@@ -442,7 +466,7 @@ type BuildArtifact struct {
 
 func (x *BuildArtifact) Reset() {
 	*x = BuildArtifact{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[4]
+	mi := &file_builder_comm_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +478,7 @@ func (x *BuildArtifact) String() string {
 func (*BuildArtifact) ProtoMessage() {}
 
 func (x *BuildArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[4]
+	mi := &file_builder_comm_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +491,7 @@ func (x *BuildArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildArtifact.ProtoReflect.Descriptor instead.
 func (*BuildArtifact) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{4}
+	return file_builder_comm_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BuildArtifact) GetName() string {
@@ -517,7 +541,7 @@ type HookSummary struct {
 
 func (x *HookSummary) Reset() {
 	*x = HookSummary{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[5]
+	mi := &file_builder_comm_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -529,7 +553,7 @@ func (x *HookSummary) String() string {
 func (*HookSummary) ProtoMessage() {}
 
 func (x *HookSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[5]
+	mi := &file_builder_comm_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -542,7 +566,7 @@ func (x *HookSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HookSummary.ProtoReflect.Descriptor instead.
 func (*HookSummary) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{5}
+	return file_builder_comm_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HookSummary) GetHookType() string {
@@ -586,7 +610,7 @@ type SignPackageRequest struct {
 
 func (x *SignPackageRequest) Reset() {
 	*x = SignPackageRequest{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[6]
+	mi := &file_builder_comm_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +622,7 @@ func (x *SignPackageRequest) String() string {
 func (*SignPackageRequest) ProtoMessage() {}
 
 func (x *SignPackageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[6]
+	mi := &file_builder_comm_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +635,7 @@ func (x *SignPackageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignPackageRequest.ProtoReflect.Descriptor instead.
 func (*SignPackageRequest) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{6}
+	return file_builder_comm_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SignPackageRequest) GetBuildId() string {
@@ -666,7 +690,7 @@ type SignPackageResponse struct {
 
 func (x *SignPackageResponse) Reset() {
 	*x = SignPackageResponse{}
-	mi := &file_builder_comm_apiserver_proto_msgTypes[7]
+	mi := &file_builder_comm_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -678,7 +702,7 @@ func (x *SignPackageResponse) String() string {
 func (*SignPackageResponse) ProtoMessage() {}
 
 func (x *SignPackageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_builder_comm_apiserver_proto_msgTypes[7]
+	mi := &file_builder_comm_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -691,7 +715,7 @@ func (x *SignPackageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignPackageResponse.ProtoReflect.Descriptor instead.
 func (*SignPackageResponse) Descriptor() ([]byte, []int) {
-	return file_builder_comm_apiserver_proto_rawDescGZIP(), []int{7}
+	return file_builder_comm_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SignPackageResponse) GetSuccess() bool {
@@ -757,12 +781,284 @@ func (x *SignPackageResponse) GetSignedAt() int64 {
 	return 0
 }
 
-var File_builder_comm_apiserver_proto protoreflect.FileDescriptor
+type GetPackageBuildStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PackageId     string                 `protobuf:"bytes,1,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	BuildId       string                 `protobuf:"bytes,3,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_builder_comm_apiserver_proto_rawDesc = "" +
+func (x *GetPackageBuildStatusRequest) Reset() {
+	*x = GetPackageBuildStatusRequest{}
+	mi := &file_builder_comm_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPackageBuildStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPackageBuildStatusRequest) ProtoMessage() {}
+
+func (x *GetPackageBuildStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_builder_comm_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPackageBuildStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetPackageBuildStatusRequest) Descriptor() ([]byte, []int) {
+	return file_builder_comm_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetPackageBuildStatusRequest) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *GetPackageBuildStatusRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetPackageBuildStatusRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+type GetPackageBuildStatusResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	BuildId         string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	Status          string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorMessage    string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ProgressPercent int32                  `protobuf:"varint,4,opt,name=progress_percent,json=progressPercent,proto3" json:"progress_percent,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GetPackageBuildStatusResponse) Reset() {
+	*x = GetPackageBuildStatusResponse{}
+	mi := &file_builder_comm_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPackageBuildStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPackageBuildStatusResponse) ProtoMessage() {}
+
+func (x *GetPackageBuildStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_builder_comm_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPackageBuildStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetPackageBuildStatusResponse) Descriptor() ([]byte, []int) {
+	return file_builder_comm_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetPackageBuildStatusResponse) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *GetPackageBuildStatusResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *GetPackageBuildStatusResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *GetPackageBuildStatusResponse) GetProgressPercent() int32 {
+	if x != nil {
+		return x.ProgressPercent
+	}
+	return 0
+}
+
+type ReviewBuildRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BuildId       string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	PackageId     string                 `protobuf:"bytes,2,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Approved      bool                   `protobuf:"varint,4,opt,name=approved,proto3" json:"approved,omitempty"`
+	Comment       string                 `protobuf:"bytes,5,opt,name=comment,proto3" json:"comment,omitempty"`
+	Reviewer      string                 `protobuf:"bytes,6,opt,name=reviewer,proto3" json:"reviewer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReviewBuildRequest) Reset() {
+	*x = ReviewBuildRequest{}
+	mi := &file_builder_comm_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReviewBuildRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReviewBuildRequest) ProtoMessage() {}
+
+func (x *ReviewBuildRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_builder_comm_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReviewBuildRequest.ProtoReflect.Descriptor instead.
+func (*ReviewBuildRequest) Descriptor() ([]byte, []int) {
+	return file_builder_comm_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ReviewBuildRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *ReviewBuildRequest) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *ReviewBuildRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *ReviewBuildRequest) GetApproved() bool {
+	if x != nil {
+		return x.Approved
+	}
+	return false
+}
+
+func (x *ReviewBuildRequest) GetComment() string {
+	if x != nil {
+		return x.Comment
+	}
+	return ""
+}
+
+func (x *ReviewBuildRequest) GetReviewer() string {
+	if x != nil {
+		return x.Reviewer
+	}
+	return ""
+}
+
+type ReviewBuildResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	NewStatus     string                 `protobuf:"bytes,3,opt,name=new_status,json=newStatus,proto3" json:"new_status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReviewBuildResponse) Reset() {
+	*x = ReviewBuildResponse{}
+	mi := &file_builder_comm_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReviewBuildResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReviewBuildResponse) ProtoMessage() {}
+
+func (x *ReviewBuildResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_builder_comm_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReviewBuildResponse.ProtoReflect.Descriptor instead.
+func (*ReviewBuildResponse) Descriptor() ([]byte, []int) {
+	return file_builder_comm_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ReviewBuildResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ReviewBuildResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ReviewBuildResponse) GetNewStatus() string {
+	if x != nil {
+		return x.NewStatus
+	}
+	return ""
+}
+
+var File_builder_comm_proto protoreflect.FileDescriptor
+
+const file_builder_comm_proto_rawDesc = "" +
 	"\n" +
-	"\x1cbuilder_comm_apiserver.proto\x12\x0fbuilder_comm.v1\"\x17\n" +
-	"\x15GetBuilderInfoRequest\"\xca\x02\n" +
+	"\x12builder_comm.proto\x12\x0fbuilder_comm.v1\"\x17\n" +
+	"\x15GetBuilderInfoRequest\"\xc6\x03\n" +
 	"\x16GetBuilderInfoResponse\x12'\n" +
 	"\x0fbuilder_version\x18\x01 \x01(\tR\x0ebuilderVersion\x12#\n" +
 	"\rbuilder_image\x18\x02 \x01(\tR\fbuilderImage\x12#\n" +
@@ -770,7 +1066,11 @@ const file_builder_comm_apiserver_proto_rawDesc = "" +
 	"\x0fbpftool_version\x18\x04 \x01(\tR\x0ebpftoolVersion\x12)\n" +
 	"\x10supported_arches\x18\x05 \x03(\tR\x0fsupportedArches\x121\n" +
 	"\x14supported_transports\x18\x06 \x03(\tR\x13supportedTransports\x126\n" +
-	"\x17signing_key_fingerprint\x18\a \x01(\tR\x15signingKeyFingerprint\"\xcc\x03\n" +
+	"\x17signing_key_fingerprint\x18\a \x01(\tR\x15signingKeyFingerprint\x120\n" +
+	"\x14builder_image_digest\x18\b \x01(\tR\x12builderImageDigest\x12!\n" +
+	"\fllvm_version\x18\t \x01(\tR\vllvmVersion\x12%\n" +
+	"\x0elibbpf_version\x18\n" +
+	" \x01(\tR\rlibbpfVersion\"\xcc\x03\n" +
 	"\x11StartBuildRequest\x12\x19\n" +
 	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12\x1d\n" +
 	"\n" +
@@ -833,72 +1133,105 @@ const file_builder_comm_apiserver_proto_rawDesc = "" +
 	"\fpackage_size\x18\x06 \x01(\x03R\vpackageSize\x12/\n" +
 	"\x13signature_algorithm\x18\a \x01(\tR\x12signatureAlgorithm\x126\n" +
 	"\x17signing_key_fingerprint\x18\b \x01(\tR\x15signingKeyFingerprint\x12\x1b\n" +
-	"\tsigned_at\x18\t \x01(\x03R\bsignedAt2\xa4\x02\n" +
+	"\tsigned_at\x18\t \x01(\x03R\bsignedAt\"r\n" +
+	"\x1cGetPackageBuildStatusRequest\x12\x1d\n" +
+	"\n" +
+	"package_id\x18\x01 \x01(\tR\tpackageId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x19\n" +
+	"\bbuild_id\x18\x03 \x01(\tR\abuildId\"\xa2\x01\n" +
+	"\x1dGetPackageBuildStatusResponse\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12#\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\x12)\n" +
+	"\x10progress_percent\x18\x04 \x01(\x05R\x0fprogressPercent\"\xba\x01\n" +
+	"\x12ReviewBuildRequest\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12\x1d\n" +
+	"\n" +
+	"package_id\x18\x02 \x01(\tR\tpackageId\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12\x1a\n" +
+	"\bapproved\x18\x04 \x01(\bR\bapproved\x12\x18\n" +
+	"\acomment\x18\x05 \x01(\tR\acomment\x12\x1a\n" +
+	"\breviewer\x18\x06 \x01(\tR\breviewer\"h\n" +
+	"\x13ReviewBuildResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"new_status\x18\x03 \x01(\tR\tnewStatus2\xf6\x03\n" +
 	"\x0eBuilderService\x12a\n" +
 	"\x0eGetBuilderInfo\x12&.builder_comm.v1.GetBuilderInfoRequest\x1a'.builder_comm.v1.GetBuilderInfoResponse\x12U\n" +
 	"\n" +
-	"StartBuild\x12\".builder_comm.v1.StartBuildRequest\x1a#.builder_comm.v1.StartBuildResponse\x12X\n" +
+	"StartBuild\x12\".builder_comm.v1.StartBuildRequest\x1a#.builder_comm.v1.StartBuildResponse\x12v\n" +
+	"\x15GetPackageBuildStatus\x12-.builder_comm.v1.GetPackageBuildStatusRequest\x1a..builder_comm.v1.GetPackageBuildStatusResponse\x12X\n" +
+	"\vReviewBuild\x12#.builder_comm.v1.ReviewBuildRequest\x1a$.builder_comm.v1.ReviewBuildResponse\x12X\n" +
 	"\vSignPackage\x12#.builder_comm.v1.SignPackageRequest\x1a$.builder_comm.v1.SignPackageResponseB\x1aZ\x18api-server/pkg/api/v1;pbb\x06proto3"
 
 var (
-	file_builder_comm_apiserver_proto_rawDescOnce sync.Once
-	file_builder_comm_apiserver_proto_rawDescData []byte
+	file_builder_comm_proto_rawDescOnce sync.Once
+	file_builder_comm_proto_rawDescData []byte
 )
 
-func file_builder_comm_apiserver_proto_rawDescGZIP() []byte {
-	file_builder_comm_apiserver_proto_rawDescOnce.Do(func() {
-		file_builder_comm_apiserver_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_builder_comm_apiserver_proto_rawDesc), len(file_builder_comm_apiserver_proto_rawDesc)))
+func file_builder_comm_proto_rawDescGZIP() []byte {
+	file_builder_comm_proto_rawDescOnce.Do(func() {
+		file_builder_comm_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_builder_comm_proto_rawDesc), len(file_builder_comm_proto_rawDesc)))
 	})
-	return file_builder_comm_apiserver_proto_rawDescData
+	return file_builder_comm_proto_rawDescData
 }
 
-var file_builder_comm_apiserver_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
-var file_builder_comm_apiserver_proto_goTypes = []any{
-	(*GetBuilderInfoRequest)(nil),  // 0: builder_comm.v1.GetBuilderInfoRequest
-	(*GetBuilderInfoResponse)(nil), // 1: builder_comm.v1.GetBuilderInfoResponse
-	(*StartBuildRequest)(nil),      // 2: builder_comm.v1.StartBuildRequest
-	(*StartBuildResponse)(nil),     // 3: builder_comm.v1.StartBuildResponse
-	(*BuildArtifact)(nil),          // 4: builder_comm.v1.BuildArtifact
-	(*HookSummary)(nil),            // 5: builder_comm.v1.HookSummary
-	(*SignPackageRequest)(nil),     // 6: builder_comm.v1.SignPackageRequest
-	(*SignPackageResponse)(nil),    // 7: builder_comm.v1.SignPackageResponse
+var file_builder_comm_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_builder_comm_proto_goTypes = []any{
+	(*GetBuilderInfoRequest)(nil),         // 0: builder_comm.v1.GetBuilderInfoRequest
+	(*GetBuilderInfoResponse)(nil),        // 1: builder_comm.v1.GetBuilderInfoResponse
+	(*StartBuildRequest)(nil),             // 2: builder_comm.v1.StartBuildRequest
+	(*StartBuildResponse)(nil),            // 3: builder_comm.v1.StartBuildResponse
+	(*BuildArtifact)(nil),                 // 4: builder_comm.v1.BuildArtifact
+	(*HookSummary)(nil),                   // 5: builder_comm.v1.HookSummary
+	(*SignPackageRequest)(nil),            // 6: builder_comm.v1.SignPackageRequest
+	(*SignPackageResponse)(nil),           // 7: builder_comm.v1.SignPackageResponse
+	(*GetPackageBuildStatusRequest)(nil),  // 8: builder_comm.v1.GetPackageBuildStatusRequest
+	(*GetPackageBuildStatusResponse)(nil), // 9: builder_comm.v1.GetPackageBuildStatusResponse
+	(*ReviewBuildRequest)(nil),            // 10: builder_comm.v1.ReviewBuildRequest
+	(*ReviewBuildResponse)(nil),           // 11: builder_comm.v1.ReviewBuildResponse
 }
-var file_builder_comm_apiserver_proto_depIdxs = []int32{
-	4, // 0: builder_comm.v1.StartBuildResponse.artifacts:type_name -> builder_comm.v1.BuildArtifact
-	5, // 1: builder_comm.v1.StartBuildResponse.hook_summary:type_name -> builder_comm.v1.HookSummary
-	0, // 2: builder_comm.v1.BuilderService.GetBuilderInfo:input_type -> builder_comm.v1.GetBuilderInfoRequest
-	2, // 3: builder_comm.v1.BuilderService.StartBuild:input_type -> builder_comm.v1.StartBuildRequest
-	6, // 4: builder_comm.v1.BuilderService.SignPackage:input_type -> builder_comm.v1.SignPackageRequest
-	1, // 5: builder_comm.v1.BuilderService.GetBuilderInfo:output_type -> builder_comm.v1.GetBuilderInfoResponse
-	3, // 6: builder_comm.v1.BuilderService.StartBuild:output_type -> builder_comm.v1.StartBuildResponse
-	7, // 7: builder_comm.v1.BuilderService.SignPackage:output_type -> builder_comm.v1.SignPackageResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+var file_builder_comm_proto_depIdxs = []int32{
+	4,  // 0: builder_comm.v1.StartBuildResponse.artifacts:type_name -> builder_comm.v1.BuildArtifact
+	5,  // 1: builder_comm.v1.StartBuildResponse.hook_summary:type_name -> builder_comm.v1.HookSummary
+	0,  // 2: builder_comm.v1.BuilderService.GetBuilderInfo:input_type -> builder_comm.v1.GetBuilderInfoRequest
+	2,  // 3: builder_comm.v1.BuilderService.StartBuild:input_type -> builder_comm.v1.StartBuildRequest
+	8,  // 4: builder_comm.v1.BuilderService.GetPackageBuildStatus:input_type -> builder_comm.v1.GetPackageBuildStatusRequest
+	10, // 5: builder_comm.v1.BuilderService.ReviewBuild:input_type -> builder_comm.v1.ReviewBuildRequest
+	6,  // 6: builder_comm.v1.BuilderService.SignPackage:input_type -> builder_comm.v1.SignPackageRequest
+	1,  // 7: builder_comm.v1.BuilderService.GetBuilderInfo:output_type -> builder_comm.v1.GetBuilderInfoResponse
+	3,  // 8: builder_comm.v1.BuilderService.StartBuild:output_type -> builder_comm.v1.StartBuildResponse
+	9,  // 9: builder_comm.v1.BuilderService.GetPackageBuildStatus:output_type -> builder_comm.v1.GetPackageBuildStatusResponse
+	11, // 10: builder_comm.v1.BuilderService.ReviewBuild:output_type -> builder_comm.v1.ReviewBuildResponse
+	7,  // 11: builder_comm.v1.BuilderService.SignPackage:output_type -> builder_comm.v1.SignPackageResponse
+	7,  // [7:12] is the sub-list for method output_type
+	2,  // [2:7] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_builder_comm_apiserver_proto_init() }
-func file_builder_comm_apiserver_proto_init() {
-	if File_builder_comm_apiserver_proto != nil {
+func init() { file_builder_comm_proto_init() }
+func file_builder_comm_proto_init() {
+	if File_builder_comm_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_builder_comm_apiserver_proto_rawDesc), len(file_builder_comm_apiserver_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_builder_comm_proto_rawDesc), len(file_builder_comm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_builder_comm_apiserver_proto_goTypes,
-		DependencyIndexes: file_builder_comm_apiserver_proto_depIdxs,
-		MessageInfos:      file_builder_comm_apiserver_proto_msgTypes,
+		GoTypes:           file_builder_comm_proto_goTypes,
+		DependencyIndexes: file_builder_comm_proto_depIdxs,
+		MessageInfos:      file_builder_comm_proto_msgTypes,
 	}.Build()
-	File_builder_comm_apiserver_proto = out.File
-	file_builder_comm_apiserver_proto_goTypes = nil
-	file_builder_comm_apiserver_proto_depIdxs = nil
+	File_builder_comm_proto = out.File
+	file_builder_comm_proto_goTypes = nil
+	file_builder_comm_proto_depIdxs = nil
 }

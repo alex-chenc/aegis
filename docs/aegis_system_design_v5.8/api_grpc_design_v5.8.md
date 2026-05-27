@@ -89,22 +89,25 @@ POST /api/v1/detection/packages/ai-generate
 ```json
 {
   "cve_id": "CVE-2026-31431",
-  "vulnerability_summary": "AF_ALG AEAD + splice page cache corruption local privilege escalation",
-  "target_os": ["linux"],
-  "preferred_package_id": "cve-2026-31431-copyfail",
-  "notes": "Use tracepoint only in first version."
+  "vulnerability_description": "AF_ALG AEAD + splice page cache corruption local privilege escalation",
+  "attack_prerequisites": "Local access, ability to create AF_ALG socket",
+  "exploitation_chain": "1. Create AF_ALG socket 2. Use splice() with AEAD 3. Corrupt page cache",
+  "false_positive_constraints": "Only alert on splice+AEAD sequence within 5s window"
 }
 ```
 
-响应：
+成功响应：
 
 ```json
 {
   "code": 0,
   "data": {
     "draft_id": "uuid",
-    "package_id": "cve-2026-31431-copyfail",
+    "package_id": "cve-2026-31431",
     "target_version": "1.0.0",
+    "title": "CVE-2026-31431 Runtime Detector",
+    "description": "...",
+    "cve_ids": ["CVE-2026-31431"],
     "hook_plan_yaml": "...",
     "sigma_rules_yaml": "...",
     "correlation_yaml": "...",
@@ -112,6 +115,24 @@ POST /api/v1/detection/packages/ai-generate
   }
 }
 ```
+
+错误响应（LLM 未配置或调用失败）：
+
+```json
+{
+  "code": 503,
+  "message": "AI生成服务未配置，请检查LLM配置"
+}
+```
+
+```json
+{
+  "code": 503,
+  "message": "AI生成失败: <error detail>，请检查LLM配置或稍后重试"
+}
+```
+
+超时：120 秒（LLM 调用上下文超时）。
 
 ### 3.4 创建草稿
 

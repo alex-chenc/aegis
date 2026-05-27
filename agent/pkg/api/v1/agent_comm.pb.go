@@ -2137,7 +2137,7 @@ const file_agent_comm_proto_rawDesc = "" +
 	"\vUpdateRules\x12 .agent_comm.v1.RuleUpdateRequest\x1a!.agent_comm.v1.RuleUpdateResponse\x12P\n" +
 	"\x13ExecuteBlockCommand\x12\x1b.agent_comm.v1.BlockCommand\x1a\x1c.agent_comm.v1.BlockResponse\x12Q\n" +
 	"\n" +
-	"SyncConfig\x12 .agent_comm.v1.ConfigSyncRequest\x1a!.agent_comm.v1.ConfigSyncResponseB\x16Z\x14server/pkg/api/v1;pbb\x06proto3"
+	"SyncConfig\x12 .agent_comm.v1.ConfigSyncRequest\x1a!.agent_comm.v1.ConfigSyncResponseB\x15Z\x13agent/pkg/api/v1;pbb\x06proto3"
 
 var (
 	file_agent_comm_proto_rawDescOnce sync.Once

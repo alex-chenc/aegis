@@ -15,7 +15,6 @@ import (
 	"api-server/internal/checker"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/ipdetect"
-	"api-server/internal/llm"
 	"api-server/internal/queue"
 	"api-server/internal/repository"
 	"api-server/internal/seed"
@@ -235,17 +234,17 @@ func main() {
 
 	detectionPkgService := service.NewDetectionPackageService(detectionPkgRepo, db, serverClient, builderSvcClient)
 
-	// LLM client for AI generation
-	llmGenClient := llm.NewLLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.ModelName, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
-	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, llmGenClient)
+	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
 	authHandler := handler.NewAuthHandler(authService)
 	commandAuditHandler := handler.NewCommandAuditHandler(commandAuditRuleRepo, systemConfigRepo, scriptAuditService)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
 
+	roleRepo := repository.NewRoleRepo(db)
+
 	// Initialize HTTP router
-	router := api.NewRouter(authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
 	router.Setup()
 
 	// Start HTTP server

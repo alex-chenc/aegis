@@ -94,6 +94,13 @@ func (rl *RateLimiter) UpdateLimits(pluginID string, pluginRate, typeRate, pidRa
 	rl.defaultPidRate = pidRate
 }
 
+func (rl *RateLimiter) RemovePackage(pluginID string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.pluginLimiters, pluginID)
+	delete(rl.exceedStart, pluginID)
+}
+
 func (rl *RateLimiter) checkExceed(pluginID string) {
 	now := time.Now()
 	if start, exists := rl.exceedStart[pluginID]; exists {

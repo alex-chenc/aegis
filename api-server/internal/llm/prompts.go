@@ -457,6 +457,9 @@ CVE 信息：
 漏洞描述：
 %s
 
+攻击前置条件：
+%s
+
 利用链行为：
 %s
 
@@ -464,6 +467,6 @@ CVE 信息：
 %s`
 
 // GetDetectionPackageGenerationPrompt returns the detection package generation prompt
-func GetDetectionPackageGenerationPrompt(cveID, description, chain, constraints string) string {
-	return fmt.Sprintf(DetectionPackageGenerationPrompt, cveID, description, chain, constraints)
+func GetDetectionPackageGenerationPrompt(cveID, description, prerequisites, chain, constraints string) string {
+	return fmt.Sprintf(DetectionPackageGenerationPrompt, cveID, description, prerequisites, chain, constraints)
 }

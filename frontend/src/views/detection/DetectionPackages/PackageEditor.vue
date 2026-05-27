@@ -169,6 +169,13 @@ async function confirmAIGenerate() {
       form.correlation_yaml = draft.correlation_yaml || ''
       aiDialogVisible.value = false
     }
+  } catch (e: any) {
+    const msg = e?.response?.data?.message || e?.message || 'AI 草稿生成失败'
+    if (e?.response?.status === 503) {
+      ElMessage.error(`AI 服务不可用: ${msg}，请检查 LLM 配置`)
+    } else {
+      ElMessage.error(msg)
+    }
   } finally {
     generating.value = false
   }

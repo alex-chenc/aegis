@@ -3,10 +3,13 @@ package dynpkg
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -93,4 +96,39 @@ func ParseManifests(extractDir string) (*PackageManifest, *PluginManifest, error
 	}
 
 	return &pkgManifest, &pluginManifest, nil
+}
+
+func downloadFile(ctx context.Context, url, destPath string) error {
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if strings.HasPrefix(url, "/") || strings.HasPrefix(url, "./") {
+		data, err := os.ReadFile(url)
+		if err != nil {
+			return err
+		}
+		_, err = out.Write(data)
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: %d", resp.StatusCode)
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	return err
 }

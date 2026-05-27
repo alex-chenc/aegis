@@ -43,9 +43,6 @@ export function useDetectionPackages() {
       currentDraft.value = await detectionPackageApi.generateDraft(data)
       ElMessage.success('AI 草稿生成成功')
       return currentDraft.value
-    } catch (e: any) {
-      ElMessage.error(e.message || 'AI 草稿生成失败')
-      throw e
     } finally {
       loading.value = false
     }

@@ -23,4 +23,7 @@ export const ebpfHookApi = {
 
   updateAllowlist: (data: UpdateAllowlistRequest): Promise<EBPFHookAllowlist> =>
     request.put('/settings/ebpf-hooks/allowlist', data),
+
+  getAllowlistHistory: (): Promise<any[]> =>
+    request.get('/settings/ebpf-hooks/allowlist/history'),
 }

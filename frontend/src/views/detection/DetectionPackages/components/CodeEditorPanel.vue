@@ -15,6 +15,7 @@
       :model-value="modelValue"
       @update:model-value="$emit('update:modelValue', $event)"
       @blur="validate"
+      @input="validate"
       class="code-textarea"
       :placeholder="placeholder"
     />
@@ -23,6 +24,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import * as yaml from 'js-yaml'
 
 const props = defineProps<{
   modelValue: string
@@ -30,8 +32,9 @@ const props = defineProps<{
   placeholder?: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
+  (e: 'validationError', error: string): void
 }>()
 
 const currentLang = ref(props.language || 'yaml')
@@ -48,6 +51,16 @@ function validate() {
       errorMsg.value = `JSON 格式错误: ${e.message}`
     }
   }
+
+  if (currentLang.value === 'yaml') {
+    try {
+      yaml.load(props.modelValue)
+    } catch (e: any) {
+      errorMsg.value = `YAML 格式错误: ${e.message}`
+    }
+  }
+
+  emit('validationError', errorMsg.value)
 }
 </script>
 
