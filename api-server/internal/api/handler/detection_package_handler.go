@@ -363,6 +363,16 @@ func (h *DetectionPackageHandler) GetBuild(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": build})
 }
 
+func (h *DetectionPackageHandler) GetLatestBuild(c *gin.Context) {
+	packageID := c.Param("package_id")
+	build, err := h.pkgService.GetLatestBuild(c.Request.Context(), packageID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "build not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": build})
+}
+
 func (h *DetectionPackageHandler) SignPackage(c *gin.Context) {
 	packageID := c.Param("package_id")
 	operator := getOperator(c)
@@ -618,8 +628,47 @@ func (h *DetectionPackageHandler) GetAllowlistHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"data": history, "total": total}})
 }
 
+func (h *DetectionPackageHandler) DeletePackage(c *gin.Context) {
+	packageID := c.Param("package_id")
+	operator := getOperator(c)
+
+	if err := h.pkgService.DeletePackage(c.Request.Context(), packageID, operator); err != nil {
+		logger.Error("delete package failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+func (h *DetectionPackageHandler) BatchDeletePackages(c *gin.Context) {
+	var req struct {
+		PackageIDs []string `json:"package_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	operator := getOperator(c)
+	var errs []string
+	for _, packageID := range req.PackageIDs {
+		if err := h.pkgService.DeletePackage(c.Request.Context(), packageID, operator); err != nil {
+			logger.Error("batch delete package failed", zap.String("package_id", packageID), zap.Error(err))
+			errs = append(errs, fmt.Sprintf("%s: %s", packageID, err.Error()))
+		}
+	}
+
+	if len(errs) > 0 {
+		c.JSON(http.StatusMultiStatus, gin.H{"code": 207, "message": fmt.Sprintf("部分删除失败: %s", strings.Join(errs, "; "))})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
 func getOperator(c *gin.Context) string {
-	if username, exists := c.Get("username"); exists {
+	if username, exists := c.Get("auth_username"); exists {
 		return username.(string)
 	}
 	return "unknown"

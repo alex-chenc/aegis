@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"api-server/internal/repository"
 	"api-server/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,7 @@ import (
 
 type AuthHandler struct {
 	authService *service.AuthService
+	roleRepo    *repository.RoleRepo
 }
 
 type LoginRequest struct {
@@ -38,8 +40,8 @@ type ChangePasswordRequest struct {
 	ConfirmPassword string `json:"confirm_password"`
 }
 
-func NewAuthHandler(authService *service.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(authService *service.AuthService, roleRepo *repository.RoleRepo) *AuthHandler {
+	return &AuthHandler{authService: authService, roleRepo: roleRepo}
 }
 
 func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -83,7 +85,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		writeAuthError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, session)
+	role := "security_analyst"
+	if h.roleRepo != nil {
+		role, _ = h.roleRepo.GetRole(session.Username)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"token":               session.Token,
+		"username":            session.Username,
+		"force_password_change": session.ForcePasswordChange,
+		"role":                role,
+	})
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
@@ -92,9 +103,14 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		writeAuthError(c, err)
 		return
 	}
+	role := "security_analyst"
+	if h.roleRepo != nil {
+		role, _ = h.roleRepo.GetRole(authCtx.Username)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"username":              authCtx.Username,
 		"force_password_change": authCtx.ForcePasswordChange,
+		"role":                  role,
 	})
 }
 

@@ -39,6 +39,10 @@ func (r *DetectionPackageRepo) DeleteDraftByPackageID(packageID string) error {
 	return r.db.Where("package_id = ?", packageID).Delete(&model.DetectionPackageDraft{}).Error
 }
 
+func (r *DetectionPackageRepo) DeletePackage(packageID string) error {
+	return r.db.Where("package_id = ?", packageID).Delete(&model.DetectionPackage{}).Error
+}
+
 func (r *DetectionPackageRepo) CreatePackage(pkg *model.DetectionPackage) error {
 	return r.db.Create(pkg).Error
 }
@@ -112,7 +116,23 @@ func (r *DetectionPackageRepo) CreateBuild(build *model.DetectionPackageBuild) e
 }
 
 func (r *DetectionPackageRepo) UpdateBuild(build *model.DetectionPackageBuild) error {
-	return r.db.Save(build).Error
+	return r.db.Model(&model.DetectionPackageBuild{}).Where("id = ?", build.ID).Updates(map[string]interface{}{
+		"status":                      build.Status,
+		"error_message":               build.ErrorMessage,
+		"builder_digest":              build.BuilderDigest,
+		"clang_version":               build.ClangVersion,
+		"started_at":                  build.StartedAt,
+		"finished_at":                 build.FinishedAt,
+		"duration_ms":                 build.DurationMs,
+		"artifact_summary":            build.ArtifactSummary,
+		"hook_summary":                build.HookSummary,
+		"event_schema":                build.EventSchema,
+		"unsigned_package_object_key": build.UnsignedPackageObjectKey,
+		"unsigned_package_sha256":     build.UnsignedPackageSHA256,
+		"unsigned_package_size":       build.UnsignedPackageSize,
+		"build_log_object_key":        build.BuildLogObjectKey,
+		"build_log":                   build.BuildLog,
+	}).Error
 }
 
 func (r *DetectionPackageRepo) GetBuild(id uuid.UUID) (*model.DetectionPackageBuild, error) {

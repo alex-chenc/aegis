@@ -8,6 +8,7 @@ export interface AuthSession {
   token: string
   username: string
   force_password_change: boolean
+  role?: string
 }
 
 export interface ChangeCredentialsPayload {

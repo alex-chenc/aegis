@@ -37,6 +37,14 @@ export function useDetectionPackages() {
     }
   }
 
+  async function fetchDraft(packageId: string) {
+    try {
+      currentDraft.value = await detectionPackageApi.getDraft(packageId)
+    } catch (e: any) {
+      // Draft not found is expected for non-draft packages
+    }
+  }
+
   async function generateDraft(data: any) {
     loading.value = true
     try {
@@ -100,6 +108,14 @@ export function useDetectionPackages() {
     }
   }
 
+  async function fetchLatestBuild(packageId: string) {
+    try {
+      currentBuild.value = await detectionPackageApi.getLatestBuild(packageId)
+    } catch {
+      // No build found is expected for new packages
+    }
+  }
+
   async function signPackage(packageId: string) {
     loading.value = true
     try {
@@ -153,6 +169,32 @@ export function useDetectionPackages() {
     }
   }
 
+  async function deletePackage(packageId: string) {
+    loading.value = true
+    try {
+      await detectionPackageApi.deletePackage(packageId)
+      ElMessage.success('删除成功')
+    } catch (e: any) {
+      ElMessage.error(e.message || '删除失败')
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function batchDeletePackages(packageIds: string[]) {
+    loading.value = true
+    try {
+      await detectionPackageApi.batchDeletePackages(packageIds)
+      ElMessage.success(`成功删除 ${packageIds.length} 个检测包`)
+    } catch (e: any) {
+      ElMessage.error(e.message || '批量删除失败')
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function fetchHostStatus(packageId: string, params?: PageQuery) {
     try {
       const res = await detectionPackageApi.hostStatus(packageId, params)
@@ -174,15 +216,19 @@ export function useDetectionPackages() {
     hostTotal,
     fetchPackages,
     fetchPackage,
+    fetchDraft,
     generateDraft,
     createDraft,
     updateDraft,
     startBuild,
     fetchBuild,
+    fetchLatestBuild,
     signPackage,
     enablePackage,
     disablePackage,
     uninstallPackage,
+    deletePackage,
+    batchDeletePackages,
     fetchHostStatus,
   }
 }

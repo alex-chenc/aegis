@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
@@ -19,7 +20,9 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
 	)
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Info),
+	})
 	if err != nil {
 		logger.Error("failed to connect database", zap.Error(err))
 		return nil, fmt.Errorf("failed to connect database: %w", err)
@@ -65,6 +68,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.DetectionPackageOperation{},
 		&model.EBPFHookAllowlistConfig{},
 		&model.CorrelationRule{},
+		&model.RolePermission{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

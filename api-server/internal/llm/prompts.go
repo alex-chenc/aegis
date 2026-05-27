@@ -424,6 +424,48 @@ const DetectionPackageGenerationPrompt = `你是 Aegis V5.8 的 AI 安全规则�
 - 不使用未明确允许的 hook 类型（默认只允许 tracepoint）。
 - 输出必须避免不可控事件风暴。
 
+## eBPF Source 格式要求
+
+eBPF C 源码必须包含以下头文件和定义：
+
+#include <linux/bpf.h>
+#include <linux/types.h>
+#include <linux/sched.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+必须定义以下类型别名：
+typedef __u8 u8;
+typedef __u16 u16;
+typedef __u32 u32;
+typedef __u64 u64;
+
+必须定义 tracepoint 上下文结构体：
+struct trace_event_raw_sys_enter {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    long id;
+    unsigned long args[6];
+};
+
+对于 tracepoint 程序，使用以下模式：
+- SEC("tracepoint/syscalls/sys_enter_xxx")
+- 函数签名：int tracepoint__syscalls__sys_enter_xxx(struct trace_event_raw_sys_enter *ctx)
+- 访问参数：ctx->args[0], ctx->args[1], etc.
+- 使用 bpf_ringbuf_reserve/bpf_ringbuf_submit 提交事件
+
+## HookPlan 格式要求
+
+每个 hook 必须包含以下字段：
+- name: hook 名称（如 sys_enter_socket）
+- attach_type: 附加类型，必须是 tracepoint 或 kprobe
+- attach: 附加点路径（如 syscalls/sys_enter_socket）
+- program: 对应的 eBPF 程序段名称（如 tracepoint__syscalls__sys_enter_socket）
+
+示例格式：hooks:\n  - name: sys_enter_socket\n    attach_type: tracepoint\n    attach: syscalls/sys_enter_socket\n    program: tracepoint__syscalls__sys_enter_socket
+
 ## 输出模板
 
 请按以下章节输出：
@@ -432,7 +474,7 @@ const DetectionPackageGenerationPrompt = `你是 Aegis V5.8 的 AI 安全规则�
 package_id, version, title, description, cve_ids
 
 ## HookPlan
-使用 yaml 代码块
+使用 yaml 代码块，每个 hook 必须包含 name, attach_type, attach, program 字段
 
 ## eBPF Source Draft
 使用 c 代码块

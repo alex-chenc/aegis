@@ -6,6 +6,7 @@ export interface StoredAuth {
   token: string
   username: string
   forcePasswordChange: boolean
+  role?: string
 }
 
 export function getStoredAuth(): StoredAuth | null {
@@ -25,7 +26,8 @@ export function saveAuthSession(session: AuthSession) {
   const auth: StoredAuth = {
     token: session.token,
     username: session.username,
-    forcePasswordChange: session.force_password_change
+    forcePasswordChange: session.force_password_change,
+    role: session.role
   }
   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth))
 }

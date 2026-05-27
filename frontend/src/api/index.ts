@@ -45,7 +45,7 @@ request.interceptors.response.use(
         }
         return Promise.reject(new Error('未授权'))
       } else if (status === 403) {
-        errorMsg = '禁止访问'
+        errorMsg = error.response?.data?.message || '禁止访问'
         if (getStoredAuth()?.forcePasswordChange && window.location.pathname !== '/force-password-change') {
           window.location.assign('/force-password-change')
         }

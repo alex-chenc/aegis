@@ -136,6 +136,9 @@ export const detectionPackageApi = {
   get: (packageId: string): Promise<DetectionPackage> =>
     request.get(`/detection/packages/${packageId}`),
 
+  getDraft: (packageId: string): Promise<DetectionPackageDraft> =>
+    request.get(`/detection/packages/drafts/${packageId}`),
+
   generateDraft: (data: AIGenerateRequest): Promise<DetectionPackageDraft> =>
     request.post('/detection/packages/ai-generate', data),
 
@@ -150,6 +153,9 @@ export const detectionPackageApi = {
 
   getBuild: (buildId: string): Promise<DetectionPackageBuild> =>
     request.get(`/detection/packages/builds/${buildId}`),
+
+  getLatestBuild: (packageId: string): Promise<DetectionPackageBuild> =>
+    request.get(`/detection/packages/${packageId}/latest-build`),
 
   sign: (packageId: string): Promise<DetectionPackage> =>
     request.post(`/detection/packages/${packageId}/sign`),
@@ -172,9 +178,15 @@ export const detectionPackageApi = {
   rollbackPackage: (packageId: string, targetVersion: string): Promise<void> =>
     request.post(`/detection/packages/${packageId}/rollback`, { target_version: targetVersion }),
 
-  getPackageAlerts: (packageId: string): Promise<any[]> =>
-    request.get(`/detection/packages/${packageId}/alerts`),
+  getPackageAlerts: (packageId: string, params?: PageQuery): Promise<{ data: any[]; total: number }> =>
+    request.get(`/detection/packages/${packageId}/alerts`, { params }),
 
   getBuildLog: (buildId: string): Promise<{ log_url: string }> =>
     request.get(`/detection/packages/builds/${buildId}/log`),
+
+  deletePackage: (packageId: string): Promise<void> =>
+    request.delete(`/detection/packages/${packageId}`),
+
+  batchDeletePackages: (packageIds: string[]): Promise<void> =>
+    request.post('/detection/packages/batch-delete', { package_ids: packageIds }),
 }

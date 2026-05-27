@@ -250,6 +250,10 @@ func (s *DetectionPackageService) GetBuild(ctx context.Context, buildID uuid.UUI
 	return s.repo.GetBuild(buildID)
 }
 
+func (s *DetectionPackageService) GetLatestBuild(ctx context.Context, packageID string) (*model.DetectionPackageBuild, error) {
+	return s.repo.GetLatestBuild(packageID)
+}
+
 func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID string, operator string) (*model.DetectionPackage, error) {
 	build, err := s.repo.GetLatestBuild(packageID)
 	if err != nil {
@@ -464,7 +468,26 @@ func (s *DetectionPackageService) UninstallPackage(ctx context.Context, packageI
 }
 
 func (s *DetectionPackageService) GetPackage(ctx context.Context, packageID string) (*model.DetectionPackage, error) {
-	return s.repo.GetLatestPackage(packageID)
+	pkg, err := s.repo.GetLatestPackage(packageID)
+	if err == nil {
+		return pkg, nil
+	}
+	// Fall back to draft table (AI-generated drafts only exist in drafts table)
+	draft, draftErr := s.repo.GetDraftByPackageID(packageID)
+	if draftErr != nil {
+		return nil, err // return original error
+	}
+	return &model.DetectionPackage{
+		ID:          draft.ID,
+		PackageID:   draft.PackageID,
+		Version:     draft.TargetVersion,
+		Title:       draft.Title,
+		Description: draft.Description,
+		CVEIDs:      draft.CVEIDs,
+		Status:      draft.Status,
+		CreatedAt:   draft.CreatedAt,
+		UpdatedAt:   draft.UpdatedAt,
+	}, nil
 }
 
 func (s *DetectionPackageService) ListPackages(ctx context.Context, page, pageSize int, status, search string) ([]model.DetectionPackage, int64, error) {
@@ -643,6 +666,31 @@ func (s *DetectionPackageService) GetBuildLogURL(ctx context.Context, buildID uu
 
 func (s *DetectionPackageService) ListAllowlistHistory(ctx context.Context, page, pageSize int) ([]model.EBPFHookAllowlistConfig, int64, error) {
 	return s.repo.ListAllowlistHistory(page, pageSize)
+}
+
+func (s *DetectionPackageService) DeletePackage(ctx context.Context, packageID, operator string) error {
+	// Try to get the published package
+	pkg, err := s.repo.GetLatestPackage(packageID)
+	if err != nil && err.Error() != "record not found" {
+		return fmt.Errorf("get package: %w", err)
+	}
+
+	// If published package exists, check status
+	if pkg != nil && pkg.ID != uuid.Nil {
+		if pkg.Status == "enabled" || pkg.Status == "active" {
+			return fmt.Errorf("cannot delete package in '%s' status, disable it first", pkg.Status)
+		}
+		// Delete the published package
+		if err := s.repo.DeletePackage(packageID); err != nil {
+			return fmt.Errorf("delete package: %w", err)
+		}
+		s.recordOperation(packageID, pkg.Version, "delete", operator, nil, true, "")
+	}
+
+	// Delete drafts (always try, even if published package exists)
+	_ = s.repo.DeleteDraftByPackageID(packageID)
+
+	return nil
 }
 
 func timePtr(t time.Time) *time.Time {

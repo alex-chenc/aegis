@@ -104,7 +104,7 @@ import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
-const { currentDraft, loading, fetchPackage, currentPackage, generateDraft, createDraft, updateDraft } = useDetectionPackages()
+const { currentDraft, loading, fetchPackage, fetchDraft, currentPackage, generateDraft, createDraft, updateDraft } = useDetectionPackages()
 
 const isEdit = ref(!!route.params.id)
 const activeTab = ref('basic')
@@ -141,6 +141,16 @@ async function loadDraft() {
       form.title = currentPackage.value.title
       form.description = currentPackage.value.description || ''
       form.cve_ids = currentPackage.value.cve_ids || []
+      // Fetch draft-specific fields if package is a draft
+      if (currentPackage.value.status === 'draft') {
+        await fetchDraft(currentPackage.value.package_id)
+        if (currentDraft.value) {
+          form.hook_plan_yaml = currentDraft.value.hook_plan_yaml || ''
+          form.ebpf_source = currentDraft.value.ebpf_source || ''
+          form.sigma_rules_yaml = currentDraft.value.sigma_rules_yaml || ''
+          form.correlation_yaml = currentDraft.value.correlation_yaml || ''
+        }
+      }
     }
   }
 }

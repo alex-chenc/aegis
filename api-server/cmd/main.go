@@ -237,11 +237,10 @@ func main() {
 	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 
 	notificationHandler := handler.NewNotificationHandler(notificationSvc)
-	authHandler := handler.NewAuthHandler(authService)
+	roleRepo := repository.NewRoleRepo(db)
+	authHandler := handler.NewAuthHandler(authService, roleRepo)
 	commandAuditHandler := handler.NewCommandAuditHandler(commandAuditRuleRepo, systemConfigRepo, scriptAuditService)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
-
-	roleRepo := repository.NewRoleRepo(db)
 
 	// Initialize HTTP router
 	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)

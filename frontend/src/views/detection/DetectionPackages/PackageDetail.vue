@@ -73,7 +73,12 @@
               <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">提交构建</el-button>
             </div>
           </div>
-          <BuildReviewPanel v-else :build="currentBuild" />
+          <template v-else>
+            <BuildReviewPanel :build="currentBuild" />
+            <div v-if="currentBuild?.status === 'failed'" style="margin-top: 16px; text-align: center;">
+              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">重新构建</el-button>
+            </div>
+          </template>
         </el-tab-pane>
 
         <el-tab-pane label="Hook 列表" name="hooks">
@@ -205,7 +210,7 @@ const route = useRoute()
 const { canOperate } = useRole()
 const {
   currentPackage, currentBuild, hostStatuses, hostTotal, loading,
-  fetchPackage, fetchBuild, startBuild, signPackage,
+  fetchPackage, fetchBuild, fetchLatestBuild, startBuild, signPackage,
   enablePackage, disablePackage, uninstallPackage, fetchHostStatus,
 } = useDetectionPackages()
 
@@ -230,7 +235,8 @@ function handleTabChange(tab: string) {
 async function loadAlerts() {
   alertsLoading.value = true
   try {
-    alerts.value = await detectionPackageApi.getPackageAlerts(packageId.value)
+    const res = await detectionPackageApi.getPackageAlerts(packageId.value)
+    alerts.value = res.data || []
   } finally {
     alertsLoading.value = false
   }
@@ -252,6 +258,10 @@ async function loadPackage() {
   await fetchPackage(packageId.value)
   if (currentPackage.value?.status !== 'draft') {
     fetchHostStatus(packageId.value)
+  }
+  // Load latest build for non-draft packages
+  if (currentPackage.value && currentPackage.value.status !== 'draft') {
+    await fetchLatestBuild(packageId.value)
   }
   if (currentPackage.value) {
     versionHistory.value = [{

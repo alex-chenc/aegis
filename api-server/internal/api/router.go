@@ -278,6 +278,7 @@ func (r *Router) Setup() {
 				packages.GET("/drafts/:package_id", r.detectionPkgHandler.GetDraft)
 				packages.GET("/builds/:build_id", r.detectionPkgHandler.GetBuild)
 				packages.POST("/:package_id/build", r.detectionPkgHandler.StartBuild)
+				packages.GET("/:package_id/latest-build", r.detectionPkgHandler.GetLatestBuild)
 				packages.POST("/:package_id/sign", r.detectionPkgHandler.SignPackage)
 				packages.POST("/:package_id/enable", r.detectionPkgHandler.EnablePackage)
 				packages.POST("/:package_id/disable", r.detectionPkgHandler.DisablePackage)
@@ -287,8 +288,10 @@ func (r *Router) Setup() {
 				packages.GET("/:package_id", r.detectionPkgHandler.GetPackage)
 				packages.POST("/builds/:build_id/review", r.roleMiddleware("review"), r.detectionPkgHandler.ReviewBuild)
 				packages.POST("/:package_id/rollback", r.roleMiddleware("rollback"), r.detectionPkgHandler.RollbackPackage)
-				packages.GET("/:package_id/alerts", r.roleMiddleware("view"), r.detectionPkgHandler.ListPackageAlerts)
+				packages.GET("/:package_id/alerts", r.detectionPkgHandler.ListPackageAlerts)
 				packages.GET("/builds/:build_id/log", r.roleMiddleware("review"), r.detectionPkgHandler.GetBuildLog)
+				packages.DELETE("/:package_id", r.detectionPkgHandler.DeletePackage)
+				packages.POST("/batch-delete", r.detectionPkgHandler.BatchDeletePackages)
 			}
 		}
 
@@ -326,7 +329,7 @@ func (r *Router) Setup() {
 		ebpfHooks := v1.Group("/settings/ebpf-hooks")
 		{
 			ebpfHooks.GET("/allowlist", r.detectionPkgHandler.GetAllowlist)
-			ebpfHooks.PUT("/allowlist", r.detectionPkgHandler.UpdateAllowlist)
+			ebpfHooks.PUT("/allowlist", r.roleMiddleware("allowlist"), r.detectionPkgHandler.UpdateAllowlist)
 			ebpfHooks.GET("/allowlist/history", r.roleMiddleware("allowlist"), r.detectionPkgHandler.GetAllowlistHistory)
 		}
 	}

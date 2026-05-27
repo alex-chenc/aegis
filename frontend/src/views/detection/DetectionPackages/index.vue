@@ -33,9 +33,25 @@
           <el-option label="运行中" value="active" />
           <el-option label="已禁用" value="disabled" />
         </el-select>
+        <el-button
+          v-if="selectedPackages.length > 0"
+          type="danger"
+          style="margin-left: 12px;"
+          @click="batchDeleteDialogVisible = true"
+        >
+          批量删除 ({{ selectedPackages.length }})
+        </el-button>
       </div>
 
-      <el-table :data="packages" v-loading="loading" border stripe style="margin-top: 16px;">
+      <el-table
+        :data="packages"
+        v-loading="loading"
+        border
+        stripe
+        style="margin-top: 16px;"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="package_id" label="Package ID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
         <el-table-column prop="version" label="版本" width="100" />
@@ -67,7 +83,7 @@
             {{ new Date(row.updated_at).toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="$router.push(`/detection/packages/${row.package_id}`)">详情</el-button>
             <el-button
@@ -85,6 +101,11 @@
               link type="danger" size="small"
               @click="handleUninstall(row)"
             >卸载</el-button>
+            <el-button
+              v-if="!['enabled', 'active'].includes(row.status)"
+              link type="danger" size="small"
+              @click="handleDelete(row)"
+            >删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -132,13 +153,38 @@
         <el-button type="danger" :loading="loading" @click="confirmUninstall">确认卸载</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="deleteDialogVisible" title="确认删除" width="400">
+      <el-text type="danger">确定要删除检测包 "{{ selectedPackage?.package_id }}" 吗？此操作不可恢复。</el-text>
+      <template #footer>
+        <el-button @click="deleteDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmDelete">确认删除</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchDeleteDialogVisible" title="批量删除" width="500">
+      <el-alert type="warning" :closable="false" show-icon>
+        <template #title>
+          确定要删除以下 {{ selectedPackages.length }} 个检测包吗？此操作不可恢复。
+        </template>
+      </el-alert>
+      <div style="margin-top: 12px; max-height: 200px; overflow-y: auto;">
+        <el-tag v-for="pkg in selectedPackages" :key="pkg.package_id" style="margin: 2px;">{{ pkg.package_id }}</el-tag>
+      </div>
+      <template #footer>
+        <el-button @click="batchDeleteDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmBatchDelete">确认删除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Plus, Search } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useDetectionPackages } from './composables/useDetectionPackages'
+import { detectionPackageApi } from '@/api/detection-packages'
 import type { DetectionPackage } from '@/api/detection-packages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 
@@ -155,7 +201,10 @@ const statusFilter = ref('')
 const enableDialogVisible = ref(false)
 const disableDialogVisible = ref(false)
 const uninstallDialogVisible = ref(false)
+const deleteDialogVisible = ref(false)
+const batchDeleteDialogVisible = ref(false)
 const selectedPackage = ref<DetectionPackage | null>(null)
+const selectedPackages = ref<DetectionPackage[]>([])
 
 function handleSearch() {
   currentPage.value = 1
@@ -176,6 +225,10 @@ function loadPackages() {
   })
 }
 
+function handleSelectionChange(selection: DetectionPackage[]) {
+  selectedPackages.value = selection
+}
+
 function handleEnable(pkg: DetectionPackage) {
   selectedPackage.value = pkg
   enableDialogVisible.value = true
@@ -189,6 +242,11 @@ function handleDisable(pkg: DetectionPackage) {
 function handleUninstall(pkg: DetectionPackage) {
   selectedPackage.value = pkg
   uninstallDialogVisible.value = true
+}
+
+function handleDelete(pkg: DetectionPackage) {
+  selectedPackage.value = pkg
+  deleteDialogVisible.value = true
 }
 
 async function confirmEnable() {
@@ -210,6 +268,31 @@ async function confirmUninstall() {
   await uninstallPackage(selectedPackage.value.package_id)
   uninstallDialogVisible.value = false
   loadPackages()
+}
+
+async function confirmDelete() {
+  if (!selectedPackage.value) return
+  try {
+    await detectionPackageApi.deletePackage(selectedPackage.value.package_id)
+    ElMessage.success('删除成功')
+    deleteDialogVisible.value = false
+    loadPackages()
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
+  }
+}
+
+async function confirmBatchDelete() {
+  if (selectedPackages.value.length === 0) return
+  try {
+    await detectionPackageApi.batchDeletePackages(selectedPackages.value.map(p => p.package_id))
+    ElMessage.success(`成功删除 ${selectedPackages.value.length} 个检测包`)
+    batchDeleteDialogVisible.value = false
+    selectedPackages.value = []
+    loadPackages()
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量删除失败')
+  }
 }
 
 onMounted(() => {
