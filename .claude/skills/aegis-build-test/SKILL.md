@@ -141,21 +141,23 @@ docker compose up -d
 ### 5.1 环境变量配置
 
 MINIO 服务地址: `http://localhost:9000`
-MINIO Console: `http://localhost:9001` (minio_admin / a_third_strong_secret_password)
+MINIO Console: `http://localhost:9001`
 
-在 `.env` 文件中配置：
+**IMPORTANT**: Credentials must NEVER be hardcoded. Users MUST provide their MINIO credentials in the conversation when needed.
+
+在 `.env` 文件中配置（使用用户提供的凭证）：
 ```bash
-MINIO_ACCESS_KEY=minio_admin
-MINIO_SECRET_KEY=a_third_strong_secret_password
+MINIO_ACCESS_KEY=<USER_PROVIDED_ACCESS_KEY>
+MINIO_SECRET_KEY=<USER_PROVIDED_SECRET_KEY>
 ```
 
 ### 5.2 上传 Agent 包
 
 ```bash
-# 1. 设置环境变量
+# 1. 设置环境变量（使用用户提供的凭证）
 export MINIO_ENDPOINT=localhost:9000
-export MINIO_ACCESS_KEY=minio_admin
-export MINIO_SECRET_KEY=a_third_strong_secret_password
+export MINIO_ACCESS_KEY=<USER_PROVIDED_ACCESS_KEY>
+export MINIO_SECRET_KEY=<USER_PROVIDED_SECRET_KEY>
 
 # 2. 构建并上传（一次性完成）
 cd agent && make all && make upload

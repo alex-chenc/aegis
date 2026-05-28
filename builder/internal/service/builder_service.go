@@ -269,6 +269,33 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	result.EventSchemaJSON = eventSchemaJSON
 	result.HookSummary = hookSummaries
 
+	// Populate artifact summary for perf and ringbuf objects
+	perfObjPath := filepath.Join(stagingDir, "plugin", "copyfail.perf.bpf.o")
+	ringbufObjPath := filepath.Join(stagingDir, "plugin", "copyfail.ringbuf.bpf.o")
+	perfStat, _ := os.Stat(perfObjPath)
+	ringbufStat, _ := os.Stat(ringbufObjPath)
+	perfSHA, _ := computeSHA256(perfObjPath)
+	ringbufSHA, _ := computeSHA256(ringbufObjPath)
+
+	if perfStat != nil {
+		result.Artifacts = append(result.Artifacts, BuildArtifact{
+			Name:      "copyfail.perf.bpf.o",
+			Transport: "perf",
+			ObjectKey: fmt.Sprintf("detection-packages/%s/%s/artifacts/perf.bpf.o", req.PackageID, req.Version),
+			SHA256:    perfSHA,
+			Size:      perfStat.Size(),
+		})
+	}
+	if ringbufStat != nil {
+		result.Artifacts = append(result.Artifacts, BuildArtifact{
+			Name:      "copyfail.ringbuf.bpf.o",
+			Transport: "ringbuf",
+			ObjectKey: fmt.Sprintf("detection-packages/%s/%s/artifacts/ringbuf.bpf.o", req.PackageID, req.Version),
+			SHA256:    ringbufSHA,
+			Size:      ringbufStat.Size(),
+		})
+	}
+
 	return result, nil
 }
 

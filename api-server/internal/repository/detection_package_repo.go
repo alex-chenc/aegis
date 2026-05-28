@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"fmt"
+	"strings"
+
 	"api-server/internal/model"
 
 	"github.com/google/uuid"
@@ -116,23 +119,118 @@ func (r *DetectionPackageRepo) CreateBuild(build *model.DetectionPackageBuild) e
 }
 
 func (r *DetectionPackageRepo) UpdateBuild(build *model.DetectionPackageBuild) error {
-	return r.db.Model(&model.DetectionPackageBuild{}).Where("id = ?", build.ID).Updates(map[string]interface{}{
-		"status":                      build.Status,
-		"error_message":               build.ErrorMessage,
-		"builder_digest":              build.BuilderDigest,
-		"clang_version":               build.ClangVersion,
-		"started_at":                  build.StartedAt,
-		"finished_at":                 build.FinishedAt,
-		"duration_ms":                 build.DurationMs,
-		"artifact_summary":            build.ArtifactSummary,
-		"hook_summary":                build.HookSummary,
-		"event_schema":                build.EventSchema,
-		"unsigned_package_object_key": build.UnsignedPackageObjectKey,
-		"unsigned_package_sha256":     build.UnsignedPackageSHA256,
-		"unsigned_package_size":       build.UnsignedPackageSize,
-		"build_log_object_key":        build.BuildLogObjectKey,
-		"build_log":                   build.BuildLog,
-	}).Error
+	// Use sql.DB directly to avoid GORM issues in goroutines
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		return err
+	}
+
+	setClauses := []string{}
+	args := []interface{}{}
+	argIdx := 1
+
+	setClauses = append(setClauses, fmt.Sprintf("status = $%d", argIdx))
+	args = append(args, build.Status)
+	argIdx++
+
+	if build.ErrorMessage != "" {
+		setClauses = append(setClauses, fmt.Sprintf("error_message = $%d", argIdx))
+		args = append(args, build.ErrorMessage)
+		argIdx++
+	}
+	if build.BuilderDigest != "" {
+		setClauses = append(setClauses, fmt.Sprintf("builder_digest = $%d", argIdx))
+		args = append(args, build.BuilderDigest)
+		argIdx++
+	}
+	if build.ClangVersion != "" {
+		setClauses = append(setClauses, fmt.Sprintf("clang_version = $%d", argIdx))
+		args = append(args, build.ClangVersion)
+		argIdx++
+	}
+	if build.StartedAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("started_at = $%d", argIdx))
+		args = append(args, build.StartedAt)
+		argIdx++
+	}
+	if build.FinishedAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("finished_at = $%d", argIdx))
+		args = append(args, build.FinishedAt)
+		argIdx++
+	}
+	if build.DurationMs > 0 {
+		setClauses = append(setClauses, fmt.Sprintf("duration_ms = $%d", argIdx))
+		args = append(args, build.DurationMs)
+		argIdx++
+	}
+	if build.UnsignedPackageObjectKey != "" {
+		setClauses = append(setClauses, fmt.Sprintf("unsigned_package_object_key = $%d", argIdx))
+		args = append(args, build.UnsignedPackageObjectKey)
+		argIdx++
+	}
+	if build.UnsignedPackageSHA256 != "" {
+		setClauses = append(setClauses, fmt.Sprintf("unsigned_package_sha256 = $%d", argIdx))
+		args = append(args, build.UnsignedPackageSHA256)
+		argIdx++
+	}
+	if build.UnsignedPackageSize > 0 {
+		setClauses = append(setClauses, fmt.Sprintf("unsigned_package_size = $%d", argIdx))
+		args = append(args, build.UnsignedPackageSize)
+		argIdx++
+	}
+	if build.BuildLogObjectKey != "" {
+		setClauses = append(setClauses, fmt.Sprintf("build_log_object_key = $%d", argIdx))
+		args = append(args, build.BuildLogObjectKey)
+		argIdx++
+	}
+	if len(build.HookSummary) > 0 && string(build.HookSummary) != "[]" && string(build.HookSummary) != "{}" {
+		setClauses = append(setClauses, fmt.Sprintf("hook_summary = $%d", argIdx))
+		args = append(args, string(build.HookSummary))
+		argIdx++
+	}
+	if len(build.ArtifactSummary) > 0 && string(build.ArtifactSummary) != "[]" && string(build.ArtifactSummary) != "{}" {
+		setClauses = append(setClauses, fmt.Sprintf("artifact_summary = $%d", argIdx))
+		args = append(args, string(build.ArtifactSummary))
+		argIdx++
+	}
+	if build.BuildLog != "" {
+		setClauses = append(setClauses, fmt.Sprintf("build_log = $%d", argIdx))
+		args = append(args, build.BuildLog)
+		argIdx++
+	}
+	if len(build.EventSchema) > 0 && string(build.EventSchema) != "{}" && string(build.EventSchema) != "[]" {
+		setClauses = append(setClauses, fmt.Sprintf("event_schema = $%d", argIdx))
+		args = append(args, string(build.EventSchema))
+		argIdx++
+	}
+	if build.ReviewedBy != nil && *build.ReviewedBy != "" {
+		setClauses = append(setClauses, fmt.Sprintf("reviewed_by = $%d", argIdx))
+		args = append(args, *build.ReviewedBy)
+		argIdx++
+	}
+	if build.ReviewedAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("reviewed_at = $%d", argIdx))
+		args = append(args, build.ReviewedAt)
+		argIdx++
+	}
+	if build.ReviewComment != nil && *build.ReviewComment != "" {
+		setClauses = append(setClauses, fmt.Sprintf("review_comment = $%d", argIdx))
+		args = append(args, *build.ReviewComment)
+		argIdx++
+	}
+
+	query := "UPDATE detection_package_builds SET " + strings.Join(setClauses, ", ") + fmt.Sprintf(" WHERE id = $%d", argIdx)
+	args = append(args, build.ID)
+
+	result, err := sqlDB.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		fmt.Printf("[WARN] UpdateBuild: no rows affected for build %s\n", build.ID)
+	}
+	return nil
 }
 
 func (r *DetectionPackageRepo) GetBuild(id uuid.UUID) (*model.DetectionPackageBuild, error) {

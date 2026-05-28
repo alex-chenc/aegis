@@ -22,7 +22,7 @@ You are a Software Designer working on the Aegis security platform. You must fol
 ## Core Workflow (Mandatory Order)
 
 ```
-1. Task Plan → 2. Design Document → 3. Test Cases → 4. Implementation → 5. Build & Test → 6. Code Review → 7. Doc Update
+1. Task Plan → 2. Design Document → 3. Test Cases → 4. Implementation → 5. Build & Test (aegis-build-test skill) → 6. Code Review (code-review skill) → 7. Doc Update
 ```
 
 ## Task Plan (Mandatory First Step)
@@ -36,16 +36,17 @@ Before ANY work begins, you MUST create a structured task plan using TodoWrite. 
 2. [Design] Write/update design document
 3. [Tests] Write test cases (TDD red phase)
 4. [Implementation] Implement code (TDD green phase)
-5. [Build & Test] Invoke /aegis-build-test skill + curl API testing
-6. [Review] Invoke /code-review skill
+5. [Build & Test - /aegis-build-test] Build verification + curl API testing
+6. [Code Review - /code-review] Code quality and security review
 7. [Documentation] Update docs (including bug fix doc if applicable)
 ```
 
 ### Plan Requirements
 
-- Every task plan MUST end with step 5: `/aegis-build-test` skill invocation followed by curl API testing
+- Every task plan MUST include step 5 with `/aegis-build-test` in the step name, and step 6 with `/code-review` in the step name
 - The plan MUST be created as a TodoWrite list before starting any work
 - Each step must be marked as `in_progress` when active and `completed` when done
+- Step names MUST explicitly include the skill invocation tag (e.g. `/aegis-build-test`, `/code-review`) so it is clear which skill to invoke
 
 ### Bug Fix Plan Additional Requirements
 
@@ -56,8 +57,8 @@ When the task is a **bug fix**, the plan MUST include an additional step:
 2. [Design] Write/update design document with bug analysis
 3. [Tests] Write regression test cases (TDD red phase)
 4. [Implementation] Fix bug (TDD green phase)
-5. [Build & Test] Invoke /aegis-build-test skill + curl API testing
-6. [Review] Invoke /code-review skill
+5. [Build & Test - aegis-build-test skill] Build verification + curl API testing
+6. [Code Review - code-review skill] Code quality and security review
 7. [Bug Fix Doc] Create bug fix document in version fix folder
 8. [Documentation] Update related docs
 ```
@@ -106,7 +107,7 @@ Only after tests are written:
 2. Follow existing code patterns in the project
 3. Use subagents for code exploration and analysis when understanding existing patterns
 
-### Step 4: Build & Test Verification
+### Step 5: Build & Test Verification (skill: `/aegis-build-test`)
 
 After implementation, you MUST invoke the `aegis-build-test` skill:
 
@@ -122,7 +123,7 @@ This performs:
 
 **Never skip this step. Never mark a task as complete without build verification.**
 
-### Step 5: Code Review
+### Step 6: Code Review (skill: `/code-review`)
 
 After build passes, invoke the `code-review` skill:
 
@@ -136,7 +137,7 @@ This checks:
 - Performance concerns
 - Adherence to project patterns
 
-### Step 6: Documentation Update
+### Step 7: Documentation Update
 
 After code review passes:
 
@@ -146,13 +147,19 @@ After code review passes:
 
 ## API Testing with curl
 
-For testing modified API endpoints:
+**IMPORTANT**: Credentials must NEVER be hardcoded in this file or any source code. Users MUST provide their credentials in the conversation prompt when API testing is needed.
+
+Before performing any API testing, you MUST ask the user to provide:
+- Username
+- Password
+
+Once provided, use them for testing:
 
 ```bash
-# 1. Obtain JWT token (credentials: admin / Cc&324511)
+# 1. Obtain JWT token (use credentials provided by user)
 TOKEN=$(curl -s -X POST http://localhost:8082/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"Cc&324511"}' | jq -r '.token')
+  -d '{"username":"<USER_PROVIDED_USERNAME>","password":"<USER_PROVIDED_PASSWORD>"}' | jq -r '.token')
 
 # 2. Test the modified endpoint
 curl -s -X <METHOD> http://localhost:8082/api/v1/<endpoint> \
@@ -207,8 +214,8 @@ Do NOT use subagents for:
 1. **No working without a plan** - Must create TodoWrite task plan before ANY work begins
 2. **No fake tests** - All tests must be real, runnable tests with actual assertions
 3. **No pseudocode** - All code must be real, compilable, executable code
-4. **No skipping build verification** - Must use `aegis-build-test` skill after implementation
-5. **No skipping code review** - Must use `code-review` skill before marking complete
+4. **No skipping build verification** - Must use `/aegis-build-test` skill after implementation (step name must include `/aegis-build-test`)
+5. **No skipping code review** - Must use `/code-review` skill before marking complete (step name must include `/code-review`)
 6. **No implementing before designing** - Design doc must exist and be approved first
 7. **No implementing before testing** - Test cases must be written and confirmed failing first
 8. **No bug fixes without fix documentation** - Bug fixes MUST include a fix document in `docs/v{version}/fix/`
@@ -242,9 +249,9 @@ User Request
     ↓
 [Implement Code → confirm GREEN]
     ↓
-[/aegis-build-test + curl API testing]
+[Build & Test - /aegis-build-test + curl API testing]
     ↓
-[/code-review]
+[Code Review - /code-review]
     ↓
 [Bug Fix Doc (if bug fix)] → docs/v{version}/fix/{bug}_fix.md
     ↓
@@ -266,10 +273,11 @@ Done
 | minio | 9000/9001 | - | aegis-minio |
 | kafka | 29092 | - | aegis-kafka |
 
-## Default Credentials
+## Credentials Policy
 
-| Service | Username | Password |
-|---------|----------|----------|
-| Aegis API | admin | Cc&324511 |
-| MinIO Console | minio_admin | a_third_strong_secret_password |
-| PostgreSQL | aegis_user | aegis_password |
+**NEVER** hardcode credentials in skill files, source code, or documentation.
+
+When API testing or service access requires credentials:
+1. Ask the user to provide the credentials in the conversation
+2. Use only the user-provided values
+3. Never store credentials in files — they exist only in the conversation context

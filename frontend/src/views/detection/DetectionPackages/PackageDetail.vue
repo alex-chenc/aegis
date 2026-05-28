@@ -81,10 +81,6 @@
           </template>
         </el-tab-pane>
 
-        <el-tab-pane label="Hook 列表" name="hooks">
-          <HookSummaryTable :hooks="currentPackage?.hook_summary || []" />
-        </el-tab-pane>
-
         <el-tab-pane label="主机状态" name="hosts">
           <HostStatusTable
             :hosts="hostStatuses"
@@ -94,7 +90,7 @@
         </el-tab-pane>
 
         <el-tab-pane label="Event Schema" name="schema">
-          <pre class="schema-json">{{ JSON.stringify(currentPackage?.event_schema || {}, null, 2) }}</pre>
+          <pre class="schema-json">{{ JSON.stringify(currentBuild?.event_schema || currentPackage?.event_schema || {}, null, 2) }}</pre>
         </el-tab-pane>
 
         <el-tab-pane label="告警证据" name="alerts">
@@ -202,7 +198,6 @@ import { detectionPackageApi } from '@/api/detection-packages'
 import { useDetectionPackages } from './composables/useDetectionPackages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 import BuildReviewPanel from './components/BuildReviewPanel.vue'
-import HookSummaryTable from './components/HookSummaryTable.vue'
 import HostStatusTable from './components/HostStatusTable.vue'
 import EvidenceTimeline from './components/EvidenceTimeline.vue'
 

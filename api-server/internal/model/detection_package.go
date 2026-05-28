@@ -69,19 +69,19 @@ type DetectionPackageBuild struct {
 	Version                  string         `gorm:"type:varchar(32);not null" json:"version"`
 	Status                   string         `gorm:"type:varchar(32);not null;default:'pending'" json:"status"`
 	BuilderImage             string         `gorm:"type:varchar(255);not null" json:"builder_image"`
-	BuilderDigest            string         `gorm:"type:varchar(128)" json:"builder_digest"`
+	BuilderDigest            string         `gorm:"type:varchar(128)" json:"builder_image_digest"`
 	ClangVersion             string         `gorm:"type:varchar(100)" json:"clang_version"`
 	StartedAt                *time.Time     `json:"started_at"`
 	FinishedAt               *time.Time     `json:"finished_at"`
 	DurationMs               int64          `json:"duration_ms"`
-	ArtifactSummary          datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"artifact_summary"`
+	ArtifactSummary          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"artifacts"`
 	HookSummary              datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"hook_summary"`
 	EventSchema              datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"event_schema"`
 	UnsignedPackageObjectKey string         `gorm:"type:text" json:"unsigned_package_object_key"`
 	UnsignedPackageSHA256    string         `gorm:"type:varchar(64)" json:"unsigned_package_sha256"`
 	UnsignedPackageSize      int64          `gorm:"not null;default:0" json:"unsigned_package_size"`
 	BuildLogObjectKey        string         `gorm:"type:text" json:"build_log_object_key"`
-	BuildLog                 string         `gorm:"type:text" json:"build_log"`
+	BuildLog                 string         `gorm:"type:text" json:"build_log_tail"`
 	ErrorMessage             string         `gorm:"type:text" json:"error_message"`
 	CreatedBy                string         `gorm:"type:varchar(100)" json:"created_by"`
 	ReviewedBy               *string        `json:"reviewed_by" gorm:"column:reviewed_by"`

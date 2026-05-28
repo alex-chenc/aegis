@@ -35,6 +35,15 @@ type BuilderStartBuildRequest struct {
 	PackageMetadataJSON string
 }
 
+// BuildArtifactItem represents a build artifact (perf/ringbuf .o file)
+type BuildArtifactItem struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	ObjectKey string `json:"object_key"`
+	Sha256    string `json:"sha256"`
+	Size      int64  `json:"size"`
+}
+
 // BuilderStartBuildResponse is the service-layer build response
 type BuilderStartBuildResponse struct {
 	BuildID                  string
@@ -47,6 +56,18 @@ type BuilderStartBuildResponse struct {
 	UnsignedPackageObjectKey string
 	UnsignedPackageSHA256    string
 	UnsignedPackageSize      int64
+	HookSummary              []HookSummaryItem
+	Artifacts                []BuildArtifactItem
+	EventSchemaJSON          string
+}
+
+type HookSummaryItem struct {
+	HookType       string `json:"attach_type"`
+	AttachPoint    string `json:"attach"`
+	ProgramSection string `json:"program"`
+	RiskLevel      string `json:"risk_level"`
+	Name           string `json:"name"`
+	Allowed        *bool  `json:"allowed,omitempty"`
 }
 
 // BuilderSignRequest is the service-layer sign request
@@ -129,6 +150,35 @@ func (c *BuilderClient) StartBuild(ctx context.Context, req *BuilderStartBuildRe
 	if err != nil {
 		return nil, err
 	}
+
+	// Map hook_summary from gRPC response
+	var hookSummary []HookSummaryItem
+	for _, h := range resp.HookSummary {
+		name := h.AttachPoint
+		if h.HookType != "" && h.AttachPoint != "" {
+			name = h.HookType + "/" + h.AttachPoint
+		}
+		hookSummary = append(hookSummary, HookSummaryItem{
+			HookType:       h.HookType,
+			AttachPoint:    h.AttachPoint,
+			ProgramSection: h.ProgramSection,
+			RiskLevel:      h.RiskLevel,
+			Name:           name,
+		})
+	}
+
+	// Map artifacts from gRPC response
+	var artifacts []BuildArtifactItem
+	for _, a := range resp.Artifacts {
+		artifacts = append(artifacts, BuildArtifactItem{
+			Name:      a.Name,
+			Transport: a.Transport,
+			ObjectKey: a.ObjectKey,
+			Sha256:    a.Sha256,
+			Size:      a.Size,
+		})
+	}
+
 	return &BuilderStartBuildResponse{
 		BuildID:                  resp.BuildId,
 		Status:                   resp.Status,
@@ -140,6 +190,9 @@ func (c *BuilderClient) StartBuild(ctx context.Context, req *BuilderStartBuildRe
 		UnsignedPackageObjectKey: resp.UnsignedPackageObjectKey,
 		UnsignedPackageSHA256:    resp.UnsignedPackageSha256,
 		UnsignedPackageSize:      resp.UnsignedPackageSize,
+		HookSummary:              hookSummary,
+		Artifacts:                artifacts,
+		EventSchemaJSON:          resp.EventSchemaJson,
 	}, nil
 }
 

@@ -234,9 +234,42 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 	build.ClangVersion = result.ClangVersion
 	build.BuildLogObjectKey = result.BuildLogObjectKey
 	build.UnsignedPackageObjectKey = result.UnsignedPackageObjectKey
-	build.UnsignedPackageSHA256 = result.UnsignedPackageSHA256
+	// Strip sha256: prefix if present (column is varchar(64))
+	sha256 := result.UnsignedPackageSHA256
+	if len(sha256) > 7 && sha256[:7] == "sha256:" {
+		sha256 = sha256[7:]
+	}
+	build.UnsignedPackageSHA256 = sha256
 	build.UnsignedPackageSize = result.UnsignedPackageSize
-	s.repo.UpdateBuild(build)
+
+	// Set hook_summary from builder response
+	if len(result.HookSummary) > 0 {
+		hookSummaryJSON, _ := json.Marshal(result.HookSummary)
+		build.HookSummary = datatypes.JSON(hookSummaryJSON)
+	}
+
+	// Set event_schema from builder response
+	if result.EventSchemaJSON != "" {
+		build.EventSchema = datatypes.JSON(result.EventSchemaJSON)
+	}
+
+	// Set build_log (tail) from builder response
+	if result.BuildLogTail != "" {
+		build.BuildLog = result.BuildLogTail
+	}
+
+	// Set artifact_summary from builder response
+	if len(result.Artifacts) > 0 {
+		artifactJSON, _ := json.Marshal(result.Artifacts)
+		build.ArtifactSummary = datatypes.JSON(artifactJSON)
+	}
+
+	fmt.Printf("[DEBUG] Calling UpdateBuild for build %s, status=%s, hook_summary_len=%d\n", build.ID, build.Status, len(build.HookSummary))
+	if err := s.repo.UpdateBuild(build); err != nil {
+		fmt.Printf("[ERROR] UpdateBuild failed: %v\n", err)
+	} else {
+		fmt.Printf("[DEBUG] UpdateBuild succeeded for build %s\n", build.ID)
+	}
 
 	if build.Status == "success" || build.Status == "awaiting_review" {
 		draft.Status = "build_success"
