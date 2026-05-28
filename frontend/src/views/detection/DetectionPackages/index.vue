@@ -110,15 +110,17 @@
         </el-table-column>
       </el-table>
 
-      <el-pagination
-        v-if="total > pageSize"
-        :current-page="currentPage"
-        :page-size="pageSize"
-        :total="total"
-        layout="total, prev, pager, next"
-        style="margin-top: 16px; justify-content: flex-end;"
-        @current-change="handlePageChange"
-      />
+      <div class="pagination-container">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="enableDialogVisible" title="确认启用" width="500">
@@ -211,8 +213,12 @@ function handleSearch() {
   loadPackages()
 }
 
-function handlePageChange(page: number) {
-  currentPage.value = page
+function handleSizeChange() {
+  currentPage.value = 1
+  loadPackages()
+}
+
+function handlePageChange() {
   loadPackages()
 }
 
@@ -309,5 +315,10 @@ onMounted(() => {
 .filter-bar {
   display: flex;
   align-items: center;
+}
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

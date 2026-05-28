@@ -60,7 +60,7 @@ func NewDetectionPackageService(repo *repository.DetectionPackageRepo, db *gorm.
 }
 
 type CreateDraftRequest struct {
-	PackageID       string                 `json:"package_id" binding:"required"`
+	PackageID       string                 `json:"package_id"`
 	TargetVersion   string                 `json:"target_version" binding:"required"`
 	Title           string                 `json:"title" binding:"required"`
 	Description     string                 `json:"description"`
@@ -104,6 +104,11 @@ func (s *DetectionPackageService) CreateDraft(ctx context.Context, req CreateDra
 		Status:          "draft",
 		CreatedBy:       operator,
 		UpdatedBy:       operator,
+	}
+
+	// Auto-generate UUID package_id if not provided
+	if draft.PackageID == "" {
+		draft.PackageID = uuid.New().String()
 	}
 
 	if err := s.repo.CreateDraft(draft); err != nil {
@@ -524,38 +529,7 @@ func (s *DetectionPackageService) GetPackage(ctx context.Context, packageID stri
 }
 
 func (s *DetectionPackageService) ListPackages(ctx context.Context, page, pageSize int, status, search string) ([]model.DetectionPackage, int64, error) {
-	packages, pkgTotal, err := s.repo.ListPackages(page, pageSize, status, search)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	if status != "" && status != "draft" {
-		return packages, pkgTotal, nil
-	}
-
-	drafts, draftTotal, err := s.repo.ListDrafts(page, pageSize, status, search)
-	if err != nil {
-		return packages, pkgTotal, nil
-	}
-
-	var result []model.DetectionPackage
-	for _, d := range drafts {
-		result = append(result, model.DetectionPackage{
-			ID:          d.ID,
-			PackageID:   d.PackageID,
-			Version:     d.TargetVersion,
-			Title:       d.Title,
-			Description: d.Description,
-			CVEIDs:      d.CVEIDs,
-			Status:      d.Status,
-			CreatedAt:   d.CreatedAt,
-			UpdatedAt:   d.UpdatedAt,
-		})
-	}
-	result = append(result, packages...)
-
-	total := pkgTotal + draftTotal
-	return result, total, nil
+	return s.repo.ListPackagesUnified(page, pageSize, status, search)
 }
 
 func (s *DetectionPackageService) ListHostStatus(ctx context.Context, packageID, version string, page, pageSize int) ([]model.DetectionPackageHostStatus, int64, error) {

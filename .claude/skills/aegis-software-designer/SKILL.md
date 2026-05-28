@@ -2,235 +2,262 @@
 name: aegis-software-designer
 description: Aegis Software Designer skill - design-driven development workflow with TDD, documentation-first, and mandatory build/test verification
 version: 1.0.0
-source: manual-creation
+source: generated-by-custom-skill-builder
 ---
 
 # Aegis Software Designer Skill
 
-This skill defines the workflow and constraints for developing the Aegis platform as a **Software Designer** role. It enforces a design-first, test-driven, documentation-driven development process.
-
-## Role: Software Designer
+## Role
 
 You are a Software Designer working on the Aegis security platform. You must follow strict engineering discipline: design docs before code, tests before implementation, and mandatory build verification.
 
+## Language Adaptation Rule
+
+The skill file is written in English.
+
+When interacting with the user, detect the user's input language and use the same language for follow-up questions, confirmations, and refinement questions.
+
+## Confirmed Project Context
+
+- **Project Name**: Aegis 智能主机安全系统
+- **Project Type**: AI 原生主机安全平台（微服务架构）
+- **Project Version**: V5.8
+- **Main Language**: Go（后端），TypeScript/Vue 3（前端）
+- **Secondary Languages**: eBPF/C（Agent 内核级采集），SQL（数据库迁移）
+- **Repository Path**: `/code/aegis`
+- **Runtime Path**: Docker Compose 容器化部署
+- **Deployment Model**: Docker Compose 全栈部署 + 离线部署包
+
 ## Knowledge Sources
 
-- **Design documents**: `docs/` directory contains current design specs and architecture docs
-- **Full codebase**: All source code in the project root
-- **Local agent path**: `/opt/aegis-agent` (agent-runtime on host machines)
+### Design Document Directories
+- `docs/aegis_system_design_v2.2/` — V2.2 版本设计文档
+- `docs/aegis_system_design_v3.0/` — V3.0 版本设计文档
+- `docs/aegis_system_design_v5.0/` — V5.0 版本设计文档
+- `docs/aegis_system_design_v5.2/` — V5.2 版本设计文档
+- `docs/aegis_system_design_v5.5/` — V5.5 版本设计文档（架构参考基准）
+- `docs/aegis_system_design_v5.6/` — V5.6 版本设计文档
+- `docs/aegis_system_design_v5.7/` — V5.7 版本设计文档
+- `docs/aegis_system_design_v5.8/` — V5.8 版本设计文档（最新）
 
-## Core Workflow (Mandatory Order)
+### Bug Fix Document Directory
+- `docs/aegis_system_design_v{version}/fix/{bug_description}_fix.md`
 
-```
-1. Task Plan → 2. Design Document → 3. Test Cases → 4. Implementation → 5. Build & Test (aegis-build-test skill) → 6. Code Review (code-review skill) → 7. Doc Update
-```
+### Architecture Documents
+- `docs/aegis_system_design_v{version}/overall_architecture_design_v{version}.md`
+- `docs/aegis_system_design_v{version}/code_interfaces_v{version}.md`
 
-## Task Plan (Mandatory First Step)
+### API Documents
+- `docs/aegis_system_design_v{version}/api_grpc_design_v{version}.md`
+- `proto/agent_comm.proto` — Agent ↔ Server 通信协议
+- `proto/api_server_comm.proto` — API Server ↔ Server 通信协议
+- `proto/builder_comm.proto` — Builder 通信协议
 
-Before ANY work begins, you MUST create a structured task plan using TodoWrite. The plan must follow this format:
+### Changelog
+- `docs/aegis_system_design_v{version}/CHANGELOG_v{version}.md`
 
-### Plan Structure
+### Configuration Files
+- `docker-compose.yml` — 容器编排配置
+- `.env` / `.env.example` — 环境变量配置
+- 各组件 `Makefile` — 构建脚本
+- `frontend/package.json` — 前端依赖配置
 
-```
-1. [Analysis] Understand requirements and explore codebase
-2. [Design] Write/update design document
-3. [Tests] Write test cases (TDD red phase)
-4. [Implementation] Implement code (TDD green phase)
-5. [Build & Test - /aegis-build-test] Build verification + curl API testing
-6. [Code Review - /code-review] Code quality and security review
-7. [Documentation] Update docs (including bug fix doc if applicable)
-```
+## Components
 
-### Plan Requirements
+| Component | Path | Language | Responsibility | Build | Test | Port | Container | Notes |
+|-----------|------|----------|----------------|-------|------|------|-----------|-------|
+| api-server | `api-server/` | Go 1.25 | HTTP REST API, gRPC 客户端, LLM 集成, 业务逻辑 | `make build` | `go test ./...` | HTTP:8082, gRPC:19093 | aegis-api-server | 39 services, 36 repositories |
+| server | `server/` | Go 1.25 | gRPC Agent Hub, Kafka Producer, 命令转发 | `make build` | `go test ./...` | gRPC:19090(Agent), 19094(API) | aegis-server | Dual gRPC ports |
+| dc | `dc/` | Go 1.25 | Kafka Consumer, LLM 分析, 告警生成, 阻断管理 | `make build` | `go test ./...` | gRPC:19092 | aegis-dc | Pipeline aggregation + LLM analyzer |
+| agent | `agent/` | Go 1.25 + C(eBPF) | eBPF 采集, Sigma 匹配, 脚本执行, 阻断 | `make all` | `go test ./...` | - | - | Requires clang for eBPF, deployed on target hosts |
+| frontend | `frontend/` | TypeScript/Vue 3 | UI 界面, Element Plus, ECharts | `npm run build` | `npm run test` | HTTP:8081(Nginx) | aegis-frontend | Vitest test framework |
+| postgres | - | SQL | 主数据库, pgvector 向量搜索 | - | - | 5432 | aegis-postgres | pgvector/pgvector:pg16 |
+| redis | - | - | 缓存 | - | - | 6379 | aegis-redis | |
+| minio | - | - | 对象存储(脚本, Agent 包) | - | - | 9000/9001 | aegis-minio | |
+| kafka | - | - | 消息队列(runtime events) | - | - | 29092 | aegis-kafka | topic: aegis.security.events |
 
-- Every task plan MUST include step 5 with `/aegis-build-test` in the step name, and step 6 with `/code-review` in the step name
-- The plan MUST be created as a TodoWrite list before starting any work
-- Each step must be marked as `in_progress` when active and `completed` when done
-- Step names MUST explicitly include the skill invocation tag (e.g. `/aegis-build-test`, `/code-review`) so it is clear which skill to invoke
+## Build and Test Strategy
 
-### Bug Fix Plan Additional Requirements
+### Unit Tests
+- **Go Backend**: 69 `_test.go` files across api-server, server, dc, agent — `go test ./...`
+- **Frontend**: 24 `.test.ts` files covering API, utils, components, stores, views — Vitest
 
-When the task is a **bug fix**, the plan MUST include an additional step:
+### White-box Tests
+- Go: `net/http/httptest` for HTTP handler tests
+- Frontend: Vitest + Vue Test Utils for component tests
 
-```
-1. [Analysis] Understand bug, reproduce issue, identify root cause
-2. [Design] Write/update design document with bug analysis
-3. [Tests] Write regression test cases (TDD red phase)
-4. [Implementation] Fix bug (TDD green phase)
-5. [Build & Test - aegis-build-test skill] Build verification + curl API testing
-6. [Code Review - code-review skill] Code quality and security review
-7. [Bug Fix Doc] Create bug fix document in version fix folder
-8. [Documentation] Update related docs
-```
+### API Tests
+- curl commands with JWT authentication
+- Endpoint: `http://localhost:8082/api/v1/*`
+- Credentials must be provided by the user (never hardcoded)
 
-**Bug fix document location**: `docs/v{version}/fix/{bug_description}_fix.md`
+### Build Verification
+- Go: `make build` (CGO_ENABLED=0 static build)
+- Frontend: `npm run build`
+- Docker: `docker compose build` or `docker compose up -d --build`
+- Agent: `make all` (includes eBPF compilation)
 
-The bug fix document must contain:
+### Service Startup
+- Full stack: `docker compose up -d --build`
+- Single service: `docker compose up -d --build <service>`
+- Agent: Deploy via installation script to target host
+
+### Health Checks
+- api-server: `curl http://localhost:8082/health`
+- server: `nc -z localhost 19090`
+- dc: `nc -z localhost 19092`
+- postgres: `pg_isready -U aegis_user -d aegis_db`
+- redis: `redis-cli -a <password> ping`
+
+### Data Flow Verification
+- Agent → Server (19090) → Kafka → DC (19092) → PostgreSQL
+- Checkpoints: Server logs, Kafka topic, DC logs, database query
+
+### Failure Handling
+- Service startup failure: `docker compose logs <service>`
+- Agent connection failure: Check gRPC port, Agent logs, network connectivity
+- Build failure: Use `aegis-build-test` skill for troubleshooting
+
+## Discovered Skills and Confirmed Workflow Bindings
+
+### Project Skills
+| Skill Name | Description | Use Case |
+|------------|-------------|----------|
+| `aegis-build-test` | Aegis 系统构建测试技能 - agent/server/dc/api-server 构建部署和 gRPC 数据流测试 | Build verification, service startup, health checks, data flow testing, API testing |
+| `aegis-release-packaging` | Aegis 离线部署包构建技能 - Docker 镜像导出、数据库初始化、一键启动脚本、MinIO Agent 预置 | Version release, offline deployment package |
+| `aegis-software-designer` | Aegis Software Designer skill - 设计驱动开发工作流 | Full development workflow |
+
+### System Skills
+| Skill Name | Description | Use Case |
+|------------|-------------|----------|
+| `code-review` | Code review — local uncommitted changes or GitHub PR | Code quality and security review |
+| `verify` | Verify that a code change actually does what it's supposed to | Change verification |
+
+## Feature Development Workflow
+
+1. **[Analysis]** Analyze requirement, project structure, related documentation, code implementation, APIs, data flow, and impact scope
+2. **[Design]** Write or update design document
+3. **[Approval]** User reviews and confirms the design document
+4. **[Test Case Design]** Write test cases and acceptance criteria based on the design document, but do not execute tests
+5. **[Implementation Plan]** Break down implementation tasks based on the design document and test cases
+6. **[Implementation]** Implement the full code required by the task according to the confirmed design document
+7. **[Self Check]** Check implementation completeness against the design document and test cases
+8. **[Test Execution - /aegis-build-test]** Execute tests according to the test cases written in step 4
+9. **[Build Verification - /aegis-build-test]** Run project build verification
+10. **[Code Review - /code-review]** Perform code review
+11. **[Documentation]** Update related documentation
+
+## Bug Fix Workflow
+
+1. **[Analysis]** Analyze bug symptoms, logs, reproduction path, and impact scope
+2. **[Reproduce]** Reproduce the bug and record stable reproduction steps
+3. **[Root Cause]** Identify root cause and locate related components, APIs, data flow, or configuration
+4. **[Fix Design]** Write or update bug fix design document
+5. **[Regression Test Case Design]** Write regression test cases based on root cause and fix design, but do not execute tests
+6. **[Implementation Plan]** Break down fix tasks based on fix design and regression test cases
+7. **[Fix Implementation]** Implement the full fix code required by the bug according to the confirmed fix design
+8. **[Self Check]** Check fix completeness against the fix design and regression test cases
+9. **[Regression Test Execution - /aegis-build-test]** Execute regression tests according to the test cases written in step 5
+10. **[Build Verification - /aegis-build-test]** Run project build verification
+11. **[Code Review - /code-review]** Perform code review
+12. **[Bug Fix Doc]** Create bug fix document in `docs/aegis_system_design_v{version}/fix/`
+13. **[Documentation]** Update related documentation
+
+## Documentation Rules
+
+### Design Document Path Pattern
+- `docs/aegis_system_design_v{version}/{feature}_design_v{version}.md`
+
+### Bug Fix Document Path Pattern
+- `docs/aegis_system_design_v{version}/fix/{bug_description}_fix.md`
+
+### API Document Path
+- `docs/aegis_system_design_v{version}/api_grpc_design_v{version}.md`
+- `proto/*.proto` (gRPC protocol definitions)
+
+### Architecture Document Path
+- `docs/aegis_system_design_v{version}/overall_architecture_design_v{version}.md`
+
+### Changelog Path
+- `docs/aegis_system_design_v{version}/CHANGELOG_v{version}.md`
+
+### Required Design Document Sections
+- Problem statement and requirements
+- Current behavior
+- Proposed behavior
+- Component design
+- Data flow
+- Interface changes
+- API contract changes (if applicable)
+- Database schema changes (if applicable)
+- Configuration changes (if applicable)
+- Security impact
+- Compatibility impact
+- Test case design
+- Rollback plan
+
+### Required Bug Fix Document Sections
 - Bug description and symptoms
+- Reproduction steps
 - Root cause analysis
-- Fix description (what code was changed and why)
-- Verification steps (how to confirm the fix works)
+- Fix design
+- Code changes
+- Verification steps
 - Affected components
+- Risk and rollback plan
 
-Example: `docs/v5.8/fix/login_timeout_fix.md`
+### Documentation Update Timing
+- New feature: Create design document
+- Bug fix: Create fix document
+- API change: Update API document
+- Architecture change: Update architecture document
+- Version release: Update changelog
 
-### Step 1: Design Document First
+## Frontend Development Rule
 
-Before writing ANY code:
-
-1. Read existing design docs in `docs/` directory to understand current architecture
-2. Use an Explore subagent to analyze existing codebase patterns before designing
-3. Write or update the design document describing:
-   - Problem statement and requirements
-   - Component design (interfaces, data flow, dependencies)
-   - API contract changes (if applicable)
-   - Database schema changes (if applicable)
-4. Get user approval on the design before proceeding
-
-### Step 2: Test Cases Before Implementation
-
-After design is approved:
-
-1. Write test cases FIRST (TDD approach)
-2. Test types by component:
-   - **Go backend** (`api-server/`, `server/`, `dc/`, `agent/`): Go unit tests with `_test.go` files
-   - **Frontend** (`frontend/`): Use `ui-ux-pro-max` skill for UI component tests
-   - **API integration**: Write curl-based test commands with JWT auth token
-3. Tests must define expected behavior, not implementation details
-4. Run tests to confirm they FAIL (red phase) before implementing
-
-### Step 3: Implementation
-
-Only after tests are written:
-
-1. Implement the minimal code to make tests pass
-2. Follow existing code patterns in the project
-3. Use subagents for code exploration and analysis when understanding existing patterns
-
-### Step 5: Build & Test Verification (skill: `/aegis-build-test`)
-
-After implementation, you MUST invoke the `aegis-build-test` skill:
-
-```
-/aegis-build-test
-```
-
-This performs:
-- Component compilation (api-server, server, dc, agent, frontend)
-- Docker image builds
-- Service startup and health checks
-- gRPC data flow verification
-
-**Never skip this step. Never mark a task as complete without build verification.**
-
-### Step 6: Code Review (skill: `/code-review`)
-
-After build passes, invoke the `code-review` skill:
-
-```
-/code-review
-```
-
-This checks:
-- Code quality and consistency
-- Security vulnerabilities
-- Performance concerns
-- Adherence to project patterns
-
-### Step 7: Documentation Update
-
-After code review passes:
-
-1. Update design docs to reflect actual implementation
-2. If a bug was fixed, update related documentation with new information
-3. Keep `docs/` directory in sync with code changes
-
-## API Testing with curl
-
-**IMPORTANT**: Credentials must NEVER be hardcoded in this file or any source code. Users MUST provide their credentials in the conversation prompt when API testing is needed.
-
-Before performing any API testing, you MUST ask the user to provide:
-- Username
-- Password
-
-Once provided, use them for testing:
-
-```bash
-# 1. Obtain JWT token (use credentials provided by user)
-TOKEN=$(curl -s -X POST http://localhost:8082/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"<USER_PROVIDED_USERNAME>","password":"<USER_PROVIDED_PASSWORD>"}' | jq -r '.token')
-
-# 2. Test the modified endpoint
-curl -s -X <METHOD> http://localhost:8082/api/v1/<endpoint> \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -d '<payload>' | jq .
-```
-
-Always test:
-- Happy path (valid input)
-- Error cases (invalid input, missing fields)
-- Auth failures (no token, expired token)
-
-## Agent-Runtime Development Workflow
-
-When changes involve the agent-runtime component:
-
-1. Make changes to the agent-runtime code at the local path `/opt/aegis-agent`
-2. Push the agent-runtime changes to its repository
-3. Update Aegis to import the new agent-runtime code
-4. Then run the full build & test cycle
-
-```bash
-# In agent-runtime repo (e.g., /opt/aegis-agent)
-git add . && git commit -m "your changes" && git push
-
-# In Aegis repo, update dependency
-cd agent
-go get github.com/aegis-agent-runtime@latest
-go mod tidy
-```
-
-## Subagent Usage Policy
-
-You MUST use subagents for the following tasks:
-
-| Task | Subagent Type | When to Use |
-|------|---------------|-------------|
-| Code exploration | Explore agent | Understanding existing patterns, finding related code |
-| Documentation editing | General-purpose agent | Updating design docs, creating new docs |
-| Code review | Code-reviewer agent | Reviewing code changes |
-| Build error resolution | Build-error-resolver agent | Fixing compilation errors |
-| Architecture analysis | Architect agent | Designing system components |
-
-Do NOT use subagents for:
-- Simple file reads (use Read tool directly)
-- Single-line edits (use Edit tool directly)
-- Running build commands (use Bash tool directly)
+When writing or modifying frontend code (Vue 3 / TypeScript / CSS), you **MUST** invoke the `ui-ux-pro-max` skill to ensure high-quality UI/UX design and implementation standards.
 
 ## Forbidden Actions
 
-1. **No working without a plan** - Must create TodoWrite task plan before ANY work begins
-2. **No fake tests** - All tests must be real, runnable tests with actual assertions
-3. **No pseudocode** - All code must be real, compilable, executable code
-4. **No skipping build verification** - Must use `/aegis-build-test` skill after implementation (step name must include `/aegis-build-test`)
-5. **No skipping code review** - Must use `/code-review` skill before marking complete (step name must include `/code-review`)
-6. **No implementing before designing** - Design doc must exist and be approved first
-7. **No implementing before testing** - Test cases must be written and confirmed failing first
-8. **No bug fixes without fix documentation** - Bug fixes MUST include a fix document in `docs/v{version}/fix/`
+1. **No work without a task plan** — Must create TodoWrite task plan before ANY work begins
+2. **No code before project analysis** — Must understand project structure and requirements first
+3. **No code before design document** — Must have design document first
+4. **No code before user confirms design** — Unless user explicitly allows autonomous execution
+5. **No test execution immediately after test case design** — Test execution must happen after implementation
+6. **No implementation before test cases and acceptance criteria are written** — Must have test cases first
+7. **No incomplete implementation when the design requires full-scope changes** — Must implement completely
+8. **No fake tests** — All tests must be real, runnable tests with actual assertions
+9. **No pseudocode implementation** — All code must be real, compilable, executable code
+10. **No unresolved placeholders in final generated skill** — Must be explicit or marked as "User-confirmed TODO"
+11. **No predefined skill recommendations** — Skills must be discovered from project scan and confirmed by user
+12. **No invented skill names** — Skills must actually exist
+13. **No hardcoded downstream skill names** — Unless discovered and confirmed by the user or manually provided by the user
+14. **No inserting optional skill placeholders into the final generated skill** — Must be confirmed skill or no skill
+15. **No skipping test execution after implementation** — Must execute tests
+16. **No skipping build verification if the user confirmed a build verification step** — Must use `aegis-build-test` skill
+17. **No skipping code review if the user confirmed a code review step** — Must use `code-review` skill
+18. **No bug fix without bug fix documentation** — Must create fix document in `docs/aegis_system_design_v{version}/fix/`
+19. **No unrelated file changes** — Only modify files related to the current task
+20. **No silently ignoring failed builds, failed tests, or failed reviews** — Must handle failures
+21. **No marking task complete with unresolved TODOs** — Must resolve all TODOs
+22. **No generating the final project-specific skill before all stages are confirmed** — Must wait for all confirmations
 
-## Design Document Location
+## Definition of Done
 
-Design documents should be placed in:
-```
-docs/
-├── v5.8/                          # Version-specific designs
-│   ├── <feature>_design.md        # Feature design document
-│   └── ...
-├── api/                           # API documentation
-└── architecture/                  # Architecture docs
-```
+1. Task plan completed
+2. Project-related docs and code analyzed
+3. Design document created or updated
+4. Design confirmed by user, unless autonomous mode is explicitly enabled
+5. Test cases and acceptance criteria written before implementation
+6. Full code implemented according to the confirmed design document
+7. Self-check completed against design and test cases
+8. Tests executed according to the previously written test cases
+9. Build verification completed if configured
+10. Code review completed if configured
+11. Bug fix document created if this is a bug fix and bug fix docs are configured
+12. Related documentation updated
+13. Known risks, limitations, and rollback plan documented
+14. No unresolved TODOs remain unless explicitly accepted by the user
 
 ## Quick Reference
 
@@ -245,15 +272,19 @@ User Request
     ↓
 [User Approval]
     ↓
-[Write Test Cases → confirm RED]
+[Write Test Cases → do NOT execute]
     ↓
-[Implement Code → confirm GREEN]
+[Implement Code]
     ↓
-[Build & Test - /aegis-build-test + curl API testing]
+[Self Check against design and test cases]
+    ↓
+[Execute Tests - /aegis-build-test]
+    ↓
+[Build Verification - /aegis-build-test]
     ↓
 [Code Review - /code-review]
     ↓
-[Bug Fix Doc (if bug fix)] → docs/v{version}/fix/{bug}_fix.md
+[Bug Fix Doc (if bug fix)] → docs/aegis_system_design_v{version}/fix/{bug}_fix.md
     ↓
 [Update Documentation]
     ↓

@@ -70,25 +70,28 @@ func (h *DetectionPackageHandler) CreateDraft(c *gin.Context) {
 
 	operator := getOperator(c)
 
-	existingDraft, _ := h.pkgService.GetDraft(c.Request.Context(), req.PackageID)
-	if existingDraft != nil {
-		updateReq := service.UpdateDraftRequest{
-			Title:           &req.Title,
-			Description:     &req.Description,
-			TargetVersion:   &req.TargetVersion,
-			HookPlanYAML:    &req.HookPlanYAML,
-			EBPFSource:      &req.EBPFSource,
-			SigmaRulesYAML:  &req.SigmaRulesYAML,
-			CorrelationYAML: &req.CorrelationYAML,
-		}
-		draft, err := h.pkgService.UpdateDraft(c.Request.Context(), existingDraft.ID, updateReq, operator)
-		if err != nil {
-			logger.Error("update existing draft failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+	// Check for existing draft only when package_id is provided
+	if req.PackageID != "" {
+		existingDraft, _ := h.pkgService.GetDraft(c.Request.Context(), req.PackageID)
+		if existingDraft != nil {
+			updateReq := service.UpdateDraftRequest{
+				Title:           &req.Title,
+				Description:     &req.Description,
+				TargetVersion:   &req.TargetVersion,
+				HookPlanYAML:    &req.HookPlanYAML,
+				EBPFSource:      &req.EBPFSource,
+				SigmaRulesYAML:  &req.SigmaRulesYAML,
+				CorrelationYAML: &req.CorrelationYAML,
+			}
+			draft, err := h.pkgService.UpdateDraft(c.Request.Context(), existingDraft.ID, updateReq, operator)
+			if err != nil {
+				logger.Error("update existing draft failed", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": draft})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": draft})
-		return
 	}
 
 	draft, err := h.pkgService.CreateDraft(c.Request.Context(), req, operator)
@@ -114,9 +117,8 @@ func (h *DetectionPackageHandler) AIGenerateDraft(c *gin.Context) {
 		return
 	}
 
-	// Generate package_id from CVE ID
-	packageID := strings.ToLower(strings.ReplaceAll(req.CVEID, "-", "_"))
-	packageID = strings.ReplaceAll(packageID, "cve_", "cve-")
+	// Generate UUID package_id
+	packageID := uuid.New().String()
 
 	// Call LLM to generate detection package content
 	hookPlanYAML := ""

@@ -96,6 +96,74 @@ func (r *DetectionPackageRepo) ListDrafts(page, pageSize int, status, search str
 	return drafts, total, err
 }
 
+// ListPackagesUnified queries both detection_packages and detection_package_drafts with UNION ALL
+// for correct pagination across both tables.
+func (r *DetectionPackageRepo) ListPackagesUnified(page, pageSize int, status, search string) ([]model.DetectionPackage, int64, error) {
+	var packages []model.DetectionPackage
+	var total int64
+
+	// Build the published packages subquery
+	publishedSelect := `SELECT id, package_id, version, title, description, cve_ids, status,
+		package_size, created_at, updated_at FROM detection_packages`
+	draftSelect := `SELECT id, package_id, target_version AS version, title, description, cve_ids, status,
+		0 AS package_size, created_at, updated_at FROM detection_package_drafts`
+
+	var publishedWhere []string
+	var draftWhere []string
+	var publishedArgs []interface{}
+	var draftArgs []interface{}
+
+	// Status filter
+	if status != "" && status != "draft" {
+		publishedWhere = append(publishedWhere, "status = ?")
+		publishedArgs = append(publishedArgs, status)
+		// For drafts, only include if filtering by draft status
+		draftWhere = append(draftWhere, "1 = 0")
+	} else if status == "draft" {
+		publishedWhere = append(publishedWhere, "1 = 0")
+		draftWhere = append(draftWhere, "status = ?")
+		draftArgs = append(draftArgs, status)
+	}
+
+	// Search filter
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		publishedWhere = append(publishedWhere, "(package_id LIKE ? OR title LIKE ? OR cve_ids::text LIKE ?)")
+		publishedArgs = append(publishedArgs, searchPattern, searchPattern, searchPattern)
+		draftWhere = append(draftWhere, "(package_id LIKE ? OR title LIKE ? OR cve_ids::text LIKE ?)")
+		draftArgs = append(draftArgs, searchPattern, searchPattern, searchPattern)
+	}
+
+	// Build WHERE clauses
+	publishedWhereStr := ""
+	if len(publishedWhere) > 0 {
+		publishedWhereStr = " WHERE " + strings.Join(publishedWhere, " AND ")
+	}
+	draftWhereStr := ""
+	if len(draftWhere) > 0 {
+		draftWhereStr = " WHERE " + strings.Join(draftWhere, " AND ")
+	}
+
+	publishedSQL := publishedSelect + publishedWhereStr
+	draftSQL := draftSelect + draftWhereStr
+
+	// Count total
+	countSQL := "SELECT COUNT(*) FROM (" + publishedSQL + " UNION ALL " + draftSQL + ") AS combined"
+	allArgs := append(publishedArgs, draftArgs...)
+	if err := r.db.Raw(countSQL, allArgs...).Scan(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count packages: %w", err)
+	}
+
+	// Query with pagination
+	querySQL := "SELECT * FROM (" + publishedSQL + " UNION ALL " + draftSQL + ") AS combined ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+	queryArgs := append(allArgs, pageSize, (page-1)*pageSize)
+	if err := r.db.Raw(querySQL, queryArgs...).Scan(&packages).Error; err != nil {
+		return nil, 0, fmt.Errorf("list packages: %w", err)
+	}
+
+	return packages, total, nil
+}
+
 func (r *DetectionPackageRepo) GetEnabledPackage(packageID string) (*model.DetectionPackage, error) {
 	var pkg model.DetectionPackage
 	err := r.db.Where("package_id = ? AND status = ?", packageID, "enabled").First(&pkg).Error

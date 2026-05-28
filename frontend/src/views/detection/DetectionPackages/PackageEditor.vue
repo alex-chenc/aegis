@@ -19,8 +19,8 @@
       <el-tabs v-model="activeTab">
         <el-tab-pane label="基础信息" name="basic">
           <el-form :model="form" label-width="120px" style="max-width: 600px;">
-            <el-form-item label="Package ID" required>
-              <el-input v-model="form.package_id" :disabled="isEdit" placeholder="如 cve-2026-31431-copyfail" />
+            <el-form-item v-if="isEdit" label="Package ID">
+              <el-input v-model="form.package_id" disabled />
             </el-form-item>
             <el-form-item label="版本" required>
               <el-input v-model="form.target_version" placeholder="如 1.0.0" />
@@ -192,7 +192,7 @@ async function confirmAIGenerate() {
 }
 
 async function handleSave() {
-  if (!form.package_id || !form.title || !form.target_version) {
+  if (!form.title || !form.target_version) {
     ElMessage.warning('请填写必填字段')
     return
   }
