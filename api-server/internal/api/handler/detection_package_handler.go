@@ -369,7 +369,8 @@ func (h *DetectionPackageHandler) GetLatestBuild(c *gin.Context) {
 	packageID := c.Param("package_id")
 	build, err := h.pkgService.GetLatestBuild(c.Request.Context(), packageID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "build not found"})
+		// No build yet is normal for draft packages — return 200 with null data
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": nil})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": build})
