@@ -94,7 +94,10 @@
         </el-tab-pane>
 
         <el-tab-pane label="Event Schema" name="schema">
-          <pre class="schema-json">{{ JSON.stringify(currentBuild?.event_schema || currentPackage?.event_schema || {}, null, 2) }}</pre>
+          <EventSchemaTable
+            :schema="currentBuild?.event_schema || currentPackage?.event_schema"
+            :schema-json="currentBuild?.event_schema_json"
+          />
         </el-tab-pane>
 
         <el-tab-pane label="关联告警" name="alerts">
@@ -209,6 +212,7 @@ import type { PackageRuntimeEvent } from '@/api/detection-packages'
 import { useDetectionPackages } from './composables/useDetectionPackages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 import BuildReviewPanel from './components/BuildReviewPanel.vue'
+import EventSchemaTable from './components/EventSchemaTable.vue'
 import HostStatusTable from './components/HostStatusTable.vue'
 import EvidenceTimeline from './components/EvidenceTimeline.vue'
 
@@ -361,14 +365,5 @@ watch(() => route.params.id, (newId) => {
 .actions {
   display: flex;
   gap: 8px;
-}
-.schema-json {
-  font-family: monospace;
-  font-size: 13px;
-  background: #f5f7fa;
-  padding: 16px;
-  border-radius: 4px;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 </style>

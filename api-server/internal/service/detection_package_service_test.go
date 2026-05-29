@@ -328,6 +328,47 @@ func TestListPackagesUnified_FilterByStatus(t *testing.T) {
 	}
 }
 
+func TestListPackagesUnified_BuiltStatusIncludesLegacyBuildSuccess(t *testing.T) {
+	svc, db := newTestDetectionPackageService(t)
+
+	legacyDraft, err := svc.CreateDraft(context.Background(), CreateDraftRequest{
+		PackageID:     "legacy-build-success-draft",
+		TargetVersion: "1.0.0",
+		Title:         "Legacy Draft",
+	}, "test-operator")
+	if err != nil {
+		t.Fatalf("CreateDraft failed: %v", err)
+	}
+	legacyDraft.Status = "build_success"
+	if err := db.Save(legacyDraft).Error; err != nil {
+		t.Fatalf("update legacy draft failed: %v", err)
+	}
+	pkg := &model.DetectionPackage{
+		PackageID: "canonical-built-package",
+		Version:   "1.0.0",
+		Title:     "Canonical Built Package",
+		Status:    "built",
+	}
+	if err := db.Create(pkg).Error; err != nil {
+		t.Fatalf("CreatePackage failed: %v", err)
+	}
+
+	result, total, err := svc.ListPackages(context.Background(), 1, 10, "built", "")
+	if err != nil {
+		t.Fatalf("ListPackages with built filter failed: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total 2 for built aliases, got %d", total)
+	}
+	statuses := map[string]bool{}
+	for _, item := range result {
+		statuses[item.Status] = true
+	}
+	if !statuses["built"] || !statuses["build_success"] {
+		t.Fatalf("expected built and build_success statuses, got %#v", statuses)
+	}
+}
+
 type fakeDetectionPackageServerClient struct {
 	installHostID string
 	installCmd    *DetectionPackageCommand
@@ -366,12 +407,21 @@ type fakeDetectionPackageBuilderClient struct {
 	reviewApproved bool
 	reviewResp     *pb.ReviewBuildResponse
 	signResp       *grpcclient.BuilderSignResponse
+	startReq       *grpcclient.BuilderStartBuildRequest
+	startResp      *grpcclient.BuilderStartBuildResponse
+	startCalled    chan struct{}
 }
 
 func (f *fakeDetectionPackageBuilderClient) StartBuild(ctx context.Context, req *grpcclient.BuilderStartBuildRequest) (*grpcclient.BuilderStartBuildResponse, error) {
 	_ = ctx
-	_ = req
-	return nil, nil
+	f.startReq = req
+	if f.startCalled != nil {
+		close(f.startCalled)
+	}
+	if f.startResp != nil {
+		return f.startResp, nil
+	}
+	return &grpcclient.BuilderStartBuildResponse{Status: "awaiting_review"}, nil
 }
 
 func (f *fakeDetectionPackageBuilderClient) SignPackage(ctx context.Context, req *grpcclient.BuilderSignRequest) (*grpcclient.BuilderSignResponse, error) {
@@ -404,6 +454,61 @@ func (f *fakeDetectionPackageBuilderClient) ReviewBuild(ctx context.Context, bui
 		return f.reviewResp, nil
 	}
 	return &pb.ReviewBuildResponse{Success: true}, nil
+}
+
+func TestStartBuildPassesManifestAndCVEIDsToBuilder(t *testing.T) {
+	svc, _ := newTestDetectionPackageService(t)
+	startCalled := make(chan struct{})
+	builder := &fakeDetectionPackageBuilderClient{
+		startCalled: startCalled,
+		startResp: &grpcclient.BuilderStartBuildResponse{
+			Status:          "awaiting_review",
+			EventSchemaJSON: `{"events":{"1001":{"name":"af_alg_socket","fields":{"1":{"name":"family","type":"string"}}}}}`,
+		},
+	}
+	svc.builderClient = builder
+
+	hookPlan := `
+schema_version: "aegis.ebpf_plugin.v1"
+plugin_id: "copyfail_probe"
+package_id: "pkg-build-manifest"
+event_schema:
+  events:
+    1001:
+      name: "af_alg_socket"
+      fields:
+        1: { name: "family", type: "string" }
+`
+	if _, err := svc.CreateDraft(context.Background(), CreateDraftRequest{
+		PackageID:       "pkg-build-manifest",
+		TargetVersion:   "1.0.0",
+		Title:           "Build Manifest Package",
+		CVEIDs:          []string{"CVE-2026-31431"},
+		HookPlanYAML:    hookPlan,
+		EBPFSource:      "int main(void) { return 0; }",
+		SigmaRulesYAML:  "title: test\n",
+		CorrelationYAML: "rules: []\n",
+	}, "creator"); err != nil {
+		t.Fatalf("CreateDraft failed: %v", err)
+	}
+	if _, err := svc.StartBuild(context.Background(), "pkg-build-manifest", "builder"); err != nil {
+		t.Fatalf("StartBuild failed: %v", err)
+	}
+
+	select {
+	case <-startCalled:
+	case <-time.After(time.Second):
+		t.Fatal("builder StartBuild was not called")
+	}
+	if builder.startReq == nil {
+		t.Fatal("expected builder request")
+	}
+	if builder.startReq.PackageMetadataJSON != hookPlan {
+		t.Fatalf("expected package metadata to include HookPlan manifest, got %q", builder.startReq.PackageMetadataJSON)
+	}
+	if got := builder.startReq.CVEIDs; len(got) != 1 || got[0] != "CVE-2026-31431" {
+		t.Fatalf("expected CVE IDs to be passed, got %#v", got)
+	}
 }
 
 func TestReviewBuild_RejectsAwaitingReviewBuild(t *testing.T) {

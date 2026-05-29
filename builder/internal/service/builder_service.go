@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -518,7 +519,7 @@ func extractEventSchema(metadataJSON string) string {
 	if metadataJSON == "" {
 		return ""
 	}
-	var meta map[string]interface{}
+	var meta map[interface{}]interface{}
 	if err := yaml.Unmarshal([]byte(metadataJSON), &meta); err != nil {
 		return ""
 	}
@@ -526,11 +527,36 @@ func extractEventSchema(metadataJSON string) string {
 	if !ok {
 		return ""
 	}
-	jsonBytes, err := yaml.Marshal(eventSchema)
+	jsonBytes, err := json.Marshal(normalizeYAMLValue(eventSchema))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(jsonBytes))
+}
+
+func normalizeYAMLValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[interface{}]interface{}:
+		normalized := make(map[string]interface{}, len(typed))
+		for key, val := range typed {
+			normalized[fmt.Sprint(key)] = normalizeYAMLValue(val)
+		}
+		return normalized
+	case map[string]interface{}:
+		normalized := make(map[string]interface{}, len(typed))
+		for key, val := range typed {
+			normalized[key] = normalizeYAMLValue(val)
+		}
+		return normalized
+	case []interface{}:
+		normalized := make([]interface{}, len(typed))
+		for idx, val := range typed {
+			normalized[idx] = normalizeYAMLValue(val)
+		}
+		return normalized
+	default:
+		return typed
+	}
 }
 
 func generateHookSummaries(hookPlanYAML string) []HookSummary {

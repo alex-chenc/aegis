@@ -17,14 +17,7 @@
     <HookSummaryTable :hooks="build?.hook_summary || []" />
 
     <el-divider content-position="left">Event Schema</el-divider>
-    <el-table v-if="eventSchemaRows.length > 0" :data="eventSchemaRows" border size="small">
-      <el-table-column prop="eventId" label="Event ID" width="110" />
-      <el-table-column prop="eventName" label="Event Type" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="fieldId" label="字段 ID" width="100" />
-      <el-table-column prop="fieldName" label="字段名" min-width="160" show-overflow-tooltip />
-      <el-table-column prop="fieldType" label="类型" width="120" />
-    </el-table>
-    <el-empty v-else description="暂无 Event Schema" />
+    <EventSchemaTable :schema="build?.event_schema" :schema-json="build?.event_schema_json" />
 
     <el-divider content-position="left">Artifact</el-divider>
     <el-table :data="build?.artifacts || []" border size="small">
@@ -73,12 +66,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import type { DetectionPackageBuild } from '@/api/detection-packages'
 import { detectionPackageApi } from '@/api/detection-packages'
 import { useRole } from '@/composables/useRole'
 import { ElMessage } from 'element-plus'
 import HookSummaryTable from './HookSummaryTable.vue'
+import EventSchemaTable from './EventSchemaTable.vue'
 import PackageStatusTag from './PackageStatusTag.vue'
 
 const props = defineProps<{
@@ -94,16 +88,6 @@ const { canOperate } = useRole()
 const reviewComment = ref('')
 const reviewing = ref(false)
 const downloadingLog = ref(false)
-
-interface EventSchemaRow {
-  eventId: string
-  eventName: string
-  fieldId: string
-  fieldName: string
-  fieldType: string
-}
-
-const eventSchemaRows = computed(() => flattenEventSchema(readEventSchema(props.build)))
 
 async function handleReview(approved: boolean) {
   reviewing.value = true
@@ -141,47 +125,6 @@ function formatSize(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-function flattenEventSchema(schema?: Record<string, unknown>): EventSchemaRow[] {
-  const events = (schema?.events || schema) as Record<string, any> | undefined
-  if (!events || typeof events !== 'object') return []
-
-  return Object.entries(events).flatMap(([eventId, eventValue]) => {
-    const eventInfo = eventValue as Record<string, any>
-    const fields = eventInfo?.fields as Record<string, any> | undefined
-    if (!fields || typeof fields !== 'object') {
-      return [{
-        eventId,
-        eventName: String(eventInfo?.name || eventId),
-        fieldId: '-',
-        fieldName: '-',
-        fieldType: '-',
-      }]
-    }
-    return Object.entries(fields).map(([fieldId, fieldValue]) => {
-      const fieldInfo = fieldValue as Record<string, any>
-      return {
-        eventId,
-        eventName: String(eventInfo?.name || eventId),
-        fieldId,
-        fieldName: String(fieldInfo?.name || fieldId),
-        fieldType: String(fieldInfo?.type || '-'),
-      }
-    })
-  })
-}
-
-function readEventSchema(build: DetectionPackageBuild | null): Record<string, unknown> | undefined {
-  if (!build) return undefined
-  if (build.event_schema && Object.keys(build.event_schema).length > 0) {
-    return build.event_schema
-  }
-  if (!build.event_schema_json) return undefined
-  try {
-    return JSON.parse(build.event_schema_json) as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-}
 </script>
 
 <style scoped>

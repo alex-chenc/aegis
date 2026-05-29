@@ -71,7 +71,7 @@ func (r *DetectionPackageRepo) ListPackages(page, pageSize int, status, search s
 	var total int64
 	query := r.db.Model(&model.DetectionPackage{})
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("status IN ?", detectionPackageStatusAliases(status))
 	}
 	if search != "" {
 		query = query.Where("package_id LIKE ? OR title LIKE ? OR cve_ids::text LIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -86,7 +86,7 @@ func (r *DetectionPackageRepo) ListDrafts(page, pageSize int, status, search str
 	var total int64
 	query := r.db.Model(&model.DetectionPackageDraft{})
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("status IN ?", detectionPackageStatusAliases(status))
 	}
 	if search != "" {
 		query = query.Where("package_id LIKE ? OR title LIKE ? OR cve_ids::text LIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -114,10 +114,11 @@ func (r *DetectionPackageRepo) ListPackagesUnified(page, pageSize int, status, s
 	var draftArgs []interface{}
 
 	if status != "" {
-		publishedWhere = append(publishedWhere, "status = ?")
-		publishedArgs = append(publishedArgs, status)
-		draftWhere = append(draftWhere, "status = ?")
-		draftArgs = append(draftArgs, status)
+		statusClause, statusArgs := statusWhereClause(status)
+		publishedWhere = append(publishedWhere, statusClause)
+		publishedArgs = append(publishedArgs, statusArgs...)
+		draftWhere = append(draftWhere, statusClause)
+		draftArgs = append(draftArgs, statusArgs...)
 	}
 
 	// Search filter
@@ -157,6 +158,30 @@ func (r *DetectionPackageRepo) ListPackagesUnified(page, pageSize int, status, s
 	}
 
 	return packages, total, nil
+}
+
+func detectionPackageStatusAliases(status string) []string {
+	switch status {
+	case "built":
+		return []string{"built", "build_success"}
+	case "build_success":
+		return []string{"build_success", "built"}
+	default:
+		return []string{status}
+	}
+}
+
+func statusWhereClause(status string) (string, []interface{}) {
+	aliases := detectionPackageStatusAliases(status)
+	if len(aliases) == 1 {
+		return "status = ?", []interface{}{aliases[0]}
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(aliases)), ",")
+	args := make([]interface{}, 0, len(aliases))
+	for _, alias := range aliases {
+		args = append(args, alias)
+	}
+	return "status IN (" + placeholders + ")", args
 }
 
 func (r *DetectionPackageRepo) GetEnabledPackage(packageID string) (*model.DetectionPackage, error) {

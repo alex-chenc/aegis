@@ -214,12 +214,15 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 		PackageID:       build.PackageID,
 		Version:         build.Version,
 		Title:           draft.Title,
+		CVEIDs:          jsonStringSlice(draft.CVEIDs),
 		Operator:        operator,
 		TargetArch:      "amd64",
 		HookPlanYAML:    draft.HookPlanYAML,
 		EBPFSource:      draft.EBPFSource,
 		SigmaRulesYAML:  draft.SigmaRulesYAML,
 		CorrelationYAML: draft.CorrelationYAML,
+		// The V5.8 plugin manifest, including event_schema, lives in HookPlanYAML.
+		PackageMetadataJSON: draft.HookPlanYAML,
 	})
 
 	finished := time.Now()
@@ -289,6 +292,17 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 		draft.Status = "build_failed"
 	}
 	s.repo.UpdateDraft(draft)
+}
+
+func jsonStringSlice(raw datatypes.JSON) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 func (s *DetectionPackageService) GetBuild(ctx context.Context, buildID uuid.UUID) (*model.DetectionPackageBuild, error) {

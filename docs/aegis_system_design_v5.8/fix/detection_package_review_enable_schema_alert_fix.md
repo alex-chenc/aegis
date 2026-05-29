@@ -8,7 +8,7 @@ V5.8 动态检测包当前实现与设计文档存在多处断点：
 - 构建成功/待审核状态与前端轮询状态名不一致，导致构建完成后审核、签名入口不稳定。
 - 启用时 server 已发送 `DetectionPackageCommand` oneof，但 agent command stream 没有处理该 oneof，也没有处理 `AllowlistUpdate` oneof。
 - API Server 到 server 的检测包命令使用 JSON roundtrip，缺少 snake_case JSON tags 时可能丢失 `package_id`、URL 等字段。
-- Event Schema 在界面上只显示原始 JSON，缺少按设计文档定义的事件字段表和空态。
+- Event Schema 构建链路未把 HookPlan 中的 plugin manifest 传给 builder，新构建可能拿不到 `event_schema`；界面上也只显示原始 JSON，缺少按设计文档定义的事件字段表和空态。
 - 检测包详情页把 correlation runtime events 展示为“告警证据”，容易与全局告警列表混淆。
 
 ## Reproduction Steps
@@ -27,6 +27,7 @@ V5.8 动态检测包当前实现与设计文档存在多处断点：
 - `agent/internal/client/client.go` 只处理 `execute/rule_update/block/config_sync`，忽略 `detection_package_command` 和 `allowlist_update`。
 - `DetectionPackageCommand` 服务结构缺少 JSON tags，经 `encoding/json` 转换到 protobuf 请求时字段名不匹配风险高。
 - `ListPackagesUnified` 对 status filter 只查 published package，导致 draft/build/review 状态筛选缺失。
+- builder 只从 `PackageMetadataJSON` 提取 `event_schema`，但 API Server 发起构建时该字段为空；builder 提取后还可能返回 YAML 片段，不能稳定写入 PostgreSQL `jsonb`。
 - 包详情页的关联告警 API 返回 runtime events，前端却读取不存在的 `title/evidence` 字段。
 
 ## Fix Design
@@ -37,7 +38,7 @@ V5.8 动态检测包当前实现与设计文档存在多处断点：
 - service 与 agent 的 `DetectionPackageCommand` 增加 snake_case JSON tags。
 - agent command stream 增加 `DetectionPackageCommand` 与 `AllowlistUpdate` oneof 分支，并复用 ConfigManager 回调。
 - 前端构建轮询兼容 `pending/running`，审核后刷新，只有审核通过后的 `success` build 允许签名。
-- Event Schema 按 `plugin.yaml` 的 `event_schema.events` 展示为 event/field 表，并保留原 JSON 作为调试信息。
+- API Server 构建请求把 HookPlan manifest 传给 builder，builder 将 `event_schema` 规范化为 JSON；Event Schema 按 `plugin.yaml` 的 `event_schema.events` 展示为 event/field 表。
 - 包详情页将“告警证据”改为“关联告警”，以 runtime event 表为主，展开行展示 evidence chain；全局告警处置仍在告警中心完成。
 
 ## Code Changes
@@ -45,6 +46,7 @@ V5.8 动态检测包当前实现与设计文档存在多处断点：
 - `api-server/internal/api/handler/detection_package_handler.go`
 - `api-server/internal/service/detection_package_service.go`
 - `api-server/internal/repository/detection_package_repo.go`
+- `builder/internal/service/builder_service.go`
 - `agent/internal/client/client.go`
 - `agent/internal/configmgr/configmgr.go`
 - `agent/internal/dynpkg/types.go`
@@ -57,6 +59,7 @@ V5.8 动态检测包当前实现与设计文档存在多处断点：
 ## Verification Steps
 
 - `cd api-server && go test ./internal/service ./internal/api/handler`
+- `cd builder && go test ./internal/service`
 - `cd agent && go test ./internal/configmgr`
 - `cd frontend && npm run type-check`
 - `cd frontend && npm run build`
