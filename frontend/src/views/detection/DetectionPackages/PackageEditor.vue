@@ -142,7 +142,7 @@ async function loadDraft() {
       form.description = currentPackage.value.description || ''
       form.cve_ids = currentPackage.value.cve_ids || []
       // Fetch draft-specific fields if package is a draft
-      if (currentPackage.value.status === 'draft') {
+      if (['draft', 'build_failed', 'review_rejected'].includes(currentPackage.value.status)) {
         await fetchDraft(currentPackage.value.package_id)
         if (currentDraft.value) {
           form.hook_plan_yaml = currentDraft.value.hook_plan_yaml || ''

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"api-server/internal/grpc"
+
+	"gopkg.in/yaml.v3"
 	"api-server/internal/model"
 	"api-server/internal/repository"
 	pb "api-server/pkg/api/v1"
@@ -222,7 +224,8 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 		SigmaRulesYAML:  draft.SigmaRulesYAML,
 		CorrelationYAML: draft.CorrelationYAML,
 		// The V5.8 plugin manifest, including event_schema, lives in HookPlanYAML.
-		PackageMetadataJSON: draft.HookPlanYAML,
+		// Ensure required metadata fields are present.
+		PackageMetadataJSON: ensurePackageMetadata(draft.HookPlanYAML, build.PackageID, build.Version),
 	})
 
 	finished := time.Now()
@@ -370,7 +373,12 @@ func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID str
 	if signResult != nil {
 		pkg.PackageObjectKey = signResult.PackageObjectKey
 		pkg.SignatureObjectKey = signResult.SignatureObjectKey
-		pkg.PackageSHA256 = signResult.PackageSHA256
+		// Strip sha256: prefix if present (column is varchar(64))
+		sha256 := signResult.PackageSHA256
+		if len(sha256) > 7 && sha256[:7] == "sha256:" {
+			sha256 = sha256[7:]
+		}
+		pkg.PackageSHA256 = sha256
 		pkg.PackageSize = signResult.PackageSize
 	}
 
@@ -716,6 +724,7 @@ func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.
 			_ = s.repo.UpdateDraft(draft)
 		}
 	}
+
 	s.recordOperation(build.PackageID, build.Version, model.OperationTypeReview, operator, nil, true, "")
 	return nil
 }
@@ -766,4 +775,61 @@ func (s *DetectionPackageService) DeletePackage(ctx context.Context, packageID, 
 
 func timePtr(t time.Time) *time.Time {
 	return &t
+}
+
+
+// ensurePackageMetadata ensures the package metadata YAML contains the required
+// schema_version, package_id, and version fields. If these fields are missing
+// (e.g. from older AI-generated drafts), they are injected by appending lines
+// to avoid reformatting the existing YAML content.
+func ensurePackageMetadata(yamlStr, packageID, version string) string {
+	if yamlStr == "" {
+		return buildMinimalMetadata(packageID, version)
+	}
+
+	var meta map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &meta); err != nil {
+		return buildMinimalMetadata(packageID, version)
+	}
+
+	changed := false
+
+	// schema_version: inject if missing
+	if _, ok := meta["schema_version"]; !ok {
+		meta["schema_version"] = "aegis.ebpf_plugin.v1"
+		changed = true
+	}
+
+	// package_id: always overwrite with the correct request value
+	if meta["package_id"] != packageID {
+		meta["package_id"] = packageID
+		changed = true
+	}
+
+	// version: always overwrite with the correct request value
+	if meta["version"] != version {
+		meta["version"] = version
+		changed = true
+	}
+
+	if !changed {
+		return yamlStr
+	}
+
+	out, err := yaml.Marshal(meta)
+	if err != nil {
+		return yamlStr
+	}
+	return string(out)
+}
+
+
+func buildMinimalMetadata(packageID, version string) string {
+	meta := map[string]interface{}{
+		"schema_version": "aegis.ebpf_plugin.v1",
+		"package_id":     packageID,
+		"version":        version,
+	}
+	out, _ := yaml.Marshal(meta)
+	return string(out)
 }

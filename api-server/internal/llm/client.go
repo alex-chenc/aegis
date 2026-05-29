@@ -145,8 +145,8 @@ func (c *LLMClient) prepareRequest(reqBody ChatCompletionRequest) ChatCompletion
 	}
 
 	reqBody.ReasoningSplit = true
-	if reqBody.MaxTokens <= 0 || reqBody.MaxTokens > 2048 {
-		reqBody.MaxTokens = 2048
+	if reqBody.MaxTokens <= 0 || reqBody.MaxTokens > 8192 {
+		reqBody.MaxTokens = 8192
 	}
 	if reqBody.Temperature <= 0 || reqBody.Temperature > 1 {
 		reqBody.Temperature = 1
@@ -216,8 +216,8 @@ func (c *LLMClient) buildAnthropicRequest(messages []Message, temperature float6
 		})
 	}
 
-	if maxTokens <= 0 || maxTokens > 2048 {
-		maxTokens = 2048
+	if maxTokens <= 0 || maxTokens > 8192 {
+		maxTokens = 8192
 	}
 	if temperature <= 0 || temperature > 1 {
 		temperature = 1

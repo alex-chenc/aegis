@@ -143,6 +143,7 @@ func (h *DetectionPackageHandler) AIGenerateDraft(c *gin.Context) {
 	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, h.llmTimeout, h.llmMaxRetries)
 
 	prompt := llm.GetDetectionPackageGenerationPrompt(
+		packageID,
 		req.CVEID,
 		req.VulnerabilityDescription,
 		req.AttackPrerequisites,

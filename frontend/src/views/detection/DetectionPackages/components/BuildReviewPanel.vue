@@ -16,9 +16,6 @@
     <el-divider content-position="left">Hook 列表</el-divider>
     <HookSummaryTable :hooks="build?.hook_summary || []" />
 
-    <el-divider content-position="left">Event Schema</el-divider>
-    <EventSchemaTable :schema="build?.event_schema" :schema-json="build?.event_schema_json" />
-
     <el-divider content-position="left">Artifact</el-divider>
     <el-table :data="build?.artifacts || []" border size="small">
       <el-table-column prop="name" label="文件名" min-width="200" />
@@ -72,7 +69,6 @@ import { detectionPackageApi } from '@/api/detection-packages'
 import { useRole } from '@/composables/useRole'
 import { ElMessage } from 'element-plus'
 import HookSummaryTable from './HookSummaryTable.vue'
-import EventSchemaTable from './EventSchemaTable.vue'
 import PackageStatusTag from './PackageStatusTag.vue'
 
 const props = defineProps<{

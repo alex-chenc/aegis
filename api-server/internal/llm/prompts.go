@@ -458,13 +458,26 @@ struct trace_event_raw_sys_enter {
 
 ## HookPlan 格式要求
 
+HookPlan YAML 必须包含以下元数据字段（在 hooks 之前）：
+- schema_version: 固定值 "aegis.ebpf_plugin.v1"
+- package_id: 使用下方提供的 package_id
+- version: 版本号（如 "1.0.0"）
+
 每个 hook 必须包含以下字段：
 - name: hook 名称（如 sys_enter_socket）
 - attach_type: 附加类型，必须是 tracepoint 或 kprobe
 - attach: 附加点路径（如 syscalls/sys_enter_socket）
 - program: 对应的 eBPF 程序段名称（如 tracepoint__syscalls__sys_enter_socket）
 
-示例格式：hooks:\n  - name: sys_enter_socket\n    attach_type: tracepoint\n    attach: syscalls/sys_enter_socket\n    program: tracepoint__syscalls__sys_enter_socket
+示例格式：
+schema_version: "aegis.ebpf_plugin.v1"
+package_id: "cve-2026-xxxxx"
+version: "1.0.0"
+hooks:
+  - name: sys_enter_socket
+    attach_type: tracepoint
+    attach: syscalls/sys_enter_socket
+    program: tracepoint__syscalls__sys_enter_socket
 
 ## 输出模板
 
@@ -474,7 +487,7 @@ struct trace_event_raw_sys_enter {
 package_id, version, title, description, cve_ids
 
 ## HookPlan
-使用 yaml 代码块，每个 hook 必须包含 name, attach_type, attach, program 字段
+使用 yaml 代码块，开头必须包含 schema_version、package_id、version 元数据字段，然后是 hooks 列表。每个 hook 必须包含 name, attach_type, attach, program 字段
 
 ## eBPF Source Draft
 使用 c 代码块
@@ -493,6 +506,9 @@ package_id, version, title, description, cve_ids
 请在输出末尾明确写出：
 该输出为草稿，必须经过人工修改、builder 容器编译、人工审核、人工签名发布和页面启用后，才能由 agent 安装。
 
+Package ID：
+%s
+
 CVE 信息：
 %s
 
@@ -509,6 +525,6 @@ CVE 信息：
 %s`
 
 // GetDetectionPackageGenerationPrompt returns the detection package generation prompt
-func GetDetectionPackageGenerationPrompt(cveID, description, prerequisites, chain, constraints string) string {
-	return fmt.Sprintf(DetectionPackageGenerationPrompt, cveID, description, prerequisites, chain, constraints)
+func GetDetectionPackageGenerationPrompt(packageID, cveID, description, prerequisites, chain, constraints string) string {
+	return fmt.Sprintf(DetectionPackageGenerationPrompt, packageID, cveID, description, prerequisites, chain, constraints)
 }

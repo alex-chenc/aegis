@@ -55,7 +55,13 @@
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="50" />
-        <el-table-column prop="package_id" label="Package ID" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="package_id" label="Package ID" min-width="200">
+          <template #default="{ row }">
+            <el-tooltip :content="row.package_id" placement="top" :show-after="300">
+              <span class="package-id-cell">{{ row.package_id }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="状态" width="120">
@@ -358,5 +364,13 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+.package-id-cell {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 </style>

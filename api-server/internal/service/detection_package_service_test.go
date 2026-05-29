@@ -472,6 +472,7 @@ func TestStartBuildPassesManifestAndCVEIDsToBuilder(t *testing.T) {
 schema_version: "aegis.ebpf_plugin.v1"
 plugin_id: "copyfail_probe"
 package_id: "pkg-build-manifest"
+version: "1.0.0"
 event_schema:
   events:
     1001:

@@ -161,6 +161,18 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 		return nil, fmt.Errorf("create build dir: %w", err)
 	}
 
+	// Clean old build artifacts to avoid conflicts from previous builds
+	if files, _ := filepath.Glob(filepath.Join(buildDir, "*.bpf.o")); files != nil {
+		for _, f := range files {
+			os.Remove(f)
+		}
+	}
+	if files, _ := filepath.Glob(filepath.Join(buildDir, "*.tar.gz")); files != nil {
+		for _, f := range files {
+			os.Remove(f)
+		}
+	}
+
 	if err := validateBuildInput(req); err != nil {
 		return &BuildResult{
 			BuildID:      req.BuildID,
@@ -210,8 +222,8 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	os.MkdirAll(filepath.Join(stagingDir, "rules"), 0755)
 	os.MkdirAll(filepath.Join(stagingDir, "correlations"), 0755)
 
-	copyFile(perfObj, filepath.Join(stagingDir, "plugin", "copyfail.perf.bpf.o"))
-	copyFile(ringbufObj, filepath.Join(stagingDir, "plugin", "copyfail.ringbuf.bpf.o"))
+	copyFile(perfObj, filepath.Join(stagingDir, "plugin", req.PackageID+".perf.bpf.o"))
+	copyFile(ringbufObj, filepath.Join(stagingDir, "plugin", req.PackageID+".ringbuf.bpf.o"))
 
 	os.WriteFile(filepath.Join(stagingDir, "package.yaml"), []byte(req.PackageMetadataJSON), 0644)
 	os.WriteFile(filepath.Join(stagingDir, "rules", "atomic_sigma.yml"), []byte(req.SigmaRulesYAML), 0644)
@@ -271,8 +283,8 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	result.HookSummary = hookSummaries
 
 	// Populate artifact summary for perf and ringbuf objects
-	perfObjPath := filepath.Join(stagingDir, "plugin", "copyfail.perf.bpf.o")
-	ringbufObjPath := filepath.Join(stagingDir, "plugin", "copyfail.ringbuf.bpf.o")
+	perfObjPath := filepath.Join(stagingDir, "plugin", req.PackageID+".perf.bpf.o")
+	ringbufObjPath := filepath.Join(stagingDir, "plugin", req.PackageID+".ringbuf.bpf.o")
 	perfStat, _ := os.Stat(perfObjPath)
 	ringbufStat, _ := os.Stat(ringbufObjPath)
 	perfSHA, _ := computeSHA256(perfObjPath)
@@ -280,7 +292,7 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 
 	if perfStat != nil {
 		result.Artifacts = append(result.Artifacts, BuildArtifact{
-			Name:      "copyfail.perf.bpf.o",
+			Name:      req.PackageID + ".perf.bpf.o",
 			Transport: "perf",
 			ObjectKey: fmt.Sprintf("detection-packages/%s/%s/artifacts/perf.bpf.o", req.PackageID, req.Version),
 			SHA256:    perfSHA,
@@ -289,7 +301,7 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	}
 	if ringbufStat != nil {
 		result.Artifacts = append(result.Artifacts, BuildArtifact{
-			Name:      "copyfail.ringbuf.bpf.o",
+			Name:      req.PackageID + ".ringbuf.bpf.o",
 			Transport: "ringbuf",
 			ObjectKey: fmt.Sprintf("detection-packages/%s/%s/artifacts/ringbuf.bpf.o", req.PackageID, req.Version),
 			SHA256:    ringbufSHA,

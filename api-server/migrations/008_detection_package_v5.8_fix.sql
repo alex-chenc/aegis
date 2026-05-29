@@ -32,3 +32,9 @@ INSERT INTO role_permissions (user_id, role)
 SELECT DISTINCT operator, 'admin' FROM detection_package_operations
 WHERE operator IS NOT NULL AND operator != ''
 ON CONFLICT (user_id) DO NOTHING;
+
+-- Seed admin role for the initial bootstrap user if not already present
+INSERT INTO role_permissions (user_id, role)
+SELECT username, 'admin' FROM auth_users
+WHERE username NOT IN (SELECT user_id FROM role_permissions)
+ON CONFLICT (user_id) DO NOTHING;

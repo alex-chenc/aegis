@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"api-server/internal/model"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 
@@ -85,10 +86,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		writeAuthError(c, err)
 		return
 	}
-	role := "security_analyst"
-	if h.roleRepo != nil {
-		role, _ = h.roleRepo.GetRole(session.Username)
-	}
+	role := h.resolveUserRole(session.Username)
 	c.JSON(http.StatusOK, gin.H{
 		"token":               session.Token,
 		"username":            session.Username,
@@ -103,15 +101,41 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		writeAuthError(c, err)
 		return
 	}
-	role := "security_analyst"
-	if h.roleRepo != nil {
-		role, _ = h.roleRepo.GetRole(authCtx.Username)
-	}
+	role := h.resolveUserRole(authCtx.Username)
 	c.JSON(http.StatusOK, gin.H{
 		"username":              authCtx.Username,
 		"force_password_change": authCtx.ForcePasswordChange,
 		"role":                  role,
 	})
+}
+
+// resolveUserRole returns the user's role, auto-assigning admin only on
+// fresh installs where no role records exist yet.
+func (h *AuthHandler) resolveUserRole(username string) string {
+	if h.roleRepo == nil {
+		return model.RoleSecurityAnalyst
+	}
+	has, err := h.roleRepo.HasRoleRecord(username)
+	if err != nil {
+		return model.RoleSecurityAnalyst
+	}
+	if has {
+		role, _ := h.roleRepo.GetRole(username)
+		return role
+	}
+	// No role record for this user. Only auto-assign admin if the entire
+	// role_permissions table is empty (fresh install). Otherwise assign
+	// the lowest-privilege role to avoid privilege escalation.
+	anyRoles, err := h.roleRepo.HasAnyRoles()
+	if err != nil {
+		return model.RoleSecurityAnalyst
+	}
+	if !anyRoles {
+		_ = h.roleRepo.SetRole(username, model.RoleAdmin)
+		return model.RoleAdmin
+	}
+	_ = h.roleRepo.SetRole(username, model.RoleSecurityAnalyst)
+	return model.RoleSecurityAnalyst
 }
 
 func (h *AuthHandler) ChangeCredentials(c *gin.Context) {

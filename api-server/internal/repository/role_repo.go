@@ -26,6 +26,26 @@ func (r *RoleRepo) GetRole(userID string) (string, error) {
 	return rp.Role, nil
 }
 
+// HasRoleRecord returns true if the user has a role record in the database.
+func (r *RoleRepo) HasRoleRecord(userID string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.RolePermission{}).Where("user_id = ?", userID).Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// HasAnyRoles returns true if the role_permissions table has any records at all.
+func (r *RoleRepo) HasAnyRoles() (bool, error) {
+	var count int64
+	err := r.db.Model(&model.RolePermission{}).Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *RoleRepo) SetRole(userID, role string) error {
 	var rp model.RolePermission
 	err := r.db.Where("user_id = ?", userID).First(&rp).Error

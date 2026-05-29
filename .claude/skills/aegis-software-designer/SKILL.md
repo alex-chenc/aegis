@@ -126,6 +126,8 @@ When interacting with the user, detect the user's input language and use the sam
 | `aegis-build-test` | Aegis 系统构建测试技能 - agent/server/dc/api-server 构建部署和 gRPC 数据流测试 | Build verification, service startup, health checks, data flow testing, API testing |
 | `aegis-release-packaging` | Aegis 离线部署包构建技能 - Docker 镜像导出、数据库初始化、一键启动脚本、MinIO Agent 预置 | Version release, offline deployment package |
 | `aegis-software-designer` | Aegis Software Designer skill - 设计驱动开发工作流 | Full development workflow |
+| `root-cause-debugging` | Root Cause Debugging - 追踪完整调用链，基于业务逻辑分析根因，应用最小安全修复 | Bug 排查时的根因分析 |
+| `daily-program-logging` | Daily Program Logging - 确保代码包含必要的运行时日志 | Implementation 阶段的日志添加，确保服务启动/关闭、API 调用、后台任务、外部依赖调用、重要业务流程等关键位置有日志 |
 
 ### System Skills
 | Skill Name | Description | Use Case |
@@ -141,27 +143,29 @@ When interacting with the user, detect the user's input language and use the sam
 4. **[Test Case Design]** Write test cases and acceptance criteria based on the design document, but do not execute tests
 5. **[Implementation Plan]** Break down implementation tasks based on the design document and test cases
 6. **[Implementation]** Implement the full code required by the task according to the confirmed design document
-7. **[Self Check]** Check implementation completeness against the design document and test cases
-8. **[Test Execution - /aegis-build-test]** Execute tests according to the test cases written in step 4
-9. **[Build Verification - /aegis-build-test]** Run project build verification
-10. **[Code Review - /code-review]** Perform code review
-11. **[Documentation]** Update related documentation
+7. **[Logging Check - /daily-program-logging]** Invoke `daily-program-logging` skill to ensure the implementation has proper operational logging at key points: service startup/shutdown, API calls, background tasks, external dependency calls, important business processes, error handling, and retry/fallback behavior
+8. **[Self Check]** Check implementation completeness against the design document and test cases
+9. **[Test Execution - /aegis-build-test]** Execute tests according to the test cases written in step 4
+10. **[Build Verification - /aegis-build-test]** Run project build verification
+11. **[Code Review - /code-review]** Perform code review
+12. **[Documentation]** Update related documentation
 
 ## Bug Fix Workflow
 
 1. **[Analysis]** Analyze bug symptoms, logs, reproduction path, and impact scope
 2. **[Reproduce]** Reproduce the bug and record stable reproduction steps
-3. **[Root Cause]** Identify root cause and locate related components, APIs, data flow, or configuration
+3. **[Root Cause - /root-cause-debugging]** Invoke `root-cause-debugging` skill: trace the complete bug-related call chain, analyze root cause based on business logic, identify all key functions on the bug path, and determine the minimal safe fix
 4. **[Fix Design]** Write or update bug fix design document
 5. **[Regression Test Case Design]** Write regression test cases based on root cause and fix design, but do not execute tests
 6. **[Implementation Plan]** Break down fix tasks based on fix design and regression test cases
 7. **[Fix Implementation]** Implement the full fix code required by the bug according to the confirmed fix design
-8. **[Self Check]** Check fix completeness against the fix design and regression test cases
-9. **[Regression Test Execution - /aegis-build-test]** Execute regression tests according to the test cases written in step 5
-10. **[Build Verification - /aegis-build-test]** Run project build verification
-11. **[Code Review - /code-review]** Perform code review
-12. **[Bug Fix Doc]** Create bug fix document in `docs/aegis_system_design_v{version}/fix/`
-13. **[Documentation]** Update related documentation
+8. **[Logging Check - /daily-program-logging]** Invoke `daily-program-logging` skill to ensure the fix includes proper operational logging, especially around the fixed code path, error handling, and any new retry/fallback logic added
+9. **[Self Check]** Check fix completeness against the fix design and regression test cases
+10. **[Regression Test Execution - /aegis-build-test]** Execute regression tests according to the test cases written in step 5
+11. **[Build Verification - /aegis-build-test]** Run project build verification
+12. **[Code Review - /code-review]** Perform code review
+13. **[Bug Fix Doc]** Create bug fix document in `docs/aegis_system_design_v{version}/fix/`
+14. **[Documentation]** Update related documentation
 
 ## Documentation Rules
 
@@ -250,14 +254,15 @@ When writing or modifying frontend code (Vue 3 / TypeScript / CSS), you **MUST**
 4. Design confirmed by user, unless autonomous mode is explicitly enabled
 5. Test cases and acceptance criteria written before implementation
 6. Full code implemented according to the confirmed design document
-7. Self-check completed against design and test cases
-8. Tests executed according to the previously written test cases
-9. Build verification completed if configured
-10. Code review completed if configured
-11. Bug fix document created if this is a bug fix and bug fix docs are configured
-12. Related documentation updated
-13. Known risks, limitations, and rollback plan documented
-14. No unresolved TODOs remain unless explicitly accepted by the user
+7. **Logging check completed** — `/daily-program-logging` invoked to ensure proper operational logging at key points (service startup/shutdown, API calls, background tasks, external dependencies, important business processes, error handling)
+8. Self-check completed against design and test cases
+9. Tests executed according to the previously written test cases
+10. Build verification completed if configured
+11. Code review completed if configured
+12. Bug fix document created if this is a bug fix and bug fix docs are configured
+13. Related documentation updated
+14. Known risks, limitations, and rollback plan documented
+15. No unresolved TODOs remain unless explicitly accepted by the user
 
 ## Quick Reference
 
