@@ -545,7 +545,7 @@ func (h *DetectionPackageHandler) ReviewBuild(c *gin.Context) {
 	}
 
 	var req struct {
-		Approved bool   `json:"approved" binding:"required"`
+		Approved *bool  `json:"approved" binding:"required"`
 		Comment  string `json:"comment"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -554,7 +554,7 @@ func (h *DetectionPackageHandler) ReviewBuild(c *gin.Context) {
 	}
 
 	operator := getOperator(c)
-	err = h.pkgService.ReviewBuild(c.Request.Context(), buildID, req.Approved, req.Comment, operator)
+	err = h.pkgService.ReviewBuild(c.Request.Context(), buildID, *req.Approved, req.Comment, operator)
 	if err != nil {
 		logger.Error("review build failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})

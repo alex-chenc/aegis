@@ -113,14 +113,9 @@ func (r *DetectionPackageRepo) ListPackagesUnified(page, pageSize int, status, s
 	var publishedArgs []interface{}
 	var draftArgs []interface{}
 
-	// Status filter
-	if status != "" && status != "draft" {
+	if status != "" {
 		publishedWhere = append(publishedWhere, "status = ?")
 		publishedArgs = append(publishedArgs, status)
-		// For drafts, only include if filtering by draft status
-		draftWhere = append(draftWhere, "1 = 0")
-	} else if status == "draft" {
-		publishedWhere = append(publishedWhere, "1 = 0")
 		draftWhere = append(draftWhere, "status = ?")
 		draftArgs = append(draftArgs, status)
 	}

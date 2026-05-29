@@ -50,12 +50,12 @@ type InstalledPackage struct {
 }
 
 type DetectionPackageCommand struct {
-	CommandID    string
-	Action       string
-	PackageID    string
-	Version      string
-	PackageURL   string
-	SignatureURL string
-	PackageSize  int64
-	Rollback     bool
+	CommandID    string `json:"command_id"`
+	Action       string `json:"action"`
+	PackageID    string `json:"package_id"`
+	Version      string `json:"version"`
+	PackageURL   string `json:"package_url"`
+	SignatureURL string `json:"signature_url"`
+	PackageSize  int64  `json:"package_size"`
+	Rollback     bool   `json:"rollback"`
 }

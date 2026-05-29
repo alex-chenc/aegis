@@ -29,6 +29,7 @@ const statusMap: Record<string, { type: string; text: string }> = {
   pending: { type: 'info', text: '待处理' },
   running: { type: 'warning', text: '运行中' },
   awaiting_review: { type: 'warning', text: '待审核' },
+  review_rejected: { type: 'danger', text: '审核拒绝' },
   success: { type: 'success', text: '成功' },
   failed: { type: 'danger', text: '失败' },
   downloading: { type: 'warning', text: '下载中' },

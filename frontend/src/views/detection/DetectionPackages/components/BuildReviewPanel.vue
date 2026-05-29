@@ -16,6 +16,16 @@
     <el-divider content-position="left">Hook 列表</el-divider>
     <HookSummaryTable :hooks="build?.hook_summary || []" />
 
+    <el-divider content-position="left">Event Schema</el-divider>
+    <el-table v-if="eventSchemaRows.length > 0" :data="eventSchemaRows" border size="small">
+      <el-table-column prop="eventId" label="Event ID" width="110" />
+      <el-table-column prop="eventName" label="Event Type" min-width="180" show-overflow-tooltip />
+      <el-table-column prop="fieldId" label="字段 ID" width="100" />
+      <el-table-column prop="fieldName" label="字段名" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="fieldType" label="类型" width="120" />
+    </el-table>
+    <el-empty v-else description="暂无 Event Schema" />
+
     <el-divider content-position="left">Artifact</el-divider>
     <el-table :data="build?.artifacts || []" border size="small">
       <el-table-column prop="name" label="文件名" min-width="200" />
@@ -51,7 +61,7 @@
       </div>
     </template>
 
-    <template v-if="build?.status === 'built'">
+    <template v-if="build?.status === 'success'">
       <el-divider content-position="left">签名发布</el-divider>
       <el-button v-if="canOperate('sign')" type="warning" @click="emit('sign')">签名发布</el-button>
     </template>
@@ -63,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { DetectionPackageBuild } from '@/api/detection-packages'
 import { detectionPackageApi } from '@/api/detection-packages'
 import { useRole } from '@/composables/useRole'
@@ -75,18 +85,32 @@ const props = defineProps<{
   build: DetectionPackageBuild | null
 }>()
 
-const emit = defineEmits<{ (e: 'sign'): void }>()
+const emit = defineEmits<{
+  (e: 'sign'): void
+  (e: 'reviewed'): void
+}>()
 
 const { canOperate } = useRole()
 const reviewComment = ref('')
 const reviewing = ref(false)
 const downloadingLog = ref(false)
 
+interface EventSchemaRow {
+  eventId: string
+  eventName: string
+  fieldId: string
+  fieldName: string
+  fieldType: string
+}
+
+const eventSchemaRows = computed(() => flattenEventSchema(readEventSchema(props.build)))
+
 async function handleReview(approved: boolean) {
   reviewing.value = true
   try {
     await detectionPackageApi.reviewBuild(props.build!.id, { approved, comment: reviewComment.value })
     ElMessage.success(approved ? '审核通过' : '审核拒绝')
+    emit('reviewed')
   } catch (e: any) {
     ElMessage.error(e.message || '审核失败')
   } finally {
@@ -98,7 +122,12 @@ async function handleDownloadLog() {
   downloadingLog.value = true
   try {
     const res = await detectionPackageApi.getBuildLog(props.build!.id)
-    window.open(res.log_url, '_blank')
+    const url = res.log_url || res.url
+    if (!url) {
+      ElMessage.warning('完整日志暂不可用')
+      return
+    }
+    window.open(url, '_blank')
   } catch (e: any) {
     ElMessage.error(e.message || '下载日志失败')
   } finally {
@@ -110,6 +139,48 @@ function formatSize(bytes: number) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function flattenEventSchema(schema?: Record<string, unknown>): EventSchemaRow[] {
+  const events = (schema?.events || schema) as Record<string, any> | undefined
+  if (!events || typeof events !== 'object') return []
+
+  return Object.entries(events).flatMap(([eventId, eventValue]) => {
+    const eventInfo = eventValue as Record<string, any>
+    const fields = eventInfo?.fields as Record<string, any> | undefined
+    if (!fields || typeof fields !== 'object') {
+      return [{
+        eventId,
+        eventName: String(eventInfo?.name || eventId),
+        fieldId: '-',
+        fieldName: '-',
+        fieldType: '-',
+      }]
+    }
+    return Object.entries(fields).map(([fieldId, fieldValue]) => {
+      const fieldInfo = fieldValue as Record<string, any>
+      return {
+        eventId,
+        eventName: String(eventInfo?.name || eventId),
+        fieldId,
+        fieldName: String(fieldInfo?.name || fieldId),
+        fieldType: String(fieldInfo?.type || '-'),
+      }
+    })
+  })
+}
+
+function readEventSchema(build: DetectionPackageBuild | null): Record<string, unknown> | undefined {
+  if (!build) return undefined
+  if (build.event_schema && Object.keys(build.event_schema).length > 0) {
+    return build.event_schema
+  }
+  if (!build.event_schema_json) return undefined
+  try {
+    return JSON.parse(build.event_schema_json) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
 }
 </script>
 

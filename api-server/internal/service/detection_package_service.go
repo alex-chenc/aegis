@@ -40,14 +40,14 @@ type BuilderClient interface {
 }
 
 type DetectionPackageCommand struct {
-	CommandID    string
-	Action       string
-	PackageID    string
-	Version      string
-	PackageURL   string
-	SignatureURL string
-	PackageSize  int64
-	Rollback     bool
+	CommandID    string `json:"command_id"`
+	Action       string `json:"action"`
+	PackageID    string `json:"package_id"`
+	Version      string `json:"version"`
+	PackageURL   string `json:"package_url"`
+	SignatureURL string `json:"signature_url"`
+	PackageSize  int64  `json:"package_size"`
+	Rollback     bool   `json:"rollback"`
 }
 
 func NewDetectionPackageService(repo *repository.DetectionPackageRepo, db *gorm.DB, serverClient GRPCServerClient, builderClient BuilderClient) *DetectionPackageService {
@@ -206,6 +206,8 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 	build.StartedAt = &now
 	build.Status = "running"
 	s.repo.UpdateBuild(build)
+	draft.Status = "build_running"
+	s.repo.UpdateDraft(draft)
 
 	result, err := s.builderClient.StartBuild(ctx, &grpc.BuilderStartBuildRequest{
 		BuildID:         build.ID.String(),
@@ -276,9 +278,14 @@ func (s *DetectionPackageService) executeBuild(ctx context.Context, build *model
 		fmt.Printf("[DEBUG] UpdateBuild succeeded for build %s\n", build.ID)
 	}
 
-	if build.Status == "success" || build.Status == "awaiting_review" {
-		draft.Status = "build_success"
-	} else {
+	switch build.Status {
+	case "awaiting_review":
+		draft.Status = model.StatusAwaitingReview
+	case "success":
+		draft.Status = "built"
+	case "pending", "running":
+		draft.Status = "build_running"
+	default:
 		draft.Status = "build_failed"
 	}
 	s.repo.UpdateDraft(draft)
@@ -318,18 +325,32 @@ func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID str
 		}
 	}
 
+	title := build.PackageID
+	description := ""
+	cveIDs := datatypes.JSON([]byte("[]"))
+	if build.DraftID != nil {
+		if draft, draftErr := s.repo.GetDraftByID(*build.DraftID); draftErr == nil {
+			title = draft.Title
+			description = draft.Description
+			cveIDs = draft.CVEIDs
+		}
+	}
+
 	pkg := &model.DetectionPackage{
-		ID:           uuid.New(),
-		PackageID:    build.PackageID,
-		Version:      build.Version,
-		Title:        build.PackageID,
-		Status:       "signed",
-		BuildID:      &build.ID,
-		BuilderImage: build.BuilderImage,
-		HookSummary:  build.HookSummary,
-		EventSchema:  build.EventSchema,
-		SignedBy:     operator,
-		SignedAt:     timePtr(time.Now()),
+		ID:            uuid.New(),
+		PackageID:     build.PackageID,
+		Version:       build.Version,
+		Title:         title,
+		Description:   description,
+		CVEIDs:        cveIDs,
+		Status:        "signed",
+		BuildID:       &build.ID,
+		BuilderImage:  build.BuilderImage,
+		BuilderDigest: build.BuilderDigest,
+		HookSummary:   build.HookSummary,
+		EventSchema:   build.EventSchema,
+		SignedBy:      operator,
+		SignedAt:      timePtr(time.Now()),
 	}
 
 	if signResult != nil {
@@ -640,11 +661,29 @@ func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.
 	if build.Status != "awaiting_review" {
 		return fmt.Errorf("build status is %s, not awaiting_review", build.Status)
 	}
+	newStatus := "review_rejected"
 	if approved {
-		build.Status = "success"
-	} else {
-		build.Status = "review_rejected"
+		newStatus = "success"
 	}
+	if s.builderClient != nil {
+		resp, err := s.builderClient.ReviewBuild(ctx, build.ID.String(), build.PackageID, build.Version, approved, comment, operator)
+		if err != nil {
+			s.recordOperation(build.PackageID, build.Version, model.OperationTypeReview, operator, nil, false, err.Error())
+			return fmt.Errorf("builder review: %w", err)
+		}
+		if resp != nil && !resp.Success {
+			msg := resp.Message
+			if msg == "" {
+				msg = "builder review rejected"
+			}
+			s.recordOperation(build.PackageID, build.Version, model.OperationTypeReview, operator, nil, false, msg)
+			return errors.New(msg)
+		}
+		if resp != nil && (resp.NewStatus == "success" || resp.NewStatus == "review_rejected") {
+			newStatus = resp.NewStatus
+		}
+	}
+	build.Status = newStatus
 	build.ReviewedBy = &operator
 	now := time.Now()
 	build.ReviewedAt = &now
@@ -652,7 +691,18 @@ func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.
 	if err := s.repo.UpdateBuild(build); err != nil {
 		return fmt.Errorf("update build: %w", err)
 	}
-	s.recordOperation(build.PackageID, build.Version, "review", operator, nil, true, "")
+	if build.DraftID != nil {
+		if draft, err := s.repo.GetDraftByID(*build.DraftID); err == nil {
+			if build.Status == "success" {
+				draft.Status = "built"
+			} else {
+				draft.Status = model.StatusReviewRejected
+			}
+			draft.UpdatedBy = operator
+			_ = s.repo.UpdateDraft(draft)
+		}
+	}
+	s.recordOperation(build.PackageID, build.Version, model.OperationTypeReview, operator, nil, true, "")
 	return nil
 }
 

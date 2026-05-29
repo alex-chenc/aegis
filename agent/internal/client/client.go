@@ -288,6 +288,36 @@ func (c *Client) run() {
 						zap.String("config_type", configSync.ConfigType))
 				}
 			}
+
+			if detectionPackageCommand := req.GetDetectionPackageCommand(); detectionPackageCommand != nil {
+				logger.Info("Received detection package command via stream",
+					zap.String("action", detectionPackageCommand.Action),
+					zap.String("package_id", detectionPackageCommand.PackageId),
+					zap.String("version", detectionPackageCommand.Version))
+				if err := c.configManager.ApplyDetectionPackageCommand(detectionPackageCommand); err != nil {
+					logger.Error("Failed to apply detection package command",
+						zap.String("package_id", detectionPackageCommand.PackageId),
+						zap.String("action", detectionPackageCommand.Action),
+						zap.Error(err))
+				} else {
+					logger.Info("Detection package command applied",
+						zap.String("package_id", detectionPackageCommand.PackageId),
+						zap.String("action", detectionPackageCommand.Action))
+				}
+			}
+
+			if allowlistUpdate := req.GetAllowlistUpdate(); allowlistUpdate != nil {
+				logger.Info("Received allowlist update via stream",
+					zap.String("version", allowlistUpdate.Version))
+				if err := c.configManager.ApplyAllowlistUpdate(allowlistUpdate); err != nil {
+					logger.Error("Failed to apply allowlist update",
+						zap.String("version", allowlistUpdate.Version),
+						zap.Error(err))
+				} else {
+					logger.Info("Allowlist update applied",
+						zap.String("version", allowlistUpdate.Version))
+				}
+			}
 		}
 	}
 }

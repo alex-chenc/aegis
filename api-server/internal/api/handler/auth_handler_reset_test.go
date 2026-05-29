@@ -55,7 +55,7 @@ func newTestAuthRouterWithReset(t *testing.T) (*gin.Engine, *gorm.DB) {
 	}
 
 	authSvc := service.NewAuthService(repository.NewAuthRepository(db), nil)
-	authHandler := NewAuthHandler(authSvc)
+	authHandler := NewAuthHandler(authSvc, nil)
 
 	router := gin.New()
 	group := router.Group("/api/v1/auth")

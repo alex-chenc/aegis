@@ -266,3 +266,63 @@ func TestApplyConfigSync_PartialRules(t *testing.T) {
 		t.Fatalf("expected 2 rules (both stored), got %d", len(got))
 	}
 }
+
+func TestApplyDetectionPackageCommand_InvokesHandlerWithPayload(t *testing.T) {
+	mgr := NewConfigManager()
+
+	var gotAction string
+	var gotPayload map[string]interface{}
+	mgr.SetDetectionPackageHandler(func(action, payload string) error {
+		gotAction = action
+		if err := json.Unmarshal([]byte(payload), &gotPayload); err != nil {
+			t.Fatalf("payload should be valid JSON: %v", err)
+		}
+		return nil
+	})
+
+	err := mgr.ApplyDetectionPackageCommand(&pb.DetectionPackageCommand{
+		Action:       "install",
+		PackageId:    "pkg-agent",
+		Version:      "1.0.0",
+		PackageUrl:   "packages/pkg-agent.tar.gz",
+		SignatureUrl: "packages/pkg-agent.tar.gz.sig",
+		PackageSize:  2048,
+	})
+	if err != nil {
+		t.Fatalf("ApplyDetectionPackageCommand failed: %v", err)
+	}
+	if gotAction != "install" {
+		t.Fatalf("expected action install, got %q", gotAction)
+	}
+	if gotPayload["package_id"] != "pkg-agent" || gotPayload["package_url"] != "packages/pkg-agent.tar.gz" {
+		t.Fatalf("unexpected payload: %#v", gotPayload)
+	}
+}
+
+func TestApplyAllowlistUpdate_InvokesHandler(t *testing.T) {
+	mgr := NewConfigManager()
+
+	var gotPayload string
+	mgr.SetAllowlistUpdateHandler(func(payload string) error {
+		gotPayload = payload
+		return nil
+	})
+
+	err := mgr.ApplyAllowlistUpdate(&pb.AllowlistUpdate{
+		Version:       "7",
+		AllowlistJson: `{"tracepoints":["syscalls/sys_enter_socket"],"kprobes":[],"lsm":[],"xdp":[],"tc":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("ApplyAllowlistUpdate failed: %v", err)
+	}
+	if gotPayload == "" {
+		t.Fatal("expected allowlist payload to be forwarded")
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(gotPayload), &parsed); err != nil {
+		t.Fatalf("expected allowlist payload to remain JSON: %v", err)
+	}
+	if parsed["version"].(float64) != 7 {
+		t.Fatalf("expected allowlist version to be merged, got %#v", parsed["version"])
+	}
+}

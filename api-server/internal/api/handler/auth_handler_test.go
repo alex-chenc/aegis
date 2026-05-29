@@ -29,7 +29,7 @@ func newTestAuthRouter(t *testing.T) *gin.Engine {
 	}
 
 	authSvc := service.NewAuthService(repository.NewAuthRepository(db), nil)
-	authHandler := NewAuthHandler(authSvc)
+	authHandler := NewAuthHandler(authSvc, nil)
 
 	router := gin.New()
 	group := router.Group("/api/v1/auth")

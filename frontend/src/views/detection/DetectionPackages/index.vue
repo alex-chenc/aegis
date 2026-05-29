@@ -27,6 +27,9 @@
         </el-input>
         <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 150px; margin-left: 12px;" @change="handleSearch">
           <el-option label="草稿" value="draft" />
+          <el-option label="构建失败" value="build_failed" />
+          <el-option label="待审核" value="awaiting_review" />
+          <el-option label="审核拒绝" value="review_rejected" />
           <el-option label="已构建" value="built" />
           <el-option label="已签名" value="signed" />
           <el-option label="已启用" value="enabled" />
@@ -83,9 +86,24 @@
             {{ new Date(row.updated_at).toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="$router.push(`/detection/packages/${row.package_id}`)">详情</el-button>
+            <el-button
+              v-if="row.status === 'draft'"
+              link type="primary" size="small"
+              @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
+            >构建</el-button>
+            <el-button
+              v-if="row.status === 'awaiting_review' || buildStatusMap[row.package_id]?.status === 'awaiting_review'"
+              link type="warning" size="small"
+              @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
+            >审核</el-button>
+            <el-button
+              v-if="row.status === 'built' || buildStatusMap[row.package_id]?.status === 'success'"
+              link type="warning" size="small"
+              @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
+            >签名</el-button>
             <el-button
               v-if="row.status === 'signed'"
               link type="success" size="small"
@@ -182,12 +200,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useDetectionPackages } from './composables/useDetectionPackages'
 import { detectionPackageApi } from '@/api/detection-packages'
-import type { DetectionPackage } from '@/api/detection-packages'
+import type { DetectionPackage, DetectionPackageBuild } from '@/api/detection-packages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 
 const {
@@ -199,6 +217,24 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const searchText = ref('')
 const statusFilter = ref('')
+
+// 构建状态缓存
+const buildStatusMap = reactive<Record<string, DetectionPackageBuild | null>>({})
+
+// 批量获取构建状态
+async function fetchBuildStatuses(packages: DetectionPackage[]) {
+  const statusesWithBuild = new Set(['draft', 'build_pending', 'build_running', 'build_failed', 'build_success', 'awaiting_review', 'review_rejected', 'built'])
+  await Promise.all(packages.map(async (pkg) => {
+    if (statusesWithBuild.has(pkg.status)) {
+      try {
+        const build = await detectionPackageApi.getLatestBuild(pkg.package_id)
+        buildStatusMap[pkg.package_id] = build
+      } catch {
+        buildStatusMap[pkg.package_id] = null
+      }
+    }
+  }))
+}
 
 const enableDialogVisible = ref(false)
 const disableDialogVisible = ref(false)
@@ -222,13 +258,15 @@ function handlePageChange() {
   loadPackages()
 }
 
-function loadPackages() {
-  fetchPackages({
+async function loadPackages() {
+  await fetchPackages({
     page: currentPage.value,
     page_size: pageSize.value,
     search: searchText.value || undefined,
     status: statusFilter.value || undefined,
   })
+  // 获取构建状态
+  await fetchBuildStatuses(packages.value)
 }
 
 function handleSelectionChange(selection: DetectionPackage[]) {

@@ -40,7 +40,7 @@
               @click="signDialogVisible = true"
             >签名发布</el-button>
             <el-button
-              v-if="['draft', 'build_failed'].includes(currentPackage?.status || '')"
+              v-if="['draft', 'build_failed', 'review_rejected'].includes(currentPackage?.status || '')"
               type="primary"
               :loading="loading"
               @click="$router.push(`/detection/packages/${packageId}/edit`)"
@@ -74,8 +74,12 @@
             </div>
           </div>
           <template v-else>
-            <BuildReviewPanel :build="currentBuild" />
-            <div v-if="currentBuild?.status === 'failed'" style="margin-top: 16px; text-align: center;">
+            <BuildReviewPanel
+              :build="currentBuild"
+              @sign="signDialogVisible = true"
+              @reviewed="loadPackage"
+            />
+            <div v-if="['failed', 'review_rejected'].includes(currentBuild?.status || '')" style="margin-top: 16px; text-align: center;">
               <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">重新构建</el-button>
             </div>
           </template>
@@ -93,18 +97,24 @@
           <pre class="schema-json">{{ JSON.stringify(currentBuild?.event_schema || currentPackage?.event_schema || {}, null, 2) }}</pre>
         </el-tab-pane>
 
-        <el-tab-pane label="告警证据" name="alerts">
+        <el-tab-pane label="关联告警" name="alerts">
           <div v-loading="alertsLoading">
-            <el-empty v-if="!alertsLoading && alerts.length === 0" description="暂无告警数据" />
-            <el-collapse v-else>
-              <el-collapse-item
-                v-for="(alert, index) in alerts"
-                :key="index"
-                :title="alert.title || `告警 ${index + 1}`"
-              >
-                <EvidenceTimeline :evidence="alert.evidence || []" />
-              </el-collapse-item>
-            </el-collapse>
+            <el-empty v-if="!alertsLoading && alerts.length === 0" description="暂无关联告警" />
+            <el-table v-else :data="alerts" border size="small">
+              <el-table-column type="expand">
+                <template #default="{ row }">
+                  <EvidenceTimeline :evidence="parseEvidence(row.event_data)" />
+                </template>
+              </el-table-column>
+              <el-table-column prop="rule_title" label="规则名称" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.rule_title || row.matched_rule_id || '-' }}</template>
+              </el-table-column>
+              <el-table-column prop="severity" label="严重程度" width="100" />
+              <el-table-column prop="pid" label="PID" width="100" />
+              <el-table-column prop="created_at" label="上报时间" width="180">
+                <template #default="{ row }">{{ row.created_at ? new Date(row.created_at).toLocaleString() : '-' }}</template>
+              </el-table-column>
+            </el-table>
           </div>
         </el-tab-pane>
 
@@ -195,6 +205,7 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useRole } from '@/composables/useRole'
 import { detectionPackageApi } from '@/api/detection-packages'
+import type { PackageRuntimeEvent } from '@/api/detection-packages'
 import { useDetectionPackages } from './composables/useDetectionPackages'
 import PackageStatusTag from './components/PackageStatusTag.vue'
 import BuildReviewPanel from './components/BuildReviewPanel.vue'
@@ -210,14 +221,14 @@ const {
 } = useDetectionPackages()
 
 const packageId = ref(route.params.id as string)
-const activeTab = ref('info')
+const activeTab = ref(route.query.tab as string || 'info')
 
 const signDialogVisible = ref(false)
 const enableDialogVisible = ref(false)
 const disableDialogVisible = ref(false)
 const uninstallDialogVisible = ref(false)
 
-const alerts = ref<any[]>([])
+const alerts = ref<PackageRuntimeEvent[]>([])
 const alertsLoading = ref(false)
 const versionHistory = ref<any[]>([])
 
@@ -280,7 +291,7 @@ async function handleBuild() {
 async function pollBuildStatus(buildId: string) {
   const poll = async () => {
     const build = await fetchBuild(buildId)
-    if (build && ['build_pending', 'build_running'].includes(build.status)) {
+    if (build && ['pending', 'running', 'build_pending', 'build_running'].includes(build.status)) {
       setTimeout(poll, 2000)
     } else {
       loadPackage()
@@ -315,6 +326,18 @@ async function confirmUninstall() {
   await uninstallPackage(packageId.value)
   uninstallDialogVisible.value = false
   loadPackage()
+}
+
+function parseEvidence(eventData: string) {
+  if (!eventData) return []
+  try {
+    const parsed = JSON.parse(eventData)
+    if (Array.isArray(parsed)) return parsed
+    if (Array.isArray(parsed.evidence)) return parsed.evidence
+    return []
+  } catch {
+    return []
+  }
 }
 
 onMounted(() => {

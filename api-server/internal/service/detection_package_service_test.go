@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	grpcclient "api-server/internal/grpc"
 	"api-server/internal/model"
 	"api-server/internal/repository"
+	pb "api-server/pkg/api/v1"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
@@ -81,19 +84,19 @@ func newTestDB(t *testing.T) *gorm.DB {
 		version TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
 		builder_image TEXT NOT NULL,
-		builder_image_digest TEXT,
+		builder_digest TEXT,
 		clang_version TEXT,
 		started_at DATETIME,
 		finished_at DATETIME,
 		duration_ms INTEGER,
-		artifacts TEXT NOT NULL DEFAULT '[]',
+		artifact_summary TEXT NOT NULL DEFAULT '[]',
 		hook_summary TEXT NOT NULL DEFAULT '[]',
 		event_schema TEXT NOT NULL DEFAULT '{}',
 		unsigned_package_object_key TEXT,
 		unsigned_package_sha256 TEXT,
 		unsigned_package_size INTEGER NOT NULL DEFAULT 0,
 		build_log_object_key TEXT,
-		build_log_tail TEXT,
+		build_log TEXT,
 		error_message TEXT,
 		created_by TEXT,
 		reviewed_by TEXT,
@@ -322,5 +325,262 @@ func TestListPackagesUnified_FilterByStatus(t *testing.T) {
 	}
 	if len(result) != 3 {
 		t.Errorf("expected 3 results for signed filter, got %d", len(result))
+	}
+}
+
+type fakeDetectionPackageServerClient struct {
+	installHostID string
+	installCmd    *DetectionPackageCommand
+	affected      int32
+}
+
+func (f *fakeDetectionPackageServerClient) InstallDetectionPackageFromService(ctx context.Context, hostID string, command interface{}) (int32, error) {
+	_ = ctx
+	f.installHostID = hostID
+	if cmd, ok := command.(*DetectionPackageCommand); ok {
+		f.installCmd = cmd
+	}
+	if f.affected == 0 {
+		return 1, nil
+	}
+	return f.affected, nil
+}
+
+func (f *fakeDetectionPackageServerClient) SyncAgentConfig(ctx context.Context, hostID string, configs []*pb.AgentConfig) (int32, error) {
+	_ = ctx
+	_ = hostID
+	_ = configs
+	return 0, nil
+}
+
+func (f *fakeDetectionPackageServerClient) UninstallDetectionPackage(ctx context.Context, hostID, packageID, version string) (int32, error) {
+	_ = ctx
+	_ = hostID
+	_ = packageID
+	_ = version
+	return 0, nil
+}
+
+type fakeDetectionPackageBuilderClient struct {
+	reviewCalled   bool
+	reviewApproved bool
+	reviewResp     *pb.ReviewBuildResponse
+	signResp       *grpcclient.BuilderSignResponse
+}
+
+func (f *fakeDetectionPackageBuilderClient) StartBuild(ctx context.Context, req *grpcclient.BuilderStartBuildRequest) (*grpcclient.BuilderStartBuildResponse, error) {
+	_ = ctx
+	_ = req
+	return nil, nil
+}
+
+func (f *fakeDetectionPackageBuilderClient) SignPackage(ctx context.Context, req *grpcclient.BuilderSignRequest) (*grpcclient.BuilderSignResponse, error) {
+	_ = ctx
+	_ = req
+	if f.signResp != nil {
+		return f.signResp, nil
+	}
+	return &grpcclient.BuilderSignResponse{Success: true}, nil
+}
+
+func (f *fakeDetectionPackageBuilderClient) GetPackageBuildStatus(ctx context.Context, packageID, version, buildID string) (*pb.GetPackageBuildStatusResponse, error) {
+	_ = ctx
+	_ = packageID
+	_ = version
+	_ = buildID
+	return nil, nil
+}
+
+func (f *fakeDetectionPackageBuilderClient) ReviewBuild(ctx context.Context, buildID, packageID, version string, approved bool, comment, reviewer string) (*pb.ReviewBuildResponse, error) {
+	_ = ctx
+	_ = buildID
+	_ = packageID
+	_ = version
+	_ = comment
+	_ = reviewer
+	f.reviewCalled = true
+	f.reviewApproved = approved
+	if f.reviewResp != nil {
+		return f.reviewResp, nil
+	}
+	return &pb.ReviewBuildResponse{Success: true}, nil
+}
+
+func TestReviewBuild_RejectsAwaitingReviewBuild(t *testing.T) {
+	svc, db := newTestDetectionPackageService(t)
+	builder := &fakeDetectionPackageBuilderClient{
+		reviewResp: &pb.ReviewBuildResponse{Success: true, NewStatus: "review_rejected"},
+	}
+	svc.builderClient = builder
+
+	draft, err := svc.CreateDraft(context.Background(), CreateDraftRequest{
+		PackageID:     "pkg-review",
+		TargetVersion: "1.0.0",
+		Title:         "Review Package",
+	}, "creator")
+	if err != nil {
+		t.Fatalf("CreateDraft failed: %v", err)
+	}
+
+	buildID := uuid.New()
+	build := &model.DetectionPackageBuild{
+		ID:           buildID,
+		DraftID:      &draft.ID,
+		PackageID:    draft.PackageID,
+		Version:      draft.TargetVersion,
+		Status:       "awaiting_review",
+		BuilderImage: "aegis-agent-builder-ubi8:5.8.0",
+	}
+	if err := db.Create(build).Error; err != nil {
+		t.Fatalf("Create build failed: %v", err)
+	}
+
+	if err := svc.ReviewBuild(context.Background(), buildID, false, "needs changes", "reviewer"); err != nil {
+		t.Fatalf("ReviewBuild reject failed: %v", err)
+	}
+	if !builder.reviewCalled {
+		t.Fatal("expected builder review to be called")
+	}
+	if builder.reviewApproved {
+		t.Fatal("expected approved=false to be passed to builder")
+	}
+
+	updatedBuild, err := svc.GetBuild(context.Background(), buildID)
+	if err != nil {
+		t.Fatalf("GetBuild failed: %v", err)
+	}
+	if updatedBuild.Status != model.StatusReviewRejected {
+		t.Fatalf("expected build status %q, got %q", model.StatusReviewRejected, updatedBuild.Status)
+	}
+	if updatedBuild.ReviewedBy == nil || *updatedBuild.ReviewedBy != "reviewer" {
+		t.Fatalf("expected reviewed_by reviewer, got %#v", updatedBuild.ReviewedBy)
+	}
+	updatedDraft, err := svc.GetDraft(context.Background(), draft.PackageID)
+	if err != nil {
+		t.Fatalf("GetDraft failed: %v", err)
+	}
+	if updatedDraft.Status != model.StatusReviewRejected {
+		t.Fatalf("expected draft status %q, got %q", model.StatusReviewRejected, updatedDraft.Status)
+	}
+}
+
+func TestSignPackage_UsesDraftMetadata(t *testing.T) {
+	svc, db := newTestDetectionPackageService(t)
+	builder := &fakeDetectionPackageBuilderClient{
+		signResp: &grpcclient.BuilderSignResponse{
+			Success:            true,
+			PackageObjectKey:   "packages/pkg/1.0.0.tar.gz",
+			SignatureObjectKey: "packages/pkg/1.0.0.tar.gz.sig",
+			PackageSHA256:      "abc123",
+			PackageSize:        2048,
+		},
+	}
+	svc.builderClient = builder
+
+	draft, err := svc.CreateDraft(context.Background(), CreateDraftRequest{
+		PackageID:     "pkg-sign",
+		TargetVersion: "1.0.0",
+		Title:         "Signed Package Title",
+		Description:   "Package description",
+		CVEIDs:        []string{"CVE-2026-31431"},
+	}, "creator")
+	if err != nil {
+		t.Fatalf("CreateDraft failed: %v", err)
+	}
+	buildID := uuid.New()
+	build := &model.DetectionPackageBuild{
+		ID:           buildID,
+		DraftID:      &draft.ID,
+		PackageID:    draft.PackageID,
+		Version:      draft.TargetVersion,
+		Status:       "success",
+		BuilderImage: "aegis-agent-builder-ubi8:5.8.0",
+	}
+	if err := db.Create(build).Error; err != nil {
+		t.Fatalf("Create build failed: %v", err)
+	}
+
+	pkg, err := svc.SignPackage(context.Background(), draft.PackageID, "signer")
+	if err != nil {
+		t.Fatalf("SignPackage failed: %v", err)
+	}
+	if pkg.Title != draft.Title {
+		t.Fatalf("expected package title %q, got %q", draft.Title, pkg.Title)
+	}
+	if pkg.Description != draft.Description {
+		t.Fatalf("expected package description %q, got %q", draft.Description, pkg.Description)
+	}
+	var cves []string
+	if err := json.Unmarshal(pkg.CVEIDs, &cves); err != nil {
+		t.Fatalf("unmarshal cve ids: %v", err)
+	}
+	if len(cves) != 1 || cves[0] != "CVE-2026-31431" {
+		t.Fatalf("expected CVE metadata to be copied, got %#v", cves)
+	}
+}
+
+func TestEnablePackage_DispatchesInstallCommand(t *testing.T) {
+	db := newTestDB(t)
+	repo := repository.NewDetectionPackageRepo(db)
+	serverClient := &fakeDetectionPackageServerClient{affected: 2}
+	svc := NewDetectionPackageService(repo, db, serverClient, nil)
+
+	pkg := &model.DetectionPackage{
+		ID:                 uuid.New(),
+		PackageID:          "pkg-enable",
+		Version:            "1.0.0",
+		Title:              "Enable Package",
+		Status:             "signed",
+		PackageObjectKey:   "packages/pkg-enable/1.0.0.tar.gz",
+		SignatureObjectKey: "packages/pkg-enable/1.0.0.tar.gz.sig",
+		PackageSize:        4096,
+	}
+	if err := db.Create(pkg).Error; err != nil {
+		t.Fatalf("Create package failed: %v", err)
+	}
+
+	if err := svc.EnablePackage(context.Background(), pkg.PackageID, "admin"); err != nil {
+		t.Fatalf("EnablePackage failed: %v", err)
+	}
+	if serverClient.installHostID != "" {
+		t.Fatalf("expected global rollout host id to be empty, got %q", serverClient.installHostID)
+	}
+	if serverClient.installCmd == nil {
+		t.Fatal("expected install command to be dispatched")
+	}
+	if serverClient.installCmd.PackageID != pkg.PackageID || serverClient.installCmd.PackageURL != pkg.PackageObjectKey {
+		t.Fatalf("unexpected install command: %#v", serverClient.installCmd)
+	}
+
+	enabled, err := repo.GetLatestPackage(pkg.PackageID)
+	if err != nil {
+		t.Fatalf("GetLatestPackage failed: %v", err)
+	}
+	if enabled.Status != "enabled" {
+		t.Fatalf("expected enabled status, got %q", enabled.Status)
+	}
+}
+
+func TestDetectionPackageCommand_JSONTagsMatchProtoRequest(t *testing.T) {
+	cmd := DetectionPackageCommand{
+		CommandID:    "cmd-1",
+		Action:       "install",
+		PackageID:    "pkg-json",
+		Version:      "1.0.0",
+		PackageURL:   "packages/pkg-json.tar.gz",
+		SignatureURL: "packages/pkg-json.tar.gz.sig",
+		PackageSize:  1024,
+		Rollback:     true,
+	}
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	var pbCmd pb.DetectionPackageCommandRequest
+	if err := json.Unmarshal(data, &pbCmd); err != nil {
+		t.Fatalf("unmarshal into proto request: %v", err)
+	}
+	if pbCmd.PackageId != cmd.PackageID || pbCmd.PackageUrl != cmd.PackageURL || !pbCmd.Rollback {
+		t.Fatalf("json tags did not map to proto request: %#v", pbCmd)
 	}
 }

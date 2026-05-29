@@ -14,8 +14,24 @@ export interface DetectionPackageDraft {
   sigma_rules_yaml: string
   correlation_yaml: string
   build_params: Record<string, unknown>
-  status: 'draft' | 'build_pending' | 'build_running' | 'built' | 'signed'
+  status: 'draft' | 'build_pending' | 'build_running' | 'build_failed' | 'awaiting_review' | 'review_rejected' | 'built' | 'signed'
 }
+
+export type DetectionPackageStatus =
+  | 'draft'
+  | 'build_pending'
+  | 'build_running'
+  | 'build_failed'
+  | 'build_success'
+  | 'awaiting_review'
+  | 'review_rejected'
+  | 'built'
+  | 'signed'
+  | 'enabled'
+  | 'active'
+  | 'degraded'
+  | 'disabled'
+  | 'uninstalled'
 
 export interface DetectionPackage {
   id: string
@@ -24,7 +40,7 @@ export interface DetectionPackage {
   title: string
   description?: string
   cve_ids: string[]
-  status: 'draft' | 'build_failed' | 'built' | 'signed' | 'enabled' | 'active' | 'degraded' | 'disabled'
+  status: DetectionPackageStatus
   package_object_key?: string
   signature_object_key?: string
   package_size?: number
@@ -64,7 +80,7 @@ export interface DetectionPackageBuild {
   id: string
   package_id: string
   version: string
-  status: 'build_pending' | 'build_running' | 'build_failed' | 'built'
+  status: 'pending' | 'running' | 'success' | 'failed' | 'awaiting_review' | 'review_rejected'
   error_message?: string
   builder_image_digest?: string
   clang_version?: string
@@ -72,12 +88,34 @@ export interface DetectionPackageBuild {
   build_log_tail?: string
   artifacts: BuildArtifact[]
   hook_summary: PackageHook[]
+  event_schema?: Record<string, unknown>
   event_schema_json?: string
   unsigned_package_object_key?: string
   unsigned_package_sha256?: string
   unsigned_package_size?: number
   created_at: string
   updated_at: string
+}
+
+export interface PackageRuntimeEvent {
+  id: string
+  event_id: string
+  host_id: string
+  event_type: string
+  event_data: string
+  matched_rule_id?: string
+  rule_title?: string
+  mitre_id?: string
+  severity?: string
+  pid?: number
+  command_line?: string
+  timestamp?: number
+  created_at: string
+}
+
+export interface BuildLogResponse {
+  url?: string
+  log_url?: string
 }
 
 export interface BuildArtifact {
@@ -178,10 +216,10 @@ export const detectionPackageApi = {
   rollbackPackage: (packageId: string, targetVersion: string): Promise<void> =>
     request.post(`/detection/packages/${packageId}/rollback`, { target_version: targetVersion }),
 
-  getPackageAlerts: (packageId: string, params?: PageQuery): Promise<{ data: any[]; total: number }> =>
+  getPackageAlerts: (packageId: string, params?: PageQuery): Promise<{ data: PackageRuntimeEvent[]; total: number }> =>
     request.get(`/detection/packages/${packageId}/alerts`, { params }),
 
-  getBuildLog: (buildId: string): Promise<{ log_url: string }> =>
+  getBuildLog: (buildId: string): Promise<BuildLogResponse> =>
     request.get(`/detection/packages/builds/${buildId}/log`),
 
   deletePackage: (packageId: string): Promise<void> =>

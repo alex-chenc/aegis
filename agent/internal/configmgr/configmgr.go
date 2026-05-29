@@ -3,6 +3,7 @@ package configmgr
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 
 	pb "aegis-agent/pkg/api/v1"
@@ -94,6 +95,55 @@ func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 	default:
 		return fmt.Errorf("unknown config type: %s", sync.ConfigType)
 	}
+}
+
+func (m *ConfigManager) ApplyDetectionPackageCommand(cmd *pb.DetectionPackageCommand) error {
+	if cmd == nil {
+		return fmt.Errorf("detection package command is nil")
+	}
+	m.mu.RLock()
+	handler := m.onDetectionPackage
+	m.mu.RUnlock()
+	if handler == nil {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"action":        cmd.Action,
+		"package_id":    cmd.PackageId,
+		"version":       cmd.Version,
+		"package_url":   cmd.PackageUrl,
+		"signature_url": cmd.SignatureUrl,
+		"package_size":  cmd.PackageSize,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal detection package command: %w", err)
+	}
+	return handler(cmd.Action, string(payload))
+}
+
+func (m *ConfigManager) ApplyAllowlistUpdate(update *pb.AllowlistUpdate) error {
+	if update == nil {
+		return fmt.Errorf("allowlist update is nil")
+	}
+	m.mu.RLock()
+	handler := m.onAllowlistUpdate
+	m.mu.RUnlock()
+	if handler == nil {
+		return nil
+	}
+	payload := update.AllowlistJson
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(update.AllowlistJson), &config); err == nil {
+		if _, exists := config["version"]; !exists && update.Version != "" {
+			if version, err := strconv.ParseInt(update.Version, 10, 64); err == nil {
+				config["version"] = version
+				if payloadBytes, err := json.Marshal(config); err == nil {
+					payload = string(payloadBytes)
+				}
+			}
+		}
+	}
+	return handler(payload)
 }
 
 func (m *ConfigManager) applyAuditRules(sync *pb.ConfigSync) error {
