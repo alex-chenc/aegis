@@ -68,9 +68,9 @@ func convertManifest(pm *PluginManifest) *plugin.PluginManifest {
 			Program:    h.Program,
 		}
 	}
-	events := make(map[int]plugin.EventDef)
+	events := make(map[string]plugin.EventDef)
 	for k, v := range pm.EventSchema.Events {
-		fields := make(map[int]plugin.FieldDef)
+		fields := make(map[string]plugin.FieldDef)
 		for fk, fv := range v.Fields {
 			fields[fk] = plugin.FieldDef{Name: fv.Name, Type: fv.Type}
 		}

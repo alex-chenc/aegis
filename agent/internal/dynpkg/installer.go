@@ -42,8 +42,15 @@ func ExtractPackage(packagePath, targetDir string) error {
 			return fmt.Errorf("read tar: %w", err)
 		}
 
-		target := filepath.Join(targetDir, header.Name)
-		if !filepath.HasPrefix(target, filepath.Clean(targetDir)+string(os.PathSeparator)) {
+		// Clean the entry name to strip leading "./" and resolve "." / ".."
+		name := filepath.Clean(header.Name)
+		if name == "." || name == "" {
+			// Root directory entry (e.g. "./") — skip it, targetDir already exists
+			continue
+		}
+
+		target := filepath.Join(targetDir, name)
+		if !strings.HasPrefix(target, filepath.Clean(targetDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid path: %s", header.Name)
 		}
 
@@ -84,18 +91,32 @@ func ParseManifests(extractDir string) (*PackageManifest, *PluginManifest, error
 		return nil, nil, fmt.Errorf("parse package.yaml: %w", err)
 	}
 
-	pluginPath := filepath.Join(extractDir, pkgManifest.Plugin.Manifest)
-	pluginData, err := os.ReadFile(pluginPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read plugin.yaml: %w", err)
+	// If plugin.manifest is set, read the external plugin.yaml file
+	if pkgManifest.Plugin.Manifest != "" {
+		pluginPath := filepath.Join(extractDir, pkgManifest.Plugin.Manifest)
+		pluginData, err := os.ReadFile(pluginPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read plugin.yaml: %w", err)
+		}
+
+		var pluginManifest PluginManifest
+		if err := yaml.Unmarshal(pluginData, &pluginManifest); err != nil {
+			return nil, nil, fmt.Errorf("parse plugin.yaml: %w", err)
+		}
+
+		return &pkgManifest, &pluginManifest, nil
 	}
 
-	var pluginManifest PluginManifest
-	if err := yaml.Unmarshal(pluginData, &pluginManifest); err != nil {
-		return nil, nil, fmt.Errorf("parse plugin.yaml: %w", err)
+	// Otherwise, build a PluginManifest from the inline hooks/event_schema in package.yaml
+	pluginManifest := &PluginManifest{
+		SchemaVersion: pkgManifest.SchemaVersion,
+		PluginID:      pkgManifest.PackageID,
+		PackageID:     pkgManifest.PackageID,
+		Hooks:         pkgManifest.Hooks,
+		EventSchema:   pkgManifest.EventSchema,
 	}
 
-	return &pkgManifest, &pluginManifest, nil
+	return &pkgManifest, pluginManifest, nil
 }
 
 func downloadFile(ctx context.Context, url, destPath string) error {

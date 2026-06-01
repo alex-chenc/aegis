@@ -32,8 +32,8 @@ redis:
 # MinIO Configuration
 minio:
   endpoint: minio:9000
-  access_key: minioadmin
-  secret_key: minioadmin
+  access_key: minio_admin
+  secret_key: a_third_strong_secret_password
   use_ssl: false
   buckets:
     - aegis-documents

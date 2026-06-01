@@ -14,5 +14,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 ARG BUILDER_IMAGE_DIGEST=""
 ENV BUILDER_IMAGE_DIGEST=${BUILDER_IMAGE_DIGEST}
 COPY --from=builder /out/builder ./builder
+# Copy eBPF common headers (vmlinux.h) from agent for dynamic plugin compilation
+COPY vmlinux.h /usr/include/vmlinux.h
 EXPOSE 19096
 CMD ["./builder"]

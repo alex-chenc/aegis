@@ -9,17 +9,20 @@ import (
 )
 
 type PackageManifest struct {
-	SchemaVersion    string        `yaml:"schema_version"`
-	PackageID        string        `yaml:"package_id"`
-	Version          string        `yaml:"version"`
-	Title            string        `yaml:"title"`
-	Description      string        `yaml:"description"`
-	MinAgentVersion  string        `yaml:"min_agent_version"`
-	Plugin           PluginRef     `yaml:"plugin"`
-	Artifacts        ArtifactRefs  `yaml:"artifacts"`
-	SigmaRules       []string      `yaml:"sigma_rules"`
-	CorrelationRules []string      `yaml:"correlation_rules"`
-	Limits           PackageLimits `yaml:"limits"`
+	SchemaVersion    string            `yaml:"schema_version"`
+	PackageID        string            `yaml:"package_id"`
+	Version          string            `yaml:"version"`
+	Title            string            `yaml:"title"`
+	Description      string            `yaml:"description"`
+	MinAgentVersion  string            `yaml:"min_agent_version"`
+	Plugin           PluginRef         `yaml:"plugin"`
+	Artifacts        ArtifactRefs      `yaml:"artifacts"`
+	SigmaRules       []string          `yaml:"sigma_rules"`
+	CorrelationRules []string          `yaml:"correlation_rules"`
+	Limits           PackageLimits     `yaml:"limits"`
+	// Inline plugin manifest fields (used when plugin.manifest is not set)
+	Hooks       []PluginHook      `yaml:"hooks"`
+	EventSchema PluginEventSchema `yaml:"event_schema"`
 }
 
 type PluginManifest struct {
@@ -60,12 +63,12 @@ type PackageLimits struct {
 }
 
 type PluginEventSchema struct {
-	Events map[int]EventDef `yaml:"events"`
+	Events map[string]EventDef `yaml:"events"`
 }
 
 type EventDef struct {
-	Name   string           `yaml:"name"`
-	Fields map[int]FieldDef `yaml:"fields"`
+	Name   string              `yaml:"name"`
+	Fields map[string]FieldDef `yaml:"fields"`
 }
 
 type FieldDef struct {
@@ -91,8 +94,8 @@ func ValidateManifest(m *PackageManifest) error {
 	if m.SchemaVersion == "" {
 		return fmt.Errorf("schema_version is required")
 	}
-	if m.Plugin.Manifest == "" {
-		return fmt.Errorf("plugin.manifest is required")
+	if m.Plugin.Manifest == "" && len(m.Hooks) == 0 {
+		return fmt.Errorf("plugin.manifest or hooks is required")
 	}
 	return nil
 }

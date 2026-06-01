@@ -1,18 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"aegis-agent/internal/asset"
+
+	"github.com/google/uuid"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
@@ -124,8 +128,68 @@ func main() {
 			zap.String("package_id", packageID),
 			zap.String("version", version),
 			zap.String("status", status))
+		// Report host status to API server
+		go func() {
+			reportURL := fmt.Sprintf("http://%s/api/v1/detection/packages/hosts/report", "127.0.0.1:8082")
+			reportData := map[string]string{
+				"host_id":    cfg.HostID,
+					"hostname":   assetInfo.Hostname,
+				"package_id": packageID,
+				"version":    version,
+				"status":     status,
+			}
+			body, _ := json.Marshal(reportData)
+			req, err := http.NewRequest("POST", reportURL, bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// Use a simple HTTP client without auth (internal API)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				logger.Debug("failed to report host status", zap.Error(err))
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				logger.Debug("host status report returned non-200", zap.Int("status", resp.StatusCode))
+			}
+		}()
 	})
 	logger.Info("Dynamic package manager initialized")
+
+	// Restore previously installed packages from disk
+	if err := dynpkgManager.RestorePackages(context.Background()); err != nil {
+		logger.Error("failed to restore detection packages", zap.Error(err))
+	} else {
+		logger.Info("Detection packages restored from disk")
+		// Report host status for all restored packages
+		go func() {
+			for _, pkg := range dynpkgManager.Status() {
+				reportURL := fmt.Sprintf("http://%s/api/v1/detection/packages/hosts/report", "127.0.0.1:8082")
+				reportData := map[string]string{
+					"host_id":    cfg.HostID,
+					"hostname":   assetInfo.Hostname,
+					"package_id": pkg.PackageID,
+					"version":    pkg.Version,
+					"status":     pkg.Status,
+				}
+				body, _ := json.Marshal(reportData)
+				req, err := http.NewRequest("POST", reportURL, bytes.NewReader(body))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					logger.Debug("failed to report restored package status", zap.String("package_id", pkg.PackageID), zap.Error(err))
+					continue
+				}
+				resp.Body.Close()
+				logger.Info("restored package status reported", zap.String("package_id", pkg.PackageID), zap.String("status", pkg.Status))
+			}
+		}()
+	}
 
 	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
 
@@ -137,16 +201,40 @@ func main() {
 			return
 		}
 		evidenceJSON, _ := json.Marshal(corrAlert.Evidence)
+		// Extract PID from first evidence item
+		var pid int32
+		if corrAlert.Evidence != nil && len(corrAlert.Evidence) > 0 {
+			pid = int32(corrAlert.Evidence[0].PID)
+		}
+		// Collect process tree for the triggering PID
+		var processTreeJSON string
+		if pid > 0 {
+			if tree, err := toolManager.GetProcessTree(int(pid)); err == nil {
+				if treeJSON, err := json.Marshal(tree); err == nil {
+					processTreeJSON = string(treeJSON)
+				}
+			}
+		}
+		// Build matched_rule_id to include package_id for frontend correlation
+		matchedRuleID := corrAlert.SpecID
+		if corrAlert.PackageID != "" {
+			matchedRuleID = corrAlert.SpecID
+		}
 		req := &pb.ReportEventRequest{
 			HostId: cfg.HostID,
 			Events: []*pb.RuntimeEvent{
 				{
+					EventId:          "EVT-" + uuid.New().String()[:8],
+					HostId:           cfg.HostID,
 					EventType:        "correlation_alert",
-					MatchedRuleId:    corrAlert.SpecID,
+					Timestamp:        time.Now().UnixMilli(),
+					Pid:              pid,
+					MatchedRuleId:    matchedRuleID,
 					MitreId:          corrAlert.MitreID,
 					Severity:         corrAlert.Severity,
 					EventDataJson:    string(evidenceJSON),
 					MatchedRuleTitle: corrAlert.Title,
+					ProcessTree:      processTreeJSON,
 				},
 			},
 		}
@@ -212,6 +300,12 @@ func main() {
 	logger.Info("Event collector started")
 
 	pipeline := ebpf.NewPipeline(collector, ruleLoader, c, cfg.HostID, metrics)
+	// Feed built-in eBPF events to the correlation engine so package-specific
+	// sigma rules (e.g. suspicious_root_exec) can be evaluated and findings
+	// fed to the correlation engine for 4-step chains.
+	pipeline.SetEventCallback(func(eventMap map[string]interface{}) {
+		dynpkgManager.ProcessEventForAll(eventMap)
+	})
 	pipelineDone := make(chan struct{})
 	go pipeline.Run(pipelineDone)
 	logger.Info("Event pipeline started")

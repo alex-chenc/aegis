@@ -31,3 +31,19 @@ func (a *SigmaMatcherAdapter) Match(event map[string]interface{}) []SigmaMatch {
 	}
 	return matches
 }
+
+func (a *SigmaMatcherAdapter) AddRules(rules []byte) error {
+	if a.loader == nil {
+		return nil
+	}
+	return a.loader.ApplyUpdate("add", "", rules)
+}
+
+func (a *SigmaMatcherAdapter) RemoveRules(ruleIDs []string) {
+	if a.loader == nil {
+		return
+	}
+	for _, id := range ruleIDs {
+		a.loader.ApplyUpdate("delete", id, nil)
+	}
+}

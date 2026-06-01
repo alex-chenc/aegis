@@ -75,9 +75,11 @@ func (e *Engine) AddFinding(finding AtomicFinding) []CorrelationAlert {
 	defer e.mu.RUnlock()
 
 	e.cache.Add(finding)
+	logger.Debug("AddFinding called", zap.String("package_id", finding.PackageID), zap.String("rule_id", finding.RuleID), zap.Int("pid", finding.PID))
 
 	var alerts []CorrelationAlert
 	for _, spec := range e.specs {
+		logger.Debug("AddFinding checking spec", zap.String("spec_id", spec.ID), zap.String("spec_package_id", spec.PackageID), zap.String("finding_package_id", finding.PackageID), zap.Bool("match", spec.PackageID == finding.PackageID))
 		if spec.PackageID != finding.PackageID {
 			continue
 		}
@@ -100,6 +102,7 @@ func (e *Engine) checkSpec(spec CorrelationSpec, finding AtomicFinding) *Correla
 	}
 
 	lastStep := spec.Correlation.Sequence[len(spec.Correlation.Sequence)-1]
+	logger.Debug("checkSpec", zap.String("spec_id", spec.ID), zap.String("finding_rule_id", finding.RuleID), zap.String("last_step_rule_id", lastStep.RuleID), zap.Bool("match", finding.RuleID == lastStep.RuleID))
 	if finding.RuleID != lastStep.RuleID {
 		return nil
 	}

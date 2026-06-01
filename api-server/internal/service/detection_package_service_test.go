@@ -148,7 +148,7 @@ func newTestDetectionPackageService(t *testing.T) (*DetectionPackageService, *go
 
 	db := newTestDB(t)
 	repo := repository.NewDetectionPackageRepo(db)
-	return NewDetectionPackageService(repo, db, nil, nil), db
+	return NewDetectionPackageService(repo, db, nil, nil, "http://minio:9000/aegis-releases"), db
 }
 
 func TestCreateDraft_AutoGeneratesUUIDPackageID(t *testing.T) {
@@ -629,7 +629,7 @@ func TestEnablePackage_DispatchesInstallCommand(t *testing.T) {
 	db := newTestDB(t)
 	repo := repository.NewDetectionPackageRepo(db)
 	serverClient := &fakeDetectionPackageServerClient{affected: 2}
-	svc := NewDetectionPackageService(repo, db, serverClient, nil)
+	svc := NewDetectionPackageService(repo, db, serverClient, nil, "http://minio:9000/aegis-releases")
 
 	pkg := &model.DetectionPackage{
 		ID:                 uuid.New(),
@@ -654,7 +654,7 @@ func TestEnablePackage_DispatchesInstallCommand(t *testing.T) {
 	if serverClient.installCmd == nil {
 		t.Fatal("expected install command to be dispatched")
 	}
-	if serverClient.installCmd.PackageID != pkg.PackageID || serverClient.installCmd.PackageURL != pkg.PackageObjectKey {
+	if serverClient.installCmd.PackageID != pkg.PackageID || serverClient.installCmd.PackageURL != "http://minio:9000/aegis-releases/"+pkg.PackageObjectKey {
 		t.Fatalf("unexpected install command: %#v", serverClient.installCmd)
 	}
 

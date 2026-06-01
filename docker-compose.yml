@@ -236,6 +236,9 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
       MINIO_USE_SSL: "false"
+      # URL agents use to download detection-package artifacts from MinIO.
+      # Must be reachable from the host where the agent runs (not the Docker network).
+      MINIO_ARTIFACT_BASE_URL: "http://localhost:9000/aegis-releases"
       # 服务配置
       SERVER_HTTP_PORT: 8082
       SERVER_GRPC_PORT: 19093

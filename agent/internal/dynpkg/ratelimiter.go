@@ -1,6 +1,7 @@
 package dynpkg
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -27,9 +28,9 @@ func NewRateLimiter(disableCallback func(packageID, reason string)) *RateLimiter
 		pidLimiters:       make(map[int]*rate.Limiter),
 		exceedStart:       make(map[string]time.Time),
 		disableCallback:   disableCallback,
-		defaultPluginRate: 1000,
-		defaultTypeRate:   500,
-		defaultPidRate:    100,
+		defaultPluginRate: 10000,
+		defaultTypeRate:   5000,
+		defaultPidRate:    1000,
 		disableThreshold:  30 * time.Second,
 	}
 }
@@ -61,6 +62,16 @@ func (rl *RateLimiter) Allow(pluginID, eventType string, pid int) bool {
 	pidOk := pidLimiter.Allow()
 
 	if !pluginOk || !typeOk || !pidOk {
+		// Debug: log rate limit hit
+		if !pluginOk {
+			fmt.Printf("[RateLimit] plugin %s rate exceeded for type=%s pid=%d\n", pluginID, eventType, pid)
+		}
+		if !typeOk {
+			fmt.Printf("[RateLimit] type %s rate exceeded for plugin=%s pid=%d\n", eventType, pluginID, pid)
+		}
+		if !pidOk {
+			fmt.Printf("[RateLimit] pid %d rate exceeded for plugin=%s type=%s\n", pid, pluginID, eventType)
+		}
 		rl.checkExceed(pluginID)
 		return false
 	}

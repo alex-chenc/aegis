@@ -1557,7 +1557,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 
 	var req SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request body"})
 		return
 	}
 
@@ -1572,7 +1572,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 			logger.Warn("failed to restore AI session for message",
 				zap.String("session_id", sessionID),
 				zap.Error(err))
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
 			return
 		}
 	}
@@ -1623,7 +1623,7 @@ func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
 func (h *AIAnalysisHandler) FindSimilarCases(c *gin.Context) {
 	var req SimilarCaseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request body"})
 		return
 	}
 
@@ -1638,7 +1638,7 @@ func (h *AIAnalysisHandler) FindSimilarCases(c *gin.Context) {
 	similar, err := h.vectorService.FindSimilarAnalysis(ctx, req.Query, req.AlertType, req.Threshold, req.Limit)
 	if err != nil {
 		logger.Error("find similar analysis error", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("search error: %v", err)})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "搜索服务暂时不可用，请稍后重试"})
 		return
 	}
 
@@ -1659,7 +1659,7 @@ func (h *AIAnalysisHandler) GetRAGContext(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request body"})
 		return
 	}
 
@@ -1667,7 +1667,7 @@ func (h *AIAnalysisHandler) GetRAGContext(c *gin.Context) {
 	ragContext, err := h.vectorService.BuildRAGContext(ctx, req.Query, req.AlertType)
 	if err != nil {
 		logger.Error("build RAG context error", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("RAG context error: %v", err)})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "RAG服务暂时不可用，请稍后重试"})
 		return
 	}
 
@@ -1788,7 +1788,7 @@ func (h *AIAnalysisHandler) GetSessionHistory(c *gin.Context) {
 	h.sessionsMutex.RUnlock()
 
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
 		return
 	}
 
@@ -2140,11 +2140,33 @@ func (h *AIAnalysisHandler) GetSessionList(c *gin.Context) {
 func (h *AIAnalysisHandler) DeleteSession(c *gin.Context) {
 	sessionID := c.Param("session_id")
 
+	// Check if session exists
+	if h.sessionRepo != nil {
+		if _, err := h.sessionRepo.FindBySessionID(sessionID); err != nil {
+			// Also check in-memory
+			h.sessionsMutex.RLock()
+			_, inMemory := h.sessions[sessionID]
+			h.sessionsMutex.RUnlock()
+			if !inMemory {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
+				return
+			}
+		}
+	} else {
+		h.sessionsMutex.RLock()
+		_, inMemory := h.sessions[sessionID]
+		h.sessionsMutex.RUnlock()
+		if !inMemory {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
+			return
+		}
+	}
+
 	// Delete from database first
 	if h.sessionRepo != nil {
 		if err := h.sessionRepo.Delete(sessionID); err != nil {
 			logger.Error("failed to delete session from DB", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete session"})
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "failed to delete session"})
 			return
 		}
 	}
@@ -2175,6 +2197,23 @@ func (h *AIAnalysisHandler) CancelAnalysis(c *gin.Context) {
 
 func (h *AIAnalysisHandler) stopActiveAnalysis(c *gin.Context, status, message string) {
 	sessionID := c.Param("session_id")
+
+	// Check if session exists in memory or database
+	h.sessionsMutex.RLock()
+	_, inMemory := h.sessions[sessionID]
+	h.sessionsMutex.RUnlock()
+
+	if !inMemory {
+		if h.sessionRepo == nil {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
+			return
+		}
+		if _, err := h.sessionRepo.FindBySessionID(sessionID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
+			return
+		}
+	}
+
 	cancel, ok := h.popActiveRun(sessionID)
 	if ok {
 		cancel()
@@ -2213,7 +2252,7 @@ func (h *AIAnalysisHandler) ApplyConclusion(c *gin.Context) {
 
 	var req ApplyConclusionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request body"})
 		return
 	}
 
@@ -2222,7 +2261,7 @@ func (h *AIAnalysisHandler) ApplyConclusion(c *gin.Context) {
 	h.sessionsMutex.RUnlock()
 
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "session not found"})
 		return
 	}
 

@@ -507,8 +507,12 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 				}
 				eventDataStr = string(eventDataJSON)
 			}
+			eventID := event.EventId
+			if eventID == "" {
+				eventID = "EVT-" + uuid.New().String()[:8]
+			}
 			runtimeEvent := &model.RuntimeEvent{
-				EventID:       event.EventId,
+				EventID:       eventID,
 				HostID:        hostID,
 				EventType:     event.EventType,
 				EventData:     eventDataStr,

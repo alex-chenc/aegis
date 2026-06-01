@@ -62,6 +62,10 @@ type MinIOConfig struct {
 	SecretKey string   `mapstructure:"secret_key"`
 	UseSSL    bool     `mapstructure:"use_ssl"`
 	Buckets   []string `mapstructure:"buckets"`
+	// ArtifactBaseURL is the HTTP base URL agents use to download objects
+	// (e.g. "http://localhost:9000/agent-artifacts"). When empty it is
+	// derived from Endpoint at startup.
+	ArtifactBaseURL string `mapstructure:"artifact_base_url"`
 }
 
 type LLMConfig struct {
@@ -141,6 +145,9 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if minioSecretKey := getEnv("MINIO_SECRET_KEY"); minioSecretKey != "" {
 		cfg.MinIO.SecretKey = minioSecretKey
+	}
+	if artifactBaseURL := getEnv("MINIO_ARTIFACT_BASE_URL"); artifactBaseURL != "" {
+		cfg.MinIO.ArtifactBaseURL = artifactBaseURL
 	}
 	if serverHTTPPort := getEnvInt("SERVER_HTTP_PORT"); serverHTTPPort != 0 {
 		cfg.Server.HTTPPort = serverHTTPPort

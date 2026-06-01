@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -232,7 +233,18 @@ func main() {
 		logger.Info("Builder gRPC client initialized", zap.String("addr", builderAddr))
 	}
 
-	detectionPkgService := service.NewDetectionPackageService(detectionPkgRepo, db, serverClient, builderSvcClient)
+	// Build the base URL agents use to download detection-package artifacts
+	// from MinIO.  When MINIO_ARTIFACT_BASE_URL / config value is set, use it
+	// directly; otherwise derive from the MinIO endpoint.
+	artifactBaseURL := cfg.MinIO.ArtifactBaseURL
+	if artifactBaseURL == "" {
+		scheme := "http"
+		if cfg.MinIO.UseSSL {
+			scheme = "https"
+		}
+		artifactBaseURL = fmt.Sprintf("%s://%s/aegis-releases", scheme, strings.TrimRight(cfg.MinIO.Endpoint, "/"))
+	}
+	detectionPkgService := service.NewDetectionPackageService(detectionPkgRepo, db, serverClient, builderSvcClient, artifactBaseURL)
 
 	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 

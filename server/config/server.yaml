@@ -24,7 +24,7 @@ redis:
 minio:
   endpoint: localhost:9000
   accessKey: minio_admin
-  secretKey: your_minio_password
+  secretKey: a_third_strong_secret_password
   useSSL: false
   buckets:
     - aegis-templates

@@ -72,7 +72,8 @@ func isAuthPublicPath(path string) bool {
 	case "/api/v1/agent/install-command",
 		"/api/v1/agent/install.sh",
 		"/api/v1/agent/uninstall.sh",
-		"/api/v1/agent/download":
+		"/api/v1/agent/download",
+		"/api/v1/detection/packages/hosts/report":
 		return true
 	default:
 		return false

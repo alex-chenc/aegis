@@ -21,16 +21,21 @@ type EventReporter interface {
 	ReportEvents(events []*pb.RuntimeEvent) error
 }
 
+// EventCallback is called for every raw eBPF event after building the eventMap.
+// Implementations can use this to feed events to the correlation engine.
+type EventCallback func(eventMap map[string]interface{})
+
 type Pipeline struct {
-	collector   *Collector
-	ruleLoader  *sigma.Loader
-	reporter    EventReporter
-	hostID      string
-	hostname    string
-	metrics     *monitor.Metrics
-	seq         uint64
-	flushEvery  time.Duration
-	toolManager *tools.ToolManager
+	collector    *Collector
+	ruleLoader   *sigma.Loader
+	reporter     EventReporter
+	hostID       string
+	hostname     string
+	metrics      *monitor.Metrics
+	seq          uint64
+	flushEvery   time.Duration
+	toolManager  *tools.ToolManager
+	eventCb      EventCallback
 }
 
 func NewPipeline(collector *Collector, ruleLoader *sigma.Loader, reporter EventReporter, hostID string, metrics *monitor.Metrics) *Pipeline {
@@ -48,6 +53,13 @@ func NewPipeline(collector *Collector, ruleLoader *sigma.Loader, reporter EventR
 		flushEvery:  2 * time.Second,
 		toolManager: tools.NewToolManager(),
 	}
+}
+
+// SetEventCallback registers a callback that is invoked for every raw eBPF event
+// after the eventMap is built. This allows the dynpkgManager to feed built-in
+// events (process_exec, file_access, etc.) into the correlation engine.
+func (p *Pipeline) SetEventCallback(cb EventCallback) {
+	p.eventCb = cb
 }
 
 func (p *Pipeline) Run(done <-chan struct{}) {
@@ -85,6 +97,14 @@ func (p *Pipeline) Run(done <-chan struct{}) {
 func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []*pb.RuntimeEvent {
 	p.metrics.IncrEvents()
 	eventMap := p.buildEventMap(event)
+
+	// Feed built-in events to the correlation engine via callback.
+	// This must happen before sigma matching so the dynpkgManager can
+	// evaluate package-specific sigma rules and feed findings to the
+	// correlation engine (e.g. suspicious_root_exec for 4-step chains).
+	if p.eventCb != nil {
+		p.eventCb(eventMap)
+	}
 
 	logger.Debug("Event captured",
 		zap.String("type", event.EventType),
@@ -172,6 +192,8 @@ func (p *Pipeline) buildEventMap(event Event) map[string]any {
 		"pid":            event.PID,
 		"ppid":           event.PPID,
 		"uid":            event.UID,
+		"host_id":        event.HostID,
+		"hostname":       event.Hostname,
 		"process_name":   event.ProcessName,
 		"comm":           event.ProcessName,
 		"commandline":    cmdLine,

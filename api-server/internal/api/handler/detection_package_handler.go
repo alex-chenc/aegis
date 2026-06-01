@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -72,7 +73,10 @@ func (h *DetectionPackageHandler) CreateDraft(c *gin.Context) {
 
 	// Check for existing draft only when package_id is provided
 	if req.PackageID != "" {
-		existingDraft, _ := h.pkgService.GetDraft(c.Request.Context(), req.PackageID)
+		existingDraft, err := h.pkgService.GetDraft(c.Request.Context(), req.PackageID)
+		if err != nil {
+			logger.Debug("get draft by package_id (will create new)", zap.String("package_id", req.PackageID), zap.Error(err))
+		}
 		if existingDraft != nil {
 			updateReq := service.UpdateDraftRequest{
 				Title:           &req.Title,
@@ -86,7 +90,8 @@ func (h *DetectionPackageHandler) CreateDraft(c *gin.Context) {
 			draft, err := h.pkgService.UpdateDraft(c.Request.Context(), existingDraft.ID, updateReq, operator)
 			if err != nil {
 				logger.Error("update existing draft failed", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+				status, msg := classifyServiceError(err)
+				c.JSON(status, gin.H{"code": status, "message": msg})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": draft})
@@ -97,7 +102,8 @@ func (h *DetectionPackageHandler) CreateDraft(c *gin.Context) {
 	draft, err := h.pkgService.CreateDraft(c.Request.Context(), req, operator)
 	if err != nil {
 		logger.Error("create draft failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -157,7 +163,7 @@ func (h *DetectionPackageHandler) AIGenerateDraft(c *gin.Context) {
 		logger.Error("LLM generation failed", zap.Error(err))
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"code":    503,
-			"message": fmt.Sprintf("AI生成失败: %s，请检查LLM配置或稍后重试", err.Error()),
+			"message": "AI生成服务暂时不可用，请检查LLM配置或稍后重试",
 		})
 		return
 	}
@@ -319,7 +325,8 @@ func (h *DetectionPackageHandler) UpdateDraft(c *gin.Context) {
 	draft, err := h.pkgService.UpdateDraft(c.Request.Context(), draftID, req, operator)
 	if err != nil {
 		logger.Error("update draft failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -343,7 +350,8 @@ func (h *DetectionPackageHandler) StartBuild(c *gin.Context) {
 	build, err := h.pkgService.StartBuild(c.Request.Context(), packageID, operator)
 	if err != nil {
 		logger.Error("start build failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -384,7 +392,8 @@ func (h *DetectionPackageHandler) SignPackage(c *gin.Context) {
 	pkg, err := h.pkgService.SignPackage(c.Request.Context(), packageID, operator)
 	if err != nil {
 		logger.Error("sign package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -397,7 +406,8 @@ func (h *DetectionPackageHandler) EnablePackage(c *gin.Context) {
 
 	if err := h.pkgService.EnablePackage(c.Request.Context(), packageID, operator); err != nil {
 		logger.Error("enable package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -410,7 +420,8 @@ func (h *DetectionPackageHandler) DisablePackage(c *gin.Context) {
 
 	if err := h.pkgService.DisablePackage(c.Request.Context(), packageID, operator); err != nil {
 		logger.Error("disable package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -423,7 +434,8 @@ func (h *DetectionPackageHandler) UninstallPackage(c *gin.Context) {
 
 	if err := h.pkgService.UninstallPackage(c.Request.Context(), packageID, operator); err != nil {
 		logger.Error("uninstall package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -454,7 +466,8 @@ func (h *DetectionPackageHandler) ReportHostStatus(c *gin.Context) {
 
 	if err := h.pkgService.ReportHostStatus(c.Request.Context(), report); err != nil {
 		logger.Error("report host status failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -464,7 +477,19 @@ func (h *DetectionPackageHandler) ReportHostStatus(c *gin.Context) {
 func (h *DetectionPackageHandler) GetAllowlist(c *gin.Context) {
 	config, err := h.pkgService.GetAllowlist(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "allowlist not found"})
+		// Return default empty config instead of 404
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "success",
+			"data": gin.H{
+				"version":     0,
+				"tracepoints": []string{},
+				"kprobes":     []string{},
+				"lsm":         []string{},
+				"xdp":         []string{},
+				"tc":          []string{},
+			},
+		})
 		return
 	}
 
@@ -559,7 +584,8 @@ func (h *DetectionPackageHandler) ReviewBuild(c *gin.Context) {
 	err = h.pkgService.ReviewBuild(c.Request.Context(), buildID, *req.Approved, req.Comment, operator)
 	if err != nil {
 		logger.Error("review build failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -572,14 +598,15 @@ func (h *DetectionPackageHandler) RollbackPackage(c *gin.Context) {
 		TargetVersion string `json:"target_version" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "target_version is required"})
 		return
 	}
 
 	operator := getOperator(c)
 	if err := h.pkgService.RollbackPackage(c.Request.Context(), packageID, req.TargetVersion, operator); err != nil {
 		logger.Error("rollback package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -611,7 +638,8 @@ func (h *DetectionPackageHandler) GetBuildLog(c *gin.Context) {
 	logURL, err := h.pkgService.GetBuildLogURL(c.Request.Context(), buildID)
 	if err != nil {
 		logger.Error("get build log failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -638,7 +666,8 @@ func (h *DetectionPackageHandler) DeletePackage(c *gin.Context) {
 
 	if err := h.pkgService.DeletePackage(c.Request.Context(), packageID, operator); err != nil {
 		logger.Error("delete package failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
@@ -669,6 +698,18 @@ func (h *DetectionPackageHandler) BatchDeletePackages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// classifyServiceError maps service sentinel errors to HTTP status codes.
+// Returns the HTTP status code and a sanitized message.
+func classifyServiceError(err error) (int, string) {
+	if errors.Is(err, service.ErrNotFound) {
+		return http.StatusNotFound, err.Error()
+	}
+	if errors.Is(err, service.ErrInvalidState) {
+		return http.StatusBadRequest, err.Error()
+	}
+	return http.StatusInternalServerError, err.Error()
 }
 
 func getOperator(c *gin.Context) string {

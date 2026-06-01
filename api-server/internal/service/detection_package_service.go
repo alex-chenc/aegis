@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"api-server/internal/grpc"
@@ -20,11 +21,21 @@ import (
 	"gorm.io/gorm"
 )
 
+// Sentinel errors for detection package operations.
+// Handlers use errors.Is to map these to HTTP status codes.
+var (
+	// ErrNotFound indicates the requested resource does not exist.
+	ErrNotFound = errors.New("resource not found")
+	// ErrInvalidState indicates the resource is in a state that disallows the operation.
+	ErrInvalidState = errors.New("invalid resource state")
+)
+
 type DetectionPackageService struct {
-	repo          *repository.DetectionPackageRepo
-	db            *gorm.DB
-	serverClient  GRPCServerClient
-	builderClient BuilderClient
+	repo                  *repository.DetectionPackageRepo
+	db                    *gorm.DB
+	serverClient          GRPCServerClient
+	builderClient         BuilderClient
+	artifactDownloadBaseURL string // e.g. "http://minio:9000/agent-artifacts"
 }
 
 type GRPCServerClient interface {
@@ -52,13 +63,27 @@ type DetectionPackageCommand struct {
 	Rollback     bool   `json:"rollback"`
 }
 
-func NewDetectionPackageService(repo *repository.DetectionPackageRepo, db *gorm.DB, serverClient GRPCServerClient, builderClient BuilderClient) *DetectionPackageService {
+func NewDetectionPackageService(repo *repository.DetectionPackageRepo, db *gorm.DB, serverClient GRPCServerClient, builderClient BuilderClient, artifactDownloadBaseURL string) *DetectionPackageService {
 	return &DetectionPackageService{
-		repo:          repo,
-		db:            db,
-		serverClient:  serverClient,
-		builderClient: builderClient,
+		repo:                  repo,
+		db:                    db,
+		serverClient:          serverClient,
+		builderClient:         builderClient,
+		artifactDownloadBaseURL: artifactDownloadBaseURL,
 	}
+}
+
+// objectKeyToURL converts a MinIO object key to a full HTTP download URL.
+// If the key already starts with "http://" or "https://", it is returned as-is.
+func (s *DetectionPackageService) objectKeyToURL(objectKey string) string {
+	if objectKey == "" {
+		return ""
+	}
+	if strings.HasPrefix(objectKey, "http://") || strings.HasPrefix(objectKey, "https://") {
+		return objectKey
+	}
+	base := strings.TrimRight(s.artifactDownloadBaseURL, "/")
+	return base + "/" + strings.TrimLeft(objectKey, "/")
 }
 
 type CreateDraftRequest struct {
@@ -124,6 +149,9 @@ func (s *DetectionPackageService) CreateDraft(ctx context.Context, req CreateDra
 func (s *DetectionPackageService) UpdateDraft(ctx context.Context, draftID uuid.UUID, req UpdateDraftRequest, operator string) (*model.DetectionPackageDraft, error) {
 	draft, err := s.repo.GetDraftByID(draftID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get draft: %w: %w", ErrNotFound, err)
+		}
 		return nil, fmt.Errorf("get draft: %w", err)
 	}
 
@@ -173,6 +201,9 @@ func (s *DetectionPackageService) DeleteDraftByPackageID(ctx context.Context, pa
 func (s *DetectionPackageService) StartBuild(ctx context.Context, packageID string, operator string) (*model.DetectionPackageBuild, error) {
 	draft, err := s.repo.GetDraftByPackageID(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get draft: %w: %w", ErrNotFound, err)
+		}
 		return nil, fmt.Errorf("get draft: %w", err)
 	}
 
@@ -319,10 +350,13 @@ func (s *DetectionPackageService) GetLatestBuild(ctx context.Context, packageID 
 func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID string, operator string) (*model.DetectionPackage, error) {
 	build, err := s.repo.GetLatestBuild(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get build: %w: %w", ErrNotFound, err)
+		}
 		return nil, fmt.Errorf("get build: %w", err)
 	}
 	if build.Status != "success" {
-		return nil, errors.New("build not successful, cannot sign")
+		return nil, fmt.Errorf("build not successful, cannot sign: %w", ErrInvalidState)
 	}
 
 	var signResult *grpc.BuilderSignResponse
@@ -393,10 +427,13 @@ func (s *DetectionPackageService) SignPackage(ctx context.Context, packageID str
 func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID string, operator string) error {
 	pkg, err := s.repo.GetLatestPackage(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("get package: %w: %w", ErrNotFound, err)
+		}
 		return fmt.Errorf("get package: %w", err)
 	}
 	if pkg.Status != "signed" && pkg.Status != "disabled" {
-		return errors.New("package not signed or disabled, cannot enable")
+		return fmt.Errorf("package not signed or disabled, cannot enable: %w", ErrInvalidState)
 	}
 
 	currentEnabled, err := s.repo.GetEnabledPackage(packageID)
@@ -426,8 +463,8 @@ func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID s
 			Action:       "install",
 			PackageID:    pkg.PackageID,
 			Version:      pkg.Version,
-			PackageURL:   pkg.PackageObjectKey,
-			SignatureURL: pkg.SignatureObjectKey,
+			PackageURL:   s.objectKeyToURL(pkg.PackageObjectKey),
+			SignatureURL: s.objectKeyToURL(pkg.SignatureObjectKey),
 			PackageSize:  pkg.PackageSize,
 		})
 		if err != nil {
@@ -440,13 +477,74 @@ func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID s
 		}
 	}
 
+	// Sync sigma rules from draft to sigma_rules table
+	if pkg.BuildID != nil {
+		if build, berr := s.repo.GetBuild(*pkg.BuildID); berr == nil && build.DraftID != nil {
+			if draft, derr := s.repo.GetDraftByID(*build.DraftID); derr == nil && draft.SigmaRulesYAML != "" {
+				s.syncSigmaRules(draft.SigmaRulesYAML, pkg.PackageID, pkg.Version)
+			}
+		}
+	}
+
 	s.recordOperation(packageID, pkg.Version, "enable", operator, nil, true, "")
 	return nil
+}
+
+func (s *DetectionPackageService) syncSigmaRules(sigmaYAML, packageID, version string) {
+	// Parse sigma rules from YAML and insert into sigma_rules table
+	rules := parseSigmaRulesFromYAML(sigmaYAML)
+	for _, rule := range rules {
+		sr := &model.SigmaRule{
+			RuleID:      rule["id"],
+			Title:       rule["title"],
+			Description: rule["description"],
+			Content:     sigmaYAML,
+			Status:      "active",
+			Severity:    rule["level"],
+			GeneratedBy: "detection_package",
+			Source:      "detection_package",
+			Version:     version,
+		}
+		// Use ON CONFLICT to avoid duplicate key errors
+		s.db.Where("rule_id = ?", sr.RuleID).Assign(sr).FirstOrCreate(sr)
+	}
+}
+
+func parseSigmaRulesFromYAML(yamlContent string) []map[string]string {
+	var rules []map[string]string
+	// Simple YAML parsing for sigma rules
+	decoder := yaml.NewDecoder(strings.NewReader(yamlContent))
+	for {
+		var rule map[string]interface{}
+		if err := decoder.Decode(&rule); err != nil {
+			break
+		}
+		r := make(map[string]string)
+		if id, ok := rule["id"].(string); ok {
+			r["id"] = id
+		}
+		if title, ok := rule["title"].(string); ok {
+			r["title"] = title
+		}
+		if desc, ok := rule["description"].(string); ok {
+			r["description"] = desc
+		}
+		if level, ok := rule["level"].(string); ok {
+			r["level"] = level
+		}
+		if r["id"] != "" {
+			rules = append(rules, r)
+		}
+	}
+	return rules
 }
 
 func (s *DetectionPackageService) DisablePackage(ctx context.Context, packageID string, operator string) error {
 	pkg, err := s.repo.GetLatestPackage(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("get package: %w: %w", ErrNotFound, err)
+		}
 		return fmt.Errorf("get package: %w", err)
 	}
 
@@ -472,19 +570,25 @@ func (s *DetectionPackageService) DisablePackage(ctx context.Context, packageID 
 func (s *DetectionPackageService) RollbackPackage(ctx context.Context, packageID, targetVersion, operator string) error {
 	currentPkg, err := s.repo.GetEnabledPackage(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("no enabled version found for package %s: %w: %w", packageID, ErrNotFound, err)
+		}
 		return fmt.Errorf("no enabled version found for package %s: %w", packageID, err)
 	}
 
 	targetPkg, err := s.repo.GetPackageByVersion(packageID, targetVersion)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("target version %s not found: %w: %w", targetVersion, ErrNotFound, err)
+		}
 		return fmt.Errorf("target version %s not found: %w", targetVersion, err)
 	}
 	if targetPkg.Status != "signed" && targetPkg.Status != "disabled" {
-		return fmt.Errorf("target version %s status is %s, must be signed or disabled", targetVersion, targetPkg.Status)
+		return fmt.Errorf("target version %s status is %s, must be signed or disabled: %w", targetVersion, targetPkg.Status, ErrInvalidState)
 	}
 
 	if targetPkg.Version == currentPkg.Version {
-		return fmt.Errorf("target version %s is the same as current enabled version", targetVersion)
+		return fmt.Errorf("target version %s is the same as current enabled version: %w", targetVersion, ErrInvalidState)
 	}
 
 	currentPkg.Status = "disabled"
@@ -510,8 +614,8 @@ func (s *DetectionPackageService) RollbackPackage(ctx context.Context, packageID
 			Action:       "rollback",
 			PackageID:    targetPkg.PackageID,
 			Version:      targetPkg.Version,
-			PackageURL:   targetPkg.PackageObjectKey,
-			SignatureURL: targetPkg.SignatureObjectKey,
+			PackageURL:   s.objectKeyToURL(targetPkg.PackageObjectKey),
+			SignatureURL: s.objectKeyToURL(targetPkg.SignatureObjectKey),
 			PackageSize:  targetPkg.PackageSize,
 			Rollback:     true,
 		})
@@ -528,6 +632,9 @@ func (s *DetectionPackageService) RollbackPackage(ctx context.Context, packageID
 func (s *DetectionPackageService) UninstallPackage(ctx context.Context, packageID string, operator string) error {
 	pkg, err := s.repo.GetLatestPackage(packageID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("get package: %w: %w", ErrNotFound, err)
+		}
 		return fmt.Errorf("get package: %w", err)
 	}
 
@@ -622,6 +729,7 @@ func (s *DetectionPackageService) UpdateAllowlist(ctx context.Context, configJSO
 
 type HostStatusReport struct {
 	HostID         string   `json:"host_id"`
+	Hostname       string   `json:"hostname"`
 	PackageID      string   `json:"package_id"`
 	Version        string   `json:"version"`
 	Status         string   `json:"status"`
@@ -633,7 +741,7 @@ type HostStatusReport struct {
 func (s *DetectionPackageService) ReportHostStatus(ctx context.Context, report HostStatusReport) error {
 	hostID, err := uuid.Parse(report.HostID)
 	if err != nil {
-		return fmt.Errorf("invalid host_id: %w", err)
+		return fmt.Errorf("invalid host_id: %w: %w", ErrInvalidState, err)
 	}
 
 	loadedHooks, _ := json.Marshal(report.LoadedHooks)
@@ -646,6 +754,7 @@ func (s *DetectionPackageService) ReportHostStatus(ctx context.Context, report H
 		PackageID:      report.PackageID,
 		Version:        report.Version,
 		HostID:         hostID,
+		Hostname:       report.Hostname,
 		Status:         report.Status,
 		ActiveArtifact: report.ActiveArtifact,
 		LoadedHooks:    datatypes.JSON(loadedHooks),
@@ -678,10 +787,13 @@ func (s *DetectionPackageService) recordOperation(packageID, version, operation,
 func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.UUID, approved bool, comment, operator string) error {
 	build, err := s.repo.GetBuild(buildID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("get build: %w: %w", ErrNotFound, err)
+		}
 		return fmt.Errorf("get build: %w", err)
 	}
 	if build.Status != "awaiting_review" {
-		return fmt.Errorf("build status is %s, not awaiting_review", build.Status)
+		return fmt.Errorf("build status is %s, not awaiting_review: %w", build.Status, ErrInvalidState)
 	}
 	newStatus := "review_rejected"
 	if approved {
@@ -725,6 +837,14 @@ func (s *DetectionPackageService) ReviewBuild(ctx context.Context, buildID uuid.
 		}
 	}
 
+	// Sync event_schema from build to the associated package when approved
+	if approved && build.EventSchema != nil && string(build.EventSchema) != "{}" {
+		if pkg, err := s.repo.GetPackage(build.PackageID, build.Version); err == nil && pkg != nil {
+			pkg.EventSchema = build.EventSchema
+			_ = s.repo.UpdatePackage(pkg)
+		}
+	}
+
 	s.recordOperation(build.PackageID, build.Version, model.OperationTypeReview, operator, nil, true, "")
 	return nil
 }
@@ -736,10 +856,13 @@ func (s *DetectionPackageService) ListPackageAlerts(ctx context.Context, package
 func (s *DetectionPackageService) GetBuildLogURL(ctx context.Context, buildID uuid.UUID) (string, error) {
 	build, err := s.repo.GetBuild(buildID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("get build: %w: %w", ErrNotFound, err)
+		}
 		return "", fmt.Errorf("get build: %w", err)
 	}
 	if build.BuildLogObjectKey == "" {
-		return "", fmt.Errorf("build log not available")
+		return "", fmt.Errorf("build log not available: %w", ErrNotFound)
 	}
 	return build.BuildLogObjectKey, nil
 }
@@ -751,14 +874,14 @@ func (s *DetectionPackageService) ListAllowlistHistory(ctx context.Context, page
 func (s *DetectionPackageService) DeletePackage(ctx context.Context, packageID, operator string) error {
 	// Try to get the published package
 	pkg, err := s.repo.GetLatestPackage(packageID)
-	if err != nil && err.Error() != "record not found" {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("get package: %w", err)
 	}
 
 	// If published package exists, check status
 	if pkg != nil && pkg.ID != uuid.Nil {
 		if pkg.Status == "enabled" || pkg.Status == "active" {
-			return fmt.Errorf("cannot delete package in '%s' status, disable it first", pkg.Status)
+			return fmt.Errorf("cannot delete package in '%s' status, disable it first: %w", pkg.Status, ErrInvalidState)
 		}
 		// Delete the published package
 		if err := s.repo.DeletePackage(packageID); err != nil {
@@ -812,6 +935,31 @@ func ensurePackageMetadata(yamlStr, packageID, version string) string {
 		changed = true
 	}
 
+	// event_schema: generate from hooks if missing
+	if _, ok := meta["event_schema"]; !ok {
+		if es := generateEventSchemaFromHooks(meta); es != nil {
+			meta["event_schema"] = es
+			changed = true
+		}
+	}
+
+	// hooks: ensure each hook has a "program" field (eBPF function name).
+	// Convention: program = "trace_" + hook name if not explicitly set.
+	if hooksRaw, ok := meta["hooks"]; ok {
+		if hooksSlice, ok := hooksRaw.([]interface{}); ok {
+			for _, hookRaw := range hooksSlice {
+				if hook, ok := hookRaw.(map[string]interface{}); ok {
+					if _, hasProgram := hook["program"]; !hasProgram {
+						if name, ok := hook["name"].(string); ok && name != "" {
+							hook["program"] = "trace_" + name
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if !changed {
 		return yamlStr
 	}
@@ -832,4 +980,47 @@ func buildMinimalMetadata(packageID, version string) string {
 	}
 	out, _ := yaml.Marshal(meta)
 	return string(out)
+}
+
+// generateEventSchemaFromHooks builds a basic event_schema from the hooks
+// defined in the plugin manifest. Each hook gets an event entry with a
+// sequential ID starting at 1001 and standard eBPF event metadata fields
+// (timestamp, pid, tid, comm, uid). If the manifest has no hooks, nil is
+// returned so the caller can skip injection.
+func generateEventSchemaFromHooks(meta map[string]interface{}) map[string]interface{} {
+	hooksRaw, ok := meta["hooks"]
+	if !ok {
+		return nil
+	}
+	hooksSlice, ok := hooksRaw.([]interface{})
+	if !ok || len(hooksSlice) == 0 {
+		return nil
+	}
+
+	events := make(map[string]interface{}, len(hooksSlice))
+	for i, hookRaw := range hooksSlice {
+		hook, ok := hookRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := hook["name"].(string)
+		if name == "" {
+			name = fmt.Sprintf("event_%d", 1001+i)
+		}
+		eventID := fmt.Sprintf("%d", 1001+i)
+		events[eventID] = map[string]interface{}{
+			"name": name,
+			"fields": map[string]interface{}{
+				"1": map[string]interface{}{"name": "timestamp", "type": "uint64"},
+				"2": map[string]interface{}{"name": "pid", "type": "uint32"},
+				"3": map[string]interface{}{"name": "tid", "type": "uint32"},
+				"4": map[string]interface{}{"name": "comm", "type": "string"},
+				"5": map[string]interface{}{"name": "uid", "type": "uint32"},
+			},
+		}
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	return map[string]interface{}{"events": events}
 }

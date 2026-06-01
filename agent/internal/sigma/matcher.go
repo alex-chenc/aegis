@@ -5,6 +5,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"aegis-agent/internal/logger"
+
+	"go.uber.org/zap"
 )
 
 type CompiledRule struct {
@@ -23,6 +27,7 @@ type PatternMatcher struct {
 	IsRegex    bool
 	Regex      *regexp.Regexp
 	StartsWith bool
+	EndsWith   bool
 }
 
 func CompileRule(rule *Rule) *CompiledRule {
@@ -41,12 +46,21 @@ func CompileRule(rule *Rule) *CompiledRule {
 		if key == "condition" {
 			continue
 		}
+		fmt.Printf("[SigmaCompile] selector=%q type=%T\n", key, val)
 		if m, ok := val.(map[string]interface{}); ok {
 			selector := make(map[string][]PatternMatcher)
 			for field, values := range m {
 				fieldKey := normalizeFieldName(field)
 				isRegex := strings.Contains(field, "|re")
 				isStartsWith := strings.Contains(field, "|startswith")
+				isEndsWith := strings.Contains(field, "|endswith")
+				logger.Debug("[SigmaCompile] field modifier",
+					zap.String("selector", key),
+					zap.String("field", field),
+					zap.String("normalized", fieldKey),
+					zap.Bool("isEndsWith", isEndsWith),
+					zap.Bool("isStartsWith", isStartsWith),
+					zap.Bool("isRegex", isRegex))
 
 				if list, ok := values.([]interface{}); ok {
 					for _, v := range list {
@@ -55,13 +69,21 @@ func CompileRule(rule *Rule) *CompiledRule {
 						if isStartsWith {
 							pm.StartsWith = true
 						}
+						if isEndsWith {
+							pm.EndsWith = true
+						}
 						cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
 						selector[fieldKey] = append(selector[fieldKey], pm)
 					}
-				} else if s, ok := values.(string); ok {
+				} else {
+					// Handle string, int, float64, bool, and any other scalar types
+					s := fmt.Sprintf("%v", values)
 					pm := compilePattern(s, isRegex)
 					if isStartsWith {
 						pm.StartsWith = true
+					}
+					if isEndsWith {
+						pm.EndsWith = true
 					}
 					cr.Matchers[fieldKey] = append(cr.Matchers[fieldKey], pm)
 					selector[fieldKey] = append(selector[fieldKey], pm)
@@ -97,10 +119,17 @@ func matchValue(eventVal string, eventRaw interface{}, pm PatternMatcher) bool {
 	if pm.StartsWith {
 		return strings.HasPrefix(eventVal, strings.ToLower(pm.Pattern))
 	}
+	if pm.EndsWith {
+		result := strings.HasSuffix(eventVal, strings.ToLower(pm.Pattern))
+		fmt.Printf("[SigmaMatch] EndsWith check: eventVal=%q pattern=%q result=%v\n", eventVal, pm.Pattern, result)
+		return result
+	}
 	// Try numeric comparison for integer fields
 	if eventRaw != nil {
 		if isNumericType(eventRaw) && isNumericPattern(pm.Pattern) {
-			return numericMatch(eventRaw, pm.Pattern)
+			result := numericMatch(eventRaw, pm.Pattern)
+			fmt.Printf("[SigmaMatch] NumericMatch: eventRaw=%v(%T) pattern=%q result=%v\n", eventRaw, eventRaw, pm.Pattern, result)
+			return result
 		}
 	}
 	return strings.Contains(eventVal, strings.ToLower(pm.Pattern))
@@ -161,8 +190,11 @@ func normalizeFieldName(field string) string {
 }
 
 func (cr *CompiledRule) Match(event map[string]interface{}) bool {
+	// Debug: log match attempt
+	fmt.Printf("[SigmaMatch] rule=%s condition=%q selectors=%v event_keys=%v\n", cr.ID, cr.Condition, selectorNames(cr.Selectors), eventKeys(event))
 	if cr.Condition != "" {
 		matched, ok := cr.evaluateCondition(event)
+		fmt.Printf("[SigmaMatch] rule=%s condition_result=%v ok=%v\n", cr.ID, matched, ok)
 		return ok && matched
 	}
 
@@ -176,6 +208,10 @@ func (cr *CompiledRule) Match(event map[string]interface{}) bool {
 
 func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]interface{}) bool {
 	selector, ok := cr.Selectors[selectorName]
+	logger.Debug("[SigmaMatch] selectorMatches called",
+		zap.String("selector", selectorName),
+		zap.Bool("found", ok),
+		zap.Int("fields", len(selector)))
 	if !ok || len(selector) == 0 {
 		return false
 	}
@@ -187,8 +223,16 @@ func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]in
 		if v, found := lookupFieldCaseInsensitive(event, field); found {
 			eventRaw = v
 			eventVal = strings.ToLower(fmt.Sprint(v))
+			logger.Debug("[SigmaMatch] field lookup",
+				zap.String("selector", selectorName),
+				zap.String("field", field),
+				zap.Any("raw", eventRaw),
+				zap.String("eventVal", eventVal))
 		}
 		if eventVal == "" {
+			logger.Debug("[SigmaMatch] field NOT_FOUND",
+				zap.String("selector", selectorName),
+				zap.String("field", field))
 			return false
 		}
 		fieldMatched := false
@@ -199,6 +243,7 @@ func (cr *CompiledRule) selectorMatches(selectorName string, event map[string]in
 			}
 		}
 		if !fieldMatched {
+			fmt.Printf("[SigmaMatch] selector=%s field=%q eventVal=%q patterns=%v NO_MATCH\n", selectorName, field, eventVal, patterns)
 			return false
 		}
 	}
@@ -395,4 +440,21 @@ func extractMitreID(tags []string) string {
 		}
 	}
 	return ""
+}
+
+
+func selectorNames(selectors map[string]map[string][]PatternMatcher) []string {
+	var names []string
+	for k := range selectors {
+		names = append(names, k)
+	}
+	return names
+}
+
+func eventKeys(event map[string]interface{}) []string {
+	var keys []string
+	for k := range event {
+		keys = append(keys, k)
+	}
+	return keys
 }

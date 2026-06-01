@@ -292,6 +292,7 @@ func attachExtraFileTracepoints(coll *ebpf.Collection) []link.Link {
 
 func (l *Loader) readEvents(name string, rd EventReader) {
 	logger.Info("Event reader started", zap.String("program", name))
+	readCount := 0
 	for {
 		select {
 		case <-l.done:
@@ -305,6 +306,10 @@ func (l *Loader) readEvents(name string, rd EventReader) {
 			}
 			logger.Debug("Event read error", zap.String("program", name), zap.Error(err))
 			continue
+		}
+		readCount++
+		if readCount%100 == 1 {
+			logger.Debug("[eBPF] readEvents progress", zap.String("program", name), zap.Int("count", readCount), zap.Int("data_len", len(data)))
 		}
 		l.processEvent(name, data)
 	}
@@ -328,8 +333,15 @@ func (l *Loader) processEvent(name string, data []byte) {
 func (l *Loader) processExecEvent(data []byte) {
 	var e ExecEvent
 	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
+		logger.Debug("[eBPF] processExecEvent binary.Read failed",
+			zap.Int("data_len", len(data)),
+			zap.Error(err))
 		return
 	}
+	logger.Debug("[eBPF] processExecEvent parsed",
+		zap.Uint32("pid", e.Pid),
+		zap.Uint32("uid", e.Uid),
+		zap.String("filename", bytesToString(e.Filename[:])))
 	l.sendEvent(l.buildExecRuntimeEvent(e, execRuntimeReaders{
 		readCmdline: readProcCmdline,
 		readExe:     readProcExe,

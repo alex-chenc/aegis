@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/datatypes"
 )
 
 type DetectionPackageRepo struct {
@@ -334,8 +335,21 @@ func (r *DetectionPackageRepo) GetLatestBuild(packageID string) (*model.Detectio
 }
 
 func (r *DetectionPackageRepo) UpsertHostStatus(status *model.DetectionPackageHostStatus) error {
-	return r.db.Where("package_id = ? AND version = ? AND host_id = ?", status.PackageID, status.Version, status.HostID).
-		Assign(status).FirstOrCreate(status).Error
+	if status.MetricsJSON == nil {
+		status.MetricsJSON = datatypes.JSON([]byte("{}"))
+	}
+	var existing model.DetectionPackageHostStatus
+	err := r.db.Where("package_id = ? AND version = ? AND host_id = ?", status.PackageID, status.Version, status.HostID).First(&existing).Error
+	if err != nil {
+		return r.db.Create(status).Error
+	}
+	return r.db.Model(&existing).Updates(map[string]interface{}{
+		"hostname":        status.Hostname,
+		"status":          status.Status,
+		"active_artifact": status.ActiveArtifact,
+		"error_message":   status.ErrorMessage,
+		"last_reported_at": status.LastReportedAt,
+	}).Error
 }
 
 func (r *DetectionPackageRepo) ListHostStatus(packageID, version string, page, pageSize int) ([]model.DetectionPackageHostStatus, int64, error) {
@@ -391,7 +405,7 @@ func (r *DetectionPackageRepo) ListCorrelationRules(packageID, version string) (
 func (r *DetectionPackageRepo) ListAlertsByPackageID(packageID string, page, pageSize int) ([]model.RuntimeEvent, int64, error) {
 	var events []model.RuntimeEvent
 	var total int64
-	query := r.db.Model(&model.RuntimeEvent{}).Where("event_type = ? AND matched_rule_id LIKE ?", "correlation_alert", packageID+"%")
+	query := r.db.Model(&model.RuntimeEvent{}).Where("event_type = ? AND matched_rule_id LIKE ?", "correlation_alert", "%"+packageID+"%")
 	query.Count(&total)
 	err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&events).Error
 	return events, total, err

@@ -21,6 +21,8 @@ type Manager struct {
 
 type SigmaMatcher interface {
 	Match(event map[string]interface{}) []SigmaMatch
+	AddRules(rules []byte) error
+	RemoveRules(ruleIDs []string)
 }
 
 type SigmaMatch struct {
@@ -38,15 +40,17 @@ type CorrelationEngine interface {
 }
 
 type InstalledPackage struct {
-	PackageID      string
-	Version        string
-	Manifest       *PackageManifest
-	PluginManifest *PluginManifest
-	ActiveArtifact string
-	Status         string
-	LoadedHooks    []string
-	ErrorMessage   string
-	stateMachine   *StateMachine
+	PackageID               string
+	Version                 string
+	Manifest                *PackageManifest
+	PluginManifest          *PluginManifest
+	ActiveArtifact          string
+	Status                  string
+	LoadedHooks             []string
+	ErrorMessage            string
+	LoadedSigmaRuleIDs      []string
+	LoadedCorrelationFiles  []string
+	stateMachine            *StateMachine
 }
 
 type DetectionPackageCommand struct {

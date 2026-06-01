@@ -225,7 +225,43 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	copyFile(perfObj, filepath.Join(stagingDir, "plugin", req.PackageID+".perf.bpf.o"))
 	copyFile(ringbufObj, filepath.Join(stagingDir, "plugin", req.PackageID+".ringbuf.bpf.o"))
 
-	os.WriteFile(filepath.Join(stagingDir, "package.yaml"), []byte(req.PackageMetadataJSON), 0644)
+	// Inject sigma_rules and correlation_rules into package.yaml so the agent
+	// can discover and load them at runtime.
+	pkgYAML := req.PackageMetadataJSON
+	if pkgYAML == "" {
+		meta := map[string]interface{}{
+			"schema_version": "aegis.ebpf_plugin.v1",
+			"package_id":     req.PackageID,
+			"version":        req.Version,
+		}
+		if out, err := yaml.Marshal(meta); err == nil {
+			pkgYAML = string(out)
+		}
+	}
+	if req.SigmaRulesYAML != "" || req.CorrelationYAML != "" {
+		var meta map[string]interface{}
+		if err := yaml.Unmarshal([]byte(pkgYAML), &meta); err == nil {
+			changed := false
+			if req.SigmaRulesYAML != "" {
+				if _, ok := meta["sigma_rules"]; !ok {
+					meta["sigma_rules"] = []string{"rules/atomic_sigma.yml"}
+					changed = true
+				}
+			}
+			if req.CorrelationYAML != "" {
+				if _, ok := meta["correlation_rules"]; !ok {
+					meta["correlation_rules"] = []string{"correlations/correlation.yml"}
+					changed = true
+				}
+			}
+			if changed {
+				if out, err := yaml.Marshal(meta); err == nil {
+					pkgYAML = string(out)
+				}
+			}
+		}
+	}
+	os.WriteFile(filepath.Join(stagingDir, "package.yaml"), []byte(pkgYAML), 0644)
 	os.WriteFile(filepath.Join(stagingDir, "rules", "atomic_sigma.yml"), []byte(req.SigmaRulesYAML), 0644)
 	os.WriteFile(filepath.Join(stagingDir, "correlations", "correlation.yml"), []byte(req.CorrelationYAML), 0644)
 
