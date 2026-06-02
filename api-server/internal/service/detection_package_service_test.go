@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -512,6 +513,18 @@ func TestCreateDraft_UsesProvidedPackageID(t *testing.T) {
 
 	if draft.PackageID != "custom-package-id" {
 		t.Errorf("expected package_id %q, got %q", "custom-package-id", draft.PackageID)
+	}
+}
+
+func TestGetDraft_MissingReturnsNilDraft(t *testing.T) {
+	svc, _ := newTestDetectionPackageService(t)
+
+	draft, err := svc.GetDraft(context.Background(), "missing-package-id")
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected ErrRecordNotFound, got draft=%v err=%v", draft, err)
+	}
+	if draft != nil {
+		t.Fatalf("expected nil draft on missing package_id, got %#v", draft)
 	}
 }
 
@@ -1062,10 +1075,10 @@ func TestDetectionPackageCommand_JSONTagsMatchProtoRequest(t *testing.T) {
 // Regression test: objectKeyToURL should correctly build URL from base URL
 func TestObjectKeyToURL_WithExternalIP(t *testing.T) {
 	tests := []struct {
-		name           string
-		baseURL        string
-		objectKey      string
-		expectedURL    string
+		name        string
+		baseURL     string
+		objectKey   string
+		expectedURL string
 	}{
 		{
 			name:        "external IP with path",

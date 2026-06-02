@@ -31,12 +31,18 @@ func (r *DetectionPackageRepo) UpdateDraft(draft *model.DetectionPackageDraft) e
 func (r *DetectionPackageRepo) GetDraftByPackageID(packageID string) (*model.DetectionPackageDraft, error) {
 	var draft model.DetectionPackageDraft
 	err := r.db.Where("package_id = ?", packageID).First(&draft).Error
+	if err != nil {
+		return nil, err
+	}
 	return &draft, err
 }
 
 func (r *DetectionPackageRepo) GetDraftByID(id uuid.UUID) (*model.DetectionPackageDraft, error) {
 	var draft model.DetectionPackageDraft
 	err := r.db.Where("id = ?", id).First(&draft).Error
+	if err != nil {
+		return nil, err
+	}
 	return &draft, err
 }
 

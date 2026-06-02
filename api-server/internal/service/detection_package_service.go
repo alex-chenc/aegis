@@ -215,6 +215,36 @@ func (s *DetectionPackageService) StartBuild(ctx context.Context, packageID stri
 		return nil, fmt.Errorf("get draft: %w", err)
 	}
 
+	// Pre-validate hooks against eBPF hook allowlist before building.
+	// This catches disallowed hooks early instead of waiting for agent-side rejection.
+	if err := s.validateHooksAgainstAllowlist(draft.HookPlanYAML); err != nil {
+		// Create a failed build record so the UI can display the failure reason.
+		allowlistErr := fmt.Errorf("hook allowlist validation failed: %w", err)
+		now := time.Now()
+		failedBuild := &model.DetectionPackageBuild{
+			ID:           uuid.New(),
+			DraftID:      &draft.ID,
+			PackageID:    draft.PackageID,
+			Version:      draft.TargetVersion,
+			Status:       "failed",
+			BuilderImage: "aegis-agent-builder-ubi8:5.8.0",
+			StartedAt:    &now,
+			FinishedAt:   &now,
+			DurationMs:   0,
+			ErrorMessage: allowlistErr.Error(),
+			CreatedBy:    operator,
+		}
+		if createErr := s.repo.CreateBuild(failedBuild); createErr != nil {
+			logger.Error("failed to create allowlist-rejected build record", zap.Error(createErr))
+		} else {
+			draft.Status = "build_failed"
+			draft.LastBuildID = &failedBuild.ID
+			s.repo.UpdateDraft(draft)
+		}
+		s.recordOperation(packageID, draft.TargetVersion, "build", operator, nil, false, allowlistErr.Error())
+		return nil, fmt.Errorf("%w: %w", ErrInvalidState, allowlistErr)
+	}
+
 	build := &model.DetectionPackageBuild{
 		ID:           uuid.New(),
 		DraftID:      &draft.ID,
@@ -989,6 +1019,35 @@ func allowlistConfigPayload(configJSON datatypes.JSON, version int64) string {
 		return string(configJSON)
 	}
 	return string(out)
+}
+
+// validateHooksAgainstAllowlist parses the hook_plan_yaml and validates each hook
+// against the currently active eBPF hook allowlist. Returns nil if no allowlist
+// is configured (allow everything) or if all hooks pass validation.
+func (s *DetectionPackageService) validateHooksAgainstAllowlist(hookPlanYAML string) error {
+	hooks, err := parseHookPlan(hookPlanYAML)
+	if err != nil {
+		return err
+	}
+	if len(hooks) == 0 {
+		return nil
+	}
+
+	allowlistRow, err := s.repo.GetActiveAllowlist()
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// No allowlist configured — allow everything (same as agent behavior when version=0)
+			return nil
+		}
+		return fmt.Errorf("get allowlist: %w", err)
+	}
+
+	allowlist, err := parseAllowlistConfig(allowlistRow.ConfigJSON)
+	if err != nil {
+		return fmt.Errorf("parse allowlist: %w", err)
+	}
+
+	return ValidateHooksAgainstAllowlist(hooks, allowlist)
 }
 
 type HostStatusReport struct {
