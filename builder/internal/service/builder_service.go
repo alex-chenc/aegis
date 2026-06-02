@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,7 +147,7 @@ func (s *BuilderService) GetBuilderInfo(ctx context.Context) (*BuilderInfo, erro
 		BuilderImage:                "aegis-agent-builder-ubi8:5.8.0",
 		ClangVersion:                clangVersion,
 		BPFToolVersion:              bpftoolVersion,
-		SupportedArches:             []string{"amd64", "arm64"},
+		SupportedArches:             []string{"x86", "arm", "amd64", "arm64"},
 		SupportedTransports:         []string{"perf", "ringbuf"},
 		SigningPublicKeyFingerprint: s.signer.GetPublicKeyFingerprint(),
 		BuilderImageDigest:          os.Getenv("BUILDER_IMAGE_DIGEST"),
@@ -156,6 +157,7 @@ func (s *BuilderService) GetBuilderInfo(ctx context.Context) (*BuilderInfo, erro
 }
 
 func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*BuildResult, error) {
+	log.Printf("[build_started] build_id=%s package_id=%s version=%s", req.BuildID, req.PackageID, req.Version)
 	buildDir := filepath.Join(s.workDir, req.BuildID)
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		return nil, fmt.Errorf("create build dir: %w", err)
@@ -174,11 +176,16 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	}
 
 	if err := validateBuildInput(req); err != nil {
-		return &BuildResult{
+		log.Printf("[build_validation_failed] build_id=%s package_id=%s error=%v", req.BuildID, req.PackageID, err)
+		result := &BuildResult{
 			BuildID:      req.BuildID,
 			Status:       "failed",
 			ErrorMessage: fmt.Sprintf("validation: %v", err),
-		}, nil
+		}
+		validationLog := fmt.Sprintf("=== validation ===\n%v\n", err)
+		s.storeBuildResult(req.BuildID, "failed", validationLog)
+		s.populateFailedBuildLog(ctx, req, result, buildDir, validationLog)
+		return result, nil
 	}
 
 	result := &BuildResult{
@@ -200,9 +207,11 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	perfLog, err := s.compileBPF(sourceFile, perfObj, "perf", req.TargetArch)
 	buildLog.WriteString(perfLog)
 	if err != nil {
+		log.Printf("[build_failed] build_id=%s package_id=%s transport=perf error=%v", req.BuildID, req.PackageID, err)
 		result.Status = "failed"
 		result.ErrorMessage = fmt.Sprintf("compile perf: %v", err)
 		s.storeBuildResult(req.BuildID, "failed", buildLog.String())
+		s.populateFailedBuildLog(ctx, req, result, buildDir, buildLog.String())
 		return result, nil
 	}
 
@@ -210,9 +219,11 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	ringbufLog, err := s.compileBPF(sourceFile, ringbufObj, "ringbuf", req.TargetArch)
 	buildLog.WriteString(ringbufLog)
 	if err != nil {
+		log.Printf("[build_failed] build_id=%s package_id=%s transport=ringbuf error=%v", req.BuildID, req.PackageID, err)
 		result.Status = "failed"
 		result.ErrorMessage = fmt.Sprintf("compile ringbuf: %v", err)
 		s.storeBuildResult(req.BuildID, "failed", buildLog.String())
+		s.populateFailedBuildLog(ctx, req, result, buildDir, buildLog.String())
 		return result, nil
 	}
 
@@ -306,6 +317,7 @@ func (s *BuilderService) StartBuild(ctx context.Context, req BuildRequest) (*Bui
 	}
 
 	s.storeBuildResult(req.BuildID, "awaiting_review", logStr)
+	log.Printf("[build_completed] build_id=%s package_id=%s status=awaiting_review", req.BuildID, req.PackageID)
 
 	result.Status = "awaiting_review"
 	result.UnsignedPackageObjectKey = objectKey
@@ -459,19 +471,76 @@ func (s *BuilderService) GetPackageBuildStatus(ctx context.Context, packageID, v
 }
 
 func (s *BuilderService) compileBPF(source, output, transport, arch string) (string, error) {
-	cmd := exec.Command("clang", "-O2", "-g", "-target", "bpf",
-		"-D__TARGET_ARCH_"+arch,
-		"-DTRANSPORT_"+transport,
-		"-c", source, "-o", output)
+	targetArch, err := normalizeBPFTargetArch(arch)
+	if err != nil {
+		return "", err
+	}
+
+	transportMacro, err := bpfTransportMacro(transport)
+	if err != nil {
+		return "", err
+	}
+
+	includeDir := os.Getenv("AEGIS_EBPF_INCLUDE")
+	if includeDir == "" {
+		includeDir = "/opt/aegis/ebpf/include"
+	}
+
+	args := []string{
+		"-O2", "-g", "-target", "bpf",
+		"-mllvm", "-bpf-stack-size=1024",
+		"-D__TARGET_ARCH_" + targetArch,
+		"-D" + transportMacro + "=1",
+		"-I/usr/include",
+	}
+	if archIncludeDir := bpfArchIncludeDir(targetArch); archIncludeDir != "" {
+		args = append(args, "-I"+archIncludeDir)
+	}
+	args = append(args, "-I"+includeDir, "-c", source, "-o", output)
+
+	cmd := exec.Command("clang", args...)
 	cmd.Dir = s.workDir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-	log := fmt.Sprintf("=== compile %s %s ===\n%s%s", transport, arch, stdout.String(), stderr.String())
+	err = cmd.Run()
+	log := fmt.Sprintf("=== compile %s %s ===\n%s%s", transport, targetArch, stdout.String(), stderr.String())
 	return log, err
+}
+
+func normalizeBPFTargetArch(arch string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "", "amd64", "x86_64", "x86":
+		return "x86", nil
+	case "arm64", "aarch64", "arm":
+		return "arm", nil
+	default:
+		return "", fmt.Errorf("unsupported BPF target arch %q", arch)
+	}
+}
+
+func bpfTransportMacro(transport string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(transport)) {
+	case "perf":
+		return "AEGIS_EVENT_PERF", nil
+	case "ringbuf":
+		return "AEGIS_EVENT_RINGBUF", nil
+	default:
+		return "", fmt.Errorf("unsupported BPF transport %q", transport)
+	}
+}
+
+func bpfArchIncludeDir(targetArch string) string {
+	switch targetArch {
+	case "x86":
+		return "/usr/include/x86_64-linux-gnu"
+	case "arm":
+		return "/usr/include/aarch64-linux-gnu"
+	default:
+		return ""
+	}
 }
 
 func (s *BuilderService) createTarGz(sourceDir, outputFile string) error {
@@ -484,6 +553,38 @@ func (s *BuilderService) storeBuildResult(buildID, status, buildLog string) {
 	s.buildLogs[buildID] = buildLog
 	s.buildStatuses[buildID] = status
 	s.mu.Unlock()
+}
+
+// populateFailedBuildLog sets BuildLogTail, ClangVersion, BuilderImageDigest,
+// and BuildLogObjectKey on a failed BuildResult so the API Server can persist
+// the real clang stderr for frontend diagnostics.
+func (s *BuilderService) populateFailedBuildLog(ctx context.Context, req BuildRequest, result *BuildResult, buildDir, logStr string) {
+	// Set build log tail (last 4096 chars)
+	buildLogTail := logStr
+	if len(buildLogTail) > 4096 {
+		buildLogTail = buildLogTail[len(buildLogTail)-4096:]
+	}
+	result.BuildLogTail = buildLogTail
+	result.ClangVersion = parseClangVersion("")
+	result.BuilderImageDigest = os.Getenv("BUILDER_IMAGE_DIGEST")
+
+	// Upload full build log to MinIO for diagnostics
+	logObjectKey := fmt.Sprintf("detection-packages/%s/%s/build.log", req.PackageID, req.Version)
+	logFile := filepath.Join(buildDir, "build.log")
+	if err := os.WriteFile(logFile, []byte(logStr), 0644); err != nil {
+		log.Printf("[build_log_write_failed] build_id=%s package_id=%s error=%v", req.BuildID, req.PackageID, err)
+		return
+	}
+	if s.minioClient == nil {
+		log.Printf("[build_log_upload_skipped] build_id=%s package_id=%s reason=minio_client_unavailable", req.BuildID, req.PackageID)
+		return
+	}
+	if err := s.minioClient.UploadFile(ctx, "aegis-builds", logObjectKey, logFile); err != nil {
+		log.Printf("[build_log_upload_failed] build_id=%s package_id=%s object_key=%s error=%v", req.BuildID, req.PackageID, logObjectKey, err)
+		return
+	}
+	result.BuildLogObjectKey = logObjectKey
+	log.Printf("[build_log_uploaded] build_id=%s package_id=%s object_key=%s", req.BuildID, req.PackageID, logObjectKey)
 }
 
 func computeSHA256(filePath string) (string, error) {
@@ -552,6 +653,7 @@ func validateBuildInput(req BuildRequest) error {
 		"bpf_override_return",
 		"bpf_setsockopt",
 		"bpf_sk_redirect",
+		"bpf_get_current_task",
 	}
 	for _, helper := range forbiddenHelpers {
 		pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(helper) + `\b`)

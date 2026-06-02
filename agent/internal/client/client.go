@@ -100,6 +100,7 @@ func (c *Client) connect() error {
 	var err error
 	c.conn, err = grpc.NewClient(c.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
+		c.cleanupFailedConnect()
 		return err
 	}
 
@@ -107,6 +108,7 @@ func (c *Client) connect() error {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 
 	if err := c.register(); err != nil {
+		c.cleanupFailedConnect()
 		return err
 	}
 
@@ -177,7 +179,7 @@ func (c *Client) register() error {
 	}
 
 	if !resp.Success {
-		return err
+		return fmt.Errorf("registration failed: %s", resp.Message)
 	}
 
 	c.hostID = resp.HostId
@@ -187,6 +189,21 @@ func (c *Client) register() error {
 		zap.String("hostname", assetInfo.Hostname),
 		zap.String("os", assetInfo.OSType))
 	return nil
+}
+
+func (c *Client) cleanupFailedConnect() {
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	if c.conn != nil {
+		if err := c.conn.Close(); err != nil {
+			logger.Warn("Failed to close grpc connection after failed connect", zap.Error(err))
+		}
+		c.conn = nil
+	}
+	c.client = nil
+	c.StopCallbackServer()
 }
 
 func (c *Client) sendHeartbeats() {
@@ -289,6 +306,19 @@ func (c *Client) run() {
 				}
 			}
 
+			if allowlistUpdate := req.GetAllowlistUpdate(); allowlistUpdate != nil {
+				logger.Info("Received allowlist update via stream",
+					zap.String("version", allowlistUpdate.Version))
+				if err := c.configManager.ApplyAllowlistUpdate(allowlistUpdate); err != nil {
+					logger.Error("Failed to apply allowlist update",
+						zap.String("version", allowlistUpdate.Version),
+						zap.Error(err))
+				} else {
+					logger.Info("Allowlist update applied",
+						zap.String("version", allowlistUpdate.Version))
+				}
+			}
+
 			if detectionPackageCommand := req.GetDetectionPackageCommand(); detectionPackageCommand != nil {
 				logger.Info("Received detection package command via stream",
 					zap.String("action", detectionPackageCommand.Action),
@@ -303,19 +333,6 @@ func (c *Client) run() {
 					logger.Info("Detection package command applied",
 						zap.String("package_id", detectionPackageCommand.PackageId),
 						zap.String("action", detectionPackageCommand.Action))
-				}
-			}
-
-			if allowlistUpdate := req.GetAllowlistUpdate(); allowlistUpdate != nil {
-				logger.Info("Received allowlist update via stream",
-					zap.String("version", allowlistUpdate.Version))
-				if err := c.configManager.ApplyAllowlistUpdate(allowlistUpdate); err != nil {
-					logger.Error("Failed to apply allowlist update",
-						zap.String("version", allowlistUpdate.Version),
-						zap.Error(err))
-				} else {
-					logger.Info("Allowlist update applied",
-						zap.String("version", allowlistUpdate.Version))
 				}
 			}
 		}

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -65,6 +66,7 @@ func (r *AlertRepository) FindByID(id string) (*model.Alert, error) {
 	if result.RuleTitle != "" {
 		alert.RuleTitle = result.RuleTitle
 	}
+	r.hydrateAlertDerivedFields(&alert)
 
 	return &alert, nil
 }
@@ -121,9 +123,88 @@ func (r *AlertRepository) List(page, pageSize int, filters map[string]interface{
 		} else {
 			alerts[i].RuleTitle = a.Alert.MitreName
 		}
+		r.hydrateAlertDerivedFields(&alerts[i])
 	}
 
 	return alerts, total, nil
+}
+
+func (r *AlertRepository) hydrateAlertDerivedFields(alert *model.Alert) {
+	if alert == nil {
+		return
+	}
+	if count := countProcessIDsFromJSON(alert.ProcessTree); count > 0 {
+		alert.ProcessCount = count
+		return
+	}
+	if count := r.countProcessIDsFromRuntimeEvidence(alert); count > 0 {
+		alert.ProcessCount = count
+		return
+	}
+	if alert.PID > 0 {
+		alert.ProcessCount = 1
+	}
+}
+
+func (r *AlertRepository) countProcessIDsFromRuntimeEvidence(alert *model.Alert) int {
+	if alert.RuleID == "" {
+		return 0
+	}
+	var eventData string
+	err := r.db.Table("runtime_events").
+		Select("event_data").
+		Where("host_id = ? AND matched_rule_id = ?", alert.HostID, alert.RuleID).
+		Where("pid = ? OR ? = 0", alert.PID, alert.PID).
+		Order("created_at DESC").
+		Limit(1).
+		Scan(&eventData).Error
+	if err != nil || eventData == "" {
+		return 0
+	}
+	return countProcessIDsFromJSON(eventData)
+}
+
+func countProcessIDsFromJSON(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+		return 0
+	}
+	seen := map[int]bool{}
+	collectProcessIDs(parsed, seen)
+	return len(seen)
+}
+
+func collectProcessIDs(value interface{}, seen map[int]bool) {
+	switch v := value.(type) {
+	case []interface{}:
+		for _, item := range v {
+			collectProcessIDs(item, seen)
+		}
+	case map[string]interface{}:
+		addProcessID(v["pid"], seen)
+		addProcessID(v["ppid"], seen)
+		addProcessID(v["PID"], seen)
+		addProcessID(v["PPID"], seen)
+		for _, child := range v {
+			collectProcessIDs(child, seen)
+		}
+	}
+}
+
+func addProcessID(value interface{}, seen map[int]bool) {
+	switch v := value.(type) {
+	case float64:
+		if v > 0 {
+			seen[int(v)] = true
+		}
+	case int:
+		if v > 0 {
+			seen[v] = true
+		}
+	}
 }
 
 func applyAlertFilters(query *gorm.DB, filters map[string]interface{}) *gorm.DB {
@@ -342,6 +423,7 @@ func (r *AlertRepository) FindPendingByTimeRange(startTime, endTime time.Time, h
 		} else {
 			alerts[i].RuleTitle = a.Alert.MitreName
 		}
+		r.hydrateAlertDerivedFields(&alerts[i])
 	}
 
 	return alerts, nil
@@ -503,6 +585,7 @@ func (r *AlertRepository) FindByAlertIDs(alertIDs []string) ([]model.Alert, erro
 		} else {
 			alerts[i].RuleTitle = a.Alert.MitreName
 		}
+		r.hydrateAlertDerivedFields(&alerts[i])
 	}
 
 	return alerts, nil

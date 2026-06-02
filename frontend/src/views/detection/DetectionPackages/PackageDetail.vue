@@ -12,7 +12,7 @@
           </div>
           <div class="actions">
             <el-button
-              v-if="currentPackage?.status === 'signed'"
+              v-if="['signed', 'disabled'].includes(currentPackage?.status || '')"
               type="success"
               :loading="loading"
               :disabled="!canOperate('enable')"
@@ -45,6 +45,10 @@
               :loading="loading"
               @click="$router.push(`/detection/packages/${packageId}/edit`)"
             >编辑</el-button>
+            <el-button
+              :loading="loading"
+              @click="activeTab = 'raw'; loadRawDraft()"
+            >原始信息</el-button>
           </div>
         </div>
       </template>
@@ -98,6 +102,40 @@
             :schema="currentBuild?.event_schema || currentPackage?.event_schema"
             :schema-json="currentBuild?.event_schema_json"
           />
+        </el-tab-pane>
+
+        <el-tab-pane label="原始信息" name="raw">
+          <el-empty v-if="!currentDraft" description="暂无草稿原始信息" />
+          <el-tabs v-else v-model="rawTab" class="raw-tabs">
+            <el-tab-pane label="HookPlan" name="hookplan">
+              <CodeEditorPanel
+                :model-value="currentDraft.hook_plan_yaml || ''"
+                language="yaml"
+                readonly
+              />
+            </el-tab-pane>
+            <el-tab-pane label="eBPF 源码" name="ebpf">
+              <CodeEditorPanel
+                :model-value="currentDraft.ebpf_source || ''"
+                language="c"
+                readonly
+              />
+            </el-tab-pane>
+            <el-tab-pane label="Sigma 原子规则" name="sigma">
+              <CodeEditorPanel
+                :model-value="currentDraft.sigma_rules_yaml || ''"
+                language="yaml"
+                readonly
+              />
+            </el-tab-pane>
+            <el-tab-pane label="Correlation 最终规则" name="correlation">
+              <CodeEditorPanel
+                :model-value="currentDraft.correlation_yaml || ''"
+                language="yaml"
+                readonly
+              />
+            </el-tab-pane>
+          </el-tabs>
         </el-tab-pane>
 
         <el-tab-pane label="关联告警" name="alerts">
@@ -215,17 +253,19 @@ import BuildReviewPanel from './components/BuildReviewPanel.vue'
 import EventSchemaTable from './components/EventSchemaTable.vue'
 import HostStatusTable from './components/HostStatusTable.vue'
 import EvidenceTimeline from './components/EvidenceTimeline.vue'
+import CodeEditorPanel from './components/CodeEditorPanel.vue'
 
 const route = useRoute()
 const { canOperate } = useRole()
 const {
-  currentPackage, currentBuild, hostStatuses, hostTotal, loading,
+  currentPackage, currentDraft, currentBuild, hostStatuses, hostTotal, loading,
   fetchPackage, fetchBuild, fetchLatestBuild, startBuild, signPackage,
-  enablePackage, disablePackage, uninstallPackage, fetchHostStatus,
+  enablePackage, disablePackage, uninstallPackage, fetchHostStatus, fetchDraft,
 } = useDetectionPackages()
 
 const packageId = ref(route.params.id as string)
 const activeTab = ref(route.query.tab as string || 'info')
+const rawTab = ref('hookplan')
 
 const signDialogVisible = ref(false)
 const enableDialogVisible = ref(false)
@@ -240,6 +280,13 @@ function handleTabChange(tab: string) {
   if (tab === 'alerts') {
     loadAlerts()
   }
+  if (tab === 'raw') {
+    loadRawDraft()
+  }
+}
+
+async function loadRawDraft() {
+  await fetchDraft(packageId.value)
 }
 
 async function loadAlerts() {
@@ -266,6 +313,7 @@ async function handleRollback(row: any) {
 
 async function loadPackage() {
   await fetchPackage(packageId.value)
+  await loadRawDraft()
   if (currentPackage.value?.status !== 'draft') {
     fetchHostStatus(packageId.value)
   }

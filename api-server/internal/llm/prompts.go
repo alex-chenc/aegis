@@ -420,6 +420,7 @@ const DetectionPackageGenerationPrompt = `你是 Aegis V5.8 的 AI 安全规则�
 - Sigma 只做单事件 atomic detection。
 - Correlation 只做 ordered sequence + window + by。
 - rule_id 使用 package_id.stable_name 格式。
+- 每条 Sigma atomic rule 的 tags 必须包含 'attack.txxxx' MITRE technique；Correlation alert 必须包含同一可处置 MITRE 'mitre_id'。
 - 不生成跨 package 依赖。
 - 不使用未明确允许的 hook 类型（默认只允许 tracepoint）。
 - 输出必须避免不可控事件风暴。
@@ -454,7 +455,18 @@ struct trace_event_raw_sys_enter {
 - SEC("tracepoint/syscalls/sys_enter_xxx")
 - 函数签名：int tracepoint__syscalls__sys_enter_xxx(struct trace_event_raw_sys_enter *ctx)
 - 访问参数：ctx->args[0], ctx->args[1], etc.
-- 使用 bpf_ringbuf_reserve/bpf_ringbuf_submit 提交事件
+- 必须同时支持 AEGIS_EVENT_PERF 与 AEGIS_EVENT_RINGBUF 条件编译
+- AEGIS_EVENT_RINGBUF 分支使用 BPF_MAP_TYPE_RINGBUF + bpf_ringbuf_reserve/bpf_ringbuf_submit
+- AEGIS_EVENT_PERF 分支使用 BPF_MAP_TYPE_PERF_EVENT_ARRAY + bpf_perf_event_output
+- perf 分支必须使用栈上 struct event 作为输出缓冲，不调用 bpf_ringbuf_reserve
+- pid/tid 必须使用 bpf_get_current_pid_tgid() 获取
+- 禁止使用 bpf_get_current_task()，禁止直接解引用 struct task_struct
+- 不要直接解引用内核内部结构体指针，如 struct sock、struct file、struct task_struct；需要字段时优先使用 tracepoint 参数或稳定 helper
+- 事件结构必须使用 agent 支持的统一信封：
+  timestamp_ns, plugin_id_hash, event_type, pid, tid, uid, gid, payload_len, payload[256]
+- payload TLV 格式必须是 field_id(uint16 little-endian) + field_len(uint16 little-endian) + raw value；不要生成 field_type 字节
+- 如果不需要字段，payload_len 必须设为 0，Sigma 规则只匹配 event_type
+- eBPF event_type 数字必须和 HookPlan/package metadata 的 event_schema.events key 一致
 
 ## HookPlan 格式要求
 

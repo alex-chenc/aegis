@@ -24,6 +24,7 @@ const statusMap: Record<string, { type: string; text: string }> = {
   active: { type: 'success', text: '运行中' },
   degraded: { type: 'warning', text: '降级' },
   load_failed: { type: 'danger', text: '加载失败' },
+  timeout: { type: 'danger', text: '超时' },
   disabled: { type: 'info', text: '已禁用' },
   uninstalled: { type: 'info', text: '已卸载' },
   pending: { type: 'info', text: '待处理' },

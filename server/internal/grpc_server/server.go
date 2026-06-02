@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ type GRPCServer struct {
 	blockPolicyRepo      *repository.BlockPolicyRepository
 	commandAuditRuleRepo *repository.CommandAuditRuleRepo
 	systemConfigRepo     *repository.SystemConfigRepo
+	detectionPackageRepo *repository.DetectionPackageRepository
 	wsBroadcaster        WebSocketBroadcaster
 	redisClient          *storage.RedisClient
 	kafkaProducer        *queue.KafkaProducer
@@ -103,6 +105,10 @@ func (s *GRPCServer) SetCommandAuditRuleRepo(repo *repository.CommandAuditRuleRe
 
 func (s *GRPCServer) SetSystemConfigRepo(repo *repository.SystemConfigRepo) {
 	s.systemConfigRepo = repo
+}
+
+func (s *GRPCServer) SetDetectionPackageRepo(repo *repository.DetectionPackageRepository) {
+	s.detectionPackageRepo = repo
 }
 
 // Start 启动 gRPC 服务器
@@ -374,7 +380,7 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 					zap.Stringer("host_id", hostID),
 				)
 
-				go s.pushActiveConfigToAgent(hostID, connection)
+				go s.pushAgentStartupState(hostID, connection)
 			}
 
 		case *pb.CommandRequest_Result:
@@ -1259,6 +1265,12 @@ func (s *GRPCServer) pushConfigToAgent(hostID uuid.UUID) {
 	}
 }
 
+func (s *GRPCServer) pushAgentStartupState(hostID uuid.UUID, conn *AgentConnection) {
+	s.pushActiveConfigToAgent(hostID, conn)
+	time.Sleep(2 * time.Second)
+	s.pushEnabledDetectionPackagesToAgent(hostID, conn)
+}
+
 // pushActiveConfigToAgent pushes all configs to an agent via the bidirectional stream.
 func (s *GRPCServer) pushActiveConfigToAgent(hostID uuid.UUID, conn *AgentConnection) {
 	time.Sleep(1 * time.Second)
@@ -1293,26 +1305,136 @@ func (s *GRPCServer) pushActiveConfigToAgent(hostID uuid.UUID, conn *AgentConnec
 	}
 }
 
+func (s *GRPCServer) pushEnabledDetectionPackagesToAgent(hostID uuid.UUID, conn *AgentConnection) {
+	if s.detectionPackageRepo == nil {
+		logger.Warn("detection package repo not initialized", zap.String("host_id", hostID.String()))
+		return
+	}
+	if conn == nil || conn.Stream == nil {
+		logger.Warn("agent stream is nil for detection package push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	packages, err := s.detectionPackageRepo.ListEnabled()
+	if err != nil {
+		logger.Error("failed to list enabled detection packages", zap.String("host_id", hostID.String()), zap.Error(err))
+		return
+	}
+	if len(packages) == 0 {
+		logger.Info("no enabled detection packages to push", zap.String("host_id", hostID.String()))
+		return
+	}
+
+	hostname := ""
+	if s.hostRepo != nil {
+		if host, err := s.hostRepo.FindByID(hostID); err == nil && host != nil {
+			hostname = host.Hostname
+		} else if err != nil {
+			logger.Warn("failed to load host before detection package push",
+				zap.String("host_id", hostID.String()),
+				zap.Error(err),
+			)
+		}
+	}
+
+	pushed := 0
+	for _, pkg := range packages {
+		cmd := &pb.CommandRequest{
+			Request: &pb.CommandRequest_DetectionPackageCommand{
+				DetectionPackageCommand: &pb.DetectionPackageCommand{
+					Action:       "install",
+					PackageId:    pkg.PackageID,
+					Version:      pkg.Version,
+					PackageUrl:   detectionPackageObjectKeyToURL(pkg.PackageObjectKey),
+					SignatureUrl: detectionPackageObjectKeyToURL(pkg.SignatureObjectKey),
+					PackageSize:  pkg.PackageSize,
+				},
+			},
+		}
+		if err := conn.Stream.Send(cmd); err != nil {
+			logger.Error("failed to push enabled detection package",
+				zap.String("host_id", hostID.String()),
+				zap.String("package_id", pkg.PackageID),
+				zap.String("version", pkg.Version),
+				zap.Error(err),
+			)
+			continue
+		}
+		pushed++
+		if s.detectionPackageRepo != nil {
+			if err := s.detectionPackageRepo.UpsertHostStatus(pkg.PackageID, pkg.Version, hostID, hostname, "installing"); err != nil {
+				logger.Warn("failed to record detection package installing status",
+					zap.String("host_id", hostID.String()),
+					zap.String("package_id", pkg.PackageID),
+					zap.String("version", pkg.Version),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	logger.Info("enabled detection packages pushed to agent",
+		zap.String("host_id", hostID.String()),
+		zap.Int("package_count", len(packages)),
+		zap.Int("pushed", pushed),
+	)
+}
+
+func detectionPackageObjectKeyToURL(objectKey string) string {
+	if objectKey == "" {
+		return ""
+	}
+	if strings.HasPrefix(objectKey, "http://") || strings.HasPrefix(objectKey, "https://") {
+		return objectKey
+	}
+	base := strings.TrimRight(os.Getenv("MINIO_ARTIFACT_BASE_URL"), "/")
+	if base == "" {
+		base = "http://localhost:9000/aegis-releases"
+	}
+	return base + "/" + strings.TrimLeft(objectKey, "/")
+}
+
 // buildAllConfigs builds all config sync messages for an agent.
 func (s *GRPCServer) buildAllConfigs() []*pb.ConfigSync {
 	var configs []*pb.ConfigSync
 
-	// 1. Build sigma rules config
+	// 1. Dynamic packages require the hook allowlist before installation.
+	if allowlistConfig := s.buildHookAllowlistConfig(); allowlistConfig != nil {
+		configs = append(configs, allowlistConfig)
+	}
+
+	// 2. Build sigma rules config
 	if sigmaConfig := s.buildSigmaRulesConfig(); sigmaConfig != nil {
 		configs = append(configs, sigmaConfig)
 	}
 
-	// 2. Build audit rules config
+	// 3. Build audit rules config
 	if auditRulesConfig := s.buildAuditRulesConfig(); auditRulesConfig != nil {
 		configs = append(configs, auditRulesConfig)
 	}
 
-	// 3. Build audit settings config
+	// 4. Build audit settings config
 	if auditSettingsConfig := s.buildAuditSettingsConfig(); auditSettingsConfig != nil {
 		configs = append(configs, auditSettingsConfig)
 	}
 
 	return configs
+}
+
+func (s *GRPCServer) buildHookAllowlistConfig() *pb.ConfigSync {
+	if s.detectionPackageRepo == nil {
+		return nil
+	}
+	payload, err := s.detectionPackageRepo.GetActiveAllowlistPayload()
+	if err != nil {
+		logger.Warn("failed to get active hook allowlist for config sync", zap.Error(err))
+		return nil
+	}
+	return &pb.ConfigSync{
+		ConfigType: "dynamic_ebpf_hook_allowlist",
+		Action:     "full_sync",
+		Payload:    payload,
+	}
 }
 
 // buildSigmaRulesConfig builds a ConfigSync message with all active/experimental sigma rules.

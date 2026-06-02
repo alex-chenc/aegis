@@ -124,20 +124,32 @@ func (h *DetectionHandler) reconcileRulePolicyBindings() (gin.H, error) {
 		return nil, fmt.Errorf("failed to list sigma rules: %w", err)
 	}
 
-	seen := make(map[string]string, len(rules))
 	mitreIDs := make([]string, 0, len(rules))
+	seen := make(map[string]bool, len(rules))
 	created := 0
+	skippedMissingMitre := 0
 	for i := range rules {
 		rule := &rules[i]
 		mitreID := normalizeDetectionMitreID(rule.MitreID)
 		if mitreID == "" {
-			return nil, fmt.Errorf("rule %s has no MITRE ID; policy count cannot be bound one-to-one", rule.RuleID)
+			skippedMissingMitre++
+			if logger.Logger != nil {
+				logger.Warn("skip rule without MITRE ID during policy reconciliation", zap.String("rule_id", rule.RuleID))
+			}
+			continue
 		}
-		if previousRuleID, ok := seen[mitreID]; ok {
-			return nil, fmt.Errorf("rules %s and %s share MITRE ID %s; one-to-one policy binding requires unique MITRE IDs", previousRuleID, rule.RuleID, mitreID)
+		if mitreID != rule.MitreID {
+			rule.MitreID = mitreID
+			if err := h.sigmaRuleRepo.Update(rule); err != nil {
+				return nil, fmt.Errorf("failed to normalize rule MITRE ID: %w", err)
+			}
 		}
-		seen[mitreID] = rule.RuleID
-		mitreIDs = append(mitreIDs, mitreID)
+
+		firstRuleForMitre := !seen[mitreID]
+		if firstRuleForMitre {
+			seen[mitreID] = true
+			mitreIDs = append(mitreIDs, mitreID)
+		}
 
 		existingPolicy, _ := h.blockPolicyRepo.FindByMitreID(mitreID)
 		if existingPolicy == nil {
@@ -145,31 +157,38 @@ func (h *DetectionHandler) reconcileRulePolicyBindings() (gin.H, error) {
 				return nil, err
 			}
 			created++
-		} else if existingPolicy.MitreName == "" || existingPolicy.MitreName != rule.Title {
+		} else if firstRuleForMitre && (existingPolicy.MitreName == "" || existingPolicy.MitreName != rule.Title) {
 			if err := h.blockPolicyRepo.Update(mitreID, map[string]interface{}{"mitre_name": rule.Title}); err != nil {
 				return nil, fmt.Errorf("failed to align policy title for %s: %w", mitreID, err)
 			}
 		}
 	}
 
-	deleted, err := h.blockPolicyRepo.DeleteExceptMitreIDs(mitreIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete orphan block policies: %w", err)
-	}
-
 	policies, err := h.blockPolicyRepo.List()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list block policies: %w", err)
 	}
-	if len(policies) != len(rules) {
-		return nil, fmt.Errorf("rule/policy binding mismatch: rules=%d policies=%d", len(rules), len(policies))
+	deletedOrphanPolicies, err := h.blockPolicyRepo.DeleteExceptMitreIDs(mitreIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete orphan block policies: %w", err)
+	}
+	if deletedOrphanPolicies > 0 {
+		if logger.Logger != nil {
+			logger.Info("deleted orphan block policies", zap.Int64("count", deletedOrphanPolicies))
+		}
+		policies, err = h.blockPolicyRepo.List()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list block policies after orphan cleanup: %w", err)
+		}
 	}
 
 	return gin.H{
-		"created":        created,
-		"deleted_orphan": deleted,
-		"total_rules":    len(rules),
-		"total_policies": len(policies),
+		"created":                 created,
+		"deleted_orphan_policies": deletedOrphanPolicies,
+		"total_rules":             len(rules),
+		"total_mitre_ids":         len(mitreIDs),
+		"total_policies":          len(policies),
+		"skipped_missing_mitre":   skippedMissingMitre,
 	}, nil
 }
 

@@ -3,22 +3,22 @@
     <el-row :gutter="12" class="status-stats">
       <el-col :span="6">
         <el-card shadow="never">
-          <el-statistic title="总主机" :value="stats.total" />
+          <el-statistic title="安装中" :value="stats.installing" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="never">
-          <el-statistic title="运行中" :value="stats.active" />
+          <el-statistic title="成功" :value="stats.success" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="never">
-          <el-statistic title="降级" :value="stats.degraded" />
+          <el-statistic title="错误" :value="stats.failed" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="never">
-          <el-statistic title="失败" :value="stats.failed" />
+          <el-statistic title="超时" :value="stats.timeout" />
         </el-card>
       </el-col>
     </el-row>
@@ -76,11 +76,11 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 
 const stats = computed(() => {
-  const total = props.hosts.length
-  const active = props.hosts.filter(h => h.status === 'active').length
-  const degraded = props.hosts.filter(h => h.status === 'degraded').length
+  const installing = props.hosts.filter(h => ['pending', 'downloading', 'installing'].includes(h.status)).length
+  const success = props.hosts.filter(h => h.status === 'active').length
   const failed = props.hosts.filter(h => ['load_failed', 'signature_failed', 'blocked_by_hook_allowlist'].includes(h.status)).length
-  return { total, active, degraded, failed }
+  const timeout = props.hosts.filter(h => h.status === 'timeout').length
+  return { installing, success, failed, timeout }
 })
 </script>
 

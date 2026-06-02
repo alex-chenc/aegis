@@ -69,7 +69,7 @@ export interface PackageHostStatus {
   hostname: string
   kernel_release?: string
   arch?: string
-  status: 'pending' | 'downloading' | 'signature_failed' | 'blocked_by_hook_allowlist' | 'installing' | 'active' | 'degraded' | 'load_failed' | 'disabled_by_policy' | 'disabled_by_rate' | 'rolled_back' | 'uninstalled'
+  status: 'pending' | 'downloading' | 'signature_failed' | 'blocked_by_hook_allowlist' | 'installing' | 'active' | 'degraded' | 'load_failed' | 'timeout' | 'disabled_by_policy' | 'disabled_by_rate' | 'rolled_back' | 'uninstalled'
   active_artifact?: 'ringbuf' | 'perf'
   loaded_hooks: string[]
   error_message?: string

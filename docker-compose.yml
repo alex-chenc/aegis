@@ -238,7 +238,8 @@ services:
       MINIO_USE_SSL: "false"
       # URL agents use to download detection-package artifacts from MinIO.
       # Must be reachable from the host where the agent runs (not the Docker network).
-      MINIO_ARTIFACT_BASE_URL: "http://localhost:9000/aegis-releases"
+      # Uses EXTERNAL_IP from .env file; falls back to localhost for local development.
+      MINIO_ARTIFACT_BASE_URL: "http://${EXTERNAL_IP:-localhost}:9000/aegis-releases"
       # 服务配置
       SERVER_HTTP_PORT: 8082
       SERVER_GRPC_PORT: 19093
@@ -264,9 +265,22 @@ services:
       retries: 3
       start_period: 30s
 
+  # Shared eBPF builder base image (V5.8)
+  ebpf-builder-base:
+    image: aegis-agent-builder-ubi8:5.8.0
+    build:
+      context: .
+      dockerfile: docker/ebpf-builder-base/Dockerfile
+    profiles:
+      - build
+
   # Builder (V5.8 - eBPF Detection Package Builder)
   builder:
-    build: ./builder
+    build:
+      context: .
+      dockerfile: builder/Dockerfile
+      args:
+        EBPF_BASE_IMAGE: aegis-agent-builder-ubi8:5.8.0
     container_name: aegis-builder
     restart: unless-stopped
     depends_on:
@@ -322,6 +336,9 @@ services:
       # Kafka 配置
       KAFKA_BROKERS: kafka:9092
       KAFKA_GROUP_ID: aegis-server-consumer
+      # DetectionPackage artifact download URL reachable by deployed agents
+      # Uses EXTERNAL_IP from .env file; falls back to localhost for local development.
+      MINIO_ARTIFACT_BASE_URL: "http://${EXTERNAL_IP:-localhost}:9000/aegis-releases"
       # Server gRPC 配置
       SERVER_GRPC_PORT: 19090
       SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}

@@ -44,15 +44,24 @@ func (r *BlockPolicyRepository) ListPaginated(page, pageSize int, query string) 
 type BlockPolicyWithRuleTitle struct {
 	model.BlockPolicy
 	RuleTitle string `json:"rule_title"`
+	RuleCount int    `json:"rule_count"`
 }
 
 func (r *BlockPolicyRepository) ListPaginatedWithRuleTitle(page, pageSize int, query string) ([]BlockPolicyWithRuleTitle, int64, error) {
 	var results []BlockPolicyWithRuleTitle
 	var total int64
 
-	db := r.db.Model(&model.BlockPolicy{})
+	db := r.db.Table("block_policies")
 	if query != "" {
-		db = db.Where("mitre_id ILIKE ? OR mitre_name ILIKE ?", "%"+query+"%", "%"+query+"%")
+		search := "%" + query + "%"
+		db = db.Where(`block_policies.mitre_id ILIKE ?
+			OR block_policies.mitre_name ILIKE ?
+			OR EXISTS (
+				SELECT 1 FROM sigma_rules
+				WHERE sigma_rules.mitre_id = block_policies.mitre_id
+				AND (sigma_rules.source IS NULL OR sigma_rules.source != 'detection_package')
+				AND (sigma_rules.title ILIKE ? OR sigma_rules.rule_id ILIKE ?)
+			)`, search, search, search, search)
 	}
 
 	if err := db.Count(&total).Error; err != nil {
@@ -60,10 +69,33 @@ func (r *BlockPolicyRepository) ListPaginatedWithRuleTitle(page, pageSize int, q
 	}
 
 	offset := (page - 1) * pageSize
-	err := r.db.Table("block_policies").
+	queryDB := r.db.Table("block_policies").
 		Select(`block_policies.*, 
-			(SELECT title FROM sigma_rules WHERE sigma_rules.mitre_id = block_policies.mitre_id LIMIT 1) as rule_title`).
-		Where("mitre_id ILIKE ? OR mitre_name ILIKE ?", "%"+query+"%", "%"+query+"%").
+			(
+				SELECT title FROM sigma_rules
+				WHERE sigma_rules.mitre_id = block_policies.mitre_id
+				AND (sigma_rules.source IS NULL OR sigma_rules.source != 'detection_package')
+				ORDER BY CASE WHEN sigma_rules.source = 'detection_package_correlation' THEN 0 ELSE 1 END,
+					sigma_rules.created_at DESC
+				LIMIT 1
+			) as rule_title,
+			(
+				SELECT COUNT(*) FROM sigma_rules
+				WHERE sigma_rules.mitre_id = block_policies.mitre_id
+				AND (sigma_rules.source IS NULL OR sigma_rules.source != 'detection_package')
+			) as rule_count`)
+	if query != "" {
+		search := "%" + query + "%"
+		queryDB = queryDB.Where(`block_policies.mitre_id ILIKE ?
+			OR block_policies.mitre_name ILIKE ?
+			OR EXISTS (
+				SELECT 1 FROM sigma_rules
+				WHERE sigma_rules.mitre_id = block_policies.mitre_id
+				AND (sigma_rules.source IS NULL OR sigma_rules.source != 'detection_package')
+				AND (sigma_rules.title ILIKE ? OR sigma_rules.rule_id ILIKE ?)
+			)`, search, search, search, search)
+	}
+	err := queryDB.
 		Order("mitre_id").
 		Offset(offset).
 		Limit(pageSize).

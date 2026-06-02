@@ -33,14 +33,14 @@ Primary services and ports:
 
 ## Codex Skills
 
-Use project skills from `.agents/codex-skills/` when their trigger matches the task.
+Use project skills from `.claude/skills/` (Claude) or `.agents/codex-skills/` (Codex) when their trigger matches the task.
 Read the relevant `SKILL.md` before running commands or changing related files.
 
-- Build, test, service verification, docker compose checks, agent packaging, API
-  smoke tests: read `.agents/codex-skills/aegis-build-test/SKILL.md`.
-- Offline release package creation, Docker image export, MinIO-with-agent image,
-  release zip/start script/database init packaging: read
-  `.agents/codex-skills/aegis-release-packaging/SKILL.md`.
+- **aegis-build-test** — Build, test, service verification, docker compose checks, agent packaging, API smoke tests. Read `.claude/skills/aegis-build-test/SKILL.md`.
+- **aegis-release-packaging** — Offline release package creation, Docker image export, MinIO-with-agent image, release zip/start script/database init packaging. Read `.claude/skills/aegis-release-packaging/SKILL.md`.
+- **aegis-software-designer** — Design-driven development workflow with TDD, documentation-first, and mandatory build/test verification. Enforces analysis → design → test cases → implementation → logging check → build verification → code review flow. Read `.claude/skills/aegis-software-designer/SKILL.md`.
+- **daily-program-logging** — Ensures code includes proper operational logging at key points: service startup/shutdown, API calls, background tasks, external dependency calls, important business processes, error handling. Read `.claude/skills/daily-program-logging/SKILL.md`.
+- **root-cause-debugging** — Traces the complete bug-related call chain, analyzes root cause based on business logic, and applies the smallest safe fix. Use for bugs, runtime errors, test failures, CI failures, and abnormal behavior. Read `.claude/skills/root-cause-debugging/SKILL.md`.
 
 After development work, run the narrowest useful verification from
 `aegis-build-test` when feasible. If verification cannot run because of sandbox,

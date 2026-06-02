@@ -5,18 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
 	"time"
 
 	"api-server/internal/grpc"
 
-	"gopkg.in/yaml.v3"
 	"api-server/internal/model"
 	"api-server/internal/repository"
 	pb "api-server/pkg/api/v1"
+	"api-server/pkg/logger"
+	"gopkg.in/yaml.v3"
 
 	"github.com/google/uuid"
 	goversion "github.com/hashicorp/go-version"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -30,11 +34,13 @@ var (
 	ErrInvalidState = errors.New("invalid resource state")
 )
 
+var detectionPackageMitrePattern = regexp.MustCompile(`(?i)T\d{4}(?:\.\d{3})?`)
+
 type DetectionPackageService struct {
-	repo                  *repository.DetectionPackageRepo
-	db                    *gorm.DB
-	serverClient          GRPCServerClient
-	builderClient         BuilderClient
+	repo                    *repository.DetectionPackageRepo
+	db                      *gorm.DB
+	serverClient            GRPCServerClient
+	builderClient           BuilderClient
 	artifactDownloadBaseURL string // e.g. "http://minio:9000/agent-artifacts"
 }
 
@@ -65,10 +71,10 @@ type DetectionPackageCommand struct {
 
 func NewDetectionPackageService(repo *repository.DetectionPackageRepo, db *gorm.DB, serverClient GRPCServerClient, builderClient BuilderClient, artifactDownloadBaseURL string) *DetectionPackageService {
 	return &DetectionPackageService{
-		repo:                  repo,
-		db:                    db,
-		serverClient:          serverClient,
-		builderClient:         builderClient,
+		repo:                    repo,
+		db:                      db,
+		serverClient:            serverClient,
+		builderClient:           builderClient,
 		artifactDownloadBaseURL: artifactDownloadBaseURL,
 	}
 }
@@ -176,6 +182,8 @@ func (s *DetectionPackageService) UpdateDraft(ctx context.Context, draftID uuid.
 	if req.CorrelationYAML != nil {
 		draft.CorrelationYAML = *req.CorrelationYAML
 	}
+	draft.Status = "draft"
+	draft.LastBuildID = nil
 	draft.UpdatedBy = operator
 
 	if err := s.repo.UpdateDraft(draft); err != nil {
@@ -477,11 +485,11 @@ func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID s
 		}
 	}
 
-	// Sync sigma rules from draft to sigma_rules table
+	// Sync package-scoped atomic and correlation rules into rule management.
 	if pkg.BuildID != nil {
 		if build, berr := s.repo.GetBuild(*pkg.BuildID); berr == nil && build.DraftID != nil {
-			if draft, derr := s.repo.GetDraftByID(*build.DraftID); derr == nil && draft.SigmaRulesYAML != "" {
-				s.syncSigmaRules(draft.SigmaRulesYAML, pkg.PackageID, pkg.Version)
+			if draft, derr := s.repo.GetDraftByID(*build.DraftID); derr == nil {
+				s.syncDetectionPackageRules(draft.SigmaRulesYAML, draft.CorrelationYAML, pkg.PackageID, pkg.Version)
 			}
 		}
 	}
@@ -490,53 +498,286 @@ func (s *DetectionPackageService) EnablePackage(ctx context.Context, packageID s
 	return nil
 }
 
-func (s *DetectionPackageService) syncSigmaRules(sigmaYAML, packageID, version string) {
-	// Parse sigma rules from YAML and insert into sigma_rules table
-	rules := parseSigmaRulesFromYAML(sigmaYAML)
-	for _, rule := range rules {
-		sr := &model.SigmaRule{
-			RuleID:      rule["id"],
-			Title:       rule["title"],
-			Description: rule["description"],
-			Content:     sigmaYAML,
-			Status:      "active",
-			Severity:    rule["level"],
-			GeneratedBy: "detection_package",
-			Source:      "detection_package",
-			Version:     version,
+func (s *DetectionPackageService) syncDetectionPackageRules(sigmaYAML, correlationYAML, packageID, version string) {
+	if deleted, err := s.deletePackageAtomicRules(packageID); err != nil {
+		if logger.Logger != nil {
+			logger.Warn("failed to delete detection package atomic rules",
+				zap.String("package_id", packageID),
+				zap.Error(err),
+			)
 		}
-		// Use ON CONFLICT to avoid duplicate key errors
-		s.db.Where("rule_id = ?", sr.RuleID).Assign(sr).FirstOrCreate(sr)
+	} else if deleted > 0 {
+		if logger.Logger != nil {
+			logger.Info("deleted detection package atomic rules",
+				zap.String("package_id", packageID),
+				zap.Int64("deleted", deleted),
+			)
+		}
+	}
+
+	correlationRules := parseCorrelationRulesFromYAML(correlationYAML)
+	if len(correlationRules) == 0 {
+		atomicCount := len(parseSigmaRulesFromYAML(sigmaYAML))
+		if logger.Logger != nil {
+			logger.Warn("detection package has no final correlation rule to sync",
+				zap.String("package_id", packageID),
+				zap.String("version", version),
+				zap.Int("atomic_rule_count", atomicCount),
+			)
+		}
+		return
+	}
+
+	for _, rule := range correlationRules {
+		sr := &model.SigmaRule{
+			RuleID:       rule.ID,
+			Title:        rule.Title,
+			Description:  rule.Description,
+			Content:      rule.Content,
+			Status:       "active",
+			MitreID:      rule.MitreID,
+			Severity:     rule.Severity,
+			GeneratedBy:  "detection_package",
+			Source:       "detection_package_correlation",
+			Version:      version,
+			ParentRuleID: packageID,
+		}
+		s.upsertSigmaRule(sr)
+		s.upsertCorrelationRule(rule, packageID, version)
 	}
 }
 
-func parseSigmaRulesFromYAML(yamlContent string) []map[string]string {
-	var rules []map[string]string
-	// Simple YAML parsing for sigma rules
+func (s *DetectionPackageService) deletePackageAtomicRules(packageID string) (int64, error) {
+	if packageID == "" {
+		return 0, nil
+	}
+	result := s.db.Where("parent_rule_id = ? AND source = ?", packageID, "detection_package").
+		Delete(&model.SigmaRule{})
+	return result.RowsAffected, result.Error
+}
+
+func (s *DetectionPackageService) upsertSigmaRule(rule *model.SigmaRule) {
+	if rule == nil || rule.RuleID == "" {
+		return
+	}
+	if rule.ID == uuid.Nil {
+		rule.ID = uuid.New()
+	}
+	if rule.Content == "" {
+		rule.Content = "{}"
+	}
+	s.db.Where("rule_id = ?", rule.RuleID).Assign(map[string]interface{}{
+		"title":          rule.Title,
+		"description":    rule.Description,
+		"content":        rule.Content,
+		"status":         rule.Status,
+		"mitre_id":       rule.MitreID,
+		"severity":       rule.Severity,
+		"generated_by":   rule.GeneratedBy,
+		"source":         rule.Source,
+		"version":        rule.Version,
+		"parent_rule_id": rule.ParentRuleID,
+		"updated_at":     time.Now(),
+	}).FirstOrCreate(rule)
+}
+
+func (s *DetectionPackageService) upsertCorrelationRule(rule parsedCorrelationRule, packageID, version string) {
+	if rule.ID == "" {
+		return
+	}
+	sequenceJSON, _ := json.Marshal(rule.Sequence)
+	correlation := &model.CorrelationRule{
+		ID:             uuid.New(),
+		PackageID:      packageID,
+		PackageVersion: version,
+		RuleID:         rule.ID,
+		Title:          rule.Title,
+		Severity:       rule.Severity,
+		ByKey:          rule.By,
+		WindowSeconds:  rule.WindowSeconds,
+		Ordered:        rule.Ordered,
+		SequenceJSON:   datatypes.JSON(sequenceJSON),
+		Content:        rule.Content,
+	}
+	s.db.Where("package_id = ? AND package_version = ? AND rule_id = ?", packageID, version, rule.ID).
+		Assign(map[string]interface{}{
+			"title":          correlation.Title,
+			"severity":       correlation.Severity,
+			"by_key":         correlation.ByKey,
+			"window_seconds": correlation.WindowSeconds,
+			"ordered":        correlation.Ordered,
+			"sequence_json":  correlation.SequenceJSON,
+			"content":        correlation.Content,
+		}).
+		FirstOrCreate(correlation)
+}
+
+type parsedSigmaRule struct {
+	ID          string
+	Title       string
+	Description string
+	Level       string
+	MitreID     string
+	Content     string
+}
+
+type parsedCorrelationRule struct {
+	ID            string
+	Title         string
+	Description   string
+	Severity      string
+	MitreID       string
+	By            string
+	WindowSeconds int
+	Ordered       bool
+	Sequence      []map[string]string
+	Content       string
+}
+
+func parseSigmaRulesFromYAML(yamlContent string) []parsedSigmaRule {
+	var rules []parsedSigmaRule
 	decoder := yaml.NewDecoder(strings.NewReader(yamlContent))
 	for {
-		var rule map[string]interface{}
-		if err := decoder.Decode(&rule); err != nil {
+		var node yaml.Node
+		if err := decoder.Decode(&node); err == io.EOF {
+			break
+		} else if err != nil {
 			break
 		}
-		r := make(map[string]string)
-		if id, ok := rule["id"].(string); ok {
-			r["id"] = id
+		if len(node.Content) == 0 {
+			continue
 		}
-		if title, ok := rule["title"].(string); ok {
-			r["title"] = title
+
+		var raw struct {
+			Title       string   `yaml:"title"`
+			ID          string   `yaml:"id"`
+			Description string   `yaml:"description"`
+			Level       string   `yaml:"level"`
+			Tags        []string `yaml:"tags"`
 		}
-		if desc, ok := rule["description"].(string); ok {
-			r["description"] = desc
+		if err := node.Decode(&raw); err != nil || raw.ID == "" {
+			continue
 		}
-		if level, ok := rule["level"].(string); ok {
-			r["level"] = level
+		contentBytes, err := yaml.Marshal(&node)
+		content := yamlContent
+		if err == nil && len(contentBytes) > 0 {
+			content = string(contentBytes)
 		}
-		if r["id"] != "" {
-			rules = append(rules, r)
-		}
+		rules = append(rules, parsedSigmaRule{
+			ID:          raw.ID,
+			Title:       raw.Title,
+			Description: raw.Description,
+			Level:       raw.Level,
+			MitreID:     extractDetectionPackageMitreID(raw.Tags),
+			Content:     content,
+		})
 	}
 	return rules
+}
+
+func parseCorrelationRulesFromYAML(yamlContent string) []parsedCorrelationRule {
+	var rules []parsedCorrelationRule
+	decoder := yaml.NewDecoder(strings.NewReader(yamlContent))
+	for {
+		var node yaml.Node
+		if err := decoder.Decode(&node); err == io.EOF {
+			break
+		} else if err != nil {
+			break
+		}
+		if len(node.Content) == 0 {
+			continue
+		}
+
+		var raw struct {
+			ID          string `yaml:"id"`
+			PackageID   string `yaml:"package_id"`
+			Correlation struct {
+				By       string `yaml:"by"`
+				Window   string `yaml:"window"`
+				Ordered  bool   `yaml:"ordered"`
+				Sequence []struct {
+					RuleID string `yaml:"rule_id"`
+				} `yaml:"sequence"`
+			} `yaml:"correlation"`
+			Alert struct {
+				Title    string `yaml:"title"`
+				Severity string `yaml:"severity"`
+				MitreID  string `yaml:"mitre_id"`
+				CVEID    string `yaml:"cve_id"`
+			} `yaml:"alert"`
+		}
+		if err := node.Decode(&raw); err != nil || raw.ID == "" {
+			continue
+		}
+		contentBytes, err := yaml.Marshal(&node)
+		content := yamlContent
+		if err == nil && len(contentBytes) > 0 {
+			content = string(contentBytes)
+		}
+
+		sequence := make([]map[string]string, 0, len(raw.Correlation.Sequence))
+		for _, step := range raw.Correlation.Sequence {
+			if step.RuleID == "" {
+				continue
+			}
+			sequence = append(sequence, map[string]string{"rule_id": step.RuleID})
+		}
+		title := raw.Alert.Title
+		if title == "" {
+			title = raw.ID
+		}
+		severity := raw.Alert.Severity
+		if severity == "" {
+			severity = "medium"
+		}
+		description := "Correlation rule"
+		if raw.Alert.CVEID != "" {
+			description = fmt.Sprintf("Correlation rule for %s", raw.Alert.CVEID)
+		}
+
+		rules = append(rules, parsedCorrelationRule{
+			ID:            raw.ID,
+			Title:         title,
+			Description:   description,
+			Severity:      severity,
+			MitreID:       normalizeDetectionPackageMitreID(raw.Alert.MitreID),
+			By:            raw.Correlation.By,
+			WindowSeconds: parseCorrelationWindowSeconds(raw.Correlation.Window),
+			Ordered:       raw.Correlation.Ordered,
+			Sequence:      sequence,
+			Content:       content,
+		})
+	}
+	return rules
+}
+
+func extractDetectionPackageMitreID(tags []string) string {
+	for _, tag := range tags {
+		if match := detectionPackageMitrePattern.FindString(tag); match != "" {
+			return normalizeDetectionPackageMitreID(match)
+		}
+	}
+	return ""
+}
+
+func normalizeDetectionPackageMitreID(mitreID string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(mitreID))
+	if normalized != "" && !strings.HasPrefix(normalized, "T") {
+		normalized = "T" + normalized
+	}
+	return normalized
+}
+
+func parseCorrelationWindowSeconds(value string) int {
+	if value == "" {
+		return 10
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 10
+	}
+	return int(duration.Seconds())
 }
 
 func (s *DetectionPackageService) DisablePackage(ctx context.Context, packageID string, operator string) error {
@@ -683,6 +924,14 @@ func (s *DetectionPackageService) ListPackages(ctx context.Context, page, pageSi
 }
 
 func (s *DetectionPackageService) ListHostStatus(ctx context.Context, packageID, version string, page, pageSize int) ([]model.DetectionPackageHostStatus, int64, error) {
+	if version == "" {
+		if pkg, err := s.repo.GetLatestPackage(packageID); err == nil && pkg != nil {
+			version = pkg.Version
+		}
+	}
+	if err := s.repo.MarkInstallingTimeouts(packageID, version, 10*time.Minute); err != nil {
+		return nil, 0, fmt.Errorf("mark installing timeouts: %w", err)
+	}
 	return s.repo.ListHostStatus(packageID, version, page, pageSize)
 }
 
@@ -706,7 +955,7 @@ func (s *DetectionPackageService) UpdateAllowlist(ctx context.Context, configJSO
 	// Sync to agents
 	var syncErr error
 	if s.serverClient != nil {
-		configJSONStr := string(config.ConfigJSON)
+		configJSONStr := allowlistConfigPayload(config.ConfigJSON, config.Version)
 		configs := []*pb.AgentConfig{
 			{ConfigType: "dynamic_ebpf_hook_allowlist", ConfigJson: configJSONStr},
 		}
@@ -725,6 +974,21 @@ func (s *DetectionPackageService) UpdateAllowlist(ctx context.Context, configJSO
 		return config, syncErr
 	}
 	return config, nil
+}
+
+func allowlistConfigPayload(configJSON datatypes.JSON, version int64) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(configJSON, &payload); err != nil || payload == nil {
+		payload = map[string]interface{}{}
+	}
+	if _, exists := payload["version"]; !exists && version > 0 {
+		payload["version"] = version
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return string(configJSON)
+	}
+	return string(out)
 }
 
 type HostStatusReport struct {
@@ -751,6 +1015,7 @@ func (s *DetectionPackageService) ReportHostStatus(ctx context.Context, report H
 
 	now := time.Now()
 	status := &model.DetectionPackageHostStatus{
+		ID:             uuid.New(),
 		PackageID:      report.PackageID,
 		Version:        report.Version,
 		HostID:         hostID,
@@ -900,7 +1165,6 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
-
 // ensurePackageMetadata ensures the package metadata YAML contains the required
 // schema_version, package_id, and version fields. If these fields are missing
 // (e.g. from older AI-generated drafts), they are injected by appending lines
@@ -970,7 +1234,6 @@ func ensurePackageMetadata(yamlStr, packageID, version string) string {
 	}
 	return string(out)
 }
-
 
 func buildMinimalMetadata(packageID, version string) string {
 	meta := map[string]interface{}{

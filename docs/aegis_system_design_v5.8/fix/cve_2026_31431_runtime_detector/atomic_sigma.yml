@@ -1,0 +1,50 @@
+---
+title: CVE-2026-31431 AF_ALG Socket
+id: b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_socket
+status: experimental
+description: AF_ALG socket creation observed.
+logsource:
+  product: linux
+  category: kernel_plugin
+detection:
+  selection:
+    event_type: af_alg_socket
+  condition: selection
+level: medium
+tags:
+  - cve.2026-31431
+  - attack.t1068
+
+---
+title: CVE-2026-31431 AF_ALG Bind
+id: b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_bind
+status: experimental
+description: AF_ALG bind observed after socket creation.
+logsource:
+  product: linux
+  category: kernel_plugin
+detection:
+  selection:
+    event_type: af_alg_bind
+  condition: selection
+level: high
+tags:
+  - cve.2026-31431
+  - attack.t1068
+
+---
+title: CVE-2026-31431 Splice Call
+id: b1c4300a-d050-4b12-8b0f-b41fce167b1e.splice_call
+status: experimental
+description: Splice syscall observed in the same process as AF_ALG activity.
+logsource:
+  product: linux
+  category: kernel_plugin
+detection:
+  selection:
+    event_type: splice_call
+  condition: selection
+level: medium
+tags:
+  - cve.2026-31431
+  - attack.t1068

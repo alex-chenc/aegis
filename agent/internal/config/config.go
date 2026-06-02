@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 
@@ -10,6 +11,7 @@ import (
 
 type Config struct {
 	ServerAddr      string `toml:"ServerAddr"`
+	APIServerAddr   string `toml:"APIServerAddr"`
 	AuthToken       string `toml:"AuthToken"`
 	HostID          string `toml:"HostID"`
 	EventBufferSize int    `toml:"EventBufferSize"`
@@ -43,6 +45,11 @@ func LoadConfig() (*Config, error) {
 		updated = true
 	}
 
+	if cfg.APIServerAddr == "" {
+		cfg.APIServerAddr = DeriveAPIServerAddr(cfg.ServerAddr)
+		updated = true
+	}
+
 	if cfg.RuleDir == "" {
 		cfg.RuleDir = "/etc/aegis-agent/rules"
 		updated = true
@@ -65,6 +72,17 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func DeriveAPIServerAddr(serverAddr string) string {
+	host, _, err := net.SplitHostPort(serverAddr)
+	if err != nil || host == "" {
+		host = serverAddr
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, "8082")
 }
 
 func saveConfig(cfg *Config) error {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type RuntimeEventRepository struct {
@@ -18,15 +19,22 @@ func NewRuntimeEventRepository(db *gorm.DB) *RuntimeEventRepository {
 }
 
 func (r *RuntimeEventRepository) Create(event *model.RuntimeEvent) error {
-	return r.db.Create(event).Error
+	return r.db.Clauses(ignoreDuplicateEventID()).Create(event).Error
 }
 
 func (r *RuntimeEventRepository) CreateWithContext(ctx context.Context, event *model.RuntimeEvent) error {
-	return r.db.WithContext(ctx).Create(event).Error
+	return r.db.WithContext(ctx).Clauses(ignoreDuplicateEventID()).Create(event).Error
 }
 
 func (r *RuntimeEventRepository) CreateBatch(events []*model.RuntimeEvent) error {
-	return r.db.CreateInBatches(events, 100).Error
+	return r.db.Clauses(ignoreDuplicateEventID()).CreateInBatches(events, 100).Error
+}
+
+func ignoreDuplicateEventID() clause.OnConflict {
+	return clause.OnConflict{
+		Columns:   []clause.Column{{Name: "event_id"}},
+		DoNothing: true,
+	}
 }
 
 func (r *RuntimeEventRepository) FindByID(id uuid.UUID) (*model.RuntimeEvent, error) {

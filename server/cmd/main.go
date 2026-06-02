@@ -74,6 +74,7 @@ func main() {
 	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 	commandAuditRuleRepo := repository.NewCommandAuditRuleRepo(db)
 	systemConfigRepo := repository.NewSystemConfigRepo(db)
+	detectionPackageRepo := repository.NewDetectionPackageRepository(db)
 
 	grpcServer := grpc_server.NewGRPCServer(
 		hostRepo,
@@ -90,6 +91,7 @@ func main() {
 	grpcServer.SetBlockPolicyRepo(blockPolicyRepo)
 	grpcServer.SetCommandAuditRuleRepo(commandAuditRuleRepo)
 	grpcServer.SetSystemConfigRepo(systemConfigRepo)
+	grpcServer.SetDetectionPackageRepo(detectionPackageRepo)
 
 	// Create APIServerToServer gRPC server on different port (19094)
 	apiServerGRPCPort := 19094

@@ -27,9 +27,12 @@
             <el-link type="primary" @click="goToRules(row.mitre_id)">{{ row.mitre_id }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="rule_title" label="规则标题" min-width="180">
+        <el-table-column prop="rule_title" label="关联规则" min-width="220">
           <template #default="{ row }">
-            {{ row.rule_title || row.mitre_name || '-' }}
+            <div class="rule-cell">
+              <span>{{ row.rule_title || row.mitre_name || '-' }}</span>
+              <el-tag v-if="row.rule_count" size="small" type="info">{{ row.rule_count }} 条</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="阻断动作" width="160" align="center">
@@ -265,6 +268,13 @@ onUnmounted(() => {
 <style scoped>
 .detection-policies-page {
   padding: 20px;
+}
+
+.rule-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .filter-card {

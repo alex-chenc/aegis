@@ -19,19 +19,21 @@ import (
 	"google.golang.org/grpc"
 )
 
+const embeddedSigningPrivateKeyHex = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
 func main() {
 	port := flag.Int("port", 19096, "gRPC port")
 	workDir := flag.String("work-dir", "/tmp/aegis-builder", "Working directory")
 	keyFile := flag.String("key-file", envOr("BUILDER_KEY_FILE", "/data/builder.key"), "Ed25519 key file path (hex encoded)")
+	useKeyFile := flag.Bool("use-key-file", false, "Load signing key from --key-file instead of the embedded V5.8 key")
 	minioEndpoint := flag.String("minio-endpoint", envOr("MINIO_ENDPOINT", "minio:9000"), "MinIO endpoint")
 	minioAccessKey := flag.String("minio-access-key", envOr("MINIO_ACCESS_KEY", "minio_admin"), "MinIO access key")
 	minioSecretKey := flag.String("minio-secret-key", envOr("MINIO_SECRET_KEY", "a_third_strong_secret_password"), "MinIO secret key")
 	flag.Parse()
 
-	// Load or generate Ed25519 key pair
-	publicKey, privateKey, err := loadOrGenerateKey(*keyFile)
+	publicKey, privateKey, err := loadSigningKey(*keyFile, *useKeyFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load/generate key pair: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load signing key pair: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -75,6 +77,25 @@ func main() {
 
 	fmt.Println("Shutting down...")
 	grpcServer.GracefulStop()
+}
+
+func loadSigningKey(keyFile string, useKeyFile bool) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	if useKeyFile {
+		return loadOrGenerateKey(keyFile)
+	}
+
+	keyBytes, err := hex.DecodeString(embeddedSigningPrivateKeyHex)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode embedded private key: %w", err)
+	}
+	if len(keyBytes) != ed25519.PrivateKeySize {
+		return nil, nil, fmt.Errorf("embedded private key has length %d, expected %d", len(keyBytes), ed25519.PrivateKeySize)
+	}
+
+	privateKey := ed25519.PrivateKey(keyBytes)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	fmt.Println("Loaded embedded V5.8 signing key")
+	return publicKey, privateKey, nil
 }
 
 func envOr(key, fallback string) string {

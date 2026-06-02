@@ -50,6 +50,9 @@ func (r *SigmaRuleRepository) List(page, pageSize int, filters map[string]interf
 	)
 
 	query := r.db.Model(&model.SigmaRule{})
+	if _, ok := filters["source"]; !ok {
+		query = query.Where("(source IS NULL OR source != ?)", "detection_package")
+	}
 
 	if searchQuery, ok := filters["query"].(string); ok && searchQuery != "" {
 		searchPattern := "%" + searchQuery + "%"

@@ -1,12 +1,12 @@
 package plugin
 
 import (
-	"encoding/json"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -607,12 +607,12 @@ func readEvents(reader EventReader, inst *PluginInstance, pkg *PackageInfo, onEv
 		}
 
 		// Skip events with PID 0 (kernel/system events)
-	if decoded.PID == 0 {
-		continue
-	}
+		if decoded.PID == 0 {
+			continue
+		}
 
-	if onEvent != nil {
-		logger.Debug("calling onEvent", zap.String("package_id", pkg.PackageID), zap.String("event_type", fmt.Sprintf("%v", evt["event_type"])))
+		if onEvent != nil {
+			logger.Debug("calling onEvent", zap.String("package_id", pkg.PackageID), zap.String("event_type", fmt.Sprintf("%v", evt["event_type"])))
 			onEvent(pkg.PackageID, evt)
 		}
 	}

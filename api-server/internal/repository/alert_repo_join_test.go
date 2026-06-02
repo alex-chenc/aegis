@@ -99,6 +99,22 @@ func setupAlertJoinTestDB(t *testing.T) *gorm.DB {
 			dispatch_hosts TEXT,
 			dispatch_status TEXT DEFAULT 'pending'
 		)`,
+		`CREATE TABLE runtime_events (
+			id TEXT PRIMARY KEY,
+			event_id TEXT NOT NULL UNIQUE,
+			host_id TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			event_data TEXT NOT NULL,
+			matched_rule_id TEXT,
+			rule_title TEXT,
+			mitre_id TEXT,
+			severity TEXT,
+			pid INTEGER,
+			command_line TEXT,
+			timestamp INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			aggregated BOOLEAN DEFAULT FALSE
+		)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -107,6 +123,46 @@ func setupAlertJoinTestDB(t *testing.T) *gorm.DB {
 	}
 
 	return db
+}
+
+func TestAlertRepoFindByIDDerivesProcessCountFromCorrelationEvidence(t *testing.T) {
+	db := setupAlertJoinTestDB(t)
+	repo := NewAlertRepository(db)
+
+	hostID := uuid.New()
+	ruleID := "pkg.copyfail_chain"
+	alertID := "ALT-process-count"
+	alert := &model.Alert{
+		ID:        uuid.New(),
+		AlertID:   alertID,
+		HostID:    hostID,
+		PID:       4321,
+		MitreID:   "T1068",
+		Severity:  "critical",
+		DedupeKey: "test:4321:pkg.copyfail_chain",
+		HitCount:  1,
+		Status:    "pending",
+		RuleID:    ruleID,
+	}
+	if err := db.Create(alert).Error; err != nil {
+		t.Fatalf("failed to seed alert: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO runtime_events (id, event_id, host_id, event_type, event_data, matched_rule_id, mitre_id, severity, pid, timestamp)
+		VALUES (?, ?, ?, 'correlation_alert', ?, ?, 'T1068', 'critical', ?, ?)
+	`, uuid.New().String(), "EVT-process-count", hostID.String(),
+		`[{"rule_id":"pkg.socket","pid":4321},{"rule_id":"pkg.bind","pid":4321},{"rule_id":"pkg.splice","pid":9876}]`,
+		ruleID, 4321, time.Now().UnixMilli()).Error; err != nil {
+		t.Fatalf("failed to seed runtime event: %v", err)
+	}
+
+	result, err := repo.FindByID(alertID)
+	if err != nil {
+		t.Fatalf("FindByID failed: %v", err)
+	}
+	if result.ProcessCount != 2 {
+		t.Fatalf("ProcessCount = %d, want 2", result.ProcessCount)
+	}
 }
 
 func TestAlertRepoJoinResolvesRuleTitleByRuleID(t *testing.T) {

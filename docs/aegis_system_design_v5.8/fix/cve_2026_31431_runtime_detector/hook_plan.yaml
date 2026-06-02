@@ -1,0 +1,33 @@
+schema_version: "aegis.ebpf_plugin.v1"
+package_id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e"
+version: "1.0.0"
+title: "CVE-2026-31431 Runtime Detector"
+description: "Detects a safe AF_ALG socket/bind plus splice sequence associated with CVE-2026-31431 exploitation attempts."
+event_schema:
+  events:
+    1001:
+      name: "af_alg_socket"
+      fields: {}
+    1002:
+      name: "af_alg_bind"
+      fields: {}
+    1003:
+      name: "splice_call"
+      fields: {}
+hooks:
+  - name: "af_alg_socket"
+    attach_type: "tracepoint"
+    attach: "syscalls/sys_enter_socket"
+    program: "tracepoint__syscalls__sys_enter_socket"
+  - name: "af_alg_bind"
+    attach_type: "tracepoint"
+    attach: "syscalls/sys_enter_bind"
+    program: "tracepoint__syscalls__sys_enter_bind"
+  - name: "splice_call"
+    attach_type: "tracepoint"
+    attach: "syscalls/sys_enter_splice"
+    program: "tracepoint__syscalls__sys_enter_splice"
+limits:
+  max_events_per_second: 1000
+  max_events_per_pid_per_second: 100
+  auto_disable_on_sustained_overflow: true

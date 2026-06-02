@@ -1,9 +1,9 @@
 package sigma
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"fmt"
 	"sync"
 
 	"aegis-agent/internal/logger"

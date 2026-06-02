@@ -102,7 +102,7 @@ func (m *Manager) ProcessEvent(packageID string, event map[string]interface{}) {
 
 	if m.sigmaMatcher != nil {
 		logger.Debug("ProcessEvent event", zap.String("package_id", packageID), zap.Any("event_keys", event), zap.Int("pid_from_event", pidFromEvent(event)))
-	logger.Debug("sigma matching plugin event",
+		logger.Debug("sigma matching plugin event",
 			zap.String("package_id", packageID),
 			zap.String("event_type", fmt.Sprintf("%v", event["event_type"])),
 			zap.String("category", fmt.Sprintf("%v", event["category"])),

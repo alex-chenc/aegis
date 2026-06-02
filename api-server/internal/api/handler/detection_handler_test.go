@@ -68,6 +68,7 @@ func setupDetectionHandlerTestDB(t *testing.T) *gorm.DB {
 			mitre_name TEXT,
 			enabled BOOLEAN NOT NULL DEFAULT TRUE,
 			auto_block BOOLEAN NOT NULL DEFAULT FALSE,
+			ai_auto_block BOOLEAN NOT NULL DEFAULT FALSE,
 			auto_dispose BOOLEAN NOT NULL DEFAULT FALSE,
 			action TEXT NOT NULL DEFAULT 'kill_process',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -78,6 +79,89 @@ func setupDetectionHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 
 	return db
+}
+
+func TestReconcileRulePolicyBindingsAllowsManyRulesPerMitre(t *testing.T) {
+	db := setupDetectionHandlerTestDB(t)
+	h := &DetectionHandler{
+		sigmaRuleRepo:   repository.NewSigmaRuleRepository(db),
+		blockPolicyRepo: repository.NewBlockPolicyRepository(db),
+	}
+
+	for _, ruleID := range []string{"pkg.af_alg_socket", "pkg.af_alg_bind", "pkg.splice_call"} {
+		if err := db.Exec(`
+			INSERT INTO sigma_rules (rule_id, title, content, status, mitre_id, severity, generated_by, version)
+			VALUES (?, ?, '{}', 'active', 'T1068', 'medium', 'detection_package', '1.0.0')
+		`, ruleID, ruleID).Error; err != nil {
+			t.Fatalf("failed to insert sigma rule: %v", err)
+		}
+	}
+
+	result, err := h.reconcileRulePolicyBindings()
+	if err != nil {
+		t.Fatalf("reconcileRulePolicyBindings failed: %v", err)
+	}
+	if result["total_mitre_ids"] != 1 {
+		t.Fatalf("total_mitre_ids = %v, want 1", result["total_mitre_ids"])
+	}
+
+	var policyCount int64
+	if err := db.Table("block_policies").Where("mitre_id = ?", "T1068").Count(&policyCount).Error; err != nil {
+		t.Fatalf("failed to count policies: %v", err)
+	}
+	if policyCount != 1 {
+		t.Fatalf("policy count = %d, want 1", policyCount)
+	}
+}
+
+func TestReconcileRulePolicyBindingsIgnoresAtomicPackageRulesAndDeletesOrphans(t *testing.T) {
+	db := setupDetectionHandlerTestDB(t)
+	h := &DetectionHandler{
+		sigmaRuleRepo:   repository.NewSigmaRuleRepository(db),
+		blockPolicyRepo: repository.NewBlockPolicyRepository(db),
+	}
+
+	if err := db.Exec(`
+		INSERT INTO sigma_rules (rule_id, title, content, status, mitre_id, severity, generated_by, version, source, parent_rule_id)
+		VALUES
+			('pkg.af_alg_socket', 'AF ALG Socket', '{}', 'active', 'T1068', 'medium', 'detection_package', '1.0.0', 'detection_package', 'pkg'),
+			('pkg.final', 'CopyFail Final Rule', '{}', 'active', 'T1068', 'critical', 'detection_package', '1.0.0', 'detection_package_correlation', 'pkg')
+	`).Error; err != nil {
+		t.Fatalf("failed to insert sigma rules: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO block_policies (mitre_id, mitre_name, enabled, auto_block, action)
+		VALUES ('T9999', 'Orphan Policy', true, false, 'kill_process')
+	`).Error; err != nil {
+		t.Fatalf("failed to insert orphan policy: %v", err)
+	}
+
+	result, err := h.reconcileRulePolicyBindings()
+	if err != nil {
+		t.Fatalf("reconcileRulePolicyBindings failed: %v", err)
+	}
+	if result["total_rules"] != 1 {
+		t.Fatalf("total_rules = %v, want 1", result["total_rules"])
+	}
+	if result["deleted_orphan_policies"] != int64(1) {
+		t.Fatalf("deleted_orphan_policies = %v, want 1", result["deleted_orphan_policies"])
+	}
+
+	var policyCount int64
+	if err := db.Table("block_policies").Count(&policyCount).Error; err != nil {
+		t.Fatalf("failed to count policies: %v", err)
+	}
+	if policyCount != 1 {
+		t.Fatalf("policy count = %d, want 1", policyCount)
+	}
+
+	var title string
+	if err := db.Table("block_policies").Select("mitre_name").Where("mitre_id = ?", "T1068").Scan(&title).Error; err != nil {
+		t.Fatalf("failed to query final policy title: %v", err)
+	}
+	if title != "CopyFail Final Rule" {
+		t.Fatalf("policy title = %q, want final rule title", title)
+	}
 }
 
 func newImportRulesMultipartRequest(t *testing.T, yamlContent string) *http.Request {

@@ -13,6 +13,7 @@ type Alert struct {
 	Hostname            string    `gorm:"-" json:"hostname"`
 	PID                 int       `gorm:"column:pid;not null" json:"pid"`
 	PPID                int       `gorm:"column:ppid;default:0" json:"ppid"`
+	ProcessCount        int       `gorm:"-" json:"process_count"`
 	CommandLine         string    `gorm:"type:text" json:"command_line"`
 	ProcessTree         string    `gorm:"type:jsonb" json:"process_tree"`
 	MitreID             string    `gorm:"type:varchar(20);not null;index" json:"mitre_id"`

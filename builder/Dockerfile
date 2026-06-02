@@ -1,20 +1,21 @@
-FROM golang:1.25-alpine AS builder
+ARG EBPF_BASE_IMAGE=aegis-agent-builder-ubi8:5.8.0
 
-WORKDIR /src
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && apk add --no-cache build-base clang llvm linux-headers libbpf-dev
-ENV GOPROXY=https://goproxy.cn,direct
-COPY go.mod go.sum ./
+FROM ${EBPF_BASE_IMAGE} AS app-builder
+
+WORKDIR /src/builder
+COPY builder/go.mod builder/go.sum ./
 RUN go mod download
-COPY . .
+COPY builder/ ./
 RUN GOMAXPROCS=1 CGO_ENABLED=0 GOOS=linux go build -p=1 -o /out/builder ./cmd/...
 
-FROM alpine:latest
-WORKDIR /root/
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && apk add --no-cache ca-certificates clang llvm linux-headers libbpf-dev
+FROM ${EBPF_BASE_IMAGE}
+
+WORKDIR /opt/aegis/builder
 ARG BUILDER_IMAGE_DIGEST=""
-ENV BUILDER_IMAGE_DIGEST=${BUILDER_IMAGE_DIGEST}
-COPY --from=builder /out/builder ./builder
-# Copy eBPF common headers (vmlinux.h) from agent for dynamic plugin compilation
-COPY vmlinux.h /usr/include/vmlinux.h
+ENV BUILDER_IMAGE_DIGEST=${BUILDER_IMAGE_DIGEST} \
+    AEGIS_EBPF_INCLUDE=/opt/aegis/ebpf/include
+
+COPY --from=app-builder /out/builder ./builder
+
 EXPOSE 19096
 CMD ["./builder"]

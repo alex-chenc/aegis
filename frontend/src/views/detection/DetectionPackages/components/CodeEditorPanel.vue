@@ -18,6 +18,7 @@
       @input="validate"
       class="code-textarea"
       :placeholder="placeholder"
+      :readonly="readonly"
     />
   </div>
 </template>
@@ -30,6 +31,7 @@ const props = defineProps<{
   modelValue: string
   language?: 'yaml' | 'c' | 'json'
   placeholder?: string
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{

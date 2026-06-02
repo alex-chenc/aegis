@@ -111,7 +111,7 @@
               @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
             >签名</el-button>
             <el-button
-              v-if="row.status === 'signed'"
+              v-if="['signed', 'disabled'].includes(row.status)"
               link type="success" size="small"
               @click="handleEnable(row)"
             >启用</el-button>

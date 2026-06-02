@@ -48,6 +48,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="hit_count" label="命中次数" width="90" align="center" />
+        <el-table-column prop="process_count" label="进程数" width="80" align="center">
+          <template #default="{ row }">{{ row.process_count || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="judgment_source" label="判定来源" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.judgment_source === 'ai' ? 'warning' : 'info'" size="small">
@@ -108,6 +111,7 @@
           <el-link type="primary" @click="goToRules(selectedAlert.mitre_id)">{{ selectedAlert.mitre_id }}</el-link>
         </el-descriptions-item>
         <el-descriptions-item label="进程PID">{{ selectedAlert.pid }}</el-descriptions-item>
+        <el-descriptions-item label="进程数">{{ selectedAlert.process_count || '-' }}</el-descriptions-item>
         <el-descriptions-item label="判定来源">{{ judgmentSourceLabel(selectedAlert.judgment_source) }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ statusLabel(selectedAlert.status, selectedAlert.block_status) }}</el-descriptions-item>
         <el-descriptions-item v-if="selectedAlert.block_status" label="阻断状态">

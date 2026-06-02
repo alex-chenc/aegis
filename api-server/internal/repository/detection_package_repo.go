@@ -3,12 +3,13 @@ package repository
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"api-server/internal/model"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 type DetectionPackageRepo struct {
@@ -338,16 +339,23 @@ func (r *DetectionPackageRepo) UpsertHostStatus(status *model.DetectionPackageHo
 	if status.MetricsJSON == nil {
 		status.MetricsJSON = datatypes.JSON([]byte("{}"))
 	}
+	if err := r.db.Where("package_id = ? AND host_id = ? AND version != ?", status.PackageID, status.HostID, status.Version).
+		Delete(&model.DetectionPackageHostStatus{}).Error; err != nil {
+		return err
+	}
+
 	var existing model.DetectionPackageHostStatus
 	err := r.db.Where("package_id = ? AND version = ? AND host_id = ?", status.PackageID, status.Version, status.HostID).First(&existing).Error
 	if err != nil {
 		return r.db.Create(status).Error
 	}
 	return r.db.Model(&existing).Updates(map[string]interface{}{
-		"hostname":        status.Hostname,
-		"status":          status.Status,
-		"active_artifact": status.ActiveArtifact,
-		"error_message":   status.ErrorMessage,
+		"hostname":         status.Hostname,
+		"status":           status.Status,
+		"active_artifact":  status.ActiveArtifact,
+		"loaded_hooks":     status.LoadedHooks,
+		"error_message":    status.ErrorMessage,
+		"updated_at":       time.Now(),
 		"last_reported_at": status.LastReportedAt,
 	}).Error
 }
@@ -364,6 +372,20 @@ func (r *DetectionPackageRepo) ListHostStatus(packageID, version string, page, p
 	return statuses, total, err
 }
 
+func (r *DetectionPackageRepo) MarkInstallingTimeouts(packageID, version string, timeout time.Duration) error {
+	cutoff := time.Now().Add(-timeout)
+	query := r.db.Model(&model.DetectionPackageHostStatus{}).
+		Where("package_id = ? AND status = ? AND updated_at < ?", packageID, "installing", cutoff)
+	if version != "" {
+		query = query.Where("version = ?", version)
+	}
+	return query.Updates(map[string]interface{}{
+		"status":        "timeout",
+		"error_message": "安装超时（超过 10 分钟未返回结果）",
+		"updated_at":    time.Now(),
+	}).Error
+}
+
 func (r *DetectionPackageRepo) CountHostStatus(packageID, version string) (total, active, failed int64, err error) {
 	query := r.db.Model(&model.DetectionPackageHostStatus{}).Where("package_id = ? AND version = ?", packageID, version)
 	err = query.Count(&total).Error
@@ -374,7 +396,7 @@ func (r *DetectionPackageRepo) CountHostStatus(packageID, version string) (total
 	if err != nil {
 		return
 	}
-	err = query.Where("status IN ?", []string{"load_failed", "signature_failed", "blocked_by_hook_allowlist"}).Count(&failed).Error
+	err = query.Where("status IN ?", []string{"load_failed", "signature_failed", "blocked_by_hook_allowlist", "timeout"}).Count(&failed).Error
 	return
 }
 

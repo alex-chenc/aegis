@@ -45,4 +45,5 @@ docker-compose.override.yml
 worktrees/
 prompt/*
 test/*
+tests/*
 release/*

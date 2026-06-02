@@ -1,0 +1,20 @@
+schema_version: "aegis.correlation.v1"
+id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e.copyfail_chain"
+package_id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e"
+requires:
+  - "b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_socket"
+  - "b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_bind"
+  - "b1c4300a-d050-4b12-8b0f-b41fce167b1e.splice_call"
+correlation:
+  by: "pid"
+  window: "10s"
+  ordered: true
+  sequence:
+    - rule_id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_socket"
+    - rule_id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e.af_alg_bind"
+    - rule_id: "b1c4300a-d050-4b12-8b0f-b41fce167b1e.splice_call"
+alert:
+  title: "Possible CVE-2026-31431 CopyFail AF_ALG Exploitation Sequence"
+  severity: "critical"
+  mitre_id: "T1068"
+  cve_id: "CVE-2026-31431"

@@ -38,10 +38,12 @@ export function useDetectionPackages() {
   }
 
   async function fetchDraft(packageId: string) {
+    currentDraft.value = null
     try {
       currentDraft.value = await detectionPackageApi.getDraft(packageId)
     } catch (e: any) {
       // Draft not found is expected for non-draft packages
+      currentDraft.value = null
     }
   }
 

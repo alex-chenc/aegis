@@ -73,6 +73,7 @@ export interface Alert {
   host_id: string
   hostname?: string
   pid: number
+  process_count?: number
   rule_id?: string
   rule_title?: string
   mitre_id: string
@@ -104,6 +105,8 @@ export interface BlockPolicy {
   ai_auto_block: boolean
   auto_dispose: boolean
   action: string
+  rule_title?: string
+  rule_count?: number
   updated_at: string
 }
 

@@ -16,7 +16,6 @@ import (
 
 	"aegis-agent/internal/asset"
 
-	"github.com/google/uuid"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
@@ -29,16 +28,19 @@ import (
 	"aegis-agent/internal/monitor"
 	"aegis-agent/internal/sigma"
 	"aegis-agent/internal/tools"
+	"github.com/google/uuid"
 
 	pb "aegis-agent/pkg/api/v1"
 
 	"go.uber.org/zap"
 )
 
+const embeddedSigningPublicKeyHex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
 func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging (overrides config LogLevel)")
 	logStdout := flag.Bool("log-stdout", false, "Also log to stdout (for systemd journal or terminal)")
-	signingPubKeyHex := flag.String("signing-public-key", "", "Ed25519 public key (hex) for package signature verification")
+	signingPubKeyHex := flag.String("signing-public-key", embeddedSigningPublicKeyHex, "Ed25519 public key (hex) for package signature verification")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig()
@@ -60,6 +62,7 @@ func main() {
 
 	logger.Info("Config loaded",
 		zap.String("server_addr", cfg.ServerAddr),
+		zap.String("api_server_addr", cfg.APIServerAddr),
 		zap.String("host_id", cfg.HostID),
 	)
 
@@ -117,44 +120,26 @@ func main() {
 		if err != nil {
 			logger.Fatal("invalid signing public key hex", zap.Error(err))
 		}
+		if len(keyBytes) != ed25519.PublicKeySize {
+			logger.Fatal("invalid signing public key length", zap.Int("key_len", len(keyBytes)))
+		}
 		signingPubKey = ed25519.PublicKey(keyBytes)
 		logger.Info("signing public key loaded", zap.Int("key_len", len(signingPubKey)))
 	}
 	corrAdapter := dynpkg.NewCorrelationEngineAdapter(corrEngine)
 	sigmaAdapter := dynpkg.NewSigmaMatcherAdapter(ruleLoader)
 	dynpkgManager := dynpkg.NewManager(signingPubKey, "", sigmaAdapter, corrAdapter)
+	reportPackageStatus := func(packageID, version, status, errorMessage string) {
+		reportDetectionPackageStatus(cfg.APIServerAddr, cfg.HostID, assetInfo.Hostname, packageID, version, status, errorMessage)
+	}
+
 	dynpkgManager.SetStatusChangeCallback(func(packageID, version, status string) {
 		logger.Info("Detection package status changed",
 			zap.String("package_id", packageID),
 			zap.String("version", version),
 			zap.String("status", status))
 		// Report host status to API server
-		go func() {
-			reportURL := fmt.Sprintf("http://%s/api/v1/detection/packages/hosts/report", "127.0.0.1:8082")
-			reportData := map[string]string{
-				"host_id":    cfg.HostID,
-					"hostname":   assetInfo.Hostname,
-				"package_id": packageID,
-				"version":    version,
-				"status":     status,
-			}
-			body, _ := json.Marshal(reportData)
-			req, err := http.NewRequest("POST", reportURL, bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			// Use a simple HTTP client without auth (internal API)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				logger.Debug("failed to report host status", zap.Error(err))
-				return
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != 200 {
-				logger.Debug("host status report returned non-200", zap.Int("status", resp.StatusCode))
-			}
-		}()
+		go reportPackageStatus(packageID, version, status, "")
 	})
 	logger.Info("Dynamic package manager initialized")
 
@@ -166,26 +151,7 @@ func main() {
 		// Report host status for all restored packages
 		go func() {
 			for _, pkg := range dynpkgManager.Status() {
-				reportURL := fmt.Sprintf("http://%s/api/v1/detection/packages/hosts/report", "127.0.0.1:8082")
-				reportData := map[string]string{
-					"host_id":    cfg.HostID,
-					"hostname":   assetInfo.Hostname,
-					"package_id": pkg.PackageID,
-					"version":    pkg.Version,
-					"status":     pkg.Status,
-				}
-				body, _ := json.Marshal(reportData)
-				req, err := http.NewRequest("POST", reportURL, bytes.NewReader(body))
-				if err != nil {
-					continue
-				}
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					logger.Debug("failed to report restored package status", zap.String("package_id", pkg.PackageID), zap.Error(err))
-					continue
-				}
-				resp.Body.Close()
+				reportPackageStatus(pkg.PackageID, pkg.Version, pkg.Status, pkg.ErrorMessage)
 				logger.Info("restored package status reported", zap.String("package_id", pkg.PackageID), zap.String("status", pkg.Status))
 			}
 		}()
@@ -260,6 +226,7 @@ func main() {
 		case "install":
 			if err := dynpkgManager.Install(ctx, cmd); err != nil {
 				logger.Error("failed to install detection package", zap.Error(err), zap.String("package_id", cmd.PackageID))
+				go reportPackageStatus(cmd.PackageID, cmd.Version, "load_failed", err.Error())
 				return fmt.Errorf("install: %w", err)
 			}
 		case "uninstall":
@@ -326,4 +293,32 @@ func main() {
 	collector.Stop()
 	c.Close()
 	logger.Info("Agent stopped")
+}
+
+func reportDetectionPackageStatus(apiServerAddr, hostID, hostname, packageID, version, status, errorMessage string) {
+	reportURL := fmt.Sprintf("%s/api/v1/detection/packages/hosts/report", apiServerAddr)
+	reportData := map[string]string{
+		"host_id":       hostID,
+		"hostname":      hostname,
+		"package_id":    packageID,
+		"version":       version,
+		"status":        status,
+		"error_message": errorMessage,
+	}
+	body, _ := json.Marshal(reportData)
+	req, err := http.NewRequest("POST", reportURL, bytes.NewReader(body))
+	if err != nil {
+		logger.Debug("failed to create host status report", zap.String("url", reportURL), zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Debug("failed to report host status", zap.String("url", reportURL), zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Debug("host status report returned non-200", zap.String("url", reportURL), zap.Int("status", resp.StatusCode))
+	}
 }
