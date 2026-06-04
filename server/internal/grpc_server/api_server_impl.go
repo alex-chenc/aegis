@@ -453,6 +453,41 @@ func (s *APIServerToServerImpl) CollectSoftware(ctx context.Context, req *pb.Col
 	}, nil
 }
 
+// TODO: V5.8 - Uncomment after regenerating proto code
+// CollectHostAssets collects host assets (V5.8)
+// func (s *APIServerToServerImpl) CollectHostAssets(ctx context.Context, req *pb.CollectHostAssetsRequest) (*pb.CollectHostAssetsResponse, error) {
+// 	if req.HostId == "" {
+// 		return &pb.CollectHostAssetsResponse{
+// 			Success: false,
+// 			Error:   "host_id is required",
+// 		}, nil
+// 	}
+//
+// 	// Call the internal method to collect assets from the agent
+// 	snapshotJSON, err := s.grpcServer.CollectHostAssets(ctx, req.HostId, req.CollectTypes, false, true, 2000)
+// 	if err != nil {
+// 		logger.Error("failed to collect host assets",
+// 			zap.String("host_id", req.HostId),
+// 			zap.Error(err),
+// 		)
+// 		return &pb.CollectHostAssetsResponse{
+// 			Success: false,
+// 			Error:   err.Error(),
+// 		}, nil
+// 	}
+//
+// 	logger.Info("host assets collected successfully",
+// 		zap.String("host_id", req.HostId),
+// 	)
+//
+// 	return &pb.CollectHostAssetsResponse{
+// 		Success:     true,
+// 		HostId:      req.HostId,
+// 		SnapshotJson: snapshotJSON,
+// 		CollectedAt: time.Now().Unix(),
+// 	}, nil
+// }
+
 // InstallDetectionPackage installs a detection package on agents
 func (s *APIServerToServerImpl) InstallDetectionPackage(ctx context.Context, req *pb.InstallDetectionPackageRequest) (*pb.InstallDetectionPackageResponse, error) {
 	if req.Command == nil {

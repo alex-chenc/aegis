@@ -141,7 +141,10 @@ func main() {
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, serverClient)
 	taskService.SetAuditService(scriptAuditService)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3, scriptAuditService)
-	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService)
+	// V5.8: Asset repository for vulnerability scanning
+	assetCollectionRepo := repository.NewAssetCollectionRepository(db)
+	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService, assetCollectionRepo)
+	logger.Info("Vulnerability service initialized with asset repository for V5.8 asset-based scanning")
 	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, scriptAuditService, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
 	alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
@@ -254,8 +257,16 @@ func main() {
 	commandAuditHandler := handler.NewCommandAuditHandler(commandAuditRuleRepo, systemConfigRepo, scriptAuditService)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
 
+	// V5.8 Intelligent Asset Collection (assetCollectionRepo already initialized above)
+	assetCollectionService := service.NewAssetCollectionService(assetCollectionRepo, serverClient, logger.Get())
+	assetQueryService := service.NewAssetQueryService(assetCollectionRepo, logger.Get())
+	assetAnalysisService := service.NewAssetAnalysisService(assetCollectionRepo, configRepo, logger.Get())
+	assetCollectionService.SetAnalysisService(assetAnalysisService)
+	assetHandler := handler.NewAssetHandler(assetCollectionService, assetQueryService, assetAnalysisService, logger.Get())
+	logger.Info("Intelligent asset collection module initialized")
+
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler)
 	router.Setup()
 
 	// Start HTTP server

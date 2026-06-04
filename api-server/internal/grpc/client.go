@@ -184,3 +184,9 @@ func (c *ServerClient) UninstallDetectionPackage(ctx context.Context, hostID, pa
 func (c *ServerClient) ReportCorrelationAlert(ctx context.Context, req *pb.ReportCorrelationAlertRequest) (*pb.ReportCorrelationAlertResponse, error) {
 	return c.client.ReportCorrelationAlert(ctx, req)
 }
+
+// TODO: Uncomment after regenerating proto code with protoc
+// CollectHostAssets collects host assets (V5.8)
+// func (c *ServerClient) CollectHostAssets(ctx context.Context, req *pb.CollectHostAssetsRequest) (*pb.CollectHostAssetsResponse, error) {
+// 	return c.client.CollectHostAssets(ctx, req)
+// }

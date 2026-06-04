@@ -44,6 +44,59 @@ const routes = [
     component: Dashboard,
     meta: { title: '主机列表' }
   },
+  // V5.8 智能资产采集
+  {
+    path: '/hosts/assets',
+    name: 'AssetsOverview',
+    component: () => import('../views/hosts/Assets/Overview.vue'),
+    meta: { title: '智能资产采集' }
+  },
+  {
+    path: '/hosts/assets/software',
+    name: 'AssetsSoftware',
+    component: () => import('../views/hosts/Assets/Software.vue'),
+    meta: { title: '软件清单' }
+  },
+  {
+    path: '/hosts/assets/applications',
+    name: 'AssetsApplications',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: '应用资产' }
+  },
+  {
+    path: '/hosts/assets/databases',
+    name: 'AssetsDatabases',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: '数据库资产' },
+    props: { defaultCategory: 'database' }
+  },
+  {
+    path: '/hosts/assets/web-services',
+    name: 'AssetsWebServices',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'Web 服务资产' },
+    props: { defaultCategory: 'web_service' }
+  },
+  {
+    path: '/hosts/assets/web-frameworks',
+    name: 'AssetsWebFrameworks',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'Web 框架资产' },
+    props: { defaultCategory: 'web_framework' }
+  },
+  {
+    path: '/hosts/assets/web-sites',
+    name: 'AssetsWebSites',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'Web 站点资产' },
+    props: { defaultCategory: 'web_site' }
+  },
+  {
+    path: '/hosts/assets/collections',
+    name: 'AssetsCollections',
+    redirect: '/hosts/assets',
+    meta: { title: '采集任务' }
+  },
   {
     path: '/baseline',
     redirect: '/baseline/workbench',

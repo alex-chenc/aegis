@@ -34,8 +34,11 @@ service APIServerToServer {
     // ExecuteBlockCommand 执行阻断命令
     rpc ExecuteBlockCommand(ExecuteBlockCommandRequest) returns (ExecuteBlockCommandResponse);
 
-    // CollectSoftware 收集主机软件清单
+    // CollectSoftware 收集主机软件清单 (旧接口，保留兼容)
     rpc CollectSoftware(CollectSoftwareRequest) returns (CollectSoftwareResponse);
+
+    // CollectHostAssets 收集主机资产 (V5.8 新增)
+    rpc CollectHostAssets(CollectHostAssetsRequest) returns (CollectHostAssetsResponse);
 
     // V5.8 Detection Package Management
     rpc InstallDetectionPackage(InstallDetectionPackageRequest) returns (InstallDetectionPackageResponse);
@@ -202,6 +205,25 @@ message CollectSoftwareResponse {
     bool success = 1;
     string software_json = 2;      // JSON格式的软件列表
     string error = 3;
+}
+
+// ============================================================
+// CollectHostAssets - 收集主机资产 (V5.8)
+// ============================================================
+
+message CollectHostAssetsRequest {
+    string task_id = 1;            // 任务ID
+    string host_id = 2;            // 主机ID
+    repeated string collect_types = 3; // software, process
+    int32 timeout_seconds = 4;     // 超时时间（秒）
+}
+
+message CollectHostAssetsResponse {
+    bool success = 1;
+    string host_id = 2;
+    string snapshot_json = 3;      // JSON格式的资产快照
+    string error = 4;
+    int64 collected_at = 5;        // 采集时间戳
 }
 
 // ============================================================

@@ -21,6 +21,41 @@
           <span>主机列表</span>
         </el-menu-item>
 
+        <el-sub-menu index="assets">
+          <template #title>
+            <el-icon><Box /></el-icon>
+            <span>智能资产采集</span>
+          </template>
+          <el-menu-item index="/hosts/assets">
+            <el-icon><DataBoard /></el-icon>
+            <span>资产概览</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/software">
+            <el-icon><Files /></el-icon>
+            <span>软件清单</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/applications">
+            <el-icon><Grid /></el-icon>
+            <span>应用资产</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/databases">
+            <el-icon><Coin /></el-icon>
+            <span>数据库</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/web-services">
+            <el-icon><Monitor /></el-icon>
+            <span>Web 服务</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/web-frameworks">
+            <el-icon><Connection /></el-icon>
+            <span>Web 框架</span>
+          </el-menu-item>
+          <el-menu-item index="/hosts/assets/web-sites">
+            <el-icon><Link /></el-icon>
+            <span>Web 站点</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-sub-menu index="baseline">
           <template #title>
             <el-icon><Document /></el-icon>
@@ -150,7 +185,7 @@
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'

@@ -1574,6 +1574,68 @@ func (s *GRPCServer) SendBlockCommand(hostID uuid.UUID, cmd *pb.BlockCommand) er
 	return fmt.Errorf("agent block command channel not available: %s", hostID)
 }
 
+// TODO: V5.8 - Uncomment after regenerating proto code
+// CollectHostAssets collects host assets (software packages and processes) from an agent
+// func (s *GRPCServer) CollectHostAssets(ctx context.Context, hostIDStr string, collectTypes []string, includePackageFiles, includeListenPorts bool, maxProcessCount int) (string, error) {
+// 	hostID, err := uuid.Parse(hostIDStr)
+// 	if err != nil {
+// 		return "", fmt.Errorf("invalid host_id: %w", err)
+// 	}
+//
+// 	logger.Info("collecting host assets",
+// 		zap.String("host_id", hostIDStr),
+// 		zap.Strings("collect_types", collectTypes))
+//
+// 	value, ok := s.agentConnections.Load(hostID)
+// 	if !ok {
+// 		logger.Error("agent not connected", zap.String("host_id", hostIDStr))
+// 		return "", fmt.Errorf("agent not connected")
+// 	}
+//
+// 	conn := value.(*AgentConnection)
+//
+// 	// Build the collect command
+// 	collectReq := &pb.CommandExecute{
+// 		TaskId:         uuid.New().String(),
+// 		HostId:         hostIDStr,
+// 		ScriptContent:  fmt.Sprintf("#ASSET_COLLECT#%s", strings.Join(collectTypes, ",")),
+// 		TimeoutSeconds: 120,
+// 	}
+//
+// 	logger.Info("sending asset collect request", zap.String("task_id", collectReq.TaskId))
+//
+// 	responseChan := make(chan *pb.CommandResult, 1)
+//
+// 	s.storeCollectCallback(collectReq.TaskId, func(result *pb.CommandResult) {
+// 		logger.Info("asset collect callback triggered",
+// 			zap.String("task_id", result.TaskId),
+// 			zap.Int("stdout_len", len(result.Stdout)))
+// 		responseChan <- result
+// 	})
+// 	defer s.removeCollectCallback(collectReq.TaskId)
+//
+// 	err = conn.Stream.Send(&pb.CommandRequest{
+// 		Request: &pb.CommandRequest_Execute{
+// 			Execute: collectReq,
+// 		},
+// 	})
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to send collect request: %w", err)
+// 	}
+//
+// 	select {
+// 	case result := <-responseChan:
+// 		if result.ExitCode != 0 {
+// 			return "", fmt.Errorf("collect failed: %s", result.Stderr)
+// 		}
+// 		return result.Stdout, nil
+// 	case <-ctx.Done():
+// 		return "", ctx.Err()
+// 	case <-time.After(120 * time.Second):
+// 		return "", fmt.Errorf("collect timeout")
+// 	}
+// }
+
 func blockTargetForAlert(alert *model.Alert, action string) (string, error) {
 	switch action {
 	case "kill_process":

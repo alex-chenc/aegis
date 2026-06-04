@@ -31,6 +31,7 @@ type Router struct {
 	aiAnalysisHandler      *handler.AIAnalysisHandler
 	commandAuditHandler    *handler.CommandAuditHandler
 	auditLogHandler        *handler.AuditLogHandler
+	assetHandler           *handler.AssetHandler
 }
 
 func NewRouter(
@@ -52,6 +53,7 @@ func NewRouter(
 	aiAnalysisHandler *handler.AIAnalysisHandler,
 	commandAuditHandler *handler.CommandAuditHandler,
 	auditLogHandler *handler.AuditLogHandler,
+	assetHandler *handler.AssetHandler,
 ) *Router {
 	return &Router{
 		roleRepo:               roleRepo,
@@ -72,6 +74,7 @@ func NewRouter(
 		aiAnalysisHandler:      aiAnalysisHandler,
 		commandAuditHandler:    commandAuditHandler,
 		auditLogHandler:        auditLogHandler,
+		assetHandler:           assetHandler,
 	}
 }
 
@@ -135,6 +138,9 @@ func (r *Router) Setup() {
 			hosts.GET("", r.hostHandler.ListHosts)
 			hosts.GET("/:id", r.hostHandler.GetHost)
 		}
+
+		// 智能资产采集接口 (V5.8)
+		r.assetHandler.RegisterRoutes(v1)
 
 		// 模板接口
 		templates := v1.Group("/templates")

@@ -226,6 +226,23 @@ message ConfigSyncResponse {
   map<string, bool> applied = 3;  // config_type -> success
 }
 
+// === V5.8 智能资产采集 ===
+
+// HostAssetCollectRequest 主机资产采集请求
+message HostAssetCollectRequest {
+  repeated string collect_types = 1; // software, process
+  bool include_package_files = 2;
+  bool include_listen_ports = 3;
+  int32 max_process_count = 4;
+}
+
+// HostAssetCollectResponse 主机资产采集响应
+message HostAssetCollectResponse {
+  bool success = 1;
+  string snapshot_json = 2;
+  string error = 3;
+}
+
 // AgentService Agent服务
 service AgentService {
   // Register 注册Agent
@@ -234,7 +251,7 @@ service AgentService {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   // ExecuteCommand 执行命令(双向流)
   rpc ExecuteCommand(stream CommandRequest) returns (stream CommandRequest);
-  // CollectSoftwareList 采集软件列表
+  // CollectSoftwareList 采集软件列表 (旧接口，保留兼容)
   rpc CollectSoftwareList(SoftwareListRequest) returns (SoftwareListResponse);
 
   // ReportEvent 运行时事件上报
@@ -247,4 +264,6 @@ service AgentService {
   rpc ExecuteBlockCommand(BlockCommand) returns (BlockResponse);
   // SyncConfig 配置同步（Server -> Agent）
   rpc SyncConfig(ConfigSyncRequest) returns (ConfigSyncResponse);
+  // CollectHostAssets 主机资产采集 (V5.8 新增)
+  rpc CollectHostAssets(HostAssetCollectRequest) returns (HostAssetCollectResponse);
 }
