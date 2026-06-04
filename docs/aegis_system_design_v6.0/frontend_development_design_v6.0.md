@@ -53,6 +53,7 @@ frontend/src/views/assistant/components/AssistantSessionSidebar.vue
 frontend/src/views/assistant/components/AssistantConversation.vue
 frontend/src/views/assistant/components/AssistantComposer.vue
 frontend/src/views/assistant/components/AssistantPlanPanel.vue
+frontend/src/views/assistant/components/AssistantToolSelectionPanel.vue
 frontend/src/views/assistant/components/AssistantToolCallCard.vue
 frontend/src/views/assistant/components/AssistantApprovalCard.vue
 frontend/src/views/assistant/components/AssistantContextRail.vue
@@ -60,6 +61,7 @@ frontend/src/views/assistant/components/AssistantObjectCard.vue
 frontend/src/views/assistant/components/AssistantResultRenderer.vue
 frontend/src/views/assistant/composables/useAssistantStream.ts
 frontend/src/views/assistant/composables/useAssistantActions.ts
+frontend/src/views/settings/AssistantToolPolicySettings.vue
 frontend/src/api/assistant.ts
 frontend/src/store/assistant.ts
 ```
@@ -155,6 +157,11 @@ export type AssistantRiskLevel =
   | 'high'
   | 'critical'
 
+export type AssistantToolApprovalMode =
+  | 'request_approval'
+  | 'whitelist'
+  | 'full_access'
+
 export interface AssistantSession {
   session_id: string
   title: string
@@ -191,6 +198,65 @@ export interface AssistantContextRef {
   route_path?: string
   snapshot?: Record<string, unknown>
   created_at: string
+}
+
+export interface AssistantIntentResult {
+  domains: string[]
+  operations: string[]
+  object_types: string[]
+  object_ids: string[]
+  keywords: string[]
+  risk_hint: AssistantRiskLevel
+  confidence: number
+  reason: string
+}
+
+export interface AssistantSelectedTool {
+  name: string
+  domain: string
+  operation: string
+  risk: AssistantRiskLevel
+  reason: string
+}
+
+export interface AssistantToolSelection {
+  run_id: string
+  stage: 'initial' | 'expanded' | 'approval_resume' | 'retry'
+  intent: AssistantIntentResult
+  tools: AssistantSelectedTool[]
+  tool_count: number
+}
+
+export interface AssistantToolSearchResult {
+  matches: Array<{
+    name: string
+    domain: string
+    operation: string
+    risk: AssistantRiskLevel
+    description: string
+    args_summary: string
+    tags: string[]
+  }>
+}
+
+export interface AssistantToolPolicy {
+  name: string
+  domain: string
+  operation: string
+  risk_level: AssistantRiskLevel
+  description: string
+  args_summary: string
+  default_whitelisted: boolean
+  whitelisted: boolean
+  enabled: boolean
+  updated_at?: string
+}
+
+export interface AssistantToolApprovalPolicy {
+  mode: AssistantToolApprovalMode
+  whitelist_version?: number
+  updated_by?: string
+  updated_at?: string
 }
 
 export interface AssistantPlan {
@@ -300,6 +366,10 @@ export function openAssistantStream(
 export type AssistantStreamEventType =
   | 'message_delta'
   | 'thinking'
+  | 'intent_detected'
+  | 'tools_selected'
+  | 'tool_search'
+  | 'tool_expansion'
   | 'plan'
   | 'step_started'
   | 'step_completed'
@@ -328,6 +398,9 @@ export interface AssistantStreamEvent {
 ```ts
 function handleAssistantStreamEvent(event: AssistantStreamEvent): void
 function appendAssistantDelta(messageId: string, delta: string): void
+function setIntentResult(result: AssistantIntentResult): void
+function upsertToolSelection(selection: AssistantToolSelection): void
+function appendToolSearchResult(result: AssistantToolSearchResult): void
 function upsertPlan(plan: AssistantPlan): void
 function upsertToolCall(call: AssistantToolCall): void
 function upsertApproval(approval: AssistantApproval): void
@@ -349,6 +422,9 @@ export const useAssistantStore = defineStore('assistant', {
     currentSession: null as AssistantSession | null,
     messages: [] as AssistantMessage[],
     contextRefs: [] as AssistantContextRef[],
+    intentResult: null as AssistantIntentResult | null,
+    toolSelections: [] as AssistantToolSelection[],
+    toolSearchResults: [] as AssistantToolSearchResult[],
     toolCalls: [] as AssistantToolCall[],
     approvals: [] as AssistantApproval[],
     resultCards: [] as AssistantResultCard[],
@@ -438,7 +514,41 @@ function groupToolCallsByMessage(messageId: string): AssistantToolCall[]
 function groupApprovalsByMessage(messageId: string): AssistantApproval[]
 ```
 
-### 10.4 AssistantApprovalCard.vue
+### 10.4 AssistantToolSelectionPanel.vue
+
+职责：
+
+- 展示 `intent_detected` 和 `tools_selected` 事件。
+- 让用户知道本轮智能体识别到的业务域、动作和风险。
+- 展示被注入 agent-runtime 的工具清单。
+- 展示 `Tool.Search` 的结果和 `tool_expansion` 的扩展记录。
+
+Props：
+
+```ts
+interface Props {
+  intent?: AssistantIntentResult | null
+  selections: AssistantToolSelection[]
+  searches: AssistantToolSearchResult[]
+  collapsed?: boolean
+}
+```
+
+函数：
+
+```ts
+function getDomainLabel(domain: string): string
+function getRiskTagType(risk: AssistantRiskLevel): 'info' | 'success' | 'warning' | 'danger'
+function groupToolsByDomain(selection: AssistantToolSelection): Record<string, AssistantSelectedTool[]>
+```
+
+显示规则：
+
+- 默认折叠，避免干扰对话主线。
+- 当工具扩展发生时自动展开一次。
+- critical 工具用危险色标签，但不显示完整敏感参数。
+
+### 10.5 AssistantApprovalCard.vue
 
 职责：
 
@@ -473,7 +583,53 @@ function confirmApprove(): Promise<void>
 function confirmReject(): Promise<void>
 ```
 
-### 10.5 AssistantContextRail.vue
+### 10.6 AssistantToolPolicySettings.vue
+
+位置：系统配置页新增“智能体工具权限”Tab。
+
+职责：
+
+- 展示三种审批模式。
+- 展示全部智能体工具。
+- 支持按工具名、详情、领域、风险、白名单状态搜索过滤。
+- 支持单个工具加入/移出白名单。
+- 支持批量加入/移出白名单。
+- 支持恢复默认低危工具白名单。
+- 展示每个工具的名称、详情、参数摘要、风险等级和当前白名单状态。
+
+布局：
+
+```text
++---------------------------------------------------------------+
+| 工具审批模式:  请求批准 | 白名单 | 完全权限                    |
++---------------------------------------------------------------+
+| 搜索工具  领域筛选  风险筛选  白名单筛选  恢复默认白名单       |
++---------------------------------------------------------------+
+| 工具名称 | 领域 | 操作 | 风险 | 工具详情 | 参数摘要 | 白名单 |
++---------------------------------------------------------------+
+```
+
+函数：
+
+```ts
+function fetchToolPolicies(): Promise<void>
+function updateApprovalMode(mode: AssistantToolApprovalMode): Promise<void>
+function updateToolWhitelist(toolName: string, whitelisted: boolean): Promise<void>
+function batchUpdateWhitelist(items: Array<{ tool_name: string; whitelisted: boolean }>): Promise<void>
+function resetDefaultWhitelist(): Promise<void>
+function getApprovalModeDescription(mode: AssistantToolApprovalMode): string
+function getToolRiskTagType(risk: AssistantRiskLevel): 'info' | 'success' | 'warning' | 'danger'
+```
+
+交互要求：
+
+- 选择 `request_approval` 时，提示“所有工具调用都将等待人工批准，包含只读查询”。
+- 选择 `whitelist` 时，表格白名单开关可用。
+- 选择 `full_access` 时，提示“所有被本轮智能体选中的工具将直接执行，仍会记录审计”。
+- critical 工具加入白名单时必须二次确认。
+- 恢复默认白名单不会改变审批模式。
+
+### 10.7 AssistantContextRail.vue
 
 职责：
 

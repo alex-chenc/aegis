@@ -26,6 +26,12 @@
 | GET | `/sessions/:session_id/context-refs` | 上下文对象 |
 | GET | `/sessions/:session_id/tool-calls` | 工具调用记录 |
 | GET | `/sessions/:session_id/approvals` | 审批列表 |
+| GET | `/tools` | 获取全部智能体工具配置列表 |
+| GET | `/tool-approval-policy` | 获取工具审批模式和白名单 |
+| PUT | `/tool-approval-policy` | 更新工具审批模式 |
+| PUT | `/tools/:tool_name/whitelist` | 更新单个工具白名单状态 |
+| POST | `/tools/whitelist/batch` | 批量更新工具白名单 |
+| POST | `/tools/whitelist/reset-defaults` | 恢复默认低危工具白名单 |
 | GET | `/approvals/:approval_id` | 审批详情 |
 | POST | `/approvals/:approval_id/approve` | 批准并执行 |
 | POST | `/approvals/:approval_id/reject` | 拒绝 |
@@ -151,6 +157,10 @@ POST /api/v1/assistant/approvals/:approval_id/approve
 |:---|:---|
 | `thinking` | `{ "content": "..." }` |
 | `message_delta` | `{ "delta": "..." }` |
+| `intent_detected` | `AssistantIntentResult` |
+| `tools_selected` | `AssistantToolSelection` |
+| `tool_search` | `ToolSearchResult` |
+| `tool_expansion` | `AssistantToolSelection` |
 | `plan` | `AssistantPlan` |
 | `step_started` | `AssistantPlanStep` |
 | `step_completed` | `AssistantPlanStep` |
@@ -163,6 +173,111 @@ POST /api/v1/assistant/approvals/:approval_id/approve
 | `result_card` | `AssistantResultCard` |
 | `done` | `{ "status": "completed" }` |
 | `error` | `{ "message": "..." }` |
+
+`tools_selected` 示例：
+
+```json
+{
+  "type": "tools_selected",
+  "session_id": "asst_xxx",
+  "run_id": "run_xxx",
+  "message_id": "msg_xxx",
+  "payload": {
+    "domains": ["package"],
+    "operations": ["get", "approve"],
+    "tool_count": 4,
+    "tools": [
+      { "name": "Package.Get", "risk": "readonly", "reason": "当前页面为检测包详情" },
+      { "name": "Package.Build.GetLatest", "risk": "readonly", "reason": "签名前需要确认最新构建状态" },
+      { "name": "Package.Sign", "risk": "critical", "reason": "用户明确要求签名" },
+      { "name": "Package.Enable", "risk": "critical", "reason": "用户明确要求启用" }
+    ]
+  }
+}
+```
+
+### 2.4 获取智能体工具列表
+
+```http
+GET /api/v1/assistant/tools?domain=package&risk=critical&keyword=sign&whitelisted=false
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "mode": "whitelist",
+    "tools": [
+      {
+        "name": "Package.Sign",
+        "domain": "package",
+        "operation": "approve",
+        "risk_level": "critical",
+        "description": "对构建成功的动态 eBPF DetectionPackage 进行签名",
+        "args_summary": "package_id:string",
+        "default_whitelisted": false,
+        "whitelisted": false,
+        "enabled": true,
+        "updated_at": "2026-06-04T10:00:00Z"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+### 2.5 更新审批模式
+
+```http
+PUT /api/v1/assistant/tool-approval-policy
+```
+
+请求：
+
+```json
+{
+  "mode": "whitelist"
+}
+```
+
+`mode` 可选值：
+
+```text
+request_approval
+whitelist
+full_access
+```
+
+### 2.6 更新白名单
+
+```http
+PUT /api/v1/assistant/tools/Package.Sign/whitelist
+```
+
+请求：
+
+```json
+{
+  "whitelisted": false
+}
+```
+
+批量请求：
+
+```http
+POST /api/v1/assistant/tools/whitelist/batch
+```
+
+```json
+{
+  "items": [
+    { "tool_name": "Host.List", "whitelisted": true },
+    { "tool_name": "Package.Sign", "whitelisted": false }
+  ]
+}
+```
 
 ---
 
@@ -300,7 +415,79 @@ CREATE INDEX IF NOT EXISTS idx_assistant_approvals_tool_call
     ON assistant_approvals(tool_call_id);
 ```
 
-### 4.6 assistant_memory
+### 4.6 assistant_tool_selections
+
+用于记录每次 run 传给 agent-runtime 的工具集合，便于调试“为什么模型能/不能调用某个工具”。
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_tool_selections (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id      VARCHAR(100) NOT NULL,
+    run_id          VARCHAR(100) NOT NULL,
+    message_id      VARCHAR(100),
+    stage           VARCHAR(32)  NOT NULL DEFAULT 'initial',
+    query           TEXT         NOT NULL,
+    intent          JSONB        NOT NULL DEFAULT '{}',
+    selected_tools  JSONB        NOT NULL DEFAULT '[]',
+    candidate_tools JSONB        NOT NULL DEFAULT '[]',
+    max_tools       INTEGER      NOT NULL DEFAULT 24,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_selections_session
+    ON assistant_tool_selections(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_selections_run
+    ON assistant_tool_selections(run_id);
+```
+
+`stage` 枚举：
+
+```text
+initial
+expanded
+approval_resume
+retry
+```
+
+### 4.7 assistant_tool_policies
+
+用于保存工具白名单和配置页展示需要的覆盖项。完整工具元数据来自后端 `ToolCatalog`，该表只保存运行时可配置项和初始化快照。
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_tool_policies (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tool_name           VARCHAR(160) UNIQUE NOT NULL,
+    domain              VARCHAR(40)  NOT NULL,
+    operation           VARCHAR(40)  NOT NULL,
+    risk_level          VARCHAR(20)  NOT NULL,
+    description         TEXT,
+    args_summary        TEXT,
+    default_whitelisted BOOLEAN      NOT NULL DEFAULT FALSE,
+    whitelisted         BOOLEAN      NOT NULL DEFAULT FALSE,
+    enabled             BOOLEAN      NOT NULL DEFAULT TRUE,
+    source              VARCHAR(32)  NOT NULL DEFAULT 'builtin',
+    updated_by          VARCHAR(100),
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_policies_domain
+    ON assistant_tool_policies(domain);
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_policies_risk
+    ON assistant_tool_policies(risk_level);
+CREATE INDEX IF NOT EXISTS idx_assistant_tool_policies_whitelisted
+    ON assistant_tool_policies(whitelisted);
+```
+
+初始化规则：
+
+- 服务启动时读取 `ToolCatalog`，对缺失工具执行 upsert。
+- `readonly` 工具默认可加入白名单。
+- `low` 工具可按工具清单显式加入默认白名单。
+- `medium/high/critical` 默认不加入白名单。
+- 管理员可在配置页修改 `whitelisted`。
+
+### 4.8 assistant_memory
 
 ```sql
 CREATE TABLE IF NOT EXISTS assistant_memory (
@@ -364,6 +551,14 @@ executed
 failed
 ```
 
+### 5.5 tool approval mode
+
+```text
+request_approval
+whitelist
+full_access
+```
+
 ---
 
 ## 6. 配置项
@@ -374,6 +569,9 @@ failed
 |:---|:---|:---|
 | `assistant.enabled` | `true` | 是否启用智能模式 |
 | `assistant.max_iterations` | `500` | 单次 run 最大迭代 |
+| `assistant.max_selected_tools` | `24` | 单次注入 agent-runtime 的最大工具数 |
+| `assistant.max_write_tools` | `6` | 单次注入的写操作工具上限 |
+| `assistant.tool_approval_mode` | `whitelist` | 工具审批模式: request_approval/whitelist/full_access |
 | `assistant.require_approval_medium` | `true` | medium 工具是否默认审批 |
 | `assistant.approval_ttl_minutes` | `30` | 审批过期时间 |
 | `assistant.max_context_refs` | `50` | 单会话上下文对象上限 |
@@ -393,21 +591,11 @@ migrations/015_v6.0_assistant_tables.sql
 
 ## 8. API 测试用例
 
-```bash
-# 创建会话
-curl -X POST http://localhost:8082/api/v1/assistant/sessions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"title":"测试智能模式","task_type":"explanation","initial_message":"总结主机态势"}'
+完整接口测试用例见 `assistant_api_curl_test_cases_v6.0.md`。该文档覆盖：
 
-# 发送消息
-curl -X POST http://localhost:8082/api/v1/assistant/sessions/<session_id>/message \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"content":"列出离线主机"}'
-
-# 查看审批
-curl http://localhost:8082/api/v1/assistant/sessions/<session_id>/approvals \
-  -H "Authorization: Bearer <token>"
-```
+- `curl + jq` 通用断言函数。
+- Assistant 会话、消息、SSE、审批、工具配置、白名单全接口测试。
+- `request_approval` / `whitelist` / `full_access` 三种审批模式行为验证。
+- 审批批准/拒绝后的工具调用状态、run 恢复和数据一致性校验。
+- 未授权、非法模式、不存在对象、重复审批等异常用例。
 

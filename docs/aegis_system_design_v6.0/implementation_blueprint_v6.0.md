@@ -14,10 +14,12 @@
 本文明确：
 
 - 不做 MCP。
+- 智能体继续使用现有 `github.com/alex-chenc/agent-runtime`，参考 AI 分析页的 `adapters.NewAegisRuntime` 和 `runtime.Run` 链路。
 - 智能体只调用 Aegis 内部 Tool。
 - Tool 是一层新写的适配函数，不重写业务逻辑。
 - Tool 调用现有 `service/repository/gRPC`。
 - 如果当前能力只在 handler 内，需要先抽 service，再给普通 handler 和 Tool 共用。
+- 所有数据库查询类接口都登记为 ToolSpec，但每次对话通过意图路由和工具检索按需注入，不把全量工具一次性暴露给大模型。
 - 每条核心链路的函数顺序、文件位置、参数、返回值、风险判断、审批恢复执行方式。
 
 ---
@@ -56,6 +58,20 @@ Tool 层不做：
 - 不绕过现有 service。
 - 不调用 HTTP handler。
 
+### 2.4 工具按需注入规则
+
+V6.0 不采用“把所有工具一次性给大模型”的方式。正确链路是：
+
+```text
+用户消息
+  -> IntentRouter 识别领域、动作、对象、风险
+  -> ToolSelector 从 ToolCatalog 检索候选工具
+  -> agent-runtime.WithTools(selectedDescriptors)
+  -> AssistantToolGateway 执行工具
+```
+
+默认常驻工具只有 `Tool.Search`、`Context.Get`、`Session.Summarize`、`Approval.ListPending`。其他工具必须由用户意图、页面路由或上下文对象命中后才注入。完整算法、工具目录和 V5.8 检测包/规则/阻断映射见 `agent_runtime_tool_orchestration_design_v6.0.md`。
+
 ### 2.3 Handler 逻辑下沉规则
 
 如果某个普通页面功能只存在于 handler 方法中，没有 service 方法：
@@ -79,7 +95,7 @@ Assistant Tool -> 调用 Handler 方法
 | Phase 0 | 新增表、模型、repository | 无 | `assistant_*` 表可迁移，repo 单测通过 |
 | Phase 1 | AssistantService、RunManager、SSE | `/assistant` 空工作台 | 可创建会话、发送消息、看到 SSE done |
 | Phase 2 | ToolRegistry、只读工具 | 展示工具调用卡片 | 可查询主机、告警、任务、检测包 |
-| Phase 3 | RiskPolicy、ApprovalGate | 审批卡片 | 高风险动作只生成审批，不直接执行 |
+| Phase 3 | RiskPolicy、ToolPolicyService、ApprovalGate | 审批卡片 | 三种审批模式生效，需审批动作先暂停 run |
 | Phase 4 | 写操作工具 | 审批后执行并展示结果 | 扫描、构建、阻断、启用等按策略执行 |
 | Phase 5 | 普通页面接入智能体 | `AskAssistantButton` | 从主机/告警/任务/检测包进入智能模式 |
 
@@ -97,15 +113,24 @@ api-server/internal/repository/assistant_message_repo.go
 api-server/internal/repository/assistant_context_ref_repo.go
 api-server/internal/repository/assistant_tool_call_repo.go
 api-server/internal/repository/assistant_approval_repo.go
+api-server/internal/repository/assistant_tool_policy_repo.go
 api-server/internal/repository/assistant_memory_repo.go
 
 api-server/internal/assistant/service.go
 api-server/internal/assistant/run_manager.go
 api-server/internal/assistant/orchestrator.go
+api-server/internal/assistant/runtime_factory.go
+api-server/internal/assistant/runtime_config.go
 api-server/internal/assistant/tool_registry.go
+api-server/internal/assistant/tool_catalog.go
+api-server/internal/assistant/tool_selector.go
+api-server/internal/assistant/intent_router.go
+api-server/internal/assistant/tool_expansion.go
 api-server/internal/assistant/tool_dispatcher.go
+api-server/internal/assistant/tool_gateway.go
 api-server/internal/assistant/risk_policy.go
 api-server/internal/assistant/approval_gate.go
+api-server/internal/assistant/tool_policy_service.go
 api-server/internal/assistant/context_loader.go
 api-server/internal/assistant/memory_service.go
 api-server/internal/assistant/event.go
@@ -116,6 +141,9 @@ api-server/internal/assistant/tools/host_tools.go
 api-server/internal/assistant/tools/task_tools.go
 api-server/internal/assistant/tools/vulnerability_tools.go
 api-server/internal/assistant/tools/detection_tools.go
+api-server/internal/assistant/tools/detection_query_tools.go
+api-server/internal/assistant/tools/sigma_rule_tools.go
+api-server/internal/assistant/tools/block_tools.go
 api-server/internal/assistant/tools/package_tools.go
 api-server/internal/assistant/tools/config_tools.go
 api-server/internal/assistant/tools/audit_tools.go
@@ -191,6 +219,7 @@ assistantMessageRepo := repository.NewAssistantMessageRepo(db)
 assistantContextRefRepo := repository.NewAssistantContextRefRepo(db)
 assistantToolCallRepo := repository.NewAssistantToolCallRepo(db)
 assistantApprovalRepo := repository.NewAssistantApprovalRepo(db)
+assistantToolPolicyRepo := repository.NewAssistantToolPolicyRepo(db)
 assistantMemoryRepo := repository.NewAssistantMemoryRepo(db)
 ```
 
@@ -236,6 +265,15 @@ tools.RegisterAgentToolProxy(assistantToolRegistry, tools.AgentToolDeps{
     ServerClient: serverClient,
 })
 
+assistantToolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
+    ToolRegistry: assistantToolRegistry,
+    ToolPolicyRepo: assistantToolPolicyRepo,
+    SystemConfigRepo: systemConfigRepo,
+})
+if err := assistantToolPolicyService.SyncCatalogTools(ctx); err != nil {
+    logger.Warn("failed to sync assistant tool policies", zap.Error(err))
+}
+
 assistantRunManager := assistant.NewRunManager()
 
 assistantApprovalGate := assistant.NewApprovalGate(assistant.ApprovalGateDeps{
@@ -243,6 +281,7 @@ assistantApprovalGate := assistant.NewApprovalGate(assistant.ApprovalGateDeps{
     ToolCallRepo: assistantToolCallRepo,
     ToolRegistry: assistantToolRegistry,
     RiskPolicy: assistantRiskPolicy,
+    ToolPolicyService: assistantToolPolicyService,
 })
 
 assistantOrchestrator := assistant.NewOrchestrator(assistant.OrchestratorDeps{
@@ -640,17 +679,107 @@ func (g *RuntimeToolGateway) Call(ctx context.Context, req agentruntime.ToolRequ
 
 ## 10. 核心链路 5: ToolDispatcher 执行和审批
 
-### 10.1 调用链
+### 10.1 三种工具审批模式
+
+智能体工具执行不再只由 `risk_level` 直接决定，而是先由 `ToolPolicyService` 读取全局审批模式和工具白名单，再交给 `ApprovalGate` 输出本次调用的审批决策。
+
+| 模式 | 配置值 | 执行规则 | 适用场景 |
+|:---|:---|:---|:---|
+| 请求批准 | `request_approval` | 所有工具调用都创建审批，审批通过后执行并恢复 run | 演示、试运行、强监管环境 |
+| 白名单 | `whitelist` | `assistant_tool_policies.whitelisted=true` 的工具直接执行，其他工具进入审批 | 默认模式 |
+| 完全权限 | `full_access` | 所有已注册、已启用、已被本轮选中的工具直接执行 | 受信任内网、管理员快速处置 |
+
+注意：
+
+- `full_access` 只跳过工具审批，不跳过登录态、RBAC、工具注册、参数校验、审计和 run 状态记录。
+- `request_approval` 会覆盖白名单，即使 `readonly` 工具也需要审批。
+- `whitelist` 模式下，默认白名单只初始化低危和只读工具；critical 工具默认不进白名单，管理员可以在配置页显式调整。
+- 任何模式下，模型仍然不能直接看到所有工具；进入运行前仍走 `IntentRouter -> ToolSelector -> Tool.Search`。
+
+决策入口：
+
+```go
+type ToolApprovalMode string
+
+const (
+    ToolApprovalModeRequestApproval ToolApprovalMode = "request_approval"
+    ToolApprovalModeWhitelist       ToolApprovalMode = "whitelist"
+    ToolApprovalModeFullAccess      ToolApprovalMode = "full_access"
+)
+
+type ApprovalEvaluateRequest struct {
+    Operator  string
+    SessionID string
+    ToolName  string
+    Spec      ToolSpec
+    Args      map[string]interface{}
+}
+
+type RiskDecision struct {
+    Mode             ToolApprovalMode
+    RiskLevel        string
+    RequiresApproval bool
+    Reason           string
+    ImpactSummary    string
+}
+```
+
+`ApprovalGate.Evaluate` 必须按下面顺序执行：
+
+```go
+func (g *ApprovalGate) Evaluate(ctx context.Context, req ApprovalEvaluateRequest) (*RiskDecision, error) {
+    mode, err := g.toolPolicyService.GetApprovalMode(ctx)
+    if err != nil {
+        return nil, err
+    }
+
+    base, err := g.riskPolicy.Evaluate(ctx, req.Operator, req.Spec, req.Args)
+    if err != nil {
+        return nil, err
+    }
+    base.Mode = mode
+
+    switch mode {
+    case ToolApprovalModeRequestApproval:
+        base.RequiresApproval = true
+        base.Reason = "当前智能体审批模式为请求批准，所有工具都需要用户审批"
+    case ToolApprovalModeFullAccess:
+        base.RequiresApproval = false
+        base.Reason = "当前智能体审批模式为完全权限，工具审批已跳过"
+    case ToolApprovalModeWhitelist:
+        whitelisted, err := g.toolPolicyService.IsWhitelisted(ctx, req.ToolName)
+        if err != nil {
+            return nil, err
+        }
+        base.RequiresApproval = !whitelisted
+        if whitelisted {
+            base.Reason = "该工具在智能体白名单中"
+        } else {
+            base.Reason = "该工具不在智能体白名单中，需要用户审批"
+        }
+    default:
+        base.RequiresApproval = true
+        base.Reason = "未知审批模式，按最小权限策略请求审批"
+    }
+    return base, nil
+}
+```
+
+### 10.2 调用链
 
 ```text
 RuntimeToolGateway.Call()
   -> ToolDispatcher.Execute()
   -> ToolRegistry.Get(toolName)
-  -> RiskPolicy.Evaluate()
+  -> ApprovalGate.Evaluate()
+       -> ToolPolicyService.GetApprovalMode()
+       -> RiskPolicy.Evaluate()
+       -> ToolPolicyService.IsWhitelisted()
   -> ToolCallRepo.Create(status=running or approval_required)
   -> if approval required:
        tool.BuildApproval()
        ApprovalGate.CreateApproval()
+       RunManager.PauseForApproval(runID, approvalID)
        emit approval_required
        return approval_required result
      else:
@@ -659,11 +788,12 @@ RuntimeToolGateway.Call()
        emit tool_result/tool_error
 ```
 
-### 10.2 ToolExecutionRequest
+### 10.3 ToolExecutionRequest
 
 ```go
 type ToolExecutionRequest struct {
     SessionID string
+    RunID     string
     MessageID string
     CallID    string
     ToolName  string
@@ -679,7 +809,7 @@ func (r ToolExecutionRequest) IntArg(name string, def int) int
 func (r ToolExecutionRequest) BoolArg(name string, def bool) bool
 ```
 
-### 10.3 ToolExecutionResult
+### 10.4 ToolExecutionResult
 
 ```go
 type ToolExecutionResult struct {
@@ -692,7 +822,7 @@ type ToolExecutionResult struct {
 }
 ```
 
-### 10.4 Dispatcher 函数
+### 10.5 Dispatcher 函数
 
 ```go
 func (d *ToolDispatcher) Execute(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error) {
@@ -701,7 +831,13 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolExecutionRequest) 
         return nil, fmt.Errorf("unknown tool: %s", req.ToolName)
     }
 
-    decision, err := d.riskPolicy.Evaluate(ctx, req.Operator, tool, req.Args)
+    decision, err := d.approvalGate.Evaluate(ctx, ApprovalEvaluateRequest{
+        Operator:  req.Operator,
+        SessionID: req.SessionID,
+        ToolName:  req.ToolName,
+        Spec:      tool.Spec,
+        Args:      req.Args,
+    })
     if err != nil {
         return nil, err
     }
@@ -730,6 +866,7 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolExecutionRequest) 
             return nil, err
         }
         _ = d.toolCallRepo.MarkApprovalRequired(ctx, req.CallID, approval.ApprovalID)
+        _ = d.runManager.PauseForApproval(ctx, req.RunID, approval.ApprovalID)
         d.emit(req.SessionID, EventApprovalRequired(approval))
         return &ToolExecutionResult{
             Success: false,
@@ -753,6 +890,45 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolExecutionRequest) 
 }
 ```
 
+### 10.6 白名单同步和默认值
+
+`ToolPolicyService.SyncCatalogTools(ctx)` 在 api-server 启动时执行，将 `ToolCatalog` 中所有工具 upsert 到 `assistant_tool_policies`。
+
+默认白名单函数：
+
+```go
+func DefaultWhitelisted(spec ToolSpec) bool {
+    if spec.RiskLevel == "readonly" {
+        return true
+    }
+    if spec.RiskLevel == "low" && spec.OperationKind == "query" {
+        return true
+    }
+    return false
+}
+```
+
+需要默认进入白名单的工具类型：
+
+| 类型 | 示例 |
+|:---|:---|
+| 资产查询 | `Host.List`、`Host.Get`、`Host.AgentStatus.Get` |
+| 告警查询 | `Detection.Alert.List`、`Detection.Alert.Get`、`Detection.Statistics.Get` |
+| 规则查询 | `SigmaRule.List`、`SigmaRule.Get` |
+| 阻断记录查询 | `Block.Record.List`、`Block.Policy.List` |
+| 检测包查询 | `Package.List`、`Package.Get`、`Package.Build.GetLog` |
+| 审计查询 | `Audit.Log.List`、`Detection.ToolCall.List` |
+
+不默认进入白名单的工具类型：
+
+| 类型 | 示例 |
+|:---|:---|
+| 主机动作 | `Vulnerability.Script.Execute`、`Task.RunFix` |
+| 阻断动作 | `Detection.Alert.Block`、`Block.Policy.Update` |
+| 规则变更 | `SigmaRule.Content.Update`、`SigmaRule.Status.Update`、`SigmaRule.Delete` |
+| 检测包发布 | `Package.Sign`、`Package.Enable`、`Package.Rollback` |
+| 全局策略 | `Package.Allowlist.Update`、`Config.LLM.Update` |
+
 ---
 
 ## 11. 核心链路 6: 审批后恢复执行
@@ -770,6 +946,8 @@ AssistantApprovalCard.approve()
   -> ToolHandler.Execute(req Approved=true)
   -> ApprovalRepo.MarkExecuted()
   -> ToolCallRepo.MarkSuccess()
+  -> RunManager.ResumeAfterApproval(runID, toolResult)
+  -> agent-runtime 继续接收工具结果并生成下一步
 ```
 
 ### 11.2 ApprovalGate.Approve
@@ -820,9 +998,102 @@ func (g *ApprovalGate) Approve(ctx context.Context, approvalID string, operator 
 
     _ = g.toolCallRepo.MarkSuccess(ctx, call.CallID, result, 0)
     _ = g.approvalRepo.MarkExecuted(ctx, approvalID)
+    _ = g.runManager.ResumeAfterApproval(ctx, call.RunID, ResumeAfterApprovalInput{
+        ApprovalID: approvalID,
+        ToolCallID: call.CallID,
+        ToolName: call.ToolName,
+        Result: result,
+    })
     return &ApprovalExecutionResult{Approval: approval, ToolResult: result}, nil
 }
 ```
+
+### 11.3 RunManager 暂停和恢复函数
+
+```go
+type ResumeAfterApprovalInput struct {
+    ApprovalID string
+    ToolCallID string
+    ToolName   string
+    Result     *ToolExecutionResult
+}
+
+func (m *RunManager) PauseForApproval(ctx context.Context, runID string, approvalID string) error {
+    run, err := m.runRepo.FindByRunID(ctx, runID)
+    if err != nil {
+        return err
+    }
+    if run.Status != "running" {
+        return nil
+    }
+    if err := m.runRepo.UpdateStatus(ctx, runID, "waiting_approval"); err != nil {
+        return err
+    }
+    m.emit(run.SessionID, EventRunWaitingApproval(runID, approvalID))
+    return nil
+}
+
+func (m *RunManager) ResumeAfterApproval(ctx context.Context, runID string, input ResumeAfterApprovalInput) error {
+    run, err := m.runRepo.FindByRunID(ctx, runID)
+    if err != nil {
+        return err
+    }
+    if run.Status != "waiting_approval" {
+        return ErrRunNotWaitingApproval
+    }
+
+    if err := m.runRepo.UpdateStatus(ctx, runID, "running"); err != nil {
+        return err
+    }
+    m.emit(run.SessionID, EventToolResult(input.ToolCallID, input.Result))
+
+    go m.continueRuntimeAfterToolResult(run, input)
+    return nil
+}
+```
+
+`continueRuntimeAfterToolResult` 的实现原则：
+
+1. 从 `assistant_runs.runtime_state` 读取 agent-runtime 的当前状态。
+2. 将审批执行后的工具结果转换成 `agentruntime.ToolResponse`。
+3. 调用 agent-runtime 的继续运行入口；如果当前版本没有显式 resume API，则由 `AssistantRuntimeAdapter` 封装“追加 tool result 消息后重新 run”的兼容实现。
+4. 后续模型可能继续调用其他工具，也可能直接输出最终回答。
+5. 如果恢复失败，run 状态改为 `failed`，审批和工具调用仍保持已执行，便于人工继续追踪。
+
+### 11.4 拒绝审批后的恢复策略
+
+拒绝不会执行工具，但也要把拒绝信息回灌给智能体，避免会话卡死。
+
+```go
+func (g *ApprovalGate) Reject(ctx context.Context, approvalID string, operator string, comment string) (*model.AssistantApproval, error) {
+    approval, err := g.approvalRepo.MarkRejected(ctx, approvalID, operator, comment)
+    if err != nil {
+        return nil, err
+    }
+    call, err := g.toolCallRepo.FindByCallID(ctx, approval.ToolCallID)
+    if err != nil {
+        return nil, err
+    }
+    _ = g.toolCallRepo.MarkRejected(ctx, call.CallID, comment)
+    _ = g.runManager.ResumeAfterApproval(ctx, call.RunID, ResumeAfterApprovalInput{
+        ApprovalID: approvalID,
+        ToolCallID: call.CallID,
+        ToolName: call.ToolName,
+        Result: &ToolExecutionResult{
+            Success: false,
+            Summary: "用户拒绝了该工具调用",
+            Error: comment,
+        },
+    })
+    return approval, nil
+}
+```
+
+前端展示规则：
+
+- 批准后卡片状态从 `pending` 变为 `executed`，并展示工具结果。
+- 拒绝后卡片状态从 `pending` 变为 `rejected`，智能体继续生成替代建议。
+- 过期后卡片状态变为 `expired`，run 标记为 `waiting_user_input`，用户可重新发起。
 
 ---
 
@@ -875,7 +1146,7 @@ func (t *HostListTool) Execute(ctx context.Context, req assistant.ToolExecutionR
 | `Task.GetDetail` | readonly | `taskLogRepo.FindByID(id)` 或 `FindByGroupID(groupID)` | 无 |
 | `Task.Redispatch` | medium | `taskService.RedispatchTask(ctx, id)` | 需要审批策略 |
 | `Baseline.RunCheck` | medium | `taskService.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "check")` | 需要 rule 选择工具 |
-| `Baseline.RunFix` | high | `taskService.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "fix")` | 必须审批 |
+| `Baseline.RunFix` | high | `taskService.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "fix")` | 默认不进白名单，需要审批 |
 
 ### 12.3 Vulnerability 工具
 
@@ -888,8 +1159,8 @@ func (t *HostListTool) Execute(ctx context.Context, req assistant.ToolExecutionR
 | `Vulnerability.AffectedHosts` | readonly | `vulnService.GetVulnerabilityByCveID(cveID)` + `GetAffectedHosts(vuln.ID)` | 两步 |
 | `Vulnerability.GenerateFixScript` | low | `hostVulnerabilityScriptService.GenerateScripts(ctx,cveID,hostIDs,"fix")` | 只生成 |
 | `Vulnerability.GeneratePOC` | low | `hostVulnerabilityScriptService.GenerateScripts(ctx,cveID,hostIDs,"poc")` | 只生成 |
-| `Vulnerability.ExecuteFix` | high | `hostVulnerabilityScriptService.ExecuteScripts(ctx,cveID,"fix",hostIDs)` | 必须审批 |
-| `Vulnerability.ExecutePOC` | high | `hostVulnerabilityScriptService.ExecuteScripts(ctx,cveID,"poc",hostIDs)` | 必须审批 |
+| `Vulnerability.ExecuteFix` | high | `hostVulnerabilityScriptService.ExecuteScripts(ctx,cveID,"fix",hostIDs)` | 默认不进白名单，需要审批 |
+| `Vulnerability.ExecutePOC` | high | `hostVulnerabilityScriptService.ExecuteScripts(ctx,cveID,"poc",hostIDs)` | 默认不进白名单，需要审批 |
 
 关键实现：
 
@@ -906,18 +1177,30 @@ func (t *VulnerabilityExecuteFixTool) BuildApproval(ctx context.Context, req ass
 }
 ```
 
-### 12.4 Detection 工具
+### 12.4 Detection / SigmaRule / Block 工具
 
 | Tool | 风险 | 调用现有函数 | 说明 |
 |:---|:---|:---|:---|
-| `Detection.ListAlerts` | readonly | `alertRepo.List(page,pageSize,filters)` | 告警列表 |
-| `Detection.GetAlert` | readonly | `alertRepo.FindByID(id)` | 告警详情 |
-| `Detection.ResolveAlert` | medium | `alertService.Resolve(alertID)` | 标记解决 |
-| `Detection.BlockAlert` | critical | `alertService.ManualBlock(alertID, action)` | 必须审批 |
-| `Detection.ListBlockRecords` | readonly | `blockRepo` 对应列表方法，如缺失补 repo | 需要检查现有 repo |
-| `Detection.GenerateSigmaRule` | medium | `ruleGenerationService` 或 `sigmaRuleService` | 需抽明确 service 方法 |
+| `Detection.Alert.List` | readonly | `alertRepo.List(page,pageSize,filters)` | 告警列表 |
+| `Detection.Alert.Get` | readonly | `alertRepo.FindByID(id)` | 告警详情 |
+| `Detection.Alert.Resolve` | low | `alertRepo.Resolve(alertID)` | 标记解决 |
+| `Detection.Alert.Block` | critical | `alertService.ManualBlock(alertID, action)` | 默认不进白名单，需要审批 |
+| `Detection.Statistics.Get` | readonly | `alertRepo/blockRepo/sigmaRuleRepo` 统计函数 | 态势统计 |
+| `Detection.Trend.Get` | readonly | `alertRepo.GetTrend(hours)` | 告警趋势 |
+| `Detection.ToolCall.List` | readonly | `toolCallRepo.List(page,pageSize,filters)` | 现有工具调用记录 |
+| `SigmaRule.List` | readonly | `sigmaRuleRepo.List(page,pageSize,filters)` | 规则列表 |
+| `SigmaRule.Get` | readonly | `sigmaRuleRepo.FindByID(id)` 或 `FindByRuleID(ruleID)` | 规则详情 |
+| `SigmaRule.Generate` | medium | `SigmaRuleManagementService.GenerateRule(ctx,req,operator)` | 需从 handler 下沉 |
+| `SigmaRule.Status.Update` | high | `SigmaRuleManagementService.UpdateStatus(ctx,ruleID,status,targetHostIDs,operator)` | active/disabled |
+| `SigmaRule.Content.Update` | high | `SigmaRuleManagementService.UpdateContent(ctx,ruleID,content,operator)` | 修改 YAML |
+| `SigmaRule.Delete` | critical | `SigmaRuleManagementService.DeleteRules(ctx,ruleIDs,operator)` | 会关联删除 |
+| `Block.Record.List` | readonly | `blockRepo.List(page,pageSize,filters)` | 阻断记录 |
+| `Block.Policy.List` | readonly | `blockPolicyRepo.ListPaginatedWithRuleTitle(page,pageSize,query)` | 阻断策略 |
+| `Block.Policy.Update` | high | `DetectionPolicyService.UpdatePolicy(ctx,mitreID,req,operator)` | 修改自动阻断 |
+| `Block.Policy.Sync` | medium | `DetectionPolicyService.ReconcileRulePolicyBindings(ctx)` | 同步规则策略 |
+| `Block.Policy.Delete` | critical | `DetectionPolicyService.DeletePolicyCascade(ctx,mitreID,operator)` | 关联删除 |
 
-`Detection.BlockAlert` 审批必须展示：
+`Detection.Alert.Block` 审批必须展示：
 
 - alert_id。
 - host_id / hostname。
@@ -977,18 +1260,25 @@ func (t *AgentToolProxy) Execute(ctx context.Context, req assistant.ToolExecutio
 |:---|:---|:---|
 | `Package.List` | readonly | `detectionPkgService.ListPackages(ctx,page,pageSize,status,search)` |
 | `Package.Get` | readonly | `detectionPkgService.GetPackage(ctx,packageID)` |
-| `Package.GetDraft` | readonly | `detectionPkgService.GetDraft(ctx,packageID)` |
-| `Package.CreateDraft` | low | `detectionPkgService.CreateDraft(ctx,req,operator)` |
-| `Package.UpdateDraft` | medium | `detectionPkgService.UpdateDraft(ctx,draftID,req,operator)` |
-| `Package.StartBuild` | medium | `detectionPkgService.StartBuild(ctx,packageID,operator)` |
-| `Package.GetBuild` | readonly | `detectionPkgService.GetBuild(ctx,buildID)` |
-| `Package.GetBuildLog` | readonly | `detectionPkgService.GetBuildLogURL(ctx,buildID)` |
-| `Package.ReviewBuild` | high | `detectionPkgService.ReviewBuild(ctx,buildID,approved,comment,operator)` |
+| `Package.Draft.Get` | readonly | `detectionPkgService.GetDraft(ctx,packageID)` |
+| `Package.Draft.Create` | medium | `detectionPkgService.CreateDraft(ctx,req,operator)` |
+| `Package.Draft.Update` | medium | `detectionPkgService.UpdateDraft(ctx,draftID,req,operator)` |
+| `Package.Draft.Generate` | medium | `DetectionPackageGenerationService.GenerateDraft(ctx,req)` |
+| `Package.Build.Start` | medium | `detectionPkgService.StartBuild(ctx,packageID,operator)` |
+| `Package.Build.Get` | readonly | `detectionPkgService.GetBuild(ctx,buildID)` |
+| `Package.Build.GetLatest` | readonly | `detectionPkgService.GetLatestBuild(ctx,packageID)` |
+| `Package.Build.GetLog` | readonly | `detectionPkgService.GetBuildLogURL(ctx,buildID)` |
+| `Package.Build.Review` | high | `detectionPkgService.ReviewBuild(ctx,buildID,approved,comment,operator)` |
 | `Package.Sign` | critical | `detectionPkgService.SignPackage(ctx,packageID,operator)` |
 | `Package.Enable` | critical | `detectionPkgService.EnablePackage(ctx,packageID,operator)` |
 | `Package.Disable` | high | `detectionPkgService.DisablePackage(ctx,packageID,operator)` |
 | `Package.Rollback` | critical | `detectionPkgService.RollbackPackage(ctx,packageID,targetVersion,operator)` |
-| `Package.UpdateAllowlist` | critical | `detectionPkgService.UpdateAllowlist(ctx,configJSON,description,operator)` |
+| `Package.Uninstall` | critical | `detectionPkgService.UninstallPackage(ctx,packageID,operator)` |
+| `Package.HostStatus.List` | readonly | `detectionPkgService.ListHostStatus(ctx,packageID,version,page,pageSize)` |
+| `Package.Alert.List` | readonly | `detectionPkgService.ListPackageAlerts(ctx,packageID,page,pageSize)` |
+| `Package.Allowlist.Get` | readonly | `detectionPkgService.GetAllowlist(ctx)` |
+| `Package.Allowlist.History` | readonly | `detectionPkgService.ListAllowlistHistory(ctx,page,pageSize)` |
+| `Package.Allowlist.Update` | critical | `detectionPkgService.UpdateAllowlist(ctx,configJSON,description,operator)` |
 
 注意：
 
@@ -1031,9 +1321,9 @@ func (s *ConfigService) TestImageModelConnection(ctx context.Context, req TestIm
 
 - 它是 Aegis 安全运营智能体。
 - 它只能调用注册工具。
-- 只读工具可以自动用。
-- 高风险工具必须请求审批。
-- DetectionPackage 签名和启用不能自动执行。
+- 它只能调用本轮被 `ToolSelector` 选中或经 `Tool.Search` 扩展后的工具。
+- 工具是否需要审批由当前审批模式决定：`request_approval` 全部审批，`whitelist` 白名单外审批，`full_access` 跳过工具审批。
+- DetectionPackage 签名和启用必须拆成两个独立工具调用；在需要审批的模式下不能自动执行。
 - 不知道对象 ID 时先查询或追问。
 - 所有用户可见文本用中文。
 
@@ -1112,7 +1402,7 @@ AskAssistantButton.click()
 ```text
 User Message
   -> Orchestrator
-  -> Tool Detection.ListAlerts
+  -> Tool Detection.Alert.List
        alertRepo.List(page=1,pageSize=50,filters={severity:["high","critical"],time_range:24h})
   -> Tool AgentTool.GetProcessTree for selected alert PID
        serverClient.ExecuteTool()
@@ -1128,8 +1418,8 @@ User Message
 User Message
   -> Host.GetDetail 确认主机存在
   -> Vulnerability.StartScan medium
-       RiskPolicy requires approval if assistant.require_approval_medium=true
-       ApprovalGate.CreateApproval
+       ApprovalGate.Evaluate(mode=request_approval/whitelist/full_access)
+       if approval required: ApprovalGate.CreateApproval + RunManager.PauseForApproval
   -> user approve
   -> vulnService.StartScan(ctx, hostIDs)
   -> Vulnerability.GetScanStatus
@@ -1142,11 +1432,11 @@ User Message
 
 ```text
 User Message
-  -> Package.CreateDraft low
+  -> Package.Draft.Create medium
        detectionPkgService.CreateDraft()
-  -> Package.StartBuild medium approval
+  -> Package.Build.Start medium approval
        detectionPkgService.StartBuild()
-  -> Package.GetBuild readonly polling
+  -> Package.Build.Get readonly polling
        detectionPkgService.GetBuild()
   -> Package.Sign critical approval
        detectionPkgService.SignPackage()
@@ -1179,6 +1469,7 @@ go test ./internal/repository -run Assistant
 - `AssistantContextRefRepo.UpsertMany/ListBySession`
 - `AssistantToolCallRepo.Create/MarkSuccess/MarkFailed`
 - `AssistantApprovalRepo.Create/Find/MarkApproved/MarkRejected`
+- `AssistantToolPolicyRepo.Upsert/List/UpdateWhitelist/GetApprovalMode`
 
 ### 16.2 Phase 1 测试
 
@@ -1203,7 +1494,7 @@ go test ./internal/assistant -run 'ToolRegistry|ToolDispatcher|HostTools|Detecti
 测试：
 
 - 未注册工具返回错误。
-- readonly 工具自动执行。
+- `whitelist` 模式下默认白名单内 readonly 工具自动执行。
 - 参数缺失返回结构化错误。
 - 工具结果写入 tool call repo。
 
@@ -1215,11 +1506,15 @@ go test ./internal/assistant -run 'RiskPolicy|ApprovalGate'
 
 测试：
 
-- `critical` 工具必定审批。
-- 未审批不执行。
+- `request_approval` 模式下 readonly/low/medium/high/critical 都进入审批。
+- `whitelist` 模式下白名单工具自动执行，白名单外工具进入审批。
+- `full_access` 模式下所有已注册、已启用、已选中的工具跳过审批。
+- 未审批的审批项不执行工具。
 - 审批通过后执行一次。
 - 已执行审批不能重复执行。
 - 拒绝后不执行。
+- 审批通过或拒绝后 run 能继续，不能卡在 `waiting_approval`。
+- 未注册工具、未选中工具、禁用工具在任何模式下都不能执行。
 
 ---
 
@@ -1235,6 +1530,8 @@ npm run test -- assistant
 - `assistantApi` endpoint 正确。
 - `assistantStore.applyStreamEvent` 可合并 plan/tool/approval。
 - `AssistantApprovalCard` approve/reject 触发正确事件。
+- `AssistantToolPolicySettings` 可切换审批模式和白名单。
+- `AssistantToolPolicySettings` 在 `request_approval` 和 `full_access` 下显示对应警示。
 - `AskAssistantButton` 生成正确 query。
 - `AssistantWorkspace` 可从 route query 创建会话。
 
@@ -1247,7 +1544,7 @@ npm run test -- assistant
 1. 新增 `migrations/015_v6.0_assistant_tables.sql`。
 2. 新增 `model/assistant.go`。
 3. `repository/db.go` 加入 AutoMigrate。
-4. 新增 6 个 repository。
+4. 新增 session/message/context/run/tool_call/approval/tool_policy 等 repository。
 5. 单测 repository。
 
 ### Backend Task 2: 会话与 SSE
@@ -1264,9 +1561,10 @@ npm run test -- assistant
 1. 新增 `ToolRegistry`。
 2. 新增 `ToolDispatcher`。
 3. 新增 `RiskPolicy`。
-4. 新增 `ToolExecutionRequest/Result`。
-5. 接入 RunManager 事件。
-6. 写 fake tool 单测。
+4. 新增 `ToolPolicyService`，启动时同步 `ToolCatalog` 到 `assistant_tool_policies`。
+5. 新增 `ToolExecutionRequest/Result`。
+6. 接入 RunManager 事件。
+7. 写 fake tool 单测。
 
 ### Backend Task 4: 只读工具
 
@@ -1279,11 +1577,14 @@ npm run test -- assistant
 ### Backend Task 5: 审批和写工具
 
 1. ApprovalGate。
-2. Vulnerability.StartScan。
-3. Task.Redispatch。
-4. Detection.BlockAlert。
-5. Package.StartBuild/Sign/Enable。
-6. 确认 critical 工具无法绕过审批。
+2. 三种审批模式 `request_approval` / `whitelist` / `full_access`。
+3. 工具白名单 API。
+4. RunManager `PauseForApproval` / `ResumeAfterApproval`。
+5. Vulnerability.StartScan。
+6. Task.Redispatch。
+7. Detection.Alert.Block。
+8. Package.Build.Start / Package.Sign / Package.Enable。
+9. 确认未注册、未启用、未选中工具无法绕过审批策略。
 
 ### Frontend Task 1: 智能工作台骨架
 
@@ -1307,6 +1608,19 @@ npm run test -- assistant
 2. Approve/reject API。
 3. 风险标签。
 4. 执行结果回填。
+5. 审批拒绝后继续展示智能体替代建议。
+
+### Frontend Task 3.1: 智能体工具配置
+
+1. 新建 `AssistantToolPolicySettings.vue`。
+2. 展示审批模式单选：请求批准、白名单、完全权限。
+3. 展示工具表格：工具名称、领域、操作、风险、说明、参数摘要、是否启用、是否加入白名单。
+4. 支持单个工具切换白名单。
+5. 支持批量加入/移出白名单。
+6. 支持恢复默认白名单。
+7. critical 工具加入白名单时二次确认。
+8. `request_approval` 模式禁用白名单开关但仍展示状态。
+9. `full_access` 模式展示管理员风险提示。
 
 ### Frontend Task 4: 普通页面入口
 
@@ -1323,10 +1637,11 @@ npm run test -- assistant
 1. `/assistant` 会话。
 2. SSE。
 3. Host.List / Host.GetDetail。
-4. Detection.ListAlerts / Detection.GetAlert。
+4. Detection.Alert.List / Detection.Alert.Get。
 5. AgentTool.GetProcessTree / QueryHistoricalLogs。
-6. Package.List / Package.GetBuildLog。
-7. Detection.BlockAlert 审批但可以暂不执行，先打通审批链。
+6. Package.List / Package.Build.GetLog。
+7. 工具审批模式和白名单配置页。
+8. Detection.Alert.Block 审批但可以暂不执行，先打通审批链。
 
 MVP 完成后，再扩展写工具和全页面入口。
 
@@ -1349,10 +1664,13 @@ curl -s http://localhost:8082/health
 开发评审时逐条检查：
 
 - Tool 是否只调 service/repo/gRPC，不调 handler。
-- high/critical 工具是否一定进 ApprovalGate。
+- `request_approval` 是否所有工具都进入 ApprovalGate。
+- `whitelist` 是否只有白名单工具跳过审批。
+- `full_access` 是否只跳过工具审批，没有跳过 RBAC、注册、启用、参数校验和审计。
 - Package.Sign/Package.Enable 是否拆成两个审批。
 - Tool call 是否持久化。
 - Approval 是否持久化。
+- Tool policy 是否启动同步，配置页是否完整展示所有工具。
 - 普通模式是否能看到智能体产生的业务结果。
 - 智能模式是否能引用普通模式对象。
 - LLM 失败是否不影响普通模式。

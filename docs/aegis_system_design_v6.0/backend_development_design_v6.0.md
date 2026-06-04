@@ -10,6 +10,8 @@
 
 在 `api-server` 内新增 `assistant` 编排层，复用现有 LLM 配置、agent-runtime、业务 service、server gRPC、builder gRPC 和 repository。第一版不新增独立微服务。
 
+V6.0 的智能体运行时必须继续使用 `github.com/alex-chenc/agent-runtime`。实现时参考现有 `api-server/internal/api/handler/ai_analysis_handler.go` 中 `adapters.NewAegisRuntime(...)` 和 `runtime.Run(ctx, agentruntime.TaskInput{...})` 的链路，把它通用化为 Assistant RuntimeFactory。
+
 ---
 
 ## 2. 目录结构
@@ -18,12 +20,21 @@
 api-server/internal/assistant/
   service.go
   orchestrator.go
+  runtime_factory.go
+  runtime_config.go
+  runtime_events.go
   context_loader.go
   memory_service.go
   risk_policy.go
   approval_gate.go
+  tool_policy_service.go
   tool_registry.go
+  tool_catalog.go
+  tool_selector.go
+  intent_router.go
+  tool_expansion.go
   tool_dispatcher.go
+  tool_gateway.go
   prompt_provider.go
   result_card_builder.go
   sse_event.go
@@ -32,6 +43,9 @@ api-server/internal/assistant/
     baseline_tools.go
     vulnerability_tools.go
     detection_tools.go
+    detection_query_tools.go
+    sigma_rule_tools.go
+    block_tools.go
     package_tools.go
     config_tools.go
     audit_tools.go
@@ -50,6 +64,7 @@ api-server/internal/repository/
   assistant_context_ref_repo.go
   assistant_tool_call_repo.go
   assistant_approval_repo.go
+  assistant_tool_policy_repo.go
   assistant_memory_repo.go
 ```
 
@@ -171,6 +186,12 @@ func (h *AssistantHandler) CancelRun(c *gin.Context)
 func (h *AssistantHandler) ListContextRefs(c *gin.Context)
 func (h *AssistantHandler) ListToolCalls(c *gin.Context)
 func (h *AssistantHandler) ListApprovals(c *gin.Context)
+func (h *AssistantHandler) ListTools(c *gin.Context)
+func (h *AssistantHandler) GetToolApprovalPolicy(c *gin.Context)
+func (h *AssistantHandler) UpdateToolApprovalPolicy(c *gin.Context)
+func (h *AssistantHandler) UpdateToolWhitelist(c *gin.Context)
+func (h *AssistantHandler) BatchUpdateToolWhitelist(c *gin.Context)
+func (h *AssistantHandler) ResetToolWhitelistDefaults(c *gin.Context)
 ```
 
 文件：`api-server/internal/api/handler/assistant_approval_handler.go`
@@ -196,6 +217,12 @@ assistantGroup := v1.Group("/assistant")
     assistantGroup.GET("/sessions/:session_id/context-refs", h.ListContextRefs)
     assistantGroup.GET("/sessions/:session_id/tool-calls", h.ListToolCalls)
     assistantGroup.GET("/sessions/:session_id/approvals", h.ListApprovals)
+    assistantGroup.GET("/tools", h.ListTools)
+    assistantGroup.GET("/tool-approval-policy", h.GetToolApprovalPolicy)
+    assistantGroup.PUT("/tool-approval-policy", h.UpdateToolApprovalPolicy)
+    assistantGroup.PUT("/tools/:tool_name/whitelist", h.UpdateToolWhitelist)
+    assistantGroup.POST("/tools/whitelist/batch", h.BatchUpdateToolWhitelist)
+    assistantGroup.POST("/tools/whitelist/reset-defaults", h.ResetToolWhitelistDefaults)
     assistantGroup.GET("/approvals/:approval_id", h.GetApproval)
     assistantGroup.POST("/approvals/:approval_id/approve", h.Approve)
     assistantGroup.POST("/approvals/:approval_id/reject", h.Reject)
@@ -249,7 +276,9 @@ func (s *Service) CompleteRun(ctx context.Context, sessionID string, result RunR
 type Orchestrator struct {
     llmFactory      LLMFactory
     runtimeFactory  RuntimeFactory
-    toolRegistry    *ToolRegistry
+    toolCatalog     *ToolCatalog
+    toolSelector    *ToolSelector
+    intentRouter    *IntentRouter
     riskPolicy      *RiskPolicy
     approvalGate    *ApprovalGate
     contextLoader   *ContextLoader
@@ -264,6 +293,17 @@ func (o *Orchestrator) handleToolRequest(ctx context.Context, req ToolRequest) (
 func (o *Orchestrator) emitPlan(plan AssistantPlan) error
 func (o *Orchestrator) emitResultCards(cards []ResultCard) error
 ```
+
+`Orchestrator` 不直接重写 ReAct 循环，主职责是准备 agent-runtime 所需输入：
+
+1. 调 `ContextLoader` 加载页面对象、会话摘要、业务对象快照。
+2. 调 `IntentRouter` 识别领域、动作、对象和风险。
+3. 调 `ToolSelector` 从 `ToolCatalog` 检索本轮工具。
+4. 调 `RuntimeFactory.Build` 创建 `agentruntime.Runtime`。
+5. 调 `runtime.Run(ctx, agentruntime.TaskInput{...})`。
+6. 处理 `Tool.Search` 触发的工具扩展，必要时启动第二段 runtime。
+
+详细设计见 `agent_runtime_tool_orchestration_design_v6.0.md`。
 
 `RunInput`：
 
@@ -281,7 +321,36 @@ type RunInput struct {
 
 ---
 
-## 7. Tool Registry
+## 7. ToolCatalog、ToolSelector 与 Tool Registry
+
+V6.0 中 `ToolRegistry` 只负责执行期按名称解析工具；全量工具元数据、检索索引和按需注入由 `ToolCatalog` 与 `ToolSelector` 负责。
+
+```go
+type ToolCatalog struct {
+    byName map[string]ToolSpec
+    index  *ToolIndex
+}
+
+type ToolSelector struct {
+    catalog      *ToolCatalog
+    intentRouter *IntentRouter
+    roleRepo     RoleRepository
+}
+
+func (c *ToolCatalog) Register(spec ToolSpec) error
+func (c *ToolCatalog) Search(ctx context.Context, q ToolSearchQuery) ([]ToolMatch, error)
+func (c *ToolCatalog) BuildDescriptors(names []string) []agentruntime.ToolDescriptor
+
+func (s *ToolSelector) Select(ctx context.Context, req ToolSelectionRequest) (ToolSelectionResult, error)
+func (s *ToolSelector) Expand(ctx context.Context, current ToolSelectionResult, query string, names []string) (ToolSelectionResult, error)
+```
+
+规则：
+
+- 所有 DB 查询接口都登记为 `ToolSpec`，但只读工具必须分页和摘要化。
+- 每次 `agent-runtime` 只接收 `ToolSelector` 选出的 `[]agentruntime.ToolDescriptor`。
+- `Tool.Search` 常驻，用于发现未注入工具；发现后由 Orchestrator 启动第二段 runtime 注入扩展工具。
+- high/critical 工具只有明确执行意图时才进入本轮候选，即使进入候选也必须走 `ApprovalGate`。
 
 ```go
 type ToolRegistry struct {
@@ -320,6 +389,58 @@ func (r *ToolRegistry) Execute(ctx context.Context, req ToolExecutionRequest) (*
 
 ## 8. RiskPolicy 与 ApprovalGate
 
+### 8.1 工具审批模式与白名单服务
+
+智能体工具执行支持三种审批模式：
+
+| 模式 | 配置值 | 行为 |
+|:---|:---|:---|
+| 请求批准 | `request_approval` | 所有工具调用都创建审批，审批执行成功后才继续 |
+| 白名单 | `whitelist` | 白名单工具自动执行，非白名单工具创建审批 |
+| 完全权限 | `full_access` | 所有已注册且被本轮注入的工具直接执行 |
+
+```go
+type ToolApprovalMode string
+
+const (
+    ApprovalModeRequestApproval ToolApprovalMode = "request_approval"
+    ApprovalModeWhitelist       ToolApprovalMode = "whitelist"
+    ApprovalModeFullAccess      ToolApprovalMode = "full_access"
+)
+
+type ToolPolicyService struct {
+    catalog      *ToolCatalog
+    policyRepo   ToolPolicyRepository
+    systemConfig SystemConfigRepository
+}
+
+func NewToolPolicyService(deps ToolPolicyServiceDeps) *ToolPolicyService
+func (s *ToolPolicyService) SyncCatalogTools(ctx context.Context) error
+func (s *ToolPolicyService) ListTools(ctx context.Context, q ToolPolicyQuery) ([]ToolPolicyView, int64, error)
+func (s *ToolPolicyService) GetApprovalMode(ctx context.Context) (ToolApprovalMode, error)
+func (s *ToolPolicyService) UpdateApprovalMode(ctx context.Context, mode ToolApprovalMode, operator string) error
+func (s *ToolPolicyService) IsWhitelisted(ctx context.Context, toolName string) (bool, error)
+func (s *ToolPolicyService) UpdateWhitelist(ctx context.Context, toolName string, whitelisted bool, operator string) error
+func (s *ToolPolicyService) BatchUpdateWhitelist(ctx context.Context, items []WhitelistUpdateItem, operator string) error
+func (s *ToolPolicyService) ResetDefaultWhitelist(ctx context.Context, operator string) error
+```
+
+`SyncCatalogTools` 在服务启动时执行：
+
+1. 遍历 `ToolCatalog` 全量工具。
+2. 对 `assistant_tool_policies` 做 upsert。
+3. 初始化默认低危白名单。
+4. 不覆盖管理员已经手动修改的 `whitelisted`。
+
+默认白名单原则：
+
+- readonly 查询工具默认加入白名单。
+- low 且无业务写入副作用的工具可以加入白名单。
+- medium/high/critical 默认不加入白名单。
+- 管理员可在配置页手动调整。
+
+### 8.2 风险策略
+
 ```go
 type RiskLevel string
 
@@ -334,7 +455,10 @@ const (
 type RiskDecision struct {
     Allow            bool
     RequiresApproval bool
+    Mode             ToolApprovalMode
+    RiskLevel        RiskLevel
     Reason           string
+    ImpactSummary    string
     ApprovalTTL      time.Duration
 }
 
@@ -352,18 +476,66 @@ func (p *RiskPolicy) requiresRole(user string, operation string) error
 
 ```go
 type ApprovalGate struct {
-    approvalRepo ApprovalRepository
-    toolCallRepo ToolCallRepository
-    registry     *ToolRegistry
-    riskPolicy   *RiskPolicy
+    approvalRepo      ApprovalRepository
+    toolCallRepo      ToolCallRepository
+    registry          *ToolRegistry
+    riskPolicy        *RiskPolicy
+    toolPolicyService *ToolPolicyService
 }
 
+func (g *ApprovalGate) Evaluate(ctx context.Context, req ApprovalEvaluateRequest) (*RiskDecision, error)
 func (g *ApprovalGate) CreateApproval(ctx context.Context, req CreateApprovalRequest) (*model.AssistantApproval, error)
 func (g *ApprovalGate) Approve(ctx context.Context, approvalID string, operator string, comment string) (*ApprovalExecutionResult, error)
 func (g *ApprovalGate) Reject(ctx context.Context, approvalID string, operator string, comment string) (*model.AssistantApproval, error)
 func (g *ApprovalGate) ExecuteApprovedTool(ctx context.Context, approval *model.AssistantApproval) (*ToolExecutionResult, error)
 func (g *ApprovalGate) expirePendingApprovals(ctx context.Context) error
 ```
+
+`Evaluate` 逻辑：
+
+```go
+func (g *ApprovalGate) Evaluate(ctx context.Context, req ApprovalEvaluateRequest) (*RiskDecision, error) {
+    mode, err := g.toolPolicyService.GetApprovalMode(ctx)
+    if err != nil {
+        return &RiskDecision{Allow: false, RequiresApproval: true, Reason: "approval mode unavailable"}, nil
+    }
+
+    decision, err := g.riskPolicy.Evaluate(ctx, req.Operator, req.Spec, req.Args)
+    if err != nil {
+        return nil, err
+    }
+    decision.Mode = mode
+
+    switch mode {
+    case ApprovalModeFullAccess:
+        decision.Allow = true
+        decision.RequiresApproval = false
+        decision.Reason = "full_access mode"
+    case ApprovalModeRequestApproval:
+        decision.Allow = false
+        decision.RequiresApproval = true
+        decision.Reason = "request_approval mode"
+    case ApprovalModeWhitelist:
+        ok, _ := g.toolPolicyService.IsWhitelisted(ctx, req.ToolName)
+        if ok {
+            decision.Allow = true
+            decision.RequiresApproval = false
+            decision.Reason = "tool in whitelist"
+            return decision, nil
+        }
+        decision.Allow = false
+        decision.RequiresApproval = true
+        decision.Reason = "tool not in whitelist"
+    default:
+        decision.Allow = false
+        decision.RequiresApproval = true
+        decision.Reason = "unknown approval mode"
+    }
+    return decision, nil
+}
+```
+
+这里的 `Allow=false` 表示“不可直接执行”，不是拒绝业务操作；只要 `RequiresApproval=true`，就进入 `ApprovalGate.CreateApproval`，审批通过后再执行原工具。
 
 ---
 
@@ -424,17 +596,23 @@ func VulnerabilityExecuteFixTool(ctx context.Context, req ToolExecutionRequest) 
 - `GenerateFixScript`、`GeneratePOC`: low，但必须经过脚本审计。
 - `ExecuteFix`: high。
 
-### 10.3 Detection tools
+### 10.3 Detection query / SigmaRule / Block tools
 
 ```go
-func RegisterDetectionTools(registry *ToolRegistry, deps DetectionToolDeps)
+func RegisterDetectionQueryTools(registry *ToolRegistry, deps DetectionQueryToolDeps)
+func RegisterSigmaRuleTools(registry *ToolRegistry, deps SigmaRuleToolDeps)
+func RegisterBlockTools(registry *ToolRegistry, deps BlockToolDeps)
 
-func DetectionListAlertsTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func DetectionAnalyzeAlertsTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func DetectionGetAlertDetailTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func DetectionResolveAlertTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func DetectionBlockAlertTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func DetectionGenerateSigmaRuleTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func DetectionAlertListTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func DetectionAlertGetTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func DetectionStatisticsGetTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func DetectionTrendGetTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func SigmaRuleListTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func SigmaRuleGenerateTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func SigmaRuleStatusUpdateTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func BlockPolicyListTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func BlockPolicyUpdateTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func DetectionAlertBlockTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
 ```
 
 ### 10.4 Package tools
@@ -443,10 +621,10 @@ func DetectionGenerateSigmaRuleTool(ctx context.Context, req ToolExecutionReques
 func RegisterPackageTools(registry *ToolRegistry, deps PackageToolDeps)
 
 func PackageListTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func PackageGenerateDraftTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func PackageUpdateDraftTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func PackageStartBuildTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
-func PackageExplainBuildFailureTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func PackageDraftGenerateTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func PackageDraftUpdateTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func PackageBuildStartTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
+func PackageBuildExplainFailureTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
 func PackageSignTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
 func PackageEnableTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
 func PackageDisableTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
@@ -505,12 +683,12 @@ func (b *ResultCardBuilder) Markdown(title, content string) ResultCard
 |:---|:---|
 | `assistant/service_test.go` | 创建会话、发送消息、绑定上下文 |
 | `assistant/tool_registry_test.go` | 注册、查找、重复注册、执行工具 |
-| `assistant/risk_policy_test.go` | 风险等级、审批判断、critical 工具强制审批 |
+| `assistant/risk_policy_test.go` | 风险等级、默认白名单、审批模式覆盖规则 |
 | `assistant/approval_gate_test.go` | 创建审批、批准、拒绝、执行 approved tool |
 | `assistant/context_loader_test.go` | host/alert/task/package 上下文加载 |
 | `handler/assistant_handler_test.go` | HTTP API 参数和响应 |
-| `tools/package_tools_test.go` | Package.Sign/Enable 必须审批 |
-| `tools/vulnerability_tools_test.go` | ExecuteFix 必须审批 |
+| `tools/package_tools_test.go` | Package.Sign/Enable 在需要审批的模式下拆成独立审批，full_access 下仍拆成独立工具调用 |
+| `tools/vulnerability_tools_test.go` | ExecuteFix 在 request_approval 或 whitelist 非白名单状态下必须审批 |
 
 ---
 
