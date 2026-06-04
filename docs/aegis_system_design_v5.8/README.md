@@ -1,14 +1,18 @@
-# Aegis V5.8 动态 eBPF 检测包设计文档
+# Aegis V5.8 设计文档
 
 **版本**: 5.8  
-**日期**: 2026-05-22  
+**日期**: 2026-06-04  
 **状态**: 设计中
 
 ---
 
 ## 1. 版本目标
 
-V5.8 引入 **动态 eBPF DetectionPackage** 能力，用于解决固定 agent 采集面无法覆盖新型漏洞利用链的问题。系统允许 AI 生成检测草稿，人工修改后通过统一 builder 容器编译，生成签名检测包，由管理员在页面显式启用后全局下发到 agent。
+V5.8 引入 **动态 eBPF DetectionPackage** 和 **智能资产采集** 能力。
+
+动态 eBPF DetectionPackage 用于解决固定 agent 采集面无法覆盖新型漏洞利用链的问题。系统允许 AI 生成检测草稿，人工修改后通过统一 builder 容器编译，生成签名检测包，由管理员在页面显式启用后全局下发到 agent。
+
+智能资产采集用于补齐主机软件包、运行应用、数据库、Web 框架、Web 站点和 Web 服务资产视图。Agent 采集 rpm/dpkg/apk 软件包和 `/proc` 进程快照，控制面调用大模型识别应用分类，并通过 Agent 只读工具补全版本证据。
 
 核心目标：
 
@@ -17,6 +21,10 @@ V5.8 引入 **动态 eBPF DetectionPackage** 能力，用于解决固定 agent �
 - 保留人工审核、人工签名、人工启用的安全边界。
 - agent 只加载完整包签名验证通过的 DetectionPackage。
 - 动态插件加载失败只禁用该插件，agent 主进程继续运行。
+- 在主机列表下提供智能资产采集模块。
+- 软件采集支持 rpm、dpkg、apk。
+- 应用采集遍历 `/proc`，由 LLM 识别数据库、Web 框架、Web 站点、Web 服务等分类。
+- 版本识别通过 Agent 白名单只读工具执行，不允许大模型下发任意命令。
 
 ---
 
@@ -34,6 +42,18 @@ V5.8 引入 **动态 eBPF DetectionPackage** 能力，用于解决固定 agent �
 | `code_interfaces_v5.8.md` | Go/Proto/TypeScript 关键接口草案 |
 | `cve_2026_31431_copyfail_example_v5.8.md` | CVE-2026-31431 示例包设计 |
 | `prompt/` | 各组件实现提示词 |
+
+智能资产采集专题：
+
+| 文档 | 说明 |
+|:---|:---|
+| `intelligent_asset_collection_prd_v5.8.md` | 智能资产采集 PRD、业务范围、页面口径和验收标准 |
+| `frontend_intelligent_asset_collection_design_v5.8.md` | 主机列表下智能资产采集前端路由、页面、表格字段和交互 |
+| `backend_intelligent_asset_collection_design_v5.8.md` | 后端服务、HTTP API、gRPC 扩展和 LLM 工具编排 |
+| `database_intelligent_asset_collection_design_v5.8.md` | 采集任务、软件资产、进程快照、应用资产和工具证据表结构 |
+| `agent_intelligent_asset_collection_design_v5.8.md` | Agent rpm/dpkg/apk 采集、/proc 进程快照和只读版本工具设计 |
+| `vulnerability_asset_matching_strategy_v5.8.md` | 漏洞扫描改为读取资产库、真实漏洞来源校验和禁止 LLM 编造漏洞 |
+| `prompt/09_intelligent_asset_collection_and_vulnerability_prompt.md` | 智能资产采集与漏洞扫描策略改造开发提示词 |
 
 ---
 
