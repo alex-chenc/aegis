@@ -58,11 +58,26 @@ Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台�
 
 - 基于 eBPF 实时采集进程执行、文件访问和网络连接事件
 - 文件事件支持敏感路径访问监控，网络事件支持 IPv4、IPv6、源地址和目标端口采集
-- eBPF 根据内核能力自动适配 ringbuf、perf buffer 
+- eBPF 根据内核能力自动适配 ringbuf、perf buffer
 - Agent 端内置 Sigma 规则匹配，支持进程、文件、网络事件初筛
 - 告警按主机、进程、规则和 MITRE 技术自动聚合去重
 - 告警中心支持筛选、搜索、详情查看和实时 WebSocket 推送
 - 阻断策略支持按 MITRE ATT&CK 技术配置手动阻断、规则命中自动阻断和 AI 分析后自动阻断
+
+### 动态 eBPF 检测包（V5.8）
+
+- 支持针对特定 CVE 动态生成 eBPF 检测程序，扩展 Agent 运行时检测能力
+- 提供检测包管理页面：草稿编辑、构建、签名、启用、下发全流程可视化
+- 管理员审核后才可构建和启用，确保检测代码安全可控
+- 检测包支持单事件规则匹配和多事件关联检测，覆盖复杂攻击链场景
+
+### 智能资产采集（V5.8）
+
+- 自动采集主机安装的软件包和运行中的应用进程
+- 通过大模型自动识别应用类型（数据库、Web 服务、Web 框架、Web 站点）和版本
+- 主机列表下提供资产分类视图，快速了解每台主机的软件资产情况
+- 为漏洞扫描提供精准的资产上下文，提升漏洞匹配准确性
+- 支持定时自动采集和手动触发采集
 
 ### AI 告警分析与攻击溯源
 
@@ -111,15 +126,18 @@ curl http://localhost:8082/health
 
 浏览器访问 http://localhost:8081
 
-### 一键部署
+### 一键部署（离线包）
 
 ```bash
-# 1. 下载版本包
+# 1. 解压离线部署包
+unzip aegis-v5.8-linux-amd64-release.zip
+cd v5.8
 
-# 2. 执行部署脚本
-  ./start.sh
+# 2. 执行部署脚本（自动检测IP、加载镜像、启动服务）
+bash start.sh
 ```
-浏览器访问 http://localhost:8081
+
+浏览器访问 http://<部署IP>:8081
 
 
 ### 配置 LLM
@@ -149,10 +167,12 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | API Server gRPC | 19093 |
 | Server gRPC | 19090 / 19094 |
 | DC gRPC | 19092 |
+| Builder gRPC | 19096 |
 | PostgreSQL | 5432 |
 | Redis | 6379 |
 | MinIO API | 9000 |
 | MinIO Console | 9001 |
+| Kafka | 29092 |
 
 
 ## 纯AI设计，开发，测试项目

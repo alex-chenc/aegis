@@ -64,6 +64,22 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Alert center supports filtering, search, detail view, and real-time WebSocket push
 - Blocking policies support manual blocking, rule-hit auto blocking, and AI-analysis-based auto blocking by MITRE ATT&CK technique
 
+### Dynamic eBPF Detection Package (V5.8)
+
+- Dynamically generate eBPF detection programs for specific CVEs, extending Agent runtime detection capabilities
+- Detection package management page: full visual workflow from draft editing, building, signing, to enabling and deployment
+- Packages can only be built and enabled after admin review, ensuring detection code is safe and controllable
+- Supports single-event rule matching and multi-event correlation detection, covering complex attack chain scenarios
+- Plugin loading failures do not affect the Agent main process, ensuring host stability
+
+### Intelligent Asset Collection (V5.8)
+
+- Automatically collects installed software packages and running application processes on hosts
+- Uses LLM to identify application types (databases, web services, web frameworks, web sites) and versions
+- Provides asset classification views under the host list for quick understanding of each host's software assets
+- Provides accurate asset context for vulnerability scanning, improving vulnerability matching accuracy
+- Supports scheduled automatic collection and manual triggered collection
+
 ### AI Alert Analysis and Attack Trace
 
 - Supports multi-alert AI analysis by time range, host, and selected alerts
@@ -110,16 +126,18 @@ curl http://localhost:8082/health
 
 Visit http://localhost:8081 in your browser.
 
-### One-click Deployment
+### One-click Deployment (Offline Package)
 
 ```bash
-# 1. Download release package
+# 1. Extract the offline release package
+unzip aegis-v5.8-linux-amd64-release.zip
+cd v5.8
 
-# 2. Run the deployment script
-  ./start.sh
+# 2. Run the deployment script (auto-detects IP, loads images, starts services)
+bash start.sh
 ```
 
-Visit http://localhost:8081 in your browser.
+Visit http://<host-ip>:8081 in your browser.
 
 ### Configure LLM
 
@@ -148,10 +166,12 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | API Server gRPC | 19093 |
 | Server gRPC | 19090 / 19094 |
 | DC gRPC | 19092 |
+| Builder gRPC | 19096 |
 | PostgreSQL | 5432 |
 | Redis | 6379 |
 | MinIO API | 9000 |
 | MinIO Console | 9001 |
+| Kafka | 29092 |
 
 
 ## Fully AI-designed, developed, and tested project
