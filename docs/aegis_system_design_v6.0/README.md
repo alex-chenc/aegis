@@ -31,6 +31,7 @@ V6.0 将 Aegis 从“功能页面驱动的主机安全平台”升级为“页�
 | `external_mcp_datasource_design_v6.0.md` | 外接 MCP 数据源配置、多数据源查询分析、外部证据注入和大模型 Prompt 模板 |
 | `host_attack_investigation_agent_design_v6.0.md` | 主机攻击研判智能体、证据链、攻击入口推断、攻击路径图、Prompt 和函数设计 |
 | `assistant_api_curl_test_cases_v6.0.md` | Assistant 全接口 curl 测试用例、jq 断言、审批模式和白名单数据校验 |
+| `development_test_prompt_v6.0.md` | 面向 Codex/AI 开发代理的 V6.0 功能开发、测试矩阵和验收提示词 |
 
 ---
 
