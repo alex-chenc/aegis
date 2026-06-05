@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,22 +29,24 @@ func NewVersionTool(logger *zap.Logger) *VersionTool {
 // key: 进程名或 exe 路径关键字
 // value: 命令参数列表
 var versionCommandTemplate = map[string][]string{
-	"nginx":         {"/usr/sbin/nginx", "-v"},
-	"httpd":         {"/usr/sbin/httpd", "-v"},
-	"apache2":       {"/usr/sbin/apache2", "-v"},
-	"postgres":      {"/usr/bin/postgres", "--version"},
-	"mysql":         {"/usr/bin/mysql", "--version"},
-	"mariadb":       {"/usr/bin/mariadb", "--version"},
-	"mysqld":        {"/usr/bin/mysqld", "--version"},
-	"redis-server":  {"/usr/bin/redis-server", "--version"},
+	"nginx":          {"/usr/sbin/nginx", "-v"},
+	"httpd":          {"/usr/sbin/httpd", "-v"},
+	"apache2":        {"/usr/sbin/apache2", "-v"},
+	"postgres":       {"/usr/bin/postgres", "--version"},
+	"mysql":          {"/usr/bin/mysql", "--version"},
+	"mariadb":        {"/usr/bin/mariadb", "--version"},
+	"mysqld":         {"/usr/bin/mysqld", "--version"},
+	"redis-server":   {"/usr/bin/redis-server", "--version"},
 	"redis-sentinel": {"/usr/bin/redis-sentinel", "--version"},
-	"mongod":        {"/usr/bin/mongod", "--version"},
-	"java":          {"/usr/bin/java", "-version"},
-	"node":          {"/usr/bin/node", "--version"},
-	"python3":       {"/usr/bin/python3", "--version"},
-	"python":        {"/usr/bin/python", "--version"},
-	"dotnet":        {"/usr/bin/dotnet", "--version"},
+	"mongod":         {"/usr/bin/mongod", "--version"},
+	"java":           {"/usr/bin/java", "-version"},
+	"node":           {"/usr/bin/node", "--version"},
+	"python3":        {"/usr/bin/python3", "--version"},
+	"python":         {"/usr/bin/python", "--version"},
+	"dotnet":         {"/usr/bin/dotnet", "--version"},
 }
+
+var versionPattern = regexp.MustCompile(`(?i)\bv?(\d+(?:\.\d+)+(?:[-_+~][0-9A-Za-z.]+)?)\b`)
 
 // AssetGetProcessResult 进程版本获取结果
 type AssetGetProcessResult struct {
@@ -139,46 +143,12 @@ func (v *VersionTool) extractVersion(output string) string {
 			continue
 		}
 
-		// 移除常见前缀
-		line = strings.TrimPrefix(line, "v")
-		line = strings.TrimPrefix(line, "V")
-
-		// 查找版本号模式
-		parts := strings.Fields(line)
-		for _, part := range parts {
-			part = strings.TrimPrefix(part, "v")
-			part = strings.TrimPrefix(part, "V")
-
-			// 检查是否像版本号（包含数字和点）
-			if isVersionString(part) {
-				return part
-			}
+		if match := versionPattern.FindString(line); match != "" {
+			return strings.TrimPrefix(strings.TrimPrefix(match, "v"), "V")
 		}
 	}
 
-	return output
-}
-
-// isVersionString 检查字符串是否像版本号
-func isVersionString(s string) bool {
-	if len(s) == 0 || len(s) > 50 {
-		return false
-	}
-
-	hasDigit := false
-	hasDot := false
-
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			hasDigit = true
-		} else if c == '.' {
-			hasDot = true
-		} else if c != '-' && c != '_' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
-			return false
-		}
-	}
-
-	return hasDigit && hasDot
+	return strings.TrimSpace(output)
 }
 
 // AssetReadConfigSummaryResult 配置摘要结果
@@ -279,6 +249,155 @@ func (v *VersionTool) AssetListDirectoryHints(ctx context.Context, dirPath strin
 		Success: true,
 		Entries: result,
 	}
+}
+
+// AssetReadProcFileResult 读取 /proc 文件结果
+type AssetReadProcFileResult struct {
+	Success   bool   `json:"success"`
+	FileName  string `json:"file_name"`
+	Content   string `json:"content,omitempty"`
+	Size      int    `json:"size"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+const maxProcFileSize = 10 * 1024 // 10KB
+
+// 禁止读取的 /proc 文件（安全风险）
+var forbiddenProcFiles = map[string]bool{
+	"environ": true, // 环境变量，可能含密码/token
+	"mem":     true, // 进程内存
+}
+
+// AssetReadProcFile 读取 /proc/{pid}/ 下的文件
+// 安全约束：
+// - 只读，不允许写操作
+// - 最大读取 10KB
+// - 禁止读取 environ 和 mem
+// - 只能读取 /proc/{pid}/ 下的文件
+func (v *VersionTool) AssetReadProcFile(ctx context.Context, pid int, fileName string) AssetReadProcFileResult {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	v.logger.Info("Reading proc file",
+		zap.Int("pid", pid),
+		zap.String("file_name", fileName))
+
+	if pid <= 0 {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: fileName,
+			Error:    "pid must be positive",
+		}
+	}
+
+	cleanFileName, err := cleanProcFileName(fileName)
+	if err != nil {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: fileName,
+			Error:    err.Error(),
+		}
+	}
+
+	// 构建路径并校验
+	procDir := fmt.Sprintf("/proc/%d", pid)
+	procPath := filepath.Join(procDir, cleanFileName)
+	if procPath != procDir && !strings.HasPrefix(procPath, procDir+"/") {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: fileName,
+			Error:    "file path escapes process directory",
+		}
+	}
+
+	// 解析 symlink 确保路径在 /proc/{pid}/ 下
+	resolved, err := filepath.EvalSymlinks(procPath)
+	if err != nil {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: fileName,
+			Error:    fmt.Sprintf("failed to resolve path: %v", err),
+		}
+	}
+
+	// 确保解析后的路径仍在 /proc/{pid}/ 下
+	expectedPrefix := fmt.Sprintf("/proc/%d/", pid)
+	if !strings.HasPrefix(resolved, expectedPrefix) && resolved != fmt.Sprintf("/proc/%d", pid) {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: fileName,
+			Error:    "resolved path escapes process directory",
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: cleanFileName,
+			Error:    ctx.Err().Error(),
+		}
+	default:
+	}
+
+	file, err := os.Open(resolved)
+	if err != nil {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: cleanFileName,
+			Error:    fmt.Sprintf("failed to open file: %v", err),
+		}
+	}
+	defer file.Close()
+
+	// 读取文件（最大 10KB），避免先将大型 /proc 文件完整读入内存。
+	data, err := io.ReadAll(io.LimitReader(file, maxProcFileSize+1))
+	if err != nil {
+		return AssetReadProcFileResult{
+			Success:  false,
+			FileName: cleanFileName,
+			Error:    fmt.Sprintf("failed to read file: %v", err),
+		}
+	}
+	size := len(data)
+
+	truncated := false
+	if len(data) > maxProcFileSize {
+		data = data[:maxProcFileSize]
+		truncated = true
+	}
+
+	return AssetReadProcFileResult{
+		Success:   true,
+		FileName:  cleanFileName,
+		Content:   string(data),
+		Size:      size,
+		Truncated: truncated,
+	}
+}
+
+func cleanProcFileName(fileName string) (string, error) {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return "", fmt.Errorf("file_name is required")
+	}
+	if filepath.IsAbs(fileName) {
+		return "", fmt.Errorf("file_name must be relative to /proc/{pid}")
+	}
+
+	cleaned := filepath.Clean(fileName)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("file_name escapes process directory")
+	}
+
+	for _, part := range strings.Split(filepath.ToSlash(cleaned), "/") {
+		if forbiddenProcFiles[part] {
+			return "", fmt.Errorf("reading %s is forbidden for security reasons", part)
+		}
+	}
+
+	return cleaned, nil
 }
 
 // AssetResolvePackageByFileResult 包解析结果

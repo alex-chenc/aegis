@@ -260,7 +260,7 @@ func main() {
 	// V5.8 Intelligent Asset Collection (assetCollectionRepo already initialized above)
 	assetCollectionService := service.NewAssetCollectionService(assetCollectionRepo, serverClient, logger.Get())
 	assetQueryService := service.NewAssetQueryService(assetCollectionRepo, logger.Get())
-	assetAnalysisService := service.NewAssetAnalysisService(assetCollectionRepo, configRepo, logger.Get())
+	assetAnalysisService := service.NewAssetAnalysisService(assetCollectionRepo, configRepo, serverClient, logger.Get())
 	assetCollectionService.SetAnalysisService(assetAnalysisService)
 	assetHandler := handler.NewAssetHandler(assetCollectionService, assetQueryService, assetAnalysisService, logger.Get())
 	logger.Info("Intelligent asset collection module initialized")

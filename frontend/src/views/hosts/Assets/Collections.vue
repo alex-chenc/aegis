@@ -65,7 +65,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="scope" label="主机范围" width="100" />
+        <el-table-column prop="scope" label="主机范围" width="100" show-overflow-tooltip />
 
         <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
@@ -89,7 +89,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="current_stage" label="当前阶段" width="120">
+        <el-table-column prop="current_stage" label="当前阶段" width="120" show-overflow-tooltip>
           <template #default="{ row }">
             {{ row.current_stage || '-' }}
           </template>

@@ -220,6 +220,159 @@ func (a *ReActAgent) parseReActOutput(content string) ([]AgentStep, string) {
 	return steps, finalAnswer
 }
 
+func (a *ReActAgent) tryParseStep(content string) (AgentStep, bool) {
+	step := AgentStep{}
+
+	lines := strings.Split(content, "\n")
+	var actionInput string
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "Thought:"):
+			step.Thought = strings.TrimSpace(strings.TrimPrefix(trimmed, "Thought:"))
+		case strings.HasPrefix(trimmed, "Action:"):
+			step.Action = normalizeToolName(strings.TrimSpace(strings.TrimPrefix(trimmed, "Action:")))
+		case strings.HasPrefix(trimmed, "Action Input:"):
+			actionInput = strings.TrimSpace(strings.TrimPrefix(trimmed, "Action Input:"))
+			if actionInput == "" && i+1 < len(lines) {
+				actionInput = strings.Join(lines[i+1:], "\n")
+			}
+		}
+	}
+
+	if step.Action != "" {
+		input, ok := parseFirstJSONObject(actionInput)
+		if !ok {
+			return step, false
+		}
+		step.ActionInput = input
+		return step, true
+	}
+
+	if input, ok := parseFirstJSONObject(content); ok && looksLikeHistoricalLogQuery(input) {
+		step.Action = "QueryHistoricalLogs"
+		step.ActionInput = input
+		return step, true
+	}
+
+	return step, false
+}
+
+func (a *ReActAgent) parseFinalAnswer(content string) (bool, string) {
+	idx := strings.Index(content, "Final Answer:")
+	if idx == -1 {
+		return false, ""
+	}
+
+	finalAnswer := strings.TrimSpace(content[idx+len("Final Answer:"):])
+	return finalAnswerReady(content, false), finalAnswer
+}
+
+func finalAnswerReady(content string, _ bool) bool {
+	idx := strings.Index(content, "Final Answer:")
+	if idx == -1 {
+		return false
+	}
+
+	answer := strings.TrimSpace(content[idx+len("Final Answer:"):])
+	if answer == "" {
+		return false
+	}
+	if strings.HasPrefix(answer, "{") || strings.HasPrefix(answer, "[") {
+		_, ok := extractFirstJSON(answer)
+		return ok
+	}
+	return true
+}
+
+func toolIterationLimit(maxIterations int) (int, bool) {
+	if maxIterations > forceFinalAnswerAfterIterations {
+		return forceFinalAnswerAfterIterations, true
+	}
+	return maxIterations, false
+}
+
+func looksLikeHistoricalLogQuery(input map[string]interface{}) bool {
+	_, hasStart := input["start_time"]
+	_, hasEnd := input["end_time"]
+	_, hasFilter := input["filter"]
+	return hasStart && hasEnd && hasFilter
+}
+
+func parseFirstJSONObject(content string) (map[string]interface{}, bool) {
+	jsonText, ok := extractFirstJSON(content)
+	if !ok || !strings.HasPrefix(strings.TrimSpace(jsonText), "{") {
+		return nil, false
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonText), &input); err != nil {
+		return nil, false
+	}
+	return input, true
+}
+
+func extractFirstJSON(content string) (string, bool) {
+	text := strings.TrimSpace(content)
+	if strings.HasPrefix(text, "```") {
+		firstLineEnd := strings.Index(text, "\n")
+		lastFence := strings.LastIndex(text, "```")
+		if firstLineEnd != -1 && lastFence > firstLineEnd {
+			text = strings.TrimSpace(text[firstLineEnd+1 : lastFence])
+		}
+	}
+
+	start := -1
+	for i, r := range text {
+		if r == '{' || r == '[' {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return "", false
+	}
+
+	stack := make([]rune, 0, 8)
+	inString := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		ch := rune(text[i])
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != ch {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return strings.TrimSpace(text[start : i+1]), true
+			}
+		}
+	}
+
+	return "", false
+}
+
 // extractToolCalls extracts tool calls from steps
 func (a *ReActAgent) extractToolCalls(steps []AgentStep) []*ToolCall {
 	calls := []*ToolCall{}

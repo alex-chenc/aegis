@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,8 +103,10 @@ func (c *RPMCollector) parseRPMLine(line string) (PackageAsset, error) {
 	}
 
 	var installTime time.Time
-	if ts := parts[5]; ts != "0" && ts != "(none)" {
-		if t, err := time.Parse("2006-01-02 15:04:05 -0700", ts); err == nil {
+	if ts := strings.TrimSpace(parts[5]); ts != "" && ts != "0" && ts != "(none)" {
+		if unixSeconds, err := strconv.ParseInt(ts, 10, 64); err == nil {
+			installTime = time.Unix(unixSeconds, 0)
+		} else if t, err := time.Parse("2006-01-02 15:04:05 -0700", ts); err == nil {
 			installTime = t
 		}
 	}

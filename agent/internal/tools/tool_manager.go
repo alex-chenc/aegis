@@ -120,6 +120,16 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			return nil, fmt.Errorf("invalid path parameter")
 		}
 		return m.versionTool.AssetResolvePackageByFile(context.Background(), path), nil
+	case "AssetReadProcFile":
+		pid, err := toInt(params["pid"])
+		if err != nil {
+			return nil, err
+		}
+		fileName, ok := params["file_name"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid file_name parameter")
+		}
+		return m.versionTool.AssetReadProcFile(context.Background(), pid, fileName), nil
 	case "AssetCollectHostAssets":
 		hostID, _ := params["host_id"].(string)
 		collectTypes := toStringSlice(params["collect_types"])

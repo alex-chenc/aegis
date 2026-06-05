@@ -73,7 +73,7 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="hostname" label="主机名称" width="200">
+        <el-table-column prop="hostname" label="主机名称" width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <div>
               <div class="hostname">{{ row.hostname }}</div>
@@ -82,9 +82,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="ip_address" label="IP 地址" width="140" />
+        <el-table-column prop="ip_address" label="IP 地址" width="140" show-overflow-tooltip />
 
-        <el-table-column prop="group_name" label="分组名称" width="120" />
+        <el-table-column prop="group_name" label="分组名称" width="120" show-overflow-tooltip />
 
         <el-table-column prop="os_type" label="操作系统" width="100">
           <template #default="{ row }">
@@ -106,7 +106,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="version" label="安装版本" width="150">
+        <el-table-column prop="version" label="安装版本" width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.version || 'unknown' }}</span>
           </template>
@@ -131,7 +131,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="run_user" label="启动用户" width="100" />
+        <el-table-column prop="run_user" label="启动用户" width="100" show-overflow-tooltip />
 
         <el-table-column prop="start_path" label="启动路径" width="180" show-overflow-tooltip />
 
