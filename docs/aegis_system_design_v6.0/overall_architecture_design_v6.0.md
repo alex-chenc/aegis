@@ -10,7 +10,9 @@
 
 V6.0 在现有 V5.8 架构上新增“Assistant 智能体编排层”。该层位于 `api-server` 内部，负责会话、上下文、工具目录、意图路由、工具检索、计划执行、审批和审计。它继续使用现有 `github.com/alex-chenc/agent-runtime` 执行 Plan/ReAct/Audit/Reflect/Correct，不重新实现智能体运行时。
 
-核心原则是“全量注册，按需注入”：所有业务查询、动态检测包、规则管理、阻断管理、漏洞治理、基线任务、配置审计能力都注册为 Aegis 内部工具，但每次对话只根据用户意图和页面上下文挑选少量工具传给 agent-runtime。
+核心原则是“全量注册，按需注入”：所有业务查询、动态检测包、规则管理、阻断管理、漏洞治理、基线任务、配置审计、主机攻击研判、外接 MCP 数据源查询能力都注册为 Aegis 内部工具，但每次对话只根据用户意图和页面上下文挑选少量工具传给 agent-runtime。
+
+主机攻击研判采用 Profile 工具模式：命中 `host_attack_investigation` 意图时，模型优先调用 `Investigation.HostAttack.*` 高层工具；后端内部再按固定链路收集资产、漏洞、基线、告警、Agent 实时证据和外部 MCP 证据，避免把底层几十个查询函数一次性暴露给模型。
 
 ---
 
@@ -29,6 +31,9 @@ flowchart TB
   ToolSelector["tool selector<br/>意图路由/工具检索/按需注入"]
   ApprovalGate["approval gate<br/>风险与审批"]
   BusinessServices["existing services<br/>host/task/vulnerability/detection/package/config"]
+  InvestigationEngine["investigation engine<br/>证据收集/入口推断/攻击路径"]
+  ExternalMCP["external MCP datasource client<br/>外部数据源受控查询"]
+  ExternalMCPServer["external MCP servers<br/>SIEM/CMDB/EDR/工单/情报"]
   LLM["LLM client<br/>OpenAI-compatible/Anthropic-compatible"]
   Runtime["agent-runtime<br/>Plan/ReAct/Audit/Reflect/Correct"]
 
@@ -56,7 +61,14 @@ flowchart TB
   Assistant --> ApprovalGate
   ToolSelector --> ToolRegistry
   ToolRegistry --> BusinessServices
+  ToolRegistry --> InvestigationEngine
+  ToolRegistry --> ExternalMCP
   ApprovalGate --> BusinessServices
+  InvestigationEngine --> BusinessServices
+  InvestigationEngine --> Server
+  InvestigationEngine --> ExternalMCP
+  ExternalMCP --> ExternalMCPServer
+  ExternalMCP --> PG
   BusinessServices --> PG
   BusinessServices --> Redis
   BusinessServices --> MinIO
@@ -256,6 +268,8 @@ agent
 | tool catalog | `api-server/internal/assistant/tool_catalog.go` | 全量工具目录和 ToolSpec 元数据 |
 | tool selector | `api-server/internal/assistant/tool_selector.go` | 从全量工具中检索本轮注入工具 |
 | tools | `api-server/internal/assistant/tools/` | 业务工具实现 |
+| investigation engine | `api-server/internal/assistant/host_attack_investigation_*.go` | 主机攻击研判、证据矩阵、入口推断、攻击路径和报告 |
+| external MCP | `api-server/internal/assistant/external_mcp_*.go` | 外接 MCP 数据源配置、受控查询、脱敏和证据归一化 |
 | policy | `api-server/internal/assistant/risk_policy.go` | 风险等级和审批策略 |
 | approval | `api-server/internal/assistant/approval_gate.go` | 审批创建、批准、拒绝、执行 |
 | context | `api-server/internal/assistant/context_loader.go` | 加载上下文对象 |
@@ -276,10 +290,47 @@ agent
 | 阻断管理 | `Block.*` | block policy repo, block repo, alert service |
 | 动态检测包 | `Package.*` | detection package service, package generation service, builder client |
 | 配置 | `Config.*` | config service, system config |
+| 主机攻击研判 | `Investigation.*` | host attack investigation service, evidence collector, entry inferer |
+| 外接 MCP 数据源 | `ExternalMCP.*` | external MCP source service, controlled MCP client |
 | 审计 | `Audit.*` | audit log repo, command audit repo |
 | agent 主机工具 | `AgentTool.*` | server gRPC ExecuteTool |
 
 完整工具目录、工具检索算法和 V5.8 动态检测包/规则/阻断函数映射见 `agent_runtime_tool_orchestration_design_v6.0.md`。
+
+---
+
+## 9.1 主机攻击研判链路
+
+```mermaid
+flowchart TD
+  A["用户: 这台主机是不是被攻击了"]
+  B["IntentRouter<br/>host_attack_investigation"]
+  C["ToolSelector<br/>注入 Investigation.HostAttack.Analyze"]
+  D["agent-runtime<br/>调用高层研判工具"]
+  E["EvidenceCollector<br/>资产/漏洞/基线/告警/Agent"]
+  F["ExternalMCP.*<br/>SIEM/CMDB/EDR 可选证据"]
+  G["EvidenceCorrelator<br/>去重/归一/关联"]
+  H["EntryPointInferer<br/>入口候选"]
+  I["AttackTimelineBuilder<br/>攻击时间线"]
+  J["AttackPathBuilder<br/>攻击路径图"]
+  K["CompromiseScorer<br/>被攻击判断"]
+  L["InvestigationReportBuilder<br/>Prompt + 报告"]
+  M["Result cards<br/>证据矩阵/入口/路径/建议"]
+
+  A --> B --> C --> D --> E
+  E --> F
+  E --> G
+  F --> G
+  G --> H
+  G --> I
+  G --> J
+  H --> K
+  I --> K
+  J --> K
+  K --> L --> M
+```
+
+该链路详细结构体、函数、Prompt、数据库和测试设计见 `host_attack_investigation_agent_design_v6.0.md`。
 
 ---
 

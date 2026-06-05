@@ -59,9 +59,20 @@ frontend/src/views/assistant/components/AssistantApprovalCard.vue
 frontend/src/views/assistant/components/AssistantContextRail.vue
 frontend/src/views/assistant/components/AssistantObjectCard.vue
 frontend/src/views/assistant/components/AssistantResultRenderer.vue
+frontend/src/views/assistant/components/HostAttackInvestigationPanel.vue
+frontend/src/views/assistant/components/CompromiseScoreCard.vue
+frontend/src/views/assistant/components/EvidenceMatrixTable.vue
+frontend/src/views/assistant/components/EntryPointCandidateList.vue
+frontend/src/views/assistant/components/AttackTimelineCard.vue
+frontend/src/views/assistant/components/AttackPathGraph.vue
+frontend/src/views/assistant/components/SourceCoveragePanel.vue
 frontend/src/views/assistant/composables/useAssistantStream.ts
 frontend/src/views/assistant/composables/useAssistantActions.ts
 frontend/src/views/settings/AssistantToolPolicySettings.vue
+frontend/src/views/settings/ExternalMCPDataSourceSettings.vue
+frontend/src/components/settings/MCPSourceForm.vue
+frontend/src/components/settings/MCPSourceToolList.vue
+frontend/src/components/settings/MCPQueryLogDrawer.vue
 frontend/src/api/assistant.ts
 frontend/src/store/assistant.ts
 ```
@@ -136,6 +147,7 @@ function restoreNormalMode(): void
 ```ts
 export type AssistantTaskType =
   | 'investigation'
+  | 'host_attack_investigation'
   | 'operations'
   | 'generation'
   | 'remediation'
@@ -304,9 +316,43 @@ export interface AssistantApproval {
 }
 
 export interface AssistantResultCard {
-  type: 'host_list' | 'alert_list' | 'task_status' | 'package_summary' | 'attack_graph' | 'markdown' | 'json'
+  type: 'host_list' | 'alert_list' | 'task_status' | 'package_summary' | 'attack_graph' | 'host_attack_investigation' | 'evidence_matrix' | 'markdown' | 'json'
   title: string
   payload: Record<string, unknown>
+}
+
+export interface HostAttackInvestigationCardPayload {
+  investigation_id: string
+  host_id: string
+  hostname?: string
+  verdict: 'confirmed_compromised' | 'suspicious' | 'likely_benign' | 'insufficient_evidence'
+  score: number
+  confidence: number
+  entry_point_candidates: Array<{
+    candidate_id: string
+    entry_type: string
+    title: string
+    score: number
+    confidence: number
+    evidence_ids: string[]
+    counter_evidence_ids?: string[]
+    explanation: string
+  }>
+  attack_timeline: Array<{
+    event_id: string
+    time: string
+    phase: string
+    title: string
+    summary: string
+    evidence_ids: string[]
+    confidence: number
+  }>
+  attack_path: {
+    nodes: Array<{ node_id: string; node_type: string; label: string; risk_level: string; evidence_ids: string[] }>
+    edges: Array<{ from: string; to: string; relation: string; evidence_ids: string[]; confidence: number }>
+  }
+  evidence_count: number
+  missing_evidence: Array<{ source_type: string; reason: string; suggested_tool?: string }>
 }
 ```
 
@@ -333,6 +379,21 @@ export interface SendAssistantMessageRequest {
   }>
 }
 
+export interface CreateHostAttackInvestigationRequest {
+  session_id?: string
+  host_id: string
+  alert_ids?: string[]
+  cve_ids?: string[]
+  time_range?: {
+    from: string
+    to: string
+  }
+  include_agent_live?: boolean
+  include_external_mcp?: boolean
+  mcp_source_ids?: string[]
+  max_evidence_items?: number
+}
+
 export const assistantApi = {
   listSessions(params?: { page?: number; page_size?: number; status?: string }): Promise<{ data: AssistantSession[]; total: number }>
   createSession(data: CreateAssistantSessionRequest): Promise<AssistantSession>
@@ -343,6 +404,10 @@ export const assistantApi = {
   listContextRefs(sessionId: string): Promise<AssistantContextRef[]>
   listToolCalls(sessionId: string): Promise<AssistantToolCall[]>
   listApprovals(sessionId: string): Promise<AssistantApproval[]>
+  createHostAttackInvestigation(data: CreateHostAttackInvestigationRequest): Promise<HostAttackInvestigationCardPayload>
+  getInvestigation(investigationId: string): Promise<HostAttackInvestigationCardPayload>
+  listInvestigationEvidence(investigationId: string, params?: { page?: number; page_size?: number; source_type?: string }): Promise<{ data: unknown[]; total: number }>
+  rebuildInvestigationReport(investigationId: string): Promise<HostAttackInvestigationCardPayload>
   approve(approvalId: string, comment?: string): Promise<AssistantApproval>
   reject(approvalId: string, comment?: string): Promise<AssistantApproval>
 }
@@ -646,6 +711,148 @@ function openInNormalMode(ref: AssistantContextRef): void
 function removeContextRef(refId: string): Promise<void>
 ```
 
+### 10.8 ExternalMCPDataSourceSettings.vue
+
+位置：系统配置页新增“外接 MCP 数据源”Tab，和“智能体工具权限”并列。
+
+职责：
+
+- 展示所有已配置外接 MCP 数据源。
+- 支持新增、编辑、禁用、删除数据源。
+- 支持测试连接。
+- 支持同步 schema/tool 摘要。
+- 支持查看最近查询日志。
+- 明确展示“外部数据进入大模型前会脱敏、截断、标注来源”。
+
+布局：
+
+```text
++--------------------------------------------------------------------+
+| 外接 MCP 数据源          新增数据源                                  |
++--------------------------------------------------------------------+
+| 搜索  类型筛选  状态筛选                                            |
++--------------------------------------------------------------------+
+| 名称 | 类型 | Transport | Endpoint | 状态 | Tool数 | 最近测试 | 操作 |
++--------------------------------------------------------------------+
+| prod-siem | siem | streamable_http | https://*** | enabled | 8 | 成功 |
++--------------------------------------------------------------------+
+```
+
+类型定义：
+
+```ts
+type MCPSourceType =
+  | 'siem'
+  | 'cmdb'
+  | 'edr'
+  | 'ticket'
+  | 'threat_intel'
+  | 'log_warehouse'
+  | 'custom'
+
+type MCPTransport = 'streamable_http' | 'sse'
+
+interface ExternalMCPSource {
+  source_id: string
+  name: string
+  source_type: MCPSourceType
+  transport: MCPTransport
+  endpoint_url_masked: string
+  auth_type: 'none' | 'api_key' | 'bearer' | 'basic' | 'oauth2'
+  credential_configured: boolean
+  enabled: boolean
+  description?: string
+  schema_cache?: Record<string, unknown>
+  query_limits?: {
+    max_rows?: number
+    timeout_seconds?: number
+    max_context_chars?: number
+  }
+  last_test_status?: 'success' | 'failed'
+  last_test_error?: string
+  last_test_at?: string
+}
+```
+
+函数：
+
+```ts
+function fetchMCPSources(): Promise<void>
+function openCreateSourceDialog(): void
+function createMCPSource(input: CreateMCPSourceRequest): Promise<void>
+function updateMCPSource(sourceId: string, input: UpdateMCPSourceRequest): Promise<void>
+function deleteMCPSource(sourceId: string): Promise<void>
+function testMCPSource(sourceId: string): Promise<void>
+function syncMCPSchema(sourceId: string): Promise<void>
+function openQueryLogDrawer(source: ExternalMCPSource): void
+```
+
+交互要求：
+
+- Endpoint 和 credential 不在表格中明文展示。
+- credential 输入框只在创建或重置凭据时出现，不回显。
+- 点击测试连接时展示 latency、tool_count、错误摘要。
+- 点击同步 schema 后展示外部 MCP tools/fields 摘要。
+- 删除数据源必须二次确认。
+- 禁用数据源后智能体不能再选择该 source。
+
+### 10.9 HostAttackInvestigationPanel.vue
+
+职责：
+
+- 渲染 `host_attack_investigation` result card。
+- 展示是否被攻击判断、分数、置信度。
+- 展示攻击入口候选、证据矩阵、攻击时间线、攻击路径图和缺失证据。
+- 支持从证据跳转普通模式对应页面。
+
+布局：
+
+```text
++---------------------------------------------------------------+
+| 主机攻击研判  verdict/score/confidence                         |
++----------------------------+----------------------------------+
+| 入口候选                    | 数据源覆盖                       |
++----------------------------+----------------------------------+
+| 攻击时间线                                                     |
++---------------------------------------------------------------+
+| 攻击路径图                                                     |
++---------------------------------------------------------------+
+| 证据矩阵                                                       |
++---------------------------------------------------------------+
+| 建议动作                                                       |
++---------------------------------------------------------------+
+```
+
+Props：
+
+```ts
+interface Props {
+  payload: HostAttackInvestigationCardPayload
+  evidenceExpanded?: boolean
+}
+```
+
+函数：
+
+```ts
+function verdictLabel(verdict: HostAttackInvestigationCardPayload['verdict']): string
+function verdictTagType(verdict: HostAttackInvestigationCardPayload['verdict']): 'success' | 'warning' | 'danger' | 'info'
+function scoreColor(score: number): string
+function openEvidence(evidenceId: string): void
+function routeForEvidence(evidenceId: string): string
+function groupTimelineByPhase(events: HostAttackInvestigationCardPayload['attack_timeline']): Record<string, typeof events>
+function renderAttackPathGraph(graph: HostAttackInvestigationCardPayload['attack_path']): void
+```
+
+交互要求：
+
+- `confirmed_compromised` 使用危险态，但仍必须展示证据引用。
+- `suspicious` 使用告警态，突出“需继续确认”。
+- `likely_benign` 使用正常态，但保留告警证据和反证。
+- `insufficient_evidence` 使用信息态，不渲染为已失陷。
+- 入口候选必须同时展示支持证据和反证数量。
+- 高风险建议动作只展示“发起审批”或“查看建议”，不能在卡片里直接执行。
+
 ---
 
 ## 11. 普通页面接入“交给智能体”
@@ -697,6 +904,7 @@ function createContextRefs(): Array<{ object_type: string; object_id: string }>
 | Workspace | `AssistantWorkspace.test.ts` | 会话创建、消息发送、三栏渲染 |
 | ApprovalCard | `AssistantApprovalCard.test.ts` | 批准、拒绝、风险标签 |
 | AskAssistantButton | `AskAssistantButton.test.ts` | 正确生成 route context |
+| MCP settings | `ExternalMCPDataSourceSettings.test.ts` | 数据源列表、新增、测试连接、schema 同步、凭据不回显 |
 
 ---
 

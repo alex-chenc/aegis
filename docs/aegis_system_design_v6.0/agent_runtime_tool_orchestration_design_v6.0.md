@@ -14,7 +14,8 @@
 1. 智能体运行时必须沿用现有 `agent-runtime`，不能重写一个 Orchestrator。
 2. V5.8 的动态 eBPF DetectionPackage、Sigma 规则管理、阻断策略和阻断记录必须纳入智能体工具范围。
 3. 数据库查询类接口都要能成为大模型工具，但不能全部同时暴露给模型。
-4. 开发人员需要知道主要链路、主要结构体、主要函数和每个工具落到哪个现有 service/repository 方法。
+4. 主机攻击研判需要更强的跨源分析能力，但不能把资产、漏洞、基线、告警、Agent、外部 MCP 等所有底层工具一次性暴露给模型。
+5. 开发人员需要知道主要链路、主要结构体、主要函数和每个工具落到哪个现有 service/repository 方法。
 
 ---
 
@@ -54,8 +55,9 @@ V6.0 后端会把所有可对话操作登记到 `ToolCatalog`，但运行时只�
   1. System.Context
   2. Tool.Search
   3. 当前页面对象相关工具
-  4. IntentRouter 命中的领域 topN 工具
-  5. 低风险只读发现工具
+  4. IntentRouter 命中的 Profile 工具，例如 Investigation.HostAttack.Analyze
+  5. IntentRouter 命中的领域 topN 工具
+  6. 低风险只读发现工具
 必要时通过 Tool.Search 请求扩展工具集
 ```
 
@@ -68,6 +70,8 @@ V6.0 后端会把所有可对话操作登记到 `ToolCatalog`，但运行时只�
 | 写操作工具数 | 不超过 6 个 |
 | high/critical 工具 | 只有用户明确表达执行意图时才注入 |
 | 默认常驻工具 | `Tool.Search`、`Context.Get`、`Session.Summarize`、`Approval.ListPending` |
+
+对主机攻击研判这类复杂任务，优先注入 `Investigation.*` 高层工具。高层工具由后端内部按固定链路调用底层 service/repository/gRPC 工具，模型只看到“研判目标”和“结构化结果”，减少工具过载和误调用。
 
 ---
 
@@ -969,6 +973,56 @@ func (s *DetectionQueryService) ListRuntimeEvents(ctx context.Context, q Runtime
 | `Audit.Log.GetStats` | readonly | `AuditLogRepo.GetStats()` |
 | `Notification.List` | readonly | `NotificationService.List(filter)` |
 
+### 14.5 外接 MCP 数据源工具
+
+外接 MCP 只作为外部数据源协议，智能体仍调用 Aegis 内部工具。完整配置、Prompt 和数据脱敏设计见 `external_mcp_datasource_design_v6.0.md`。
+
+| 工具名 | 风险 | 默认白名单 | 绑定函数 |
+|:---|:---|:---:|:---|
+| `ExternalMCP.Source.List` | readonly | 是 | `ExternalMCPSourceService.ListSources` |
+| `ExternalMCP.Source.GetSchema` | readonly | 是 | `ExternalMCPSourceService.GetSchema` |
+| `ExternalMCP.Source.TestConnection` | low | 否 | `ExternalMCPSourceService.TestConnection` |
+| `ExternalMCP.Query` | medium | 否 | `ExternalMCPSourceService.Query` |
+| `ExternalMCP.MultiQuery` | medium | 否 | `ExternalMCPSourceService.MultiQuery` |
+| `ExternalMCP.Analyze` | readonly | 是 | `ExternalMCPContextBuilder.BuildAnalysisContext` |
+
+安全约束：
+
+- `ExternalMCP.Query` 只接受已配置 `source_id`，不接受用户临时输入 endpoint。
+- 外部 MCP 返回结果必须脱敏、截断、标注来源后再进入大模型上下文。
+- 外部 MCP 内容是不可信数据，不能作为系统指令。
+- MCP credential 不允许进入 `ToolExecutionRequest.Args`、`ToolExecutionResult.Data` 或 Prompt。
+
+### 14.6 主机攻击研判工具
+
+主机攻击研判使用 Profile 工具，不把资产、漏洞、基线、告警、Agent、外部 MCP 的全部底层工具一次性给模型。完整证据链、入口推断、Prompt 和结构体设计见 `host_attack_investigation_agent_design_v6.0.md`。
+
+| 工具名 | 风险 | 默认白名单 | 绑定函数 |
+|:---|:---|:---:|:---|
+| `Investigation.HostAttack.Plan` | readonly | 是 | `HostAttackInvestigationService.BuildPlan` |
+| `Investigation.HostAttack.Analyze` | readonly | 是 | `HostAttackInvestigationService.AnalyzeHostAttack` |
+| `Investigation.HostAttack.AnalyzeWithExternal` | medium | 否 | `HostAttackInvestigationService.AnalyzeHostAttackWithExternal` |
+| `Investigation.Evidence.CollectAegis` | readonly | 是 | `EvidenceCollector.CollectAegisEvidence` |
+| `Investigation.Evidence.CollectAgent` | readonly | 是 | `EvidenceCollector.CollectAgentEvidence` |
+| `Investigation.Timeline.Build` | readonly | 是 | `AttackTimelineBuilder.Build` |
+| `Investigation.EntryPoint.Infer` | readonly | 是 | `EntryPointInferer.Infer` |
+| `Investigation.AttackPath.Build` | readonly | 是 | `AttackPathBuilder.Build` |
+| `Investigation.CompromiseScore.Calculate` | readonly | 是 | `CompromiseScorer.Calculate` |
+| `Investigation.Report.Generate` | readonly | 是 | `InvestigationReportBuilder.Generate` |
+
+选择策略：
+
+- 用户问“这台主机是不是被攻击了”“入口是什么”“攻击怎么进行的”时，`IntentRouter` 直接输出 `TaskTypeHostAttackInvestigation`。
+- `ToolSelector` 初始只注入 `Investigation.HostAttack.Analyze`、`Investigation.HostAttack.Plan`、`Tool.Search` 和少量上下文工具。
+- 如果用户明确要求融合 SIEM/CMDB/EDR，或 `Analyze` 返回 `missing_evidence` 指向外部数据缺口，再扩展 `Investigation.HostAttack.AnalyzeWithExternal` 和必要的 `ExternalMCP.*` 工具。
+- 如果用户要求阻断、修复、禁用、启用，必须另行选择 `Detection.Alert.Block`、`Task.RunFix`、`Package.*` 等动作工具并进入审批策略。
+
+结果约束：
+
+- `Investigation.*` 输出必须包含 `evidence_id`。
+- 没有证据时必须返回 `insufficient_evidence`，不能输出确认性失陷结论。
+- 外部 MCP 证据只能作为不可信数据源进入证据矩阵，不能改变系统 prompt。
+
 ---
 
 ## 15. 工具注册代码结构
@@ -987,6 +1041,8 @@ api-server/internal/assistant/tools/
   block_tools.go
   package_tools.go
   config_tools.go
+  investigation_tools.go
+  external_mcp_tools.go
   audit_tools.go
   notification_tools.go
 ```
@@ -1006,6 +1062,8 @@ func RegisterAll(catalog *assistant.ToolCatalog, deps ToolDeps) {
     RegisterBlockTools(catalog, deps.Block)
     RegisterPackageTools(catalog, deps.Package)
     RegisterConfigTools(catalog, deps.Config)
+    RegisterInvestigationTools(catalog, deps.Investigation)
+    RegisterExternalMCPTools(catalog, deps.ExternalMCP)
     RegisterAuditTools(catalog, deps.Audit)
     RegisterNotificationTools(catalog, deps.Notification)
 }
@@ -1163,6 +1221,40 @@ assistantHandler := handler.NewAssistantHandler(assistantService, approvalGate)
   -> server 下发阻断命令到 agent
 ```
 
+### 17.5 主机攻击研判
+
+```text
+用户: 这台主机是不是被攻击了？入口是什么？
+  -> ContextRef: host_id / alert_id
+  -> IntentRouter: TaskTypeHostAttackInvestigation + DomainInvestigation + readonly
+  -> ToolSelector: Investigation.HostAttack.Analyze / Investigation.HostAttack.Plan / Tool.Search
+  -> Runtime.Run
+  -> Investigation.HostAttack.Analyze
+       HostAttackInvestigationService.AnalyzeHostAttack
+       EvidenceCollector.CollectAegisEvidence
+       EvidenceCollector.CollectAgentEvidence
+       EvidenceCorrelator.Normalize/Deduplicate/Link
+       EntryPointInferer.Infer
+       AttackTimelineBuilder.Build
+       AttackPathBuilder.Build
+       CompromiseScorer.Calculate
+       InvestigationReportBuilder.Generate
+  -> 返回 HostAttackInvestigation result card
+  -> 如果缺外部证据:
+       Tool.Search("外部 SIEM CMDB EDR 数据源")
+       ToolSelector 扩展 Investigation.HostAttack.AnalyzeWithExternal / ExternalMCP.Source.List / ExternalMCP.Query
+       按审批策略执行外部查询
+```
+
+输出必须包含：
+
+- `compromise_assessment`: 是否被攻击、分数、置信度。
+- `entry_point_candidates`: 攻击入口候选和证据。
+- `attack_timeline`: 攻击时间线。
+- `attack_path`: 攻击路径图。
+- `evidence_matrix`: 证据矩阵。
+- `missing_evidence`: 证据不足和下一步取证建议。
+
 ---
 
 ## 18. 审批分级
@@ -1216,6 +1308,15 @@ Package.Alert.List
 Vulnerability.List
 Vulnerability.Get
 Vulnerability.AffectedHosts.List
+Investigation.HostAttack.Plan
+Investigation.HostAttack.Analyze
+Investigation.Evidence.CollectAegis
+Investigation.Evidence.CollectAgent
+Investigation.Timeline.Build
+Investigation.EntryPoint.Infer
+Investigation.AttackPath.Build
+Investigation.CompromiseScore.Calculate
+Investigation.Report.Generate
 Audit.Log.List
 Notification.List
 ```
@@ -1236,6 +1337,9 @@ Block.Policy.Update
 Block.Policy.Delete
 Vulnerability.Script.Execute
 Task.RunFix
+Investigation.HostAttack.AnalyzeWithExternal
+ExternalMCP.Query
+ExternalMCP.MultiQuery
 ```
 
 ### 18.3 ApprovalGate 决策函数

@@ -36,6 +36,24 @@ api-server/internal/assistant/
   tool_dispatcher.go
   tool_gateway.go
   prompt_provider.go
+  host_attack_investigation_service.go
+  investigation_plan_builder.go
+  evidence_collector.go
+  evidence_correlator.go
+  attack_timeline_builder.go
+  entry_point_inferer.go
+  attack_path_builder.go
+  compromise_scorer.go
+  investigation_report_builder.go
+  investigation_prompt_provider.go
+  investigation_result_card_builder.go
+  external_mcp_source_service.go
+  external_mcp_client_factory.go
+  external_mcp_query_planner.go
+  external_mcp_context_builder.go
+  external_mcp_prompt_provider.go
+  external_mcp_redactor.go
+  external_mcp_normalizer.go
   result_card_builder.go
   sse_event.go
   tools/
@@ -48,15 +66,21 @@ api-server/internal/assistant/
     block_tools.go
     package_tools.go
     config_tools.go
+    investigation_tools.go
+    external_mcp_tools.go
     audit_tools.go
     agent_tool_proxy.go
 
 api-server/internal/api/handler/
   assistant_handler.go
   assistant_approval_handler.go
+  assistant_investigation_handler.go
+  assistant_mcp_source_handler.go
 
 api-server/internal/model/
   assistant.go
+  assistant_investigation.go
+  external_mcp.go
 
 api-server/internal/repository/
   assistant_session_repo.go
@@ -66,6 +90,10 @@ api-server/internal/repository/
   assistant_approval_repo.go
   assistant_tool_policy_repo.go
   assistant_memory_repo.go
+  assistant_investigation_report_repo.go
+  assistant_investigation_evidence_repo.go
+  external_mcp_source_repo.go
+  external_mcp_query_log_repo.go
 ```
 
 ---
@@ -192,6 +220,10 @@ func (h *AssistantHandler) UpdateToolApprovalPolicy(c *gin.Context)
 func (h *AssistantHandler) UpdateToolWhitelist(c *gin.Context)
 func (h *AssistantHandler) BatchUpdateToolWhitelist(c *gin.Context)
 func (h *AssistantHandler) ResetToolWhitelistDefaults(c *gin.Context)
+func (h *AssistantHandler) CreateHostAttackInvestigation(c *gin.Context)
+func (h *AssistantHandler) GetInvestigation(c *gin.Context)
+func (h *AssistantHandler) ListInvestigationEvidence(c *gin.Context)
+func (h *AssistantHandler) RebuildInvestigationReport(c *gin.Context)
 ```
 
 文件：`api-server/internal/api/handler/assistant_approval_handler.go`
@@ -223,11 +255,25 @@ assistantGroup := v1.Group("/assistant")
     assistantGroup.PUT("/tools/:tool_name/whitelist", h.UpdateToolWhitelist)
     assistantGroup.POST("/tools/whitelist/batch", h.BatchUpdateToolWhitelist)
     assistantGroup.POST("/tools/whitelist/reset-defaults", h.ResetToolWhitelistDefaults)
+    assistantGroup.POST("/investigations/host-attack", h.CreateHostAttackInvestigation)
+    assistantGroup.GET("/investigations/:investigation_id", h.GetInvestigation)
+    assistantGroup.GET("/investigations/:investigation_id/evidence", h.ListInvestigationEvidence)
+    assistantGroup.POST("/investigations/:investigation_id/rebuild-report", h.RebuildInvestigationReport)
+    assistantGroup.GET("/mcp-sources", h.ListMCPSources)
+    assistantGroup.POST("/mcp-sources", h.CreateMCPSource)
+    assistantGroup.GET("/mcp-sources/:source_id", h.GetMCPSource)
+    assistantGroup.PUT("/mcp-sources/:source_id", h.UpdateMCPSource)
+    assistantGroup.DELETE("/mcp-sources/:source_id", h.DeleteMCPSource)
+    assistantGroup.POST("/mcp-sources/:source_id/test", h.TestMCPSource)
+    assistantGroup.POST("/mcp-sources/:source_id/sync-schema", h.SyncMCPSchema)
+    assistantGroup.GET("/mcp-sources/:source_id/query-logs", h.ListMCPQueryLogs)
     assistantGroup.GET("/approvals/:approval_id", h.GetApproval)
     assistantGroup.POST("/approvals/:approval_id/approve", h.Approve)
     assistantGroup.POST("/approvals/:approval_id/reject", h.Reject)
 }
 ```
+
+`mcp-sources` 是配置页能力，不代表大模型直连 MCP。智能体运行时仍只看到 `ExternalMCP.*` 内部工具，后端根据配置受控访问外部 MCP 数据源。
 
 ---
 
@@ -304,6 +350,57 @@ func (o *Orchestrator) emitResultCards(cards []ResultCard) error
 6. 处理 `Tool.Search` 触发的工具扩展，必要时启动第二段 runtime。
 
 详细设计见 `agent_runtime_tool_orchestration_design_v6.0.md`。
+
+### 6.1 主机攻击研判服务
+
+`host_attack_investigation` 任务不把所有底层工具直接暴露给模型。`ToolSelector` 命中主机攻击研判意图后，优先注入 `Investigation.HostAttack.*` 高层工具；这些工具在后端内部调用资产、漏洞、基线、告警、Agent readonly gRPC 和外接 MCP 数据源查询。
+
+核心结构和完整 Prompt 模板见 `host_attack_investigation_agent_design_v6.0.md`。后端必须实现以下服务边界：
+
+```go
+type HostAttackInvestigationService struct {
+    planBuilder       *InvestigationPlanBuilder
+    evidenceCollector *EvidenceCollector
+    correlator        *EvidenceCorrelator
+    timelineBuilder   *AttackTimelineBuilder
+    entryInferer      *EntryPointInferer
+    pathBuilder       *AttackPathBuilder
+    scorer            *CompromiseScorer
+    reportBuilder     *InvestigationReportBuilder
+    reportRepo        repository.AssistantInvestigationReportRepository
+    evidenceRepo      repository.AssistantInvestigationEvidenceRepository
+}
+
+func (s *HostAttackInvestigationService) BuildPlan(ctx context.Context, input HostAttackInvestigationInput) (*InvestigationPlan, error)
+func (s *HostAttackInvestigationService) AnalyzeHostAttack(ctx context.Context, input HostAttackInvestigationInput) (*HostAttackInvestigationResult, error)
+func (s *HostAttackInvestigationService) AnalyzeHostAttackWithExternal(ctx context.Context, input HostAttackInvestigationInput) (*HostAttackInvestigationResult, error)
+func (s *HostAttackInvestigationService) GetInvestigation(ctx context.Context, investigationID string) (*HostAttackInvestigationResult, error)
+
+type EvidenceCollector struct {
+    hostRepo         repository.HostRepository
+    alertRepo        repository.AlertRepository
+    runtimeEventRepo repository.RuntimeEventRepository
+    blockRepo        repository.BlockRepository
+    taskRepo         repository.TaskLogRepository
+    vulnerabilitySvc *service.VulnerabilityService
+    packageSvc       *service.DetectionPackageService
+    serverClient     ServerClient
+    externalMCP      *ExternalMCPSourceService
+}
+
+func (c *EvidenceCollector) CollectAegisEvidence(ctx context.Context, input HostAttackInvestigationInput) (*EvidenceBundle, error)
+func (c *EvidenceCollector) CollectAgentEvidence(ctx context.Context, input HostAttackInvestigationInput) ([]EvidenceItem, error)
+func (c *EvidenceCollector) CollectExternalEvidence(ctx context.Context, input HostAttackInvestigationInput, plan ExternalEvidencePlan) ([]EvidenceItem, error)
+```
+
+研判输出必须包含：
+
+- `compromise_assessment`: 是否被攻击、分数、置信度。
+- `entry_point_candidates`: 入口候选，包含支持证据和反证。
+- `attack_timeline`: 按时间排序的攻击阶段。
+- `attack_path`: 主机、进程、账号、IP、文件、CVE、基线项构成的攻击图。
+- `evidence_matrix`: 所有证据按来源、阶段、MITRE 聚合。
+- `missing_evidence`: 证据不足和建议补充取证项。
 
 `RunInput`：
 
@@ -654,6 +751,79 @@ func AgentGetUserSessionsTool(ctx context.Context, req ToolExecutionRequest) (*T
 func AgentQueryHistoricalLogsTool(ctx context.Context, req ToolExecutionRequest) (*ToolExecutionResult, error)
 ```
 
+### 10.6 External MCP tools
+
+外接 MCP 是外部数据源接入能力，不是 Aegis 对外 MCP Server。智能体只调用以下 Aegis 内部工具，后端再根据配置受控访问外部 MCP 数据源。
+
+| Tool | 风险 | 默认白名单 | 绑定函数 |
+|:---|:---|:---:|:---|
+| `ExternalMCP.Source.List` | readonly | 是 | `ExternalMCPSourceService.ListSources` |
+| `ExternalMCP.Source.GetSchema` | readonly | 是 | `ExternalMCPSourceService.GetSchema` |
+| `ExternalMCP.Source.TestConnection` | low | 否 | `ExternalMCPSourceService.TestConnection` |
+| `ExternalMCP.Query` | medium | 否 | `ExternalMCPSourceService.Query` |
+| `ExternalMCP.MultiQuery` | medium | 否 | `ExternalMCPSourceService.MultiQuery` |
+| `ExternalMCP.Analyze` | readonly | 是 | `ExternalMCPContextBuilder.BuildAnalysisContext` |
+
+核心服务：
+
+```go
+type ExternalMCPSourceService struct {
+    sourceRepo    repository.ExternalMCPSourceRepository
+    queryLogRepo  repository.ExternalMCPQueryLogRepository
+    clientFactory *ExternalMCPClientFactory
+    redactor      *ExternalMCPRedactor
+    normalizer    *ExternalMCPNormalizer
+    auditService  *AuditService
+}
+
+func (s *ExternalMCPSourceService) ListSources(ctx context.Context, q MCPSourceQuery) ([]MCPSourceView, int64, error)
+func (s *ExternalMCPSourceService) CreateSource(ctx context.Context, input CreateMCPSourceInput, operator string) (*model.ExternalMCPSource, error)
+func (s *ExternalMCPSourceService) UpdateSource(ctx context.Context, sourceID string, input UpdateMCPSourceInput, operator string) (*model.ExternalMCPSource, error)
+func (s *ExternalMCPSourceService) DeleteSource(ctx context.Context, sourceID string, operator string) error
+func (s *ExternalMCPSourceService) TestConnection(ctx context.Context, sourceID string) (*MCPConnectionTestResult, error)
+func (s *ExternalMCPSourceService) SyncSchema(ctx context.Context, sourceID string) (*MCPSchemaSyncResult, error)
+func (s *ExternalMCPSourceService) Query(ctx context.Context, req ExternalMCPQueryRequest) (*ExternalMCPQueryResult, error)
+func (s *ExternalMCPSourceService) MultiQuery(ctx context.Context, req ExternalMCPMultiQueryRequest) (*ExternalMCPMultiQueryResult, error)
+```
+
+Prompt 构建：
+
+```go
+type ExternalMCPPromptProvider struct{}
+
+func (p *ExternalMCPPromptProvider) BuildExternalMCPSystemSection(ctx AssistantContext) string
+func (p *ExternalMCPPromptProvider) BuildMCPSourceCatalogPrompt(sources []MCPSourceView) string
+func (p *ExternalMCPPromptProvider) BuildMCPQueryPlanningPrompt(input MCPQueryPlanningInput) string
+func (p *ExternalMCPPromptProvider) BuildMCPResultAnalysisPrompt(input MCPResultAnalysisInput) string
+```
+
+完整 Prompt 文本见 `external_mcp_datasource_design_v6.0.md` 的“上传给大模型的 Prompt 模板”章节，开发时不得把 MCP token、password、endpoint secret 放入 prompt。
+
+### 10.7 Investigation tools
+
+主机攻击研判工具是 Profile 工具，面向 `host_attack_investigation` 任务注入，避免模型直接看到过多底层查询函数。
+
+| Tool | 风险 | 默认白名单 | 绑定函数 |
+|:---|:---|:---:|:---|
+| `Investigation.HostAttack.Plan` | readonly | 是 | `HostAttackInvestigationService.BuildPlan` |
+| `Investigation.HostAttack.Analyze` | readonly | 是 | `HostAttackInvestigationService.AnalyzeHostAttack` |
+| `Investigation.HostAttack.AnalyzeWithExternal` | medium | 否 | `HostAttackInvestigationService.AnalyzeHostAttackWithExternal` |
+| `Investigation.Evidence.CollectAegis` | readonly | 是 | `EvidenceCollector.CollectAegisEvidence` |
+| `Investigation.Evidence.CollectAgent` | readonly | 是 | `EvidenceCollector.CollectAgentEvidence` |
+| `Investigation.Timeline.Build` | readonly | 是 | `AttackTimelineBuilder.Build` |
+| `Investigation.EntryPoint.Infer` | readonly | 是 | `EntryPointInferer.Infer` |
+| `Investigation.AttackPath.Build` | readonly | 是 | `AttackPathBuilder.Build` |
+| `Investigation.CompromiseScore.Calculate` | readonly | 是 | `CompromiseScorer.Calculate` |
+| `Investigation.Report.Generate` | readonly | 是 | `InvestigationReportBuilder.Generate` |
+
+实现要求：
+
+1. `Analyze` 默认只查 Aegis 内部证据和 Agent readonly 证据。
+2. `AnalyzeWithExternal` 才能触发外接 MCP 查询，默认不进白名单。
+3. 所有结论必须带 `evidence_id`；无法引用证据时 verdict 必须允许返回 `insufficient_evidence`。
+4. 工具结果写入 `assistant_investigation_reports` 和 `assistant_investigation_evidence`。
+5. Prompt 必须使用 `InvestigationPromptProvider`，并包含“事实、推断、假设分离”的约束。
+
 ---
 
 ## 11. ResultCard Builder
@@ -672,6 +842,8 @@ func (b *ResultCardBuilder) AlertList(alerts []model.Alert) ResultCard
 func (b *ResultCardBuilder) TaskStatus(task *model.TaskLog) ResultCard
 func (b *ResultCardBuilder) PackageSummary(pkg *model.DetectionPackage) ResultCard
 func (b *ResultCardBuilder) AttackGraph(graph map[string]interface{}) ResultCard
+func (b *ResultCardBuilder) HostAttackInvestigation(result HostAttackInvestigationResult) ResultCard
+func (b *ResultCardBuilder) EvidenceMatrix(matrix EvidenceMatrix) ResultCard
 func (b *ResultCardBuilder) Markdown(title, content string) ResultCard
 ```
 
@@ -687,6 +859,16 @@ func (b *ResultCardBuilder) Markdown(title, content string) ResultCard
 | `assistant/approval_gate_test.go` | 创建审批、批准、拒绝、执行 approved tool |
 | `assistant/context_loader_test.go` | host/alert/task/package 上下文加载 |
 | `handler/assistant_handler_test.go` | HTTP API 参数和响应 |
+| `handler/assistant_mcp_source_handler_test.go` | MCP 数据源 CRUD、测试连接、schema 同步 |
+| `assistant/external_mcp_prompt_provider_test.go` | Prompt 不包含凭据，包含外部数据不可信规则 |
+| `assistant/external_mcp_redactor_test.go` | token、password、private key 脱敏 |
+| `tools/external_mcp_tools_test.go` | ExternalMCP.* 工具风险、参数校验、审计 |
+| `assistant/host_attack_investigation_service_test.go` | 完整 AnalyzeHostAttack 链路、结果结构、报告和证据落库 |
+| `assistant/evidence_collector_test.go` | 资产、漏洞、基线、告警、Agent、外部 MCP 证据收集 |
+| `assistant/entry_point_inferer_test.go` | SSH 暴破、CVE 暴露服务、webshell、unknown 入口推断 |
+| `assistant/compromise_scorer_test.go` | confirmed/suspicious/benign/insufficient 分数边界 |
+| `assistant/investigation_prompt_provider_test.go` | Prompt 包含证据约束、不包含凭据、不执行外部数据指令 |
+| `tools/investigation_tools_test.go` | Investigation.* 工具注册、风险等级、默认白名单、参数校验 |
 | `tools/package_tools_test.go` | Package.Sign/Enable 在需要审批的模式下拆成独立审批，full_access 下仍拆成独立工具调用 |
 | `tools/vulnerability_tools_test.go` | ExecuteFix 在 request_approval 或 whitelist 非白名单状态下必须审批 |
 

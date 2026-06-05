@@ -32,6 +32,8 @@
 | 白名单 | `PUT /assistant/tools/:tool_name/whitelist`、`POST /assistant/tools/whitelist/batch`、`POST /assistant/tools/whitelist/reset-defaults` |
 | 审批详情 | `GET /assistant/approvals/:approval_id` |
 | 审批动作 | `POST /assistant/approvals/:approval_id/approve`、`POST /assistant/approvals/:approval_id/reject` |
+| 主机攻击研判 | `POST /assistant/investigations/host-attack`、`GET /assistant/investigations/:id`、`GET /assistant/investigations/:id/evidence` |
+| 外接 MCP 数据源 | `GET/POST/PUT/DELETE /assistant/mcp-sources`、`POST /assistant/mcp-sources/:id/test`、`POST /assistant/mcp-sources/:id/sync-schema` |
 
 ---
 
@@ -155,16 +157,19 @@ assert_code0() {
 |:---|:---|:---|
 | Host | `host-curl-test-001` | 上下文引用、Host 查询 |
 | Alert | `ALT-CURL-TEST-001` | 上下文引用、告警查询 |
+| Vulnerability | `CVE-CURL-TEST-0001` | 主机攻击研判入口关联 |
+| Baseline failed item | `baseline-curl-test-001` | 主机攻击研判弱配置关联 |
 | DetectionPackage | `pkg-curl-test-001` | `Package.Sign` 审批拒绝测试 |
 | DetectionPackage | `pkg-curl-test-approve-001` | `Package.Sign` 审批批准测试 |
 
 确定性运行要求：
 
 1. `ToolCatalog` 必须包含本文档引用的工具：`Host.List`、`Detection.Alert.List`、`Package.Sign`、`Package.Enable` 等。
-2. `ToolPolicyService.SyncCatalogTools(ctx)` 必须在 api-server 启动时完成。
-3. CI 环境建议开启 `ASSISTANT_DETERMINISTIC_TEST=true`，让 agent-runtime 或测试 LLM 根据固定 prompt 返回固定工具调用。
-4. 如果不启用确定性测试模式，`TC-MODE-*` 和 `TC-APPROVAL-*` 仍可作为人工验收脚本，但不能作为稳定 CI 阻塞项。
-5. 对没有真实业务 fixture 的高风险工具，允许工具执行失败，但审批状态、工具调用状态和失败原因必须可查。
+2. `ToolCatalog` 必须包含 `Investigation.HostAttack.Analyze`、`Investigation.HostAttack.AnalyzeWithExternal`。
+3. `ToolPolicyService.SyncCatalogTools(ctx)` 必须在 api-server 启动时完成。
+4. CI 环境建议开启 `ASSISTANT_DETERMINISTIC_TEST=true`，让 agent-runtime 或测试 LLM 根据固定 prompt 返回固定工具调用。
+5. 如果不启用确定性测试模式，`TC-MODE-*` 和 `TC-APPROVAL-*` 仍可作为人工验收脚本，但不能作为稳定 CI 阻塞项。
+6. 对没有真实业务 fixture 的高风险工具，允许工具执行失败，但审批状态、工具调用状态和失败原因必须可查。
 
 ---
 
@@ -1108,7 +1113,278 @@ fi
 
 ---
 
-## 11. 建议 CI 执行顺序
+## 11. 主机攻击研判测试
+
+### TC-HAI-001 创建主机攻击研判会话
+
+```bash
+http_json POST "/assistant/sessions" '{
+  "title": "curl 主机攻击研判",
+  "task_type": "host_attack_investigation",
+  "initial_message": "分析 host-curl-test-001 是否被攻击，入口是什么",
+  "context_refs": [
+    { "object_type": "host", "object_id": "host-curl-test-001" },
+    { "object_type": "alert", "object_id": "ALT-CURL-TEST-001" }
+  ]
+}' > "$TMP_DIR/create_hai_session.out"
+assert_http 200
+assert_code0
+assert_json '.data.task_type == "host_attack_investigation"'
+
+export HAI_SESSION_ID
+HAI_SESSION_ID="$(jq -r '.data.session_id' "$TMP_DIR/response.json")"
+```
+
+预期：
+
+- 会话创建成功。
+- 上下文包含 host 和 alert。
+
+### TC-HAI-002 显式创建主机攻击研判
+
+```bash
+CREATE_HAI_BODY='{
+  "session_id": "'"$HAI_SESSION_ID"'",
+  "host_id": "host-curl-test-001",
+  "alert_ids": ["ALT-CURL-TEST-001"],
+  "time_range": {
+    "from": "2026-06-04T00:00:00+08:00",
+    "to": "2026-06-05T00:00:00+08:00"
+  },
+  "include_agent_live": true,
+  "include_external_mcp": false,
+  "mcp_source_ids": [],
+  "max_evidence_items": 200
+}'
+
+http_json POST "/assistant/investigations/host-attack" "$CREATE_HAI_BODY" > "$TMP_DIR/create_hai.out"
+assert_http 200
+assert_code0
+assert_json '.data.investigation_id | test("^inv_")'
+assert_json '.data.compromise_assessment.verdict | IN("confirmed_compromised", "suspicious", "likely_benign", "insufficient_evidence")'
+assert_json '.data.compromise_assessment.score >= 0 and .data.compromise_assessment.score <= 100'
+assert_json '.data.compromise_assessment.confidence >= 0 and .data.compromise_assessment.confidence <= 1'
+assert_json '.data.entry_point_candidates | type == "array"'
+assert_json '.data.attack_timeline.events | type == "array"'
+assert_json '.data.attack_path.nodes | type == "array"'
+assert_json '.data.attack_path.edges | type == "array"'
+assert_json '.data.evidence_matrix.items | type == "array"'
+
+export HAI_INVESTIGATION_ID
+HAI_INVESTIGATION_ID="$(jq -r '.data.investigation_id' "$TMP_DIR/response.json")"
+```
+
+证据一致性断言：
+
+```bash
+jq -e '
+  if (.data.evidence_matrix.items | length) == 0
+  then .data.compromise_assessment.verdict == "insufficient_evidence"
+  else true
+  end
+' "$TMP_DIR/response.json"
+```
+
+预期：
+
+- 不允许在无证据时输出确认性失陷。
+- `score`、`confidence` 必须是可比较数值。
+
+### TC-HAI-003 查询研判报告
+
+```bash
+http_json GET "/assistant/investigations/$HAI_INVESTIGATION_ID" > "$TMP_DIR/get_hai.out"
+assert_http 200
+assert_code0
+assert_json '.data.investigation_id == env.HAI_INVESTIGATION_ID'
+assert_json '.data.compromise_assessment.verdict | IN("confirmed_compromised", "suspicious", "likely_benign", "insufficient_evidence")'
+assert_json '.data.report_markdown | type == "string"'
+```
+
+预期：
+
+- 返回结构和创建接口一致。
+- `report_markdown` 可以为空字符串，但字段必须存在。
+
+### TC-HAI-004 查询研判证据
+
+```bash
+http_json GET "/assistant/investigations/$HAI_INVESTIGATION_ID/evidence?page=1&page_size=50" > "$TMP_DIR/list_hai_evidence.out"
+assert_http 200
+assert_code0
+assert_json '(.data.items // .data.data // []) | type == "array"'
+assert_json '(.data.total // 0) >= 0'
+```
+
+如果存在证据，继续断言：
+
+```bash
+jq -e '
+  ((.data.items // .data.data // []) | length) == 0 or
+  all((.data.items // .data.data // [])[]; (.evidence_id | type == "string") and (.source_type | type == "string") and (.summary | type == "string"))
+' "$TMP_DIR/response.json"
+```
+
+### TC-HAI-005 对话触发研判工具选择
+
+```bash
+http_json POST "/assistant/sessions/$HAI_SESSION_ID/message" '{"content":"请判断这台主机是否被攻击，入口是什么，攻击是怎么进行的"}' > "$TMP_DIR/send_hai_message.out"
+assert_http 200
+assert_code0
+assert_json '.data.run_id | test("^run_")'
+
+sleep 3
+http_json GET "/assistant/sessions/$HAI_SESSION_ID/tool-calls?page=1&page_size=100" > "$TMP_DIR/hai_tool_calls.out"
+assert_http 200
+assert_code0
+```
+
+确定性测试模式下继续断言：
+
+```bash
+if [ "${ASSISTANT_DETERMINISTIC_TEST:-false}" = "true" ]; then
+  jq -e 'any((.data.tool_calls // .data.items // .data.data)[]; .tool_name == "Investigation.HostAttack.Analyze")' "$TMP_DIR/response.json"
+fi
+```
+
+### TC-HAI-006 外部 MCP 研判失败不应编造证据
+
+该用例依赖 TC-MCP-001 创建的数据源，也允许在无真实 MCP 服务时验证失败路径。
+
+```bash
+if [ -n "${MCP_SOURCE_ID:-}" ]; then
+  CREATE_HAI_EXTERNAL_BODY='{
+    "session_id": "'"$HAI_SESSION_ID"'",
+    "host_id": "host-curl-test-001",
+    "alert_ids": ["ALT-CURL-TEST-001"],
+    "include_agent_live": false,
+    "include_external_mcp": true,
+    "mcp_source_ids": ["'"$MCP_SOURCE_ID"'"],
+    "max_evidence_items": 200
+  }'
+
+  http_json POST "/assistant/investigations/host-attack" "$CREATE_HAI_EXTERNAL_BODY" > "$TMP_DIR/create_hai_external.out" || true
+  test "$HTTP_STATUS" = "200" -o "$HTTP_STATUS" = "202" -o "$HTTP_STATUS" = "400" -o "$HTTP_STATUS" = "403"
+  if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
+    jq -e '.data.missing_evidence | type == "array"' "$TMP_DIR/response.json"
+    jq -e '(.data.source_coverage // {}) | type == "object"' "$TMP_DIR/response.json"
+  else
+    jq -e '.message | type == "string" or .code != 0' "$TMP_DIR/response.json"
+  fi
+fi
+```
+
+预期：
+
+- 外部 MCP 不可用时，返回错误或 `missing_evidence`。
+- 最终报告不能伪造外部 SIEM/CMDB/EDR 证据。
+
+---
+
+## 12. 外接 MCP 数据源配置测试
+
+### TC-MCP-001 创建外接 MCP 数据源
+
+```bash
+CREATE_MCP_SOURCE_BODY='{
+  "name": "curl-test-siem",
+  "source_type": "siem",
+  "transport": "streamable_http",
+  "endpoint_url": "https://mcp.example.test/sse",
+  "auth_type": "bearer",
+  "credential": {
+    "token": "curl-test-token"
+  },
+  "description": "curl 测试 MCP 数据源",
+  "query_limits": {
+    "max_rows": 50,
+    "timeout_seconds": 10,
+    "max_context_chars": 8000
+  }
+}'
+
+http_json POST "/assistant/mcp-sources" "$CREATE_MCP_SOURCE_BODY" > "$TMP_DIR/create_mcp_source.out"
+assert_http 200
+assert_code0
+assert_json '.data.source_id | test("^mcp_")'
+assert_json '.data.name == "curl-test-siem"'
+assert_json '.data.credential_configured == true'
+assert_json '(.data | tostring) | contains("curl-test-token") | not'
+
+export MCP_SOURCE_ID
+MCP_SOURCE_ID="$(jq -r '.data.source_id' "$TMP_DIR/response.json")"
+```
+
+预期：
+
+- 返回中不能包含明文 token。
+- `external_mcp_sources` 新增一条记录。
+- 凭据只通过 `credential_ref` 指向加密存储。
+
+### TC-MCP-002 查询 MCP 数据源列表
+
+```bash
+http_json GET "/assistant/mcp-sources?page=1&page_size=20" > "$TMP_DIR/list_mcp_sources.out"
+assert_http 200
+assert_code0
+assert_json '.data.total >= 1'
+assert_json 'any((.data.items // .data.sources // .data.data)[]; .source_id == env.MCP_SOURCE_ID)'
+assert_json '[(.data.items // .data.sources // .data.data)[] | tostring] | join(" ") | contains("curl-test-token") | not'
+```
+
+### TC-MCP-003 测试 MCP 连接
+
+```bash
+http_json POST "/assistant/mcp-sources/$MCP_SOURCE_ID/test" '{}' > "$TMP_DIR/test_mcp_source.out" || true
+test "$HTTP_STATUS" = "200" -o "$HTTP_STATUS" = "502" -o "$HTTP_STATUS" = "504"
+if [ "$HTTP_STATUS" = "200" ]; then
+  jq -e '.code == 0 and (.data.success | type == "boolean")' "$TMP_DIR/response.json"
+else
+  jq -e '.message | type == "string" or .code != 0' "$TMP_DIR/response.json"
+fi
+```
+
+说明：
+
+- CI 如果没有真实 MCP mock server，允许连接失败。
+- 即使失败，也必须返回明确错误，不允许 500。
+
+### TC-MCP-004 同步 schema
+
+```bash
+http_json POST "/assistant/mcp-sources/$MCP_SOURCE_ID/sync-schema" '{}' > "$TMP_DIR/sync_mcp_schema.out" || true
+test "$HTTP_STATUS" = "200" -o "$HTTP_STATUS" = "502" -o "$HTTP_STATUS" = "504"
+if [ "$HTTP_STATUS" = "200" ]; then
+  jq -e '.code == 0 and (.data.source_id == env.MCP_SOURCE_ID)' "$TMP_DIR/response.json"
+fi
+```
+
+### TC-MCP-005 查询 MCP 调用日志
+
+```bash
+http_json GET "/assistant/mcp-sources/$MCP_SOURCE_ID/query-logs?page=1&page_size=20" > "$TMP_DIR/list_mcp_query_logs.out"
+assert_http 200
+assert_code0
+assert_json '(.data.items // .data.logs // .data.data) | type == "array"'
+```
+
+### TC-MCP-006 删除 MCP 数据源
+
+```bash
+http_json DELETE "/assistant/mcp-sources/$MCP_SOURCE_ID" > "$TMP_DIR/delete_mcp_source.out"
+assert_http 200
+assert_code0
+
+http_json GET "/assistant/mcp-sources/$MCP_SOURCE_ID" > "$TMP_DIR/get_deleted_mcp_source.out" || true
+test "$HTTP_STATUS" = "404" -o "$HTTP_STATUS" = "200"
+if [ "$HTTP_STATUS" = "200" ]; then
+  jq -e '.code != 0 or .data.enabled == false' "$TMP_DIR/response.json"
+fi
+```
+
+---
+
+## 13. 建议 CI 执行顺序
 
 ```text
 1. TC-AUTH-001 ~ TC-AUTH-002
@@ -1121,7 +1397,9 @@ fi
 8. TC-APPROVAL-001 ~ TC-APPROVAL-004
 9. TC-DATA-001 ~ TC-DATA-003
 10. TC-NEG-001 ~ TC-NEG-005
-11. 恢复默认配置: mode=whitelist, reset-defaults
+11. TC-HAI-001 ~ TC-HAI-006
+12. TC-MCP-001 ~ TC-MCP-006
+13. 恢复默认配置: mode=whitelist, reset-defaults
 ```
 
 收尾命令：
@@ -1138,7 +1416,7 @@ assert_code0
 
 ---
 
-## 12. 开发完成判定标准
+## 14. 开发完成判定标准
 
 开发人员完成 V6.0 Assistant API 后，必须满足：
 
@@ -1152,3 +1430,7 @@ assert_code0
 8. 审批批准/拒绝后 run 不会永久卡住。
 9. 工具执行成功或失败都能在 `tool-calls` 中查到结果。
 10. 所有接口均可通过 `curl` 和 `jq` 在无前端环境下完成验收。
+11. 主机攻击研判返回 verdict、score、entry candidates、timeline、attack path、evidence matrix。
+12. 主机攻击研判无证据时必须返回 `insufficient_evidence`，不能确认失陷。
+13. 外接 MCP 数据源接口返回不包含明文凭据。
+14. 外接 MCP 连接失败时返回明确错误，不出现 500。
