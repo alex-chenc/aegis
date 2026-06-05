@@ -69,6 +69,19 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.EBPFHookAllowlistConfig{},
 		&model.CorrelationRule{},
 		&model.RolePermission{},
+		// V6.0 Assistant tables
+		&model.AssistantSession{},
+		&model.AssistantMessage{},
+		&model.AssistantContextRef{},
+		&model.AssistantToolCall{},
+		&model.AssistantApproval{},
+		&model.AssistantToolSelection{},
+		&model.AssistantToolPolicy{},
+		&model.AssistantMemory{},
+		&model.AssistantInvestigationReport{},
+		&model.AssistantInvestigationEvidence{},
+		&model.ExternalMCPSource{},
+		&model.ExternalMCPQueryLog{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)
