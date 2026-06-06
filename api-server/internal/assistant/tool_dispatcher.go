@@ -79,8 +79,8 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 		MessageID: req.MessageID,
 		CallID:    callID,
 		ToolName:  req.ToolName,
-		Domain:    tool.Domain,
-		RiskLevel: tool.RiskLevel,
+		Domain:    string(tool.Domain),
+		RiskLevel: string(tool.Risk),
 		Status:    model.ToolCallStatusRunning,
 		Args:      mustMarshalJSON(req.Args),
 	}
@@ -99,7 +99,7 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 
 	riskResult := d.approvalGate.riskPolicy.Evaluate(ctx, RiskEvaluateRequest{
 		ToolName:      req.ToolName,
-		ToolRiskLevel: tool.RiskLevel,
+		ToolRiskLevel: string(tool.Risk),
 		Mode:          mode,
 		Whitelisted:   isWhitelisted,
 		Operator:      req.Operator,
@@ -137,36 +137,70 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 }
 
 func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *ToolSpec, req DispatchRequest) (*DispatchResult, error) {
-	start := time.Now()
-	result, err := d.registry.Execute(ctx, req.ToolName, req.Args)
-	duration := time.Since(start).Milliseconds()
+	// Apply tool execution timeout to prevent indefinite blocking
+	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	if err != nil {
-		_ = d.toolCallRepo.MarkFailed(ctx, callID, err.Error(), duration)
+	start := time.Now()
+	type toolResult struct {
+		result *ToolExecutionResult
+		err    error
+	}
+	resultCh := make(chan toolResult, 1)
+
+	go func() {
+		res, err := d.registry.Execute(toolCtx, req.ToolName, req.Args)
+		resultCh <- toolResult{result: res, err: err}
+	}()
+
+	select {
+	case tr := <-resultCh:
+		duration := time.Since(start).Milliseconds()
+
+		if tr.err != nil {
+			_ = d.toolCallRepo.MarkFailed(ctx, callID, tr.err.Error(), duration)
+			return &DispatchResult{
+				CallID:     callID,
+				ToolName:   req.ToolName,
+				Success:    false,
+				Error:      tr.err.Error(),
+				DurationMs: duration,
+			}, nil
+		}
+
+		if tr.result.Success {
+			_ = d.toolCallRepo.MarkSuccess(ctx, callID, tr.result.Data, duration)
+			_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
+		} else {
+			_ = d.toolCallRepo.MarkFailed(ctx, callID, tr.result.Error, duration)
+		}
+
+		return &DispatchResult{
+			CallID:     callID,
+			ToolName:   req.ToolName,
+			Success:    tr.result.Success,
+			Data:       tr.result.Data,
+			Error:      tr.result.Error,
+			DurationMs: duration,
+		}, nil
+
+	case <-toolCtx.Done():
+		duration := time.Since(start).Milliseconds()
+		timeoutErr := fmt.Sprintf("tool %s execution timeout after %ds", req.ToolName, 30)
+		d.logger.Warn("tool execution timeout",
+			zap.String("tool", req.ToolName),
+			zap.String("call_id", callID),
+			zap.Int64("duration_ms", duration),
+		)
+		_ = d.toolCallRepo.MarkFailed(ctx, callID, timeoutErr, duration)
 		return &DispatchResult{
 			CallID:     callID,
 			ToolName:   req.ToolName,
 			Success:    false,
-			Error:      err.Error(),
+			Error:      timeoutErr,
 			DurationMs: duration,
 		}, nil
 	}
-
-	if result.Success {
-		_ = d.toolCallRepo.MarkSuccess(ctx, callID, result.Data, duration)
-		_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
-	} else {
-		_ = d.toolCallRepo.MarkFailed(ctx, callID, result.Error, duration)
-	}
-
-	return &DispatchResult{
-		CallID:     callID,
-		ToolName:   req.ToolName,
-		Success:    result.Success,
-		Data:       result.Data,
-		Error:      result.Error,
-		DurationMs: duration,
-	}, nil
 }
 
 // ExecuteApprovedTool 执行已批准的工具

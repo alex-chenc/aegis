@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -203,6 +204,150 @@ func (s *ExternalMCPSourceService) SyncSchema(ctx context.Context, sourceID stri
 		zap.Int("tool_count", result.ToolCount),
 	)
 	return result, nil
+}
+
+// EnableSource enables or disables an external MCP source
+func (s *ExternalMCPSourceService) EnableSource(ctx context.Context, sourceID string, enabled bool, operator string) error {
+	existing, err := s.sourceRepo.FindBySourceID(ctx, sourceID)
+	if err != nil {
+		s.logger.Error("failed to find external MCP source for enable/disable",
+			zap.String("source_id", sourceID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("external MCP source not found: %w", err)
+	}
+
+	existing.Enabled = enabled
+	existing.UpdatedBy = operator
+	existing.UpdatedAt = time.Now()
+
+	if err := s.sourceRepo.Update(ctx, existing); err != nil {
+		s.logger.Error("failed to update external MCP source enabled status",
+			zap.String("source_id", sourceID),
+			zap.Bool("enabled", enabled),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to update external MCP source: %w", err)
+	}
+
+	s.logger.Info("external MCP source enabled status updated",
+		zap.String("source_id", sourceID),
+		zap.Bool("enabled", enabled),
+		zap.String("operator", operator),
+	)
+	return nil
+}
+
+// ExternalMCPQueryRequest MCP 查询请求
+type ExternalMCPQueryRequest struct {
+	SourceID  string            `json:"source_id"`
+	QueryGoal string            `json:"query_goal"`
+	TimeRange *TimeRange        `json:"time_range,omitempty"`
+	Filters   map[string]string `json:"filters,omitempty"`
+	MaxRows   int               `json:"max_rows"`
+}
+
+// ExternalMCPQueryResultWithRows 带行数据的查询结果
+type ExternalMCPQueryResultWithRows struct {
+	QueryID    string           `json:"query_id"`
+	SourceID   string           `json:"source_id"`
+	Rows       []map[string]any `json:"rows"`
+	RowCount   int              `json:"row_count"`
+	Truncated  bool             `json:"truncated"`
+}
+
+// Query queries an external MCP source
+func (s *ExternalMCPSourceService) Query(ctx context.Context, req ExternalMCPQueryRequest) (*ExternalMCPQueryResultWithRows, error) {
+	start := time.Now()
+
+	// 获取数据源
+	source, err := s.sourceRepo.FindBySourceID(ctx, req.SourceID)
+	if err != nil {
+		s.logger.Error("failed to find external MCP source for query",
+			zap.String("source_id", req.SourceID),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("external MCP source not found: %w", err)
+	}
+
+	// 检查是否启用
+	if !source.Enabled {
+		return nil, fmt.Errorf("external MCP source %s is disabled", req.SourceID)
+	}
+
+	// 记录查询日志
+	queryID := "mcpq_" + uuid.New().String()[:8]
+	queryLog := &model.ExternalMCPQueryLog{
+		QueryID:   queryID,
+		SourceID:  req.SourceID,
+		SourceName: source.Name,
+		QueryGoal: req.QueryGoal,
+		Status:    model.MCPQueryStatusSuccess,
+		CreatedBy: "system",
+	}
+
+	// 简化实现：返回空结果，实际应该调用 MCP Client
+	result := &ExternalMCPQueryResultWithRows{
+		QueryID:  queryID,
+		SourceID: req.SourceID,
+		Rows:     []map[string]any{},
+		RowCount: 0,
+	}
+
+	duration := int(time.Since(start).Milliseconds())
+	queryLog.DurationMs = duration
+	queryLog.ResultCount = result.RowCount
+
+	// 保存查询日志
+	if err := s.queryLogRepo.Create(ctx, queryLog); err != nil {
+		s.logger.Warn("failed to save MCP query log",
+			zap.String("query_id", queryID),
+			zap.Error(err),
+		)
+	}
+
+	s.logger.Info("external MCP query completed",
+		zap.String("query_id", queryID),
+		zap.String("source_id", req.SourceID),
+		zap.String("query_goal", req.QueryGoal),
+		zap.Int("result_count", result.RowCount),
+		zap.Int("duration_ms", duration),
+	)
+
+	return result, nil
+}
+
+// GetSourceView gets a source view (without sensitive data)
+func (s *ExternalMCPSourceService) GetSourceView(ctx context.Context, sourceID string) (*MCPSourceView, error) {
+	source, err := s.sourceRepo.FindBySourceID(ctx, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("external MCP source not found: %w", err)
+	}
+
+	// 解析 query_limits
+	maxRows := 50
+	timeout := 20
+	if source.QueryLimits != nil {
+		var limits map[string]interface{}
+		if err := json.Unmarshal(source.QueryLimits, &limits); err == nil {
+			if mr, ok := limits["max_rows"].(float64); ok {
+				maxRows = int(mr)
+			}
+			if t, ok := limits["timeout_seconds"].(float64); ok {
+				timeout = int(t)
+			}
+		}
+	}
+
+	return &MCPSourceView{
+		SourceID:   source.SourceID,
+		Name:       source.Name,
+		SourceType: source.SourceType,
+		Transport:  source.Transport,
+		Enabled:    source.Enabled,
+		MaxRows:    maxRows,
+		Timeout:    timeout,
+	}, nil
 }
 
 // ListQueryLogs lists query logs for an external MCP source

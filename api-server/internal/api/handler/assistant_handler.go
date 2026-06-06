@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"api-server/internal/assistant"
 	"api-server/internal/model"
@@ -82,6 +83,7 @@ func (h *AssistantHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.DELETE("/mcp-sources/:source_id", h.DeleteMCPSource)
 	group.POST("/mcp-sources/:source_id/test", h.TestMCPSource)
 	group.POST("/mcp-sources/:source_id/sync-schema", h.SyncMCPSchema)
+	group.GET("/mcp-sources/:source_id/query-logs", h.ListMCPQueryLogs)
 }
 
 // ListSessions 列出会话
@@ -325,7 +327,8 @@ func (h *AssistantHandler) UpdateToolApprovalPolicy(c *gin.Context) {
 		return
 	}
 
-	if err := h.policyService.SetApprovalMode(c.Request.Context(), req.Mode); err != nil {
+	operator := c.GetString("username")
+	if err := h.policyService.SetApprovalMode(c.Request.Context(), req.Mode, operator); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -574,7 +577,7 @@ func (h *AssistantHandler) CreateMCPSource(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": source})
 }
 
-// GetMCPSource 获取 MCP 数据源
+// GetMCPSource 获取 MCP 数据源（脱敏）
 func (h *AssistantHandler) GetMCPSource(c *gin.Context) {
 	if h.mcpService == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
@@ -588,7 +591,30 @@ func (h *AssistantHandler) GetMCPSource(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": source})
+	// 脱敏响应：不暴露 credential_ref 和 endpoint_url
+	safeResponse := gin.H{
+		"source_id":             source.SourceID,
+		"name":                  source.Name,
+		"source_type":           source.SourceType,
+		"transport":             source.Transport,
+		"endpoint_url_masked":   maskEndpointURL(source.EndpointURL),
+		"auth_type":             source.AuthType,
+		"credential_configured": source.CredentialRef != "",
+		"enabled":               source.Enabled,
+		"description":           source.Description,
+		"allowed_tool_names":    source.AllowedToolNames,
+		"query_limits":          source.QueryLimits,
+		"data_classification":   source.DataClassification,
+		"last_test_status":      source.LastTestStatus,
+		"last_test_error":       source.LastTestError,
+		"last_test_at":          source.LastTestAt,
+		"created_by":            source.CreatedBy,
+		"updated_by":            source.UpdatedBy,
+		"created_at":            source.CreatedAt,
+		"updated_at":            source.UpdatedAt,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": safeResponse})
 }
 
 // UpdateMCPSource 更新 MCP 数据源
@@ -665,6 +691,48 @@ func (h *AssistantHandler) SyncMCPSchema(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
+}
+
+// ListMCPQueryLogs 列出 MCP 查询日志
+func (h *AssistantHandler) ListMCPQueryLogs(c *gin.Context) {
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	logs, total, err := h.mcpService.ListQueryLogs(c.Request.Context(), sourceID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"items": logs,
+			"total": total,
+		},
+	})
+}
+
+// maskEndpointURL 掩码 endpoint URL
+func maskEndpointURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	// 只保留协议和域名，隐藏路径
+	parts := strings.SplitN(url, "://", 2)
+	if len(parts) != 2 {
+		return "***"
+	}
+	scheme := parts[0]
+	hostParts := strings.SplitN(parts[2], "/", 2)
+	host := hostParts[0]
+	return scheme + "://" + host + "/***"
 }
 
 // SSE Writer

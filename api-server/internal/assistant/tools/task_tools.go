@@ -21,7 +21,7 @@ func RegisterTaskTools(registry *assistant.ToolRegistry, deps TaskToolDeps) erro
 		Domain:      "task",
 		Operation:   "list",
 		Description: "列出任务组，支持按状态、类型、时间范围筛选",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -46,7 +46,7 @@ func RegisterTaskTools(registry *assistant.ToolRegistry, deps TaskToolDeps) erro
 		Domain:      "task",
 		Operation:   "get_detail",
 		Description: "根据任务ID获取任务详细信息",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{

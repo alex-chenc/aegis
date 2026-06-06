@@ -40,13 +40,8 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		})
 
 	case agentruntime.HookTaskFinished:
-		payload := toMap(event.Payload)
-		if finalAnswer, ok := payload["final_answer"].(string); ok && finalAnswer != "" {
-			s.publish(EventMessageDelta, map[string]interface{}{
-				"message_id": "msg_" + s.runID,
-				"delta":      finalAnswer,
-			})
-		}
+		// 最终消息由 orchestrator 统一发布，此处不重复发送
+		// 避免前端收到两次相同内容
 
 	case agentruntime.HookTaskInterrupted:
 		s.publish(EventError, map[string]interface{}{

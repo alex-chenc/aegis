@@ -8,11 +8,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// ContextLoader 上下文加载器
+// ContextLoader 上下文加载器（对齐设计文档 9 节）
 type ContextLoader struct {
 	hostRepo       *repository.HostRepository
 	alertRepo      *repository.AlertRepository
 	taskRepo       *repository.TaskLogRepository
+	vulnRepo       *repository.VulnerabilityRepo
 	contextRefRepo repository.AssistantContextRefRepository
 }
 
@@ -21,6 +22,7 @@ type ContextLoaderDeps struct {
 	HostRepo       *repository.HostRepository
 	AlertRepo      *repository.AlertRepository
 	TaskRepo       *repository.TaskLogRepository
+	VulnRepo       *repository.VulnerabilityRepo
 	ContextRefRepo repository.AssistantContextRefRepository
 }
 
@@ -40,6 +42,7 @@ func NewContextLoader(deps ContextLoaderDeps) *ContextLoader {
 		hostRepo:       deps.HostRepo,
 		alertRepo:      deps.AlertRepo,
 		taskRepo:       deps.TaskRepo,
+		vulnRepo:       deps.VulnRepo,
 		contextRefRepo: deps.ContextRefRepo,
 	}
 }
@@ -70,7 +73,7 @@ func (l *ContextLoader) ResolveSession(ctx context.Context, sessionID string) ([
 	return objects, nil
 }
 
-// Resolve 解析上下文对象
+// Resolve 解析上下文对象（对齐设计文档 9 节）
 func (l *ContextLoader) Resolve(ctx context.Context, objectType, objectID string) (*ContextObject, error) {
 	switch objectType {
 	case "host":
@@ -79,6 +82,8 @@ func (l *ContextLoader) Resolve(ctx context.Context, objectType, objectID string
 		return l.resolveAlert(ctx, objectID)
 	case "task":
 		return l.resolveTask(ctx, objectID)
+	case "vulnerability", "vuln":
+		return l.resolveVulnerability(ctx, objectID)
 	default:
 		return &ContextObject{
 			ObjectType: objectType,
@@ -155,5 +160,30 @@ func (l *ContextLoader) resolveTask(ctx context.Context, taskID string) (*Contex
 		Summary:    fmt.Sprintf("Status: %s", task.Status),
 		RoutePath:  "/baseline/tasks/" + taskID,
 		Data:       task,
+	}, nil
+}
+
+func (l *ContextLoader) resolveVulnerability(ctx context.Context, cveID string) (*ContextObject, error) {
+	if l.vulnRepo == nil {
+		return nil, fmt.Errorf("vulnerability repo not available")
+	}
+
+	vuln, err := l.vulnRepo.FindByCveID(cveID)
+	if err != nil {
+		return nil, err
+	}
+
+	scoreStr := ""
+	if vuln.CvssScore != nil {
+		scoreStr = fmt.Sprintf(", CVSS: %.1f", *vuln.CvssScore)
+	}
+
+	return &ContextObject{
+		ObjectType: "vulnerability",
+		ObjectID:   cveID,
+		Title:      vuln.CveID,
+		Summary:    fmt.Sprintf("Severity: %s%s", vuln.Severity, scoreStr),
+		RoutePath:  "/vulnerabilities",
+		Data:       vuln,
 	}, nil
 }

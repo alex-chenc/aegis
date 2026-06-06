@@ -20,7 +20,7 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		Domain:      "package",
 		Operation:   "list",
 		Description: "列出检测包，支持按状态和关键字筛选",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -42,7 +42,7 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		Domain:      "package",
 		Operation:   "get",
 		Description: "根据包ID获取检测包详情（最新版本）",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{

@@ -20,7 +20,7 @@ func RegisterAuditTools(registry *assistant.ToolRegistry, deps AuditToolDeps) er
 		Domain:      "audit",
 		Operation:   "log_list",
 		Description: "列出审计日志，支持按脚本类型、审计来源和审核结果筛选",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{

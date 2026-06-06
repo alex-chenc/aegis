@@ -23,8 +23,44 @@ type ActiveRun struct {
 	cancel    context.CancelFunc
 	events    chan AssistantEvent
 	startedAt time.Time
+
+	// 审批暂停/恢复状态
+	waitingApproval   *WaitingApprovalState
+	waitingMu         sync.RWMutex
+
 	subscribers []chan AssistantEvent
-	subMu     sync.RWMutex
+	subMu       sync.RWMutex
+}
+
+// WaitingApprovalState 审批等待状态
+type WaitingApprovalState struct {
+	ApprovalID  string                 `json:"approval_id"`
+	ToolCallID  string                 `json:"tool_call_id"`
+	ToolName    string                 `json:"tool_name"`
+	Args        map[string]interface{} `json:"args"`
+	Operator    string                 `json:"operator"`
+	RequestedAt time.Time              `json:"requested_at"`
+}
+
+// SetWaitingApproval 设置审批等待状态
+func (r *ActiveRun) SetWaitingApproval(state *WaitingApprovalState) {
+	r.waitingMu.Lock()
+	defer r.waitingMu.Unlock()
+	r.waitingApproval = state
+}
+
+// GetWaitingApproval 获取审批等待状态
+func (r *ActiveRun) GetWaitingApproval() *WaitingApprovalState {
+	r.waitingMu.RLock()
+	defer r.waitingMu.RUnlock()
+	return r.waitingApproval
+}
+
+// ClearWaitingApproval 清除审批等待状态
+func (r *ActiveRun) ClearWaitingApproval() {
+	r.waitingMu.Lock()
+	defer r.waitingMu.Unlock()
+	r.waitingApproval = nil
 }
 
 // NewRunManager 创建运行管理器
@@ -44,7 +80,8 @@ func (m *RunManager) Start(sessionID string) *ActiveRun {
 		existing.cancel()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// 使用 5 分钟超时防止 LLM 调用无限阻塞
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	run := &ActiveRun{
 		RunID:     "run_" + uuid.New().String()[:8],
 		SessionID: sessionID,

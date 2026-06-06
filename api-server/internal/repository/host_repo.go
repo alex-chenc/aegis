@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"api-server/internal/model"
@@ -88,6 +89,17 @@ func (r *HostRepository) FindByID(id uuid.UUID) (*model.Host, error) {
 	return &host, nil
 }
 
+// FindByIDWithContext is like FindByID but respects context cancellation and deadlines.
+func (r *HostRepository) FindByIDWithContext(ctx context.Context, id uuid.UUID) (*model.Host, error) {
+	var host model.Host
+	result := r.db.WithContext(ctx).First(&host, "id = ?", id)
+	if result.Error != nil {
+		logger.Error("failed to find host by id with context", zap.Error(result.Error), zap.String("id", id.String()))
+		return nil, result.Error
+	}
+	return &host, nil
+}
+
 func (r *HostRepository) FindByIP(ipAddress string) (*model.Host, error) {
 	var host model.Host
 	result := r.db.First(&host, "ip_address = ?", ipAddress)
@@ -109,6 +121,46 @@ func (r *HostRepository) Count(query string) (int64, error) {
 	result := db.Count(&count)
 	if result.Error != nil {
 		logger.Error("failed to count hosts", zap.Error(result.Error))
+		return 0, result.Error
+	}
+
+	return count, nil
+}
+
+// FindAllWithContext is like FindAll but respects context cancellation and deadlines.
+func (r *HostRepository) FindAllWithContext(ctx context.Context, page, pageSize int, query string) ([]model.Host, error) {
+	var hosts []model.Host
+	offset := (page - 1) * pageSize
+
+	db := r.db.WithContext(ctx).Model(&model.Host{})
+	if query != "" {
+		searchPattern := "%" + query + "%"
+		db = db.Where("ip_address LIKE ? OR hostname LIKE ?", searchPattern, searchPattern)
+	}
+
+	result := db.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&hosts)
+	if result.Error != nil {
+		logger.Error("failed to find hosts with context", zap.Error(result.Error))
+		return nil, result.Error
+	}
+
+	logger.Debug("hosts found", zap.Int("count", len(hosts)), zap.Int("page", page))
+	return hosts, nil
+}
+
+// CountWithContext is like Count but respects context cancellation and deadlines.
+func (r *HostRepository) CountWithContext(ctx context.Context, query string) (int64, error) {
+	var count int64
+
+	db := r.db.WithContext(ctx).Model(&model.Host{})
+	if query != "" {
+		searchPattern := "%" + query + "%"
+		db = db.Where("ip_address LIKE ? OR hostname LIKE ?", searchPattern, searchPattern)
+	}
+
+	result := db.Count(&count)
+	if result.Error != nil {
+		logger.Error("failed to count hosts with context", zap.Error(result.Error))
 		return 0, result.Error
 	}
 

@@ -74,20 +74,10 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 4. 不确定时明确说明，不编造信息
 
 ## 输出要求
-请以JSON格式输出执行计划：
-{
-  "goal": "任务目标描述",
-  "assumptions": ["假设1", "假设2"],
-  "steps": [
-    {
-      "step_id": "step_1",
-      "title": "步骤标题",
-      "objective": "步骤目标",
-      "expected_output": "预期输出",
-      "suggested_tools": ["ToolName1", "ToolName2"]
-    }
-  ]
-}`, toolList)
+⚠️ 严格要求：只输出一个JSON对象，不要输出任何其他文本、解释、问候或markdown格式。直接以 { 开头，以 } 结尾。
+
+JSON格式如下：
+{"goal":"任务目标描述","assumptions":["假设1","假设2"],"steps":[{"step_id":"step_1","title":"步骤标题","objective":"步骤目标","expected_output":"预期输出","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList)
 
 	userPrompt := p.userMessage
 	if len(p.contextRefs) > 0 {
@@ -115,17 +105,42 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 ## 可用工具（必须严格使用以下工具名，不得发明新工具名）
 %s
 
-## 行动格式
-你必须以JSON格式输出行动指令：
+## ⚠️ 严格输出格式要求（必须完全遵守，不得使用其他格式）
+你的输出必须是一个JSON对象，包含 "action" 字段。不要输出任何非JSON内容。
 
-调用工具时输出：
-{"action":"tool_call","summary":"调用目的简述","tool_call":{"tool_name":"上面列出的工具名之一","reason":"调用原因","args":{...}}}
+### 直接回复（问候、简单问题、不需要工具的场景）：
+{"action":"step_result","summary":"直接回复","step_result":{"result":"你的回复内容","evidence":[],"confidence":"high"}
 
-当收集到足够信息完成当前步骤时，输出：
+示例：
+用户说"你好" → {"action":"step_result","summary":"问候回复","step_result":{"result":"你好！我是 Aegis 智能安全助手，专注于主机安全分析。有什么可以帮您的吗？","evidence":[],"confidence":"high"}}
+
+### 调用工具（需要查询或操作数据时）：
+{"action":"tool_call","summary":"调用目的简述","tool_call":{"tool_name":"上面列出的工具名之一","reason":"调用原因","args":{"参数名":"参数值"}}}
+
+调用工具示例：
+{"action":"tool_call","summary":"查询主机列表","tool_call":{"tool_name":"Host.List","reason":"需要获取所有主机信息","args":{"page":1,"page_size":20}}}
+
+同时调用多个工具的示例（每个工具调用单独一个JSON，按顺序输出）：
+{"action":"tool_call","summary":"查询主机列表","tool_call":{"tool_name":"Host.List","reason":"获取所有主机信息","args":{"page":1,"page_size":20}}}
+{"action":"tool_call","summary":"查询 Agent 在线状态","tool_call":{"tool_name":"Host.AgentStatus.Get","reason":"获取 Agent 在线状态","args":{}}}
+
+### 完成当前步骤（工具调用完成后）：
 {"action":"step_result","summary":"完成总结","step_result":{"result":"步骤结果","evidence":["证据1","证据2"],"confidence":"high/medium/low"}}
 
-当无法继续时，输出：
-{"action":"fail_step","summary":"失败总结","failure":{"reason":"失败原因","recoverable":true/false}}`, toolList)
+### 无法继续：
+{"action":"fail_step","summary":"失败总结","failure":{"reason":"失败原因","recoverable":true}}
+
+## 判断规则
+- 问候、闲聊、简单问题（如"你好"、"你是谁"、"你能做什么"）→ 直接回复，使用 step_result
+- 需要查询系统数据、执行操作 → 调用工具，使用 tool_call
+- 不确定时，优先直接回复而非调用工具
+
+## 禁止事项
+- 禁止在需要调用工具时输出自然语言（如"我来帮您查询..."），必须直接输出JSON
+- 禁止输出 {"name":"...","arguments":...} 格式（这是错误格式）
+- 禁止输出 markdown 代码块（不要用三个反引号包裹）
+- 禁止在JSON前后输出多余文字
+- 必须使用 "action" 字段，不要使用 "name" 或 "type" 字段`, toolList)
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
@@ -134,19 +149,26 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 
 // buildSummarizePrompt 构建总结阶段提示词
 func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBundle {
-	systemPrompt := `你是 Aegis 智能安全助手，需要根据所有收集到的信息生成最终分析报告。
+	// 根据任务类型选择不同的总结格式
+	systemPrompt := `你是 Aegis 智能安全助手。根据收集到的信息回复用户。
 
-## 输出格式
-请以清晰的中文格式输出分析结果，包含：
-1. 任务完成情况总结
-2. 关键发现和数据
+## 回复规则
+
+### 数据查询类（主机查询、资产查看、列表查询等）
+直接告诉用户查询到了什么数据，简洁明了，不需要分析报告格式。
+示例：
+"共查询到 3 台主机：\n1. 192.168.1.10 (hostname-a) - 在线\n2. ..."
+
+### 分析类（安全分析、攻击调查、漏洞评估等）
+使用结构化报告格式：
+1. 分析结论
+2. 关键发现
 3. 安全建议（如有）
-4. 后续操作建议（如有）
 
-要求：
-- 所有结论必须基于实际收集到的数据
-- 不要声称未执行的操作已经完成
-- 如果信息不足，明确说明`
+## 要求
+- 基于实际数据回复，不要编造
+- 简单查询不要加"安全建议"、"后续操作"等多余内容
+- 语言简洁，重点突出数据本身`
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,

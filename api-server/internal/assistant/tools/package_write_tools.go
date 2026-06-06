@@ -29,7 +29,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:      "package",
 		Operation:   "draft_generate",
 		Description: "生成检测包草稿",
-		RiskLevel:   "medium",
+		Risk:        assistant.ToolRiskMedium,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
@@ -77,7 +77,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:      "package",
 		Operation:   "build_start",
 		Description: "启动检测包构建",
-		RiskLevel:   "medium",
+		Risk:        assistant.ToolRiskMedium,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
@@ -104,7 +104,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:      "package",
 		Operation:   "sign",
 		Description: "签名检测包（高风险操作，需审批）",
-		RiskLevel:   "critical",
+		Risk:        assistant.ToolRiskCritical,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
@@ -131,7 +131,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:      "package",
 		Operation:   "enable",
 		Description: "启用检测包，将检测包分发到所有Agent（高风险操作，需审批）",
-		RiskLevel:   "critical",
+		Risk:        assistant.ToolRiskCritical,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{

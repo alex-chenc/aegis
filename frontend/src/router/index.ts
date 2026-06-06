@@ -227,6 +227,12 @@ const routes = [
     component: EBPFHooks,
     meta: { title: 'eBPF Hook 白名单' }
   },
+  {
+    path: '/settings/tool-policy',
+    name: 'ToolPolicySettings',
+    component: () => import('../views/settings/AssistantToolPolicySettings.vue'),
+    meta: { title: '智能体工具权限' }
+  },
   // V6.0 智能助手
   {
     path: '/assistant',

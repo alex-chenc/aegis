@@ -2,14 +2,25 @@ package assistant
 
 import (
 	"context"
+
+	"api-server/internal/repository"
 )
 
-// RiskPolicy 风险策略
-type RiskPolicy struct{}
+// RiskPolicy 风险策略（对齐设计文档 8.2 节）
+type RiskPolicy struct {
+	systemConfig *repository.SystemConfigRepo
+}
+
+// RiskPolicyDeps 风险策略依赖
+type RiskPolicyDeps struct {
+	SystemConfig *repository.SystemConfigRepo
+}
 
 // NewRiskPolicy 创建风险策略
-func NewRiskPolicy() *RiskPolicy {
-	return &RiskPolicy{}
+func NewRiskPolicy(deps RiskPolicyDeps) *RiskPolicy {
+	return &RiskPolicy{
+		systemConfig: deps.SystemConfig,
+	}
 }
 
 // Evaluate 评估工具风险

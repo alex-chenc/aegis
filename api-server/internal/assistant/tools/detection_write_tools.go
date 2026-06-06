@@ -26,7 +26,7 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 		Domain:      "detection",
 		Operation:   "alert_resolve",
 		Description: "将告警标记为已解决",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -49,7 +49,7 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 		Domain:      "detection",
 		Operation:   "alert_block",
 		Description: "对告警关联的进程/连接执行阻断操作（高风险，需审批）",
-		RiskLevel:   "critical",
+		Risk:        assistant.ToolRiskCritical,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{

@@ -19,6 +19,10 @@ import {
   type AssistantToolCall,
   type AssistantApproval,
   type AssistantResultCard,
+  type AssistantIntentResult,
+  type AssistantToolSelection,
+  type AssistantToolSearchResult,
+  type AssistantPlan,
   type CreateSessionRequest,
   type SendMessageRequest,
   type RunHandle,
@@ -46,6 +50,12 @@ export const useAssistantStore = defineStore('assistant', () => {
   const approvals = ref<AssistantApproval[]>([])
   /** 当前会话结果卡片 */
   const resultCards = ref<AssistantResultCard[]>([])
+  /** 意图识别结果 */
+  const intentResult = ref<AssistantIntentResult | null>(null)
+  /** 工具选择列表 */
+  const toolSelections = ref<AssistantToolSelection[]>([])
+  /** 工具搜索结果 */
+  const toolSearchResults = ref<AssistantToolSearchResult[]>([])
   /** 是否正在流式接收 */
   const streaming = ref(false)
   /** 全局加载状态 */
@@ -60,24 +70,47 @@ export const useAssistantStore = defineStore('assistant', () => {
   // Actions
   // ============================================
 
+  // 分页状态
+  const sessionPage = ref(1)
+  const sessionTotal = ref(0)
+  const hasMoreSessions = ref(false)
+  const loadingMore = ref(false)
+
   /**
    * 获取会话列表
+   * @param params 查询参数
+   * @param append 是否追加模式（加载更多），默认 false（替换模式）
    */
-  async function fetchSessions(params?: SessionsQueryParams) {
-    loading.value = true
+  async function fetchSessions(params?: SessionsQueryParams, append = false) {
+    if (append) {
+      loadingMore.value = true
+    } else {
+      loading.value = true
+      sessionPage.value = 1
+    }
     error.value = null
     try {
-      const result = await getSessions(params)
+      const queryPage = append ? sessionPage.value + 1 : 1
+      const result = await getSessions({ ...params, page: queryPage, page_size: 20 })
       // API 返回 { sessions: [...], total: N }
-      sessions.value = result?.sessions || result?.items || []
+      const items = result?.sessions || result?.items || []
+      if (append) {
+        sessions.value = [...sessions.value, ...items]
+        sessionPage.value = queryPage
+      } else {
+        sessions.value = items
+      }
+      sessionTotal.value = result?.total || 0
+      hasMoreSessions.value = sessions.value.length < sessionTotal.value
       return result
     } catch (err: any) {
       // 不抛出错误，避免页面崩溃
       error.value = err.message || '获取会话列表失败'
-      sessions.value = []
+      if (!append) sessions.value = []
       return { sessions: [], total: 0 }
     } finally {
       loading.value = false
+      loadingMore.value = false
     }
   }
 
@@ -346,18 +379,117 @@ export const useAssistantStore = defineStore('assistant', () => {
         // 思考状态（可选：显示 loading 指示器）
         break
 
+      case 'intent_detected': {
+        // 意图识别结果
+        // payload: AssistantIntentResult
+        intentResult.value = payload as AssistantIntentResult
+        break
+      }
+
+      case 'tools_selected': {
+        // 工具选择结果
+        // payload: AssistantToolSelection
+        const selection = payload as AssistantToolSelection
+        const existingIdx = toolSelections.value.findIndex(s => s.run_id === selection.run_id)
+        if (existingIdx > -1) {
+          toolSelections.value[existingIdx] = selection
+        } else {
+          toolSelections.value.push(selection)
+        }
+        break
+      }
+
+      case 'tool_search': {
+        // 工具搜索结果
+        // payload: AssistantToolSearchResult
+        toolSearchResults.value.push(payload as AssistantToolSearchResult)
+        break
+      }
+
+      case 'tool_expansion': {
+        // 工具扩展 — 更新已有工具选择
+        // payload: AssistantToolSelection (expanded stage)
+        const expanded = payload as AssistantToolSelection
+        const expandIdx = toolSelections.value.findIndex(s => s.run_id === expanded.run_id)
+        if (expandIdx > -1) {
+          toolSelections.value[expandIdx] = expanded
+        } else {
+          toolSelections.value.push(expanded)
+        }
+        break
+      }
+
+      case 'plan': {
+        // 执行计划 — 嵌入到当前助手消息的 plan 字段
+        // payload: AssistantPlan
+        const plan = payload as AssistantPlan
+        const planMsgId = event.message_id
+        if (planMsgId) {
+          const planMsg = messages.value.find(m => m.id === planMsgId)
+          if (planMsg) {
+            planMsg.plan = {
+              goal: plan.goal,
+              status: plan.status,
+              steps: plan.steps.map(s => ({
+                step_id: s.step_id,
+                title: s.title,
+                status: s.status,
+                result_summary: s.result_summary,
+              })),
+            }
+          }
+        }
+        break
+      }
+
+      case 'step_started': {
+        // 步骤开始 — 更新对应 plan step 状态
+        // payload: { step_id, title? }
+        const stepStartedId = event.message_id
+        if (stepStartedId) {
+          const stepMsg = messages.value.find(m => m.id === stepStartedId)
+          if (stepMsg?.plan?.steps) {
+            const step = stepMsg.plan.steps.find(s => s.step_id === payload.step_id)
+            if (step) {
+              step.status = 'running'
+            }
+          }
+        }
+        break
+      }
+
+      case 'step_completed': {
+        // 步骤完成 — 更新对应 plan step 状态和结果
+        // payload: { step_id, result_summary?, status? }
+        const stepDoneId = event.message_id
+        if (stepDoneId) {
+          const stepDoneMsg = messages.value.find(m => m.id === stepDoneId)
+          if (stepDoneMsg?.plan?.steps) {
+            const stepDone = stepDoneMsg.plan.steps.find(s => s.step_id === payload.step_id)
+            if (stepDone) {
+              stepDone.status = payload.status || 'completed'
+              if (payload.result_summary) {
+                stepDone.result_summary = payload.result_summary
+              }
+            }
+          }
+        }
+        break
+      }
+
       case 'message_delta': {
         // 增量更新助手消息内容
         // payload: { message_id, delta }
         const { message_id, delta } = payload
         if (!delta) break
-        const existing = messages.value.find(m => m.id === message_id)
+        const existing = messages.value.find(m => m.id === message_id || m.message_id === message_id)
         if (existing) {
           existing.content += delta
         } else {
           messages.value.push({
             id: message_id,
             session_id: currentSession.value?.session_id || '',
+            message_id: message_id,
             role: 'assistant',
             content: delta,
             created_at: new Date().toISOString(),
@@ -437,8 +569,15 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
 
       case 'result_card': {
-        // 结果卡片
-        const card = payload as AssistantResultCard
+        // 结果卡片 — 后端可能用 card_type/data 或 type/payload，统一映射
+        const rawCard = payload as Record<string, any>
+        const card: AssistantResultCard = {
+          id: rawCard.id || `card-${Date.now()}`,
+          type: rawCard.type || rawCard.card_type,
+          title: rawCard.title || '',
+          payload: rawCard.payload || rawCard.data || {},
+          created_at: rawCard.created_at || new Date().toISOString(),
+        }
         resultCards.value.push(card)
         break
       }
@@ -525,6 +664,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     toolCalls.value = []
     approvals.value = []
     resultCards.value = []
+    intentResult.value = null
+    toolSelections.value = []
+    toolSearchResults.value = []
     streaming.value = false
     loading.value = false
     error.value = null
@@ -539,9 +681,15 @@ export const useAssistantStore = defineStore('assistant', () => {
     toolCalls,
     approvals,
     resultCards,
+    intentResult,
+    toolSelections,
+    toolSearchResults,
     streaming,
     loading,
     error,
+    sessionTotal,
+    hasMoreSessions,
+    loadingMore,
 
     // Actions
     fetchSessions,

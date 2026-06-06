@@ -218,6 +218,55 @@ func (g *ApprovalGate) Reject(ctx context.Context, approvalID string, operator s
 	return approval, nil
 }
 
+// ExecuteApprovedTool 执行已批准的工具（对齐设计文档 18.4 节）
+// 用户批准后，执行原工具调用并返回结果
+func (g *ApprovalGate) ExecuteApprovedTool(ctx context.Context, approval *model.AssistantApproval, dispatcher *ToolDispatcher) (*ToolExecutionResult, error) {
+	// 校验审批状态
+	if approval.Status != model.ApprovalStatusApproved {
+		return nil, fmt.Errorf("approval %s is not approved (status: %s)", approval.ApprovalID, approval.Status)
+	}
+
+	// 解析原始参数
+	var args map[string]interface{}
+	if approval.ParamsPreview != nil {
+		args = unmarshalJSON(approval.ParamsPreview)
+	}
+
+	// 查找工具规格
+	tool, ok := g.toolCallRepo.(interface{ Get(string) (*ToolSpec, bool) })
+	_ = tool
+	_ = ok
+
+	// 执行工具（通过 dispatcher，Approved=true 跳过风险评估）
+	result, err := dispatcher.Dispatch(ctx, DispatchRequest{
+		SessionID: approval.SessionID,
+		ToolName:  approval.ToolName,
+		Args:      args,
+		Operator:  approval.RequestedBy,
+		Approved:  true,
+	})
+	if err != nil {
+		_ = g.approvalRepo.MarkFailed(ctx, approval.ApprovalID, err.Error())
+		return nil, fmt.Errorf("failed to execute approved tool: %w", err)
+	}
+
+	// 标记审批已执行
+	_ = g.approvalRepo.MarkExecuted(ctx, approval.ApprovalID)
+
+	g.logger.Info("approved tool executed",
+		zap.String("approval_id", approval.ApprovalID),
+		zap.String("tool_name", approval.ToolName),
+		zap.Bool("success", result.Success),
+	)
+
+	return &ToolExecutionResult{
+		Success:    result.Success,
+		Data:       result.Data,
+		Error:      result.Error,
+		DurationMs: result.DurationMs,
+	}, nil
+}
+
 // MarkExecuted 标记审批已执行
 func (g *ApprovalGate) MarkExecuted(ctx context.Context, approvalID string) error {
 	return g.approvalRepo.MarkExecuted(ctx, approvalID)

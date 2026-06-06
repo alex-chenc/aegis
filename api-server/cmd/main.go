@@ -286,15 +286,23 @@ func main() {
 		HostRepo:       hostRepo,
 		AlertRepo:      alertRepo,
 		TaskRepo:       taskLogRepo,
+		VulnRepo:       vulnRepo,
 		ContextRefRepo: assistantContextRefRepo,
 	})
-	riskPolicy := assistant.NewRiskPolicy()
+	riskPolicy := assistant.NewRiskPolicy(assistant.RiskPolicyDeps{
+		SystemConfig: systemConfigRepo,
+	})
 	toolRegistry := assistant.NewToolRegistry()
 	// Register all assistant tools
 	registerAssistantTools(toolRegistry, assistantLogger, hostRepo, alertRepo, taskLogRepo, vulnRepo, sigmaRuleRepo, blockPolicyRepo, blockRepo, configRepo, auditLogRepo, detectionPkgRepo, serverClient)
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
 	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
-	toolPolicyService := assistant.NewToolPolicyService(assistantToolPolicyRepo, toolRegistry, assistantLogger)
+	toolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
+		PolicyRepo:   assistantToolPolicyRepo,
+		Registry:     toolRegistry,
+		SystemConfig: systemConfigRepo,
+		Logger:       assistantLogger,
+	})
 	runManager := assistant.NewRunManager()
 	approvalGate := assistant.NewApprovalGate(assistant.ApprovalGateDeps{
 		ApprovalRepo:  assistantApprovalRepo,
@@ -304,8 +312,15 @@ func main() {
 		Logger:        assistantLogger,
 	})
 	intentRouter := assistant.NewIntentRouter()
-	runtimeFactory := assistant.NewRuntimeFactory(configRepo, assistantLogger)
 	toolDispatcher := assistant.NewToolDispatcher(toolRegistry, approvalGate, assistantToolCallRepo, assistantSessionRepo, toolPolicyService, assistantLogger)
+	runtimeFactory := assistant.NewRuntimeFactory(assistant.RuntimeFactoryDeps{
+		ConfigRepo:     configRepo,
+		Catalog:        toolCatalog,
+		Selector:       toolSelector,
+		ToolDispatcher: toolDispatcher,
+		RunManager:     runManager,
+		Logger:         assistantLogger,
+	})
 	orchestrator := assistant.NewOrchestrator(assistant.OrchestratorDeps{
 		ConfigRepo:     configRepo,
 		MessageRepo:    assistantMessageRepo,
@@ -314,6 +329,7 @@ func main() {
 		ToolRegistry:   toolRegistry,
 		ToolSelector:   toolSelector,
 		ToolDispatcher: toolDispatcher,
+		ApprovalGate:   approvalGate,
 		ContextLoader:  contextLoader,
 		IntentRouter:   intentRouter,
 		RuntimeFactory: runtimeFactory,
@@ -350,6 +366,67 @@ func main() {
 		QueryLogRepo: externalMCPQueryLogRepo,
 		Logger:       assistantLogger,
 	})
+
+	// V6.0 External MCP components
+	mcpRedactor := assistant.NewExternalMCPRedactor(assistantLogger)
+	mcpNormalizer := assistant.NewExternalMCPNormalizer(assistantLogger)
+	mcpPromptProvider := assistant.NewExternalMCPPromptProvider(mcpRedactor)
+	mcpClientFactory := assistant.NewExternalMCPClientFactory(assistantLogger)
+	mcpQueryPlanner := assistant.NewExternalMCPQueryPlanner(mcpSvc, mcpPromptProvider, assistantLogger)
+
+	// Register MCP tools
+	if err := assistantTools.RegisterExternalMCPTools(toolRegistry, assistantTools.ExternalMCPToolDeps{
+		SourceService:  mcpSvc,
+		QueryPlanner:   mcpQueryPlanner,
+		Normalizer:     mcpNormalizer,
+		Redactor:       mcpRedactor,
+		PromptProvider: mcpPromptProvider,
+		Logger:         assistantLogger,
+	}); err != nil {
+		logger.Warn("failed to register external MCP tools", zap.Error(err))
+	}
+
+	// Register remaining assistant tools (require services initialized above)
+	// Agent tools
+	if err := assistantTools.RegisterAgentTools(toolRegistry, assistantTools.AgentToolDeps{ServerClient: serverClient}); err != nil {
+		logger.Warn("failed to register agent tools", zap.Error(err))
+	}
+	// Investigation tools
+	if err := assistantTools.RegisterInvestigationTools(toolRegistry, assistantTools.InvestigationToolDeps{InvestigationService: investigationSvc}); err != nil {
+		logger.Warn("failed to register investigation tools", zap.Error(err))
+	}
+	// System tools (Tool.Search, Context.Get, Session.Summarize)
+	if err := assistantTools.RegisterSystemTools(toolRegistry, toolCatalog, assistantSessionRepo, contextLoader); err != nil {
+		logger.Warn("failed to register system tools", zap.Error(err))
+	}
+	// Notification tools
+	if err := assistantTools.RegisterNotificationTools(toolRegistry, assistantTools.NotificationToolDeps{}); err != nil {
+		logger.Warn("failed to register notification tools", zap.Error(err))
+	}
+	// Baseline tools
+	if err := assistantTools.RegisterBaselineTools(toolRegistry, assistantTools.BaselineToolDeps{TaskService: taskService}); err != nil {
+		logger.Warn("failed to register baseline tools", zap.Error(err))
+	}
+	// Detection write tools
+	if err := assistantTools.RegisterDetectionWriteTools(toolRegistry, assistantTools.DetectionWriteToolDeps{AlertService: alertService}); err != nil {
+		logger.Warn("failed to register detection write tools", zap.Error(err))
+	}
+	// Package write tools
+	if err := assistantTools.RegisterPackageWriteTools(toolRegistry, assistantTools.PackageWriteToolDeps{PackageService: detectionPkgService}); err != nil {
+		logger.Warn("failed to register package write tools", zap.Error(err))
+	}
+	// Config tools
+	if err := assistantTools.RegisterConfigTools(toolRegistry, assistantTools.ConfigToolDeps{SystemConfigRepo: systemConfigRepo, LLMConfigRepo: configRepo}); err != nil {
+		logger.Warn("failed to register config tools", zap.Error(err))
+	}
+	// Sigma rule tools
+	if err := assistantTools.RegisterSigmaRuleTools(toolRegistry, assistantTools.SigmaRuleToolDeps{SigmaRuleRepo: sigmaRuleRepo, RuleGenService: ruleGenerationService}); err != nil {
+		logger.Warn("failed to register sigma rule tools", zap.Error(err))
+	}
+
+	assistantLogger.Info("all assistant tools registered", zap.Int("total", toolRegistry.Count()))
+
+	_ = mcpClientFactory
 
 	assistantHandler := handler.NewAssistantHandler(assistantService, approvalGate, toolPolicyService, investigationSvc, mcpSvc, assistantLogger)
 

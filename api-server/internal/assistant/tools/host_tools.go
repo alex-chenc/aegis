@@ -15,37 +15,58 @@ type HostToolDeps struct {
 	HostRepo *repository.HostRepository
 }
 
-// RegisterHostTools 注册主机域工具
+// RegisterHostTools 注册主机域工具（对齐设计文档命名规范）
 func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) error {
+	// Host.List — 查询主机列表
 	if err := registry.Register(&assistant.ToolSpec{
 		Name:        "Host.List",
-		Domain:      "host",
-		Operation:   "list",
+		Domain:      assistant.DomainHost,
+		Operation:   assistant.OpList,
+		Capability:  "list_hosts",
 		Description: "列出所有主机，支持分页和关键字搜索",
-		RiskLevel:   "low",
-		Enabled:     true,
+		Aliases:     []string{"主机列表", "资产列表", "list hosts"},
+		Tags:        []string{"v5.5", "host", "asset"},
+		ObjectTypes: []string{"host"},
+		PageRoutes:  []string{"/hosts", "/assets"},
+		Risk:        assistant.ToolRiskReadonly,
+		AutoCallable: true,
+		Idempotent:   true,
 		DefaultWhitelisted: true,
+		Enabled:      true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
+				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量，默认20，最大100"},
 				"query":     map[string]interface{}{"type": "string", "description": "搜索关键字（IP或主机名）"},
 			},
 		},
 		Handler: makeHostListHandler(deps.HostRepo),
+		ServiceBinding: assistant.ServiceBinding{
+			Component: "api-server",
+			File:      "api-server/internal/repository/host_repo.go",
+			Function:  "HostRepository.FindAll",
+		},
 	}); err != nil {
 		return err
 	}
 
+	// Host.Get — 获取主机详情（对齐设计文档命名：Host.Get 而非 Host.GetDetail）
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Host.GetDetail",
-		Domain:      "host",
-		Operation:   "get_detail",
+		Name:        "Host.Get",
+		Domain:      assistant.DomainHost,
+		Operation:   assistant.OpGet,
+		Capability:  "get_host_detail",
 		Description: "根据主机ID获取主机详细信息",
-		RiskLevel:   "low",
-		Enabled:     true,
+		Aliases:     []string{"主机详情", "主机信息", "get host"},
+		Tags:        []string{"v5.5", "host", "asset"},
+		ObjectTypes: []string{"host"},
+		PageRoutes:  []string{"/hosts/:id"},
+		Risk:        assistant.ToolRiskReadonly,
+		AutoCallable: true,
+		Idempotent:   true,
 		DefaultWhitelisted: true,
+		Enabled:      true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -54,18 +75,31 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 			"required": []string{"host_id"},
 		},
 		Handler: makeHostGetDetailHandler(deps.HostRepo),
+		ServiceBinding: assistant.ServiceBinding{
+			Component: "api-server",
+			File:      "api-server/internal/repository/host_repo.go",
+			Function:  "HostRepository.FindByID",
+		},
 	}); err != nil {
 		return err
 	}
 
+	// Host.AgentStatus.Get — 查询 Agent 在线状态（对齐设计文档：Host.AgentStatus.Get 而非 Host.FindOffline）
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Host.FindOffline",
-		Domain:      "host",
-		Operation:   "find_offline",
-		Description: "查找离线主机，通过查询心跳超时的主机",
-		RiskLevel:   "low",
-		Enabled:     true,
+		Name:        "Host.AgentStatus.Get",
+		Domain:      assistant.DomainHost,
+		Operation:   assistant.OpGet,
+		Capability:  "get_agent_status",
+		Description: "查询 Agent 在线状态，返回在线和离线主机统计",
+		Aliases:     []string{"Agent状态", "在线状态", "离线主机"},
+		Tags:        []string{"v5.5", "host", "agent", "status"},
+		ObjectTypes: []string{"host"},
+		PageRoutes:  []string{"/hosts"},
+		Risk:        assistant.ToolRiskReadonly,
+		AutoCallable: true,
+		Idempotent:   true,
 		DefaultWhitelisted: true,
+		Enabled:      true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -73,7 +107,12 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
 			},
 		},
-		Handler: makeHostFindOfflineHandler(deps.HostRepo),
+		Handler: makeHostAgentStatusHandler(deps.HostRepo),
+		ServiceBinding: assistant.ServiceBinding{
+			Component: "api-server",
+			File:      "api-server/internal/repository/host_repo.go",
+			Function:  "HostRepository.FindAll + heartbeat filter",
+		},
 	}); err != nil {
 		return err
 	}
@@ -87,13 +126,23 @@ func makeHostListHandler(repo *repository.HostRepository) assistant.ToolHandler 
 		pageSize := getIntArg(args, "page_size", 20)
 		query := getStringArg(args, "query", "")
 
-		hosts, err := repo.FindAll(page, pageSize, query)
+		// Apply timeout to database queries to prevent indefinite blocking
+		queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		hosts, err := repo.FindAllWithContext(queryCtx, page, pageSize, query)
 		if err != nil {
+			if queryCtx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("host list query timeout: %w", err)
+			}
 			return nil, fmt.Errorf("failed to list hosts: %w", err)
 		}
 
-		total, err := repo.Count(query)
+		total, err := repo.CountWithContext(queryCtx, query)
 		if err != nil {
+			if queryCtx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("host count query timeout: %w", err)
+			}
 			return nil, fmt.Errorf("failed to count hosts: %w", err)
 		}
 
@@ -116,8 +165,15 @@ func makeHostGetDetailHandler(repo *repository.HostRepository) assistant.ToolHan
 			return nil, fmt.Errorf("invalid host_id: %w", err)
 		}
 
-		host, err := repo.FindByID(hostID)
+		// Apply timeout to database query
+		queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		host, err := repo.FindByIDWithContext(queryCtx, hostID)
 		if err != nil {
+			if queryCtx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("host detail query timeout: %w", err)
+			}
 			return nil, fmt.Errorf("failed to find host: %w", err)
 		}
 
@@ -125,15 +181,22 @@ func makeHostGetDetailHandler(repo *repository.HostRepository) assistant.ToolHan
 	}
 }
 
-func makeHostFindOfflineHandler(repo *repository.HostRepository) assistant.ToolHandler {
+func makeHostAgentStatusHandler(repo *repository.HostRepository) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		page := getIntArg(args, "page", 1)
 		pageSize := getIntArg(args, "page_size", 20)
 
+		// Apply timeout to database query
+		queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
 		// FindAll with empty query returns all hosts; we filter offline ones client-side.
 		// Offline = last_heartbeat_at is older than 90 seconds or nil.
-		hosts, err := repo.FindAll(page, pageSize, "")
+		hosts, err := repo.FindAllWithContext(queryCtx, page, pageSize, "")
 		if err != nil {
+			if queryCtx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("offline hosts query timeout: %w", err)
+			}
 			return nil, fmt.Errorf("failed to list hosts: %w", err)
 		}
 

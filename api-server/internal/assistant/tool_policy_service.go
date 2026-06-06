@@ -2,30 +2,38 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
 	"go.uber.org/zap"
 )
 
-// ToolPolicyService 工具策略服务
+// ToolPolicyService 工具策略服务（对齐设计文档 8.1 节）
 type ToolPolicyService struct {
-	policyRepo repository.AssistantToolPolicyRepository
-	registry   *ToolRegistry
-	logger     *zap.Logger
+	policyRepo   repository.AssistantToolPolicyRepository
+	registry     *ToolRegistry
+	systemConfig *repository.SystemConfigRepo
+	logger       *zap.Logger
+}
+
+// ToolPolicyServiceDeps 工具策略服务依赖
+type ToolPolicyServiceDeps struct {
+	PolicyRepo   repository.AssistantToolPolicyRepository
+	Registry     *ToolRegistry
+	SystemConfig *repository.SystemConfigRepo
+	Logger       *zap.Logger
 }
 
 // NewToolPolicyService 创建工具策略服务
-func NewToolPolicyService(
-	policyRepo repository.AssistantToolPolicyRepository,
-	registry *ToolRegistry,
-	logger *zap.Logger,
-) *ToolPolicyService {
+func NewToolPolicyService(deps ToolPolicyServiceDeps) *ToolPolicyService {
 	return &ToolPolicyService{
-		policyRepo: policyRepo,
-		registry:   registry,
-		logger:     logger,
+		policyRepo:   deps.PolicyRepo,
+		registry:     deps.Registry,
+		systemConfig: deps.SystemConfig,
+		logger:       deps.Logger,
 	}
 }
 
@@ -37,9 +45,9 @@ func (s *ToolPolicyService) SyncCatalogTools(ctx context.Context) error {
 	for _, tool := range tools {
 		policies = append(policies, model.AssistantToolPolicy{
 			ToolName:          tool.Name,
-			Domain:            tool.Domain,
-			Operation:         tool.Operation,
-			RiskLevel:         tool.RiskLevel,
+			Domain:            string(tool.Domain),
+			Operation:         string(tool.Operation),
+			RiskLevel:         string(tool.Risk),
 			Description:       tool.Description,
 			DefaultWhitelisted: tool.DefaultWhitelisted,
 			Whitelisted:       tool.DefaultWhitelisted,
@@ -56,25 +64,46 @@ func (s *ToolPolicyService) SyncCatalogTools(ctx context.Context) error {
 	return nil
 }
 
-// GetApprovalMode 获取当前审批模式
+// GetApprovalMode 获取当前审批模式（从 system_config 表读取，默认 whitelist）
 func (s *ToolPolicyService) GetApprovalMode(ctx context.Context) (string, error) {
-	// Read from system config
-	// Default to whitelist mode
-	return "whitelist", nil
+	if s.systemConfig == nil {
+		return model.ApprovalModeWhitelist, nil
+	}
+	cfg, err := s.systemConfig.GetByKey("assistant.tool_approval_mode")
+	if err != nil || cfg == nil {
+		return model.ApprovalModeWhitelist, nil
+	}
+	// ConfigValue 是 JSON 编码的字符串，如 "\"whitelist\""
+	var mode string
+	if err := json.Unmarshal(cfg.ConfigValue, &mode); err != nil {
+		// 兼容直接存储非 JSON 值
+		mode = strings.Trim(string(cfg.ConfigValue), "\"")
+	}
+	validModes := map[string]bool{
+		model.ApprovalModeRequestApproval: true,
+		model.ApprovalModeWhitelist:       true,
+		model.ApprovalModeFullAccess:      true,
+	}
+	if !validModes[mode] {
+		return model.ApprovalModeWhitelist, nil
+	}
+	return mode, nil
 }
 
-// SetApprovalMode 设置审批模式
-func (s *ToolPolicyService) SetApprovalMode(ctx context.Context, mode string) error {
+// SetApprovalMode 设置审批模式（持久化到 system_config 表）
+func (s *ToolPolicyService) SetApprovalMode(ctx context.Context, mode string, operator string) error {
 	validModes := map[string]bool{
-		"request_approval": true,
-		"whitelist":        true,
-		"full_access":      true,
+		model.ApprovalModeRequestApproval: true,
+		model.ApprovalModeWhitelist:       true,
+		model.ApprovalModeFullAccess:      true,
 	}
 	if !validModes[mode] {
 		return fmt.Errorf("invalid approval mode: %s", mode)
 	}
-	// Save to system config
-	return nil
+	if s.systemConfig == nil {
+		return fmt.Errorf("system config not available")
+	}
+	return s.systemConfig.Upsert("assistant.tool_approval_mode", mode, "智能体工具审批模式", "assistant")
 }
 
 // IsToolWhitelisted 检查工具是否在白名单中

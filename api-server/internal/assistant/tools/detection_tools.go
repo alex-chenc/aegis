@@ -22,7 +22,7 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 		Domain:      "detection",
 		Operation:   "alert_list",
 		Description: "列出告警，支持按主机名、时间范围等条件筛选",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -46,7 +46,7 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 		Domain:      "detection",
 		Operation:   "alert_get",
 		Description: "根据告警ID获取告警详情",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -66,7 +66,7 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 		Domain:      "detection",
 		Operation:   "statistics_get",
 		Description: "获取威胁统计概览，包含今日告警数、拦截数、受影响主机数和活跃规则数",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -83,7 +83,7 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 		Domain:      "detection",
 		Operation:   "trend_get",
 		Description: "获取告警趋势数据，按小时聚合",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -153,17 +153,36 @@ func makeThreatStatisticsHandler(
 	sigmaRuleRepo *repository.SigmaRuleRepository,
 ) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-		todayAlerts, _ := alertRepo.GetTodayCount()
-		todayBlocks, _ := blockRepo.GetTodayCount()
-		affectedHosts, _ := alertRepo.GetAffectedHostCount()
-		activeRules, _ := sigmaRuleRepo.GetActiveCount()
+		todayAlerts, err1 := alertRepo.GetTodayCount()
+		todayBlocks, err2 := blockRepo.GetTodayCount()
+		affectedHosts, err3 := alertRepo.GetAffectedHostCount()
+		activeRules, err4 := sigmaRuleRepo.GetActiveCount()
 
-		return map[string]interface{}{
+		// 收集错误但不阻断返回，部分数据仍可用
+		var warnings []string
+		if err1 != nil {
+			warnings = append(warnings, fmt.Sprintf("today_alerts query failed: %v", err1))
+		}
+		if err2 != nil {
+			warnings = append(warnings, fmt.Sprintf("today_blocks query failed: %v", err2))
+		}
+		if err3 != nil {
+			warnings = append(warnings, fmt.Sprintf("affected_hosts query failed: %v", err3))
+		}
+		if err4 != nil {
+			warnings = append(warnings, fmt.Sprintf("active_rules query failed: %v", err4))
+		}
+
+		result := map[string]interface{}{
 			"today_alerts":   todayAlerts,
 			"today_blocks":   todayBlocks,
 			"affected_hosts": affectedHosts,
 			"active_rules":   activeRules,
-		}, nil
+		}
+		if len(warnings) > 0 {
+			result["warnings"] = warnings
+		}
+		return result, nil
 	}
 }
 

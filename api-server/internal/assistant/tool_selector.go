@@ -38,15 +38,23 @@ func (s *ToolSelector) Select(input ToolSelectionInput) *ToolSelectionResult {
 		score := s.scoreTool(tool, input)
 
 		// Filter: critical tools excluded unless explicit intent
-		if tool.RiskLevel == "critical" && !input.ExplicitHighRisk {
+		if tool.Risk == ToolRiskCritical && !input.ExplicitHighRisk {
 			continue
 		}
 
-		// Filter: write tools limited
+		// Filter: high risk write tools excluded unless explicit intent
 		if s.isWriteTool(tool) && !input.ExplicitWrite {
-			if tool.RiskLevel == "high" || tool.RiskLevel == "critical" {
+			if tool.Risk == ToolRiskHigh || tool.Risk == ToolRiskCritical {
 				continue
 			}
+		}
+
+		// Filter: agent tools only for security analysis intents
+		// Agent 工具（进程采集、网络采集等）通过 gRPC 调用目标主机 Agent，
+		// 只应在安全分析场景（事件分析、攻击研判、威胁检测）下注入。
+		// 普通资源查询（主机列表、资产统计等）应直接使用服务端数据库查询工具。
+		if tool.Domain == DomainAgent && !s.IntentRequiresAgentTools(input.Intent) {
+			continue
 		}
 
 		if score > 0 {
@@ -147,28 +155,63 @@ func (s *ToolSelector) Expand(currentTools []string, expansionQuery string, maxA
 	return expanded
 }
 
+// scoreTool 评分工具（对齐设计文档 6.3 节评分规则）
+//
+// score =
+//
+//	0.35 * domain_match
+//	+ 0.20 * operation_match
+//	+ 0.15 * keyword_match
+//	+ 0.10 * page_route_match
+//	+ 0.10 * context_object_match
+//	+ 0.05 * recent_usage_match
+//	+ 0.05 * risk_fit
 func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float64 {
 	score := 0.0
 
 	// Domain match (0.35)
 	for _, domain := range input.Intent.Domains {
-		if tool.Domain == domain {
+		if string(tool.Domain) == domain {
 			score += 0.35
 			break
 		}
 	}
 
 	// Operation match (0.20)
-	if input.Intent.Action != "" && strings.Contains(strings.ToLower(tool.Operation), strings.ToLower(input.Intent.Action)) {
-		score += 0.20
+	if input.Intent.Action != "" {
+		action := strings.ToLower(input.Intent.Action)
+		op := strings.ToLower(string(tool.Operation))
+		if strings.Contains(op, action) || action == "query" && (op == "list" || op == "get" || op == "search") {
+			score += 0.20
+		}
 	}
 
-	// Keyword match (0.15)
+	// Keyword match (0.15) — 匹配 name, description, aliases, tags
 	query := strings.ToLower(input.Query)
 	if query != "" {
+		matched := false
 		name := strings.ToLower(tool.Name)
 		desc := strings.ToLower(tool.Description)
 		if strings.Contains(name, query) || strings.Contains(desc, query) {
+			matched = true
+		}
+		if !matched {
+			for _, alias := range tool.Aliases {
+				if strings.Contains(strings.ToLower(alias), query) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			for _, tag := range tool.Tags {
+				if strings.Contains(strings.ToLower(tag), query) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
 			score += 0.15
 		}
 	}
@@ -176,27 +219,43 @@ func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float
 	// Page route match (0.10)
 	if input.PageRoute != "" {
 		pageRoute := strings.ToLower(input.PageRoute)
-		domain := strings.ToLower(tool.Domain)
-		if strings.Contains(pageRoute, domain) {
-			score += 0.10
+		for _, pr := range tool.PageRoutes {
+			if strings.Contains(pageRoute, strings.ToLower(pr)) {
+				score += 0.10
+				break
+			}
+		}
+		// 降级：按域名匹配
+		if score < 0.10 {
+			domain := strings.ToLower(string(tool.Domain))
+			if strings.Contains(pageRoute, domain) {
+				score += 0.05
+			}
 		}
 	}
 
 	// Context object match (0.10)
 	for _, ref := range input.ContextRefs {
-		if tool.Domain == s.mapContextToDomain(ref.ObjectType) {
+		if string(tool.Domain) == s.mapContextToDomain(ref.ObjectType) {
 			score += 0.10
 			break
+		}
+		// 检查 ObjectTypes
+		for _, ot := range tool.ObjectTypes {
+			if ot == ref.ObjectType {
+				score += 0.10
+				break
+			}
 		}
 	}
 
 	// Risk fit (0.05) - prefer readonly for general queries
-	if tool.RiskLevel == "readonly" {
+	if tool.Risk == ToolRiskReadonly {
 		score += 0.05
 	}
 
 	// Query tools always prioritized
-	if tool.RiskLevel == "readonly" && input.Intent.Action == "query" {
+	if tool.Risk == ToolRiskReadonly && input.Intent.Action == "query" {
 		score += 0.05
 	}
 
@@ -204,7 +263,7 @@ func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float
 }
 
 func (s *ToolSelector) isWriteTool(tool *ToolSpec) bool {
-	return tool.RiskLevel != "readonly"
+	return tool.Risk != ToolRiskReadonly && tool.Risk != ToolRiskLow
 }
 
 func (s *ToolSelector) mapContextToDomain(objectType string) string {
@@ -220,16 +279,42 @@ func (s *ToolSelector) mapContextToDomain(objectType string) string {
 	return mapping[objectType]
 }
 
+// IntentRequiresAgentTools 判断意图是否需要 agent 工具
+// agent 工具（进程采集、网络采集等）通过 gRPC 调用目标主机 Agent，
+// 只应在安全分析场景下使用。普通资源查询应直接查数据库。
+func (s *ToolSelector) IntentRequiresAgentTools(intent IntentResult) bool {
+	// 1. 分析类动作 → 需要 agent 工具
+	if intent.Action == "analyze" || intent.Action == "investigate" {
+		return true
+	}
+
+	// 2. 安全分析相关领域 → 需要 agent 工具
+	securityDomains := map[string]bool{
+		"detection":     true,
+		"investigation": true,
+		"sigma_rule":    true,
+		"block":         true,
+	}
+	for _, d := range intent.Domains {
+		if securityDomains[d] {
+			return true
+		}
+	}
+
+	// 3. 普通资源查询（host/query、task/query 等）→ 不需要 agent 工具
+	return false
+}
+
 // ToolSelectionInput 工具选择输入
 type ToolSelectionInput struct {
-	Query            string      `json:"query"`
-	PageRoute        string      `json:"page_route,omitempty"`
+	Query            string           `json:"query"`
+	PageRoute        string           `json:"page_route,omitempty"`
 	ContextRefs      []ContextRefInput `json:"context_refs,omitempty"`
-	Intent           IntentResult `json:"intent"`
-	MaxTools         int          `json:"max_tools,omitempty"`
-	MaxWriteTools    int          `json:"max_write_tools,omitempty"`
-	ExplicitHighRisk bool         `json:"explicit_high_risk,omitempty"`
-	ExplicitWrite    bool         `json:"explicit_write,omitempty"`
+	Intent           IntentResult     `json:"intent"`
+	MaxTools         int              `json:"max_tools,omitempty"`
+	MaxWriteTools    int              `json:"max_write_tools,omitempty"`
+	ExplicitHighRisk bool             `json:"explicit_high_risk,omitempty"`
+	ExplicitWrite    bool             `json:"explicit_write,omitempty"`
 }
 
 // ToolSelectionResult 工具选择结果
@@ -239,4 +324,9 @@ type ToolSelectionResult struct {
 	Query          string       `json:"query"`
 	Intent         IntentResult `json:"intent"`
 	MaxTools       int          `json:"max_tools"`
+}
+
+// ToolNames 返回选中工具名列表
+func (r ToolSelectionResult) ToolNames() []string {
+	return r.SelectedTools
 }

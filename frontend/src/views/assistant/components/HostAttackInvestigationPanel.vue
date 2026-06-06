@@ -1,168 +1,104 @@
 <template>
   <div class="investigation-panel">
-    <!-- 置信度评分 -->
-    <div class="verdict-section">
-      <div class="verdict-header">
-        <span class="verdict-label">研判结论</span>
-        <el-tag :type="getVerdictTag(data.verdict)" size="large">
-          {{ getVerdictLabel(data.verdict) }}
-        </el-tag>
-      </div>
-      <div class="score-bar">
-        <div class="score-label">风险评分</div>
-        <el-progress
-          :percentage="data.score"
-          :color="getScoreColor(data.score)"
-          :stroke-width="20"
-          :format="(p: number) => `${p}分`"
-        />
-      </div>
-      <div class="confidence">
-        <span class="confidence-label">置信度:</span>
-        <span class="confidence-value">{{ (data.confidence * 100).toFixed(0) }}%</span>
-      </div>
+    <!-- 研判结论 -->
+    <CompromiseScoreCard
+      :verdict="data.verdict"
+      :score="data.score"
+      :confidence="data.confidence"
+      :summary="data.summary"
+      :key-reasons="data.key_reasons"
+      :contradictions="data.contradictions"
+    />
+
+    <!-- 入口推断 + 数据源覆盖 并排 -->
+    <div class="two-column">
+      <EntryPointCandidateList :candidates="data.entry_point_candidates || []" />
+      <SourceCoveragePanel :coverage="data.source_coverage" />
     </div>
 
-    <!-- 入口推断 -->
-    <div v-if="data.entry_point_candidates?.length" class="section">
-      <div class="section-title">入口推断</div>
-      <div class="entry-list">
+    <!-- 攻击时间线 -->
+    <AttackTimelineCard :events="data.attack_timeline || []" />
+
+    <!-- 攻击路径图 -->
+    <AttackPathGraph
+      :nodes="data.attack_path?.nodes || []"
+      :edges="data.attack_path?.edges || []"
+    />
+
+    <!-- 证据矩阵 -->
+    <EvidenceMatrixTable
+      :items="evidenceItems"
+      :evidence-count="data.evidence_count || 0"
+      :by-source="evidenceBySource"
+    />
+
+    <!-- 缺失证据 -->
+    <div v-if="data.missing_evidence?.length" class="missing-evidence-section">
+      <div class="section-header">
+        <span class="section-title">缺失证据</span>
+        <el-tag size="small" type="warning">{{ data.missing_evidence.length }} 项</el-tag>
+      </div>
+      <div class="missing-list">
         <div
-          v-for="ep in data.entry_point_candidates"
-          :key="ep.candidate_id"
-          class="entry-item"
+          v-for="(item, idx) in data.missing_evidence"
+          :key="idx"
+          class="missing-item"
         >
-          <div class="entry-header">
-            <el-tag :type="getEntryTypeTag(ep.entry_type)" size="small">
-              {{ getEntryTypeLabel(ep.entry_type) }}
-            </el-tag>
-            <span class="entry-score">评分: {{ ep.score }}</span>
+          <div class="missing-source">{{ sourceLabel(item.source_type) }}</div>
+          <div class="missing-reason">{{ item.reason }}</div>
+          <div v-if="item.suggested_tool" class="missing-tool">
+            建议工具: {{ item.suggested_tool }}
           </div>
-          <div class="entry-title">{{ ep.title }}</div>
-          <div class="entry-explanation">{{ ep.explanation }}</div>
         </div>
       </div>
     </div>
 
-    <!-- 攻击时间线 -->
-    <div v-if="data.attack_timeline?.length" class="section">
-      <div class="section-title">攻击时间线</div>
-      <el-timeline>
-        <el-timeline-item
-          v-for="event in data.attack_timeline"
-          :key="event.event_id"
-          :timestamp="formatTime(event.time)"
-          :type="getPhaseType(event.phase)"
-          placement="top"
-        >
-          <div class="timeline-content">
-            <div class="timeline-title">{{ event.title }}</div>
-            <div class="timeline-summary">{{ event.summary }}</div>
-            <el-tag size="small">{{ getPhaseLabel(event.phase) }}</el-tag>
-          </div>
-        </el-timeline-item>
-      </el-timeline>
-    </div>
-
-    <!-- 证据矩阵 -->
-    <div v-if="data.evidence_count > 0" class="section">
-      <div class="section-title">
-        证据矩阵
-        <el-tag size="small">{{ data.evidence_count }} 条证据</el-tag>
-      </div>
-    </div>
+    <!-- 推荐动作 -->
+    <RecommendedActionList :actions="data.recommended_actions" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { HostAttackInvestigationCardPayload } from '@/api/assistant'
+import CompromiseScoreCard from './CompromiseScoreCard.vue'
+import EntryPointCandidateList from './EntryPointCandidateList.vue'
+import AttackTimelineCard from './AttackTimelineCard.vue'
+import AttackPathGraph from './AttackPathGraph.vue'
+import EvidenceMatrixTable from './EvidenceMatrixTable.vue'
+import SourceCoveragePanel from './SourceCoveragePanel.vue'
+import RecommendedActionList from './RecommendedActionList.vue'
 
-defineProps<{
+const props = defineProps<{
   data: HostAttackInvestigationCardPayload
 }>()
 
-function getVerdictTag(verdict: string): string {
-  const map: Record<string, string> = {
-    confirmed_compromised: 'danger',
-    suspicious: 'warning',
-    likely_benign: 'success',
-    insufficient_evidence: 'info',
-  }
-  return map[verdict] || 'info'
-}
+// 从 payload 中提取证据项（如果后端直接返回了 evidence_matrix.items）
+const evidenceItems = computed(() => {
+  const payload = props.data as Record<string, any>
+  return payload.evidence_matrix?.items || []
+})
 
-function getVerdictLabel(verdict: string): string {
-  const map: Record<string, string> = {
-    confirmed_compromised: '确认被攻击',
-    suspicious: '可疑',
-    likely_benign: '可能正常',
-    insufficient_evidence: '证据不足',
-  }
-  return map[verdict] || verdict
-}
+const evidenceBySource = computed(() => {
+  const payload = props.data as Record<string, any>
+  return payload.evidence_matrix?.by_source || {}
+})
 
-function getScoreColor(score: number): string {
-  if (score >= 80) return '#f56c6c'
-  if (score >= 50) return '#e6a23c'
-  if (score >= 20) return '#409eff'
-  return '#67c23a'
-}
-
-function getEntryTypeTag(type: string): string {
+function sourceLabel(type: string): string {
   const map: Record<string, string> = {
-    ssh_bruteforce: 'danger',
-    exposed_service_cve: 'danger',
-    webshell: 'danger',
-    stolen_credential: 'warning',
-    weak_config: 'warning',
-    unknown: 'info',
-  }
-  return map[type] || 'info'
-}
-
-function getEntryTypeLabel(type: string): string {
-  const map: Record<string, string> = {
-    ssh_bruteforce: 'SSH暴力破解',
-    exposed_service_cve: '服务漏洞',
-    webshell: 'WebShell',
-    stolen_credential: '凭据窃取',
-    weak_config: '弱配置',
-    unknown: '未知',
+    aegis_alert: 'Aegis 告警',
+    runtime_event: '运行时事件',
+    agent_process: 'Agent 进程',
+    agent_network: 'Agent 网络',
+    agent_file: 'Agent 文件',
+    agent_log: 'Agent 日志',
+    baseline: '基线检查',
+    vulnerability: '漏洞数据',
+    external_siem: '外部 SIEM',
+    external_cmdb: '外部 CMDB',
+    external_edr: '外部 EDR',
   }
   return map[type] || type
-}
-
-function getPhaseType(phase: string): string {
-  const map: Record<string, string> = {
-    reconnaissance: 'info',
-    initial_access: 'danger',
-    execution: 'danger',
-    persistence: 'warning',
-    privilege_escalation: 'danger',
-    defense_evasion: 'warning',
-    lateral_movement: 'danger',
-    impact: 'danger',
-  }
-  return map[phase] || 'info'
-}
-
-function getPhaseLabel(phase: string): string {
-  const map: Record<string, string> = {
-    reconnaissance: '侦察',
-    initial_access: '初始访问',
-    execution: '执行',
-    persistence: '持久化',
-    privilege_escalation: '权限提升',
-    defense_evasion: '防御规避',
-    lateral_movement: '横向移动',
-    impact: '影响',
-  }
-  return map[phase] || phase
-}
-
-function formatTime(time: string): string {
-  if (!time) return ''
-  return new Date(time).toLocaleString('zh-CN')
 }
 </script>
 
@@ -173,112 +109,66 @@ function formatTime(time: string): string {
   gap: 16px;
 }
 
-.verdict-section {
-  background: #f5f7fa;
-  padding: 16px;
-  border-radius: 8px;
+.two-column {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
-.verdict-header {
+@media (max-width: 900px) {
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+}
+
+.missing-evidence-section {
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.section-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 12px;
 }
 
-.verdict-label {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.score-bar {
-  margin-bottom: 8px;
-}
-
-.score-label {
-  font-size: 13px;
-  color: #606266;
-  margin-bottom: 4px;
-}
-
-.confidence {
-  font-size: 13px;
-  color: #606266;
-}
-
-.confidence-label {
-  margin-right: 4px;
-}
-
-.confidence-value {
+.section-title {
+  font-size: 15px;
   font-weight: 600;
   color: #303133;
 }
 
-.section {
-  padding: 12px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.entry-list {
+.missing-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.entry-item {
+.missing-item {
   padding: 10px;
-  background: #f5f7fa;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
   border-radius: 6px;
 }
 
-.entry-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.missing-source {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
   margin-bottom: 4px;
 }
 
-.entry-score {
+.missing-reason {
+  font-size: 13px;
+  color: #606266;
+}
+
+.missing-tool {
   font-size: 12px;
-  color: #909399;
-}
-
-.entry-title {
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.entry-explanation {
-  font-size: 13px;
-  color: #606266;
-}
-
-.timeline-content {
-  padding: 4px 0;
-}
-
-.timeline-title {
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.timeline-summary {
-  font-size: 13px;
-  color: #606266;
-  margin-bottom: 4px;
+  color: #409eff;
+  margin-top: 4px;
 }
 </style>

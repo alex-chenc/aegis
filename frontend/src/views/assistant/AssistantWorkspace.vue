@@ -5,9 +5,13 @@
       :sessions="sessions"
       :active-session-id="currentSession?.session_id"
       :loading="loading"
+      :loading-more="store.loadingMore.value"
+      :has-more="store.hasMoreSessions.value"
+      :total="store.sessionTotal.value"
       @select="handleSessionSelected"
       @create="handleNewSession"
       @search="handleSearch"
+      @load-more="handleLoadMore"
     />
 
     <!-- 中间对话区 -->
@@ -188,6 +192,11 @@ async function handleReject(approvalId: string, comment?: string) {
 // 搜索
 function handleSearch(keyword: string) {
   store.fetchSessions({ keyword })
+}
+
+// 加载更多会话
+function handleLoadMore() {
+  store.fetchSessions(undefined, true)
 }
 
 // 状态标签

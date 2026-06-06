@@ -180,3 +180,79 @@ func TestIsContextualPurpose_Compress(t *testing.T) {
 		t.Error("expected PurposeCompress to not be contextual")
 	}
 }
+
+// === Phase 3: Tool call extraction from natural language tests ===
+
+func TestExtractToolCallFromText_WithHostList(t *testing.T) {
+	input := "我将帮您查询当前的主机情况。首先，我会调用 Host.List 工具来获取所有主机的列表和概览信息"
+	result := extractToolCallFromText(input)
+	if result == "" {
+		t.Fatal("expected non-empty result for Host.List")
+	}
+	t.Logf("Result: %s", result)
+	if !containsSubstring(result, `"tool_name":"Host.List"`) {
+		t.Error("expected tool_name to be Host.List")
+	}
+}
+
+func TestExtractToolCallFromText_WithHostFindOffline(t *testing.T) {
+	input := "需要调用 Host.FindOffline 来查找离线主机"
+	result := extractToolCallFromText(input)
+	if result == "" {
+		t.Fatal("expected non-empty result for Host.FindOffline")
+	}
+	t.Logf("Result: %s", result)
+	if !containsSubstring(result, `"tool_name":"Host.FindOffline"`) {
+		t.Error("expected tool_name to be Host.FindOffline")
+	}
+}
+
+func TestExtractToolCallFromText_NoToolName(t *testing.T) {
+	input := "你好，我是智能助手"
+	result := extractToolCallFromText(input)
+	if result != "" {
+		t.Errorf("expected empty result, got: %s", result)
+	}
+}
+
+func TestExtractToolCallFromText_AlreadyJSON(t *testing.T) {
+	input := `{"action":"tool_call","tool_call":{"tool_name":"Host.List","args":{}}}`
+	result := extractToolCallFromText(input)
+	if result != "" {
+		t.Errorf("expected empty result for already-JSON input, got: %s", result)
+	}
+}
+
+func TestNormalizeToolCallFormat_NaturalLanguage(t *testing.T) {
+	input := "我将帮您查询当前的主机情况。首先，我会调用 Host.List 工具来获取所有主机的列表和概览信息"
+	result := normalizeToolCallFormat(input)
+	t.Logf("Input: %s", input)
+	t.Logf("Output: %s", result)
+	if result == input {
+		t.Error("normalizeToolCallFormat did not transform natural language input")
+	}
+	if !containsSubstring(result, `"action":"tool_call"`) {
+		t.Error("expected output to contain action:tool_call")
+	}
+}
+
+func TestNormalizeToolCallFormat_AlreadyNormalized(t *testing.T) {
+	input := `{"action":"tool_call","tool_call":{"tool_name":"Host.List","args":{}}}`
+	result := normalizeToolCallFormat(input)
+	if result != input {
+		t.Errorf("expected unchanged output for already-normalized input")
+	}
+}
+
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

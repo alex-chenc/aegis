@@ -73,7 +73,7 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 	}
 
 	return agentruntime.LLMResponse{
-		Content: cleanLLMResponse(result.Content),
+		Content: normalizeToolCallFormat(cleanLLMResponse(result.Content)),
 		Model:   result.Model,
 		Usage: agentruntime.LLMUsage{
 			PromptTokens:     result.Usage.PromptTokens,
@@ -183,4 +183,168 @@ func cleanLLMResponse(content string) string {
 	}
 
 	return content
+}
+
+// normalizeToolCallFormat converts alternative LLM tool call formats into the
+// standard agent-runtime format: {"action":"tool_call","tool_call":{"tool_name":"X","args":{...}}}
+//
+// Handles:
+//   - {"name":"X","arguments":{...}}          (OpenAI function calling style)
+//   - {"name":"X","args":{...}}               (variant)
+//   - {"tool":"X","input":{...}}              (Anthropic style)
+//   - {"function":{"name":"X","arguments":{}}} (OpenAI function call style)
+//   - Natural language tool call descriptions  (LLM fallback)
+func normalizeToolCallFormat(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return content
+	}
+
+	// Quick check: if it already has "action" field and looks like valid JSON, no normalization needed
+	if strings.HasPrefix(content, "{") && strings.Contains(content, `"action"`) {
+		return content
+	}
+
+	// Try to parse as JSON first
+	if strings.HasPrefix(content, "{") {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(content), &raw); err == nil {
+			// Valid JSON, try to extract tool call
+			toolName := extractToolName(raw)
+			if toolName != "" {
+				args := extractToolArgs(raw)
+				if args == nil {
+					args = json.RawMessage("{}")
+				}
+				normalized := map[string]interface{}{
+					"action":  "tool_call",
+					"summary": fmt.Sprintf("调用 %s", toolName),
+					"tool_call": map[string]interface{}{
+						"tool_name": toolName,
+						"args":      json.RawMessage(args),
+					},
+				}
+				result, err := json.Marshal(normalized)
+				if err == nil {
+					return string(result)
+				}
+			}
+		}
+	}
+
+	// 不再从自然语言文本中提取工具调用（会产生空参数的不可靠调用）
+	// 如果 LLM 返回自然语言而非 JSON，让 ReAct 执行器处理解析错误并重试
+	return content
+}
+
+// extractToolCallFromText attempts to extract a tool call from natural language text.
+// This is a fallback for when the LLM returns descriptions instead of JSON.
+func extractToolCallFromText(content string) string {
+	// Known tool names that the system supports (must match tool_registry.go registrations)
+	knownTools := []string{
+		"Host.List", "Host.Get", "Host.AgentStatus.Get",
+		"Detection.Alert.List", "Detection.Alert.Get", "Detection.Statistics.Get", "Detection.Trend.Get",
+		"Vulnerability.List", "Vulnerability.AffectedHosts", "Software.Installed.Search",
+		"Task.List", "Task.GetDetail", "Task.RunCheck", "Task.RunFix",
+		"Block.Policy.List", "Block.Policy.Update",
+		"Audit.Log.List",
+		"Package.List", "Package.Get",
+		"SigmaRule.List", "SigmaRule.Generate",
+		"Config.Get",
+		"Agent.Process.List", "Agent.Process.Tree", "Agent.Network.List", "Agent.File.OpenList", "Agent.Log.Query",
+		"Investigation.HostAttack.Analyze", "Investigation.HostAttack.Plan",
+	}
+
+	// Look for known tool names in the content
+	for _, toolName := range knownTools {
+		if strings.Contains(content, toolName) {
+			// Found a tool name, construct a JSON tool call
+			normalized := map[string]interface{}{
+				"action":  "tool_call",
+				"summary": fmt.Sprintf("调用 %s", toolName),
+				"tool_call": map[string]interface{}{
+					"tool_name": toolName,
+					"reason":    "从用户请求中检测到需要调用此工具",
+					"args":      map[string]interface{}{},
+				},
+			}
+			result, err := json.Marshal(normalized)
+			if err == nil {
+				return string(result)
+			}
+		}
+	}
+
+	return ""
+}
+
+// extractToolName tries to extract the tool name from various JSON formats.
+func extractToolName(raw map[string]json.RawMessage) string {
+	// Format: {"name":"X",...}
+	if v, ok := raw["name"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s != "" {
+			return s
+		}
+	}
+
+	// Format: {"tool":"X",...}
+	if v, ok := raw["tool"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s != "" {
+			return s
+		}
+	}
+
+	// Format: {"function":{"name":"X",...}}
+	if v, ok := raw["function"]; ok {
+		var fn struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(v, &fn) == nil && fn.Name != "" {
+			return fn.Name
+		}
+	}
+
+	return ""
+}
+
+// extractToolArgs tries to extract the tool arguments from various JSON formats.
+func extractToolArgs(raw map[string]json.RawMessage) json.RawMessage {
+	// Format: {"args":{...}}
+	if v, ok := raw["args"]; ok {
+		return v
+	}
+
+	// Format: {"arguments":{...}}
+	if v, ok := raw["arguments"]; ok {
+		return v
+	}
+
+	// Format: {"input":{...}}
+	if v, ok := raw["input"]; ok {
+		return v
+	}
+
+	// Format: {"parameters":{...}}
+	if v, ok := raw["parameters"]; ok {
+		return v
+	}
+
+	// Format: {"function":{"arguments":"..."}}
+	if v, ok := raw["function"]; ok {
+		var fn struct {
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if json.Unmarshal(v, &fn) == nil && fn.Arguments != nil {
+			// OpenAI sometimes returns arguments as a JSON string
+			var s string
+			if json.Unmarshal(fn.Arguments, &s) == nil {
+				return json.RawMessage(s)
+			}
+			return fn.Arguments
+		}
+	}
+
+	return nil
 }

@@ -72,6 +72,15 @@
             <span>{{ session.tool_call_count || 0 }} 次工具调用</span>
           </div>
         </div>
+        <!-- 加载更多 -->
+        <div v-if="hasMore" class="load-more">
+          <el-button text size="small" :loading="loadingMore" @click="$emit('loadMore')">
+            加载更多
+          </el-button>
+        </div>
+        <div v-else-if="sessions.length > 0" class="session-count">
+          共 {{ total }} 个会话
+        </div>
       </div>
     </div>
   </aside>
@@ -86,12 +95,16 @@ defineProps<{
   sessions: AssistantSession[]
   activeSessionId?: string
   loading: boolean
+  loadingMore?: boolean
+  hasMore?: boolean
+  total?: number
 }>()
 
 const emit = defineEmits<{
   select: [sessionId: string]
   create: [taskType?: AssistantTaskType]
   search: [keyword: string]
+  loadMore: []
 }>()
 
 const searchKeyword = ref('')
@@ -257,5 +270,26 @@ function formatTime(time: string): string {
 .loading-state,
 .empty-state {
   padding: 16px;
+}
+
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.load-more .el-button {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.load-more .el-button:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.session-count {
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  padding: 8px 0;
 }
 </style>

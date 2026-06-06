@@ -20,7 +20,7 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 		Domain:      "block",
 		Operation:   "policy_list",
 		Description: "列出阻断策略，支持分页和关键字搜索",
-		RiskLevel:   "readonly",
+		Risk:        assistant.ToolRiskReadonly,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -41,7 +41,7 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 		Domain:      "block",
 		Operation:   "policy_update",
 		Description: "更新阻断策略配置（高风险操作，需审批）",
-		RiskLevel:   "high",
+		Risk:        assistant.ToolRiskHigh,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{

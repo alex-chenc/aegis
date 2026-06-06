@@ -42,6 +42,7 @@ const (
 	EventError             = "error"
 	EventRunStarted        = "run_started"
 	EventRunWaitingApproval = "run_waiting_approval"
+	EventBusinessObject    = "business_object"
 )
 
 // NewEvent 创建新事件
@@ -121,5 +122,38 @@ func EventDonePayload(sessionID, runID string) AssistantEvent {
 func EventErrorPayload(sessionID, runID, errMsg string) AssistantEvent {
 	return NewEvent(EventError, sessionID, runID, map[string]interface{}{
 		"message": errMsg,
+	})
+}
+
+// EventBusinessObject 创建业务对象事件（对齐设计文档 19 节）
+func EventBusinessObjectPayload(sessionID, runID, objectType, objectID string, data interface{}) AssistantEvent {
+	return NewEvent(EventBusinessObject, sessionID, runID, map[string]interface{}{
+		"object_type": objectType,
+		"object_id":   objectID,
+		"data":        data,
+	})
+}
+
+// EventRunWaitingApprovalPayload 创建等待审批事件
+func EventRunWaitingApprovalPayload(sessionID, runID, approvalID, toolName string) AssistantEvent {
+	return NewEvent(EventRunWaitingApproval, sessionID, runID, map[string]interface{}{
+		"approval_id": approvalID,
+		"tool_name":   toolName,
+		"status":      "waiting_approval",
+	})
+}
+
+// EventToolSearchPayload 创建工具搜索事件
+func EventToolSearchPayload(sessionID, runID, query string) AssistantEvent {
+	return NewEvent(EventToolSearch, sessionID, runID, map[string]interface{}{
+		"query": query,
+	})
+}
+
+// EventToolExpansionPayload 创建工具扩展事件
+func EventToolExpansionPayload(sessionID, runID string, addedTools []string) AssistantEvent {
+	return NewEvent(EventToolExpansion, sessionID, runID, map[string]interface{}{
+		"added_tools": addedTools,
+		"status":      "expanded",
 	})
 }

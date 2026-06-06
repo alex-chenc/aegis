@@ -1,8 +1,8 @@
 # Aegis V6.0 API 与数据库设计: Assistant 智能模式
 
-**版本**: 6.0  
-**日期**: 2026-05-29  
-**状态**: 设计中
+**版本**: 6.0
+**日期**: 2026-05-29
+**状态**: 已实现 (2026-06-05 更新)
 
 ---
 
@@ -934,33 +934,33 @@ full_access
 
 ## 6. 配置项
 
-建议新增系统配置：
+系统配置（当前实现状态）：
 
-| Key | 默认值 | 说明 |
-|:---|:---|:---|
-| `assistant.enabled` | `true` | 是否启用智能模式 |
-| `assistant.max_iterations` | `500` | 单次 run 最大迭代 |
-| `assistant.max_selected_tools` | `24` | 单次注入 agent-runtime 的最大工具数 |
-| `assistant.max_write_tools` | `6` | 单次注入的写操作工具上限 |
-| `assistant.tool_approval_mode` | `whitelist` | 工具审批模式: request_approval/whitelist/full_access |
-| `assistant.require_approval_medium` | `true` | medium 工具是否默认审批 |
-| `assistant.approval_ttl_minutes` | `30` | 审批过期时间 |
-| `assistant.max_context_refs` | `50` | 单会话上下文对象上限 |
-| `assistant.max_tool_calls` | `100` | 单次 run 工具调用上限 |
-| `assistant.investigation.enabled` | `true` | 是否启用主机攻击研判 Profile |
-| `assistant.investigation.default_time_range_hours` | `24` | 只给主机时默认研判时间范围 |
-| `assistant.investigation.alert_context_before_hours` | `2` | 告警上下文向前扩展时间 |
-| `assistant.investigation.alert_context_after_hours` | `6` | 告警上下文向后扩展时间 |
-| `assistant.investigation.max_evidence_items` | `200` | 单次研判最大证据数 |
-| `assistant.investigation.agent_live_probe_enabled` | `true` | 是否允许研判读取 Agent 实时只读证据 |
-| `assistant.investigation.external_mcp_default` | `false` | 是否默认启用外部 MCP 证据；建议默认 false |
-| `assistant.investigation.report_prompt_max_chars` | `32000` | 研判报告 Prompt 最大上下文字符数 |
-| `assistant.external_mcp.enabled` | `true` | 是否启用外接 MCP 数据源 |
-| `assistant.external_mcp.max_sources_per_run` | `3` | 单轮最多查询的数据源数 |
-| `assistant.external_mcp.max_query_per_run` | `6` | 单轮最多外部查询次数 |
-| `assistant.external_mcp.default_max_rows` | `50` | 外部查询默认最大行数 |
-| `assistant.external_mcp.max_context_chars` | `24000` | 外部结果注入大模型前的最大字符数 |
-| `assistant.external_mcp.allowed_transports` | `streamable_http,sse` | 允许的 MCP transport |
+| Key | 默认值 | 实现状态 | 说明 |
+|:---|:---|:---|:---|
+| `assistant.enabled` | `true` | 始终启用 | 是否启用智能模式 |
+| `assistant.max_iterations` | `80` | 硬编码 | 单次 run 最大迭代 |
+| `assistant.max_selected_tools` | `24` | 硬编码 | 单次注入 agent-runtime 的最大工具数 |
+| `assistant.max_write_tools` | `6` | 硬编码 | 单次注入的写操作工具上限 |
+| `assistant.tool_approval_mode` | `whitelist` | 硬编码 | 工具审批模式: request_approval/whitelist/full_access |
+| `assistant.require_approval_medium` | `true` | 未实现 | medium 工具是否默认审批 |
+| `assistant.approval_ttl_minutes` | `30` | 硬编码 | 审批过期时间 |
+| `assistant.max_context_refs` | `50` | 未实现 | 单会话上下文对象上限 |
+| `assistant.max_tool_calls` | `60` | 硬编码 | 单次 run 工具调用上限 |
+| `assistant.investigation.enabled` | `true` | 始终启用 | 是否启用主机攻击研判 Profile |
+| `assistant.investigation.default_time_range_hours` | `24` | 未实现 | 只给主机时默认研判时间范围 |
+| `assistant.investigation.alert_context_before_hours` | `2` | 未实现 | 告警上下文向前扩展时间 |
+| `assistant.investigation.alert_context_after_hours` | `6` | 未实现 | 告警上下文向后扩展时间 |
+| `assistant.investigation.max_evidence_items` | `200` | 来自 API 请求 | 单次研判最大证据数 |
+| `assistant.investigation.agent_live_probe_enabled` | `true` | 来自 API 请求 | 是否允许研判读取 Agent 实时只读证据 |
+| `assistant.investigation.external_mcp_default` | `false` | 来自 API 请求 | 是否默认启用外部 MCP 证据；建议默认 false |
+| `assistant.investigation.report_prompt_max_chars` | `32000` | 未实现 | 研判报告 Prompt 最大上下文字符数 |
+| `assistant.external_mcp.enabled` | `true` | 始终启用 | 是否启用外接 MCP 数据源 |
+| `assistant.external_mcp.max_sources_per_run` | `3` | 未实现 | 单轮最多查询的数据源数 |
+| `assistant.external_mcp.max_query_per_run` | `6` | 未实现 | 单轮最多外部查询次数 |
+| `assistant.external_mcp.default_max_rows` | `50` | 来自数据源配置 | 外部查询默认最大行数 |
+| `assistant.external_mcp.max_context_chars` | `24000` | 未实现 | 外部结果注入大模型前的最大字符数 |
+| `assistant.external_mcp.allowed_transports` | `streamable_http,sse` | 未实现 | 允许的 MCP transport |
 
 ---
 
@@ -985,3 +985,67 @@ migrations/015_v6.0_assistant_tables.sql
 - 审批批准/拒绝后的工具调用状态、run 恢复和数据一致性校验。
 - 未授权、非法模式、不存在对象、重复审批等异常用例。
 
+---
+
+## 9. 实现状态 (2026-06-05)
+
+### 9.1 数据库
+
+| 组件 | 状态 | 备注 |
+|:---|:---|:---|
+| 表定义 (12/12) | ✅ 完成 | `migrations/015_v6.0_assistant_tables.sql` |
+| GORM 模型 (12/12) | ✅ 完成 | `model/assistant.go`, `model/assistant_investigation.go`, `model/external_mcp.go` |
+| AutoMigrate (12/12) | ✅ 完成 | `repository/db.go` |
+| Repository (11/12) | ⚠️ 缺失 | `assistant_tool_selections` 无独立 Repository |
+
+### 9.2 API 端点
+
+| 类别 | 设计 | 已实现 | 缺失 |
+|:---|:---|:---|:---|
+| 会话管理 | 10 | 10 | - |
+| 工具策略 | 6 | 6 | - |
+| 审批 | 3 | 3 | - |
+| 研判 | 4 | 3 | `POST /investigations/:investigation_id/rebuild-report` |
+| MCP 数据源 | 7 | 6 | `GET /mcp-sources/:source_id/query-logs` |
+| **总计** | **30** | **28** | **2** |
+
+### 9.3 配置项
+
+| 类别 | 设计 | 已实现 | 备注 |
+|:---|:---|:---|:---|
+| 顶层配置 | 9 | 0 | 全部硬编码 |
+| 研判配置 | 8 | 0 | 部分来自 API 请求 |
+| 外部 MCP 配置 | 6 | 0 | 部分来自数据源配置 |
+| **总计** | **23** | **0** | **全部未实现为可配置项** |
+
+### 9.4 SSE 事件类型
+
+| 状态 | 数量 | 说明 |
+|:---|:---|:---|
+| 已实现并使用 | 16 | 正常工作 |
+| 已定义未使用 | 2 | `approval_updated`, `context_ref_added` |
+| 额外新增 | 3 | `run_started`, `run_waiting_approval`, `business_object` |
+
+### 9.5 硬编码参数
+
+| 参数 | 当前值 | 位置 |
+|:---|:---|:---|
+| `assistant.max_iterations` | 80 | `orchestrator.go:369`, `runtime_factory.go:183` |
+| `assistant.max_tool_calls` | 60 | `runtime_factory.go:188` |
+| `assistant.max_selected_tools` | 24 | `orchestrator.go:132`, `tool_selector.go:65` |
+| `assistant.max_write_tools` | 6 | `tool_selector.go:69` |
+| `assistant.approval_ttl_minutes` | 30 | `approval_gate.go:129` |
+
+### 9.6 待实现功能
+
+| 优先级 | 功能 | 说明 |
+|:---|:---|:---|
+| 高 | `POST /investigations/:investigation_id/rebuild-report` | 基于已收集证据重生成研判报告 |
+| 高 | `GET /mcp-sources/:source_id/query-logs` | 查询 MCP 数据源调用日志 |
+| 高 | `assistant_tool_selection_repo.go` | 工具选择记录 Repository |
+| 中 | 配置项读取 | 使用 `SystemConfigRepo` 读取 `assistant.*` 配置 |
+| 中 | `approval_updated` 事件 | 补齐事件触发逻辑 |
+| 中 | `context_ref_added` 事件 | 补齐事件触发逻辑 |
+| 低 | 配置管理 API | 提供配置项 CRUD 接口 |
+
+> 详细差异分析见 `api_database_design_gap_analysis_v6.0.md`

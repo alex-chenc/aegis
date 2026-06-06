@@ -219,13 +219,44 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 
 	// Run orchestrator in background
 	go func() {
+		// 防止 panic 导致 session 永远卡在 running 状态
+		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error("orchestrator panic recovered",
+					zap.String("session_id", sessionID),
+					zap.String("run_id", run.RunID),
+					zap.Any("panic", r),
+				)
+				s.completeRun(context.Background(), sessionID, run.RunID, nil,
+					fmt.Errorf("internal error: orchestrator panic: %v", r))
+			}
+		}()
+
 		runCtx := run.Context()
+
+		// 加载上下文引用，传递给 Orchestrator（对齐设计文档 6 节 RunInput）
+		var contextRefs []model.AssistantContextRef
+		if s.contextLoader != nil {
+			refs, _ := s.contextLoader.ResolveSession(runCtx, sessionID)
+			for _, ref := range refs {
+				contextRefs = append(contextRefs, model.AssistantContextRef{
+					SessionID:  sessionID,
+					ObjectType: ref.ObjectType,
+					ObjectID:   ref.ObjectID,
+					Title:      ref.Title,
+					Summary:    ref.Summary,
+					RoutePath:  ref.RoutePath,
+				})
+			}
+		}
 		result, err := s.orchestrator.Run(runCtx, RunInput{
 			RunID:       run.RunID,
 			SessionID:   sessionID,
 			MessageID:   userMsg.MessageID,
 			UserID:      operator,
 			UserMessage: req.Content,
+			TaskType:    session.TaskType,
+			ContextRefs: contextRefs,
 		})
 		s.completeRun(context.Background(), sessionID, run.RunID, result, err)
 	}()
@@ -279,6 +310,18 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		s.logger.Error("run failed", zap.String("session_id", sessionID), zap.Error(err))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
 		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, err.Error()))
+
+		// 错误时也保存一条助手消息，避免用户看到空白
+		errMsg := fmt.Sprintf("抱歉，执行过程中出现错误: %s", err.Error())
+		msgID := "msg_" + runID
+		_ = s.messageRepo.Create(ctx, &model.AssistantMessage{
+			ID:        uuid.New(),
+			SessionID: sessionID,
+			MessageID: msgID,
+			Role:      "assistant",
+			Content:   errMsg,
+		})
+		s.runManager.Publish(sessionID, EventMessageDeltaPayload(sessionID, runID, msgID, errMsg))
 	} else {
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCompleted)
 		s.runManager.Publish(sessionID, EventDonePayload(sessionID, runID))

@@ -27,7 +27,7 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 		Domain:      "sigma_rule",
 		Operation:   "list",
 		Description: "列出Sigma规则，支持按状态、关键字筛选",
-		RiskLevel:   "readonly",
+		Risk:        assistant.ToolRiskReadonly,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
@@ -49,7 +49,7 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 		Domain:      "sigma_rule",
 		Operation:   "generate",
 		Description: "基于告警样本使用AI生成Sigma规则",
-		RiskLevel:   "medium",
+		Risk:        assistant.ToolRiskMedium,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{

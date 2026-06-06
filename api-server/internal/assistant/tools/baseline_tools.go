@@ -26,7 +26,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:      "baseline",
 		Operation:   "run_check",
 		Description: "触发基线检查任务，将检查脚本下发到指定主机执行",
-		RiskLevel:   "medium",
+		Risk:        assistant.ToolRiskMedium,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
@@ -55,7 +55,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:      "baseline",
 		Operation:   "run_fix",
 		Description: "触发基线修复任务，将修复脚本下发到指定主机执行（高风险操作）",
-		RiskLevel:   "high",
+		Risk:        assistant.ToolRiskHigh,
 		Enabled:     true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{

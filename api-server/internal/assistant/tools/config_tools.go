@@ -21,7 +21,7 @@ func RegisterConfigTools(registry *assistant.ToolRegistry, deps ConfigToolDeps) 
 		Domain:      "config",
 		Operation:   "get",
 		Description: "获取系统配置信息，支持按配置键查询",
-		RiskLevel:   "low",
+		Risk:        assistant.ToolRiskLow,
 		Enabled:     true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{

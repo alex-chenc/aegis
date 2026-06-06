@@ -201,10 +201,96 @@ export interface AssistantEvidence {
 /** 结果卡片 */
 export interface AssistantResultCard {
   id: string
-  card_type: 'markdown' | 'json' | 'host_list' | 'alert_list' | 'host_attack_investigation' | 'attack_graph' | 'evidence_matrix' | 'task_status' | 'package_summary'
+  /** 卡片类型 — 兼容后端 card_type 和 type 两种字段名 */
+  type: 'markdown' | 'json' | 'host_list' | 'alert_list' | 'host_attack_investigation' | 'attack_graph' | 'evidence_matrix' | 'task_status' | 'package_summary'
   title: string
-  data: Record<string, any>
+  /** 卡片数据 — 兼容后端 data 和 payload 两种字段名 */
+  payload: Record<string, any>
   created_at: string
+}
+
+/** 入口候选 */
+export interface EntryPointCandidate {
+  candidate_id: string
+  entry_type: string
+  title: string
+  score: number
+  confidence: number
+  first_seen_at?: string
+  evidence_ids: string[]
+  counter_evidence_ids?: string[]
+  related_cve_ids?: string[]
+  related_baseline_ids?: string[]
+  explanation: string
+}
+
+/** 攻击时间线事件 */
+export interface AttackTimelineEvent {
+  event_id: string
+  time: string
+  phase: string
+  title: string
+  summary: string
+  evidence_ids: string[]
+  confidence: number
+}
+
+/** 攻击路径图 */
+export interface AttackPathGraph {
+  nodes: Array<{ node_id: string; node_type: string; label: string; risk_level: string; evidence_ids: string[] }>
+  edges: Array<{ from: string; to: string; relation: string; evidence_ids: string[]; confidence: number }>
+}
+
+/** 缺失证据 */
+export interface MissingEvidence {
+  source_type: string
+  reason: string
+  suggested_tool?: string
+}
+
+/** 数据源覆盖 */
+export interface SourceCoverage {
+  sources: Array<{
+    source_type: string
+    source_name: string
+    available: boolean
+    evidence_count: number
+    error?: string
+  }>
+  total_sources: number
+  available_sources: number
+}
+
+/** 推荐动作 */
+export interface RecommendedAction {
+  action_id: string
+  category: 'immediate_forensics' | 'temporary_containment' | 'remediation' | 'detection_enhancement'
+  title: string
+  description: string
+  risk_level: AssistantRiskLevel
+  requires_approval: boolean
+  related_evidence_ids: string[]
+}
+
+/** 主机攻击研判结果载荷 */
+export interface HostAttackInvestigationCardPayload {
+  investigation_id: string
+  host_id: string
+  hostname?: string
+  verdict: 'confirmed_compromised' | 'suspicious' | 'likely_benign' | 'insufficient_evidence'
+  score: number
+  confidence: number
+  summary?: string
+  key_reasons?: string[]
+  contradictions?: string[]
+  entry_point_candidates: EntryPointCandidate[]
+  attack_timeline: AttackTimelineEvent[]
+  attack_path: AttackPathGraph
+  evidence_count: number
+  missing_evidence: MissingEvidence[]
+  source_coverage?: SourceCoverage
+  recommended_actions?: RecommendedAction[]
+  report_markdown?: string
 }
 
 // ============================================
@@ -549,6 +635,103 @@ export function syncMCPSchema(sourceId: string) {
     url: `/assistant/mcp-sources/${sourceId}/sync-schema`,
     method: 'post'
   })
+}
+
+// ============================================
+// SSE 事件类型 — V6.0 设计规范
+// ============================================
+
+/** SSE 事件类型 */
+export type AssistantStreamEventType =
+  | 'message_delta'
+  | 'thinking'
+  | 'intent_detected'
+  | 'tools_selected'
+  | 'tool_search'
+  | 'tool_expansion'
+  | 'plan'
+  | 'step_started'
+  | 'step_completed'
+  | 'tool_call'
+  | 'tool_result'
+  | 'tool_error'
+  | 'approval_required'
+  | 'approval_updated'
+  | 'context_ref_added'
+  | 'result_card'
+  | 'done'
+  | 'error'
+
+/** SSE 流式事件 */
+export interface AssistantStreamEvent {
+  type: AssistantStreamEventType
+  session_id: string
+  run_id?: string
+  message_id?: string
+  payload?: any
+  error?: string
+  timestamp?: string
+}
+
+/** 意图识别结果 */
+export interface AssistantIntentResult {
+  domains: string[]
+  operations: string[]
+  object_types: string[]
+  object_ids: string[]
+  keywords: string[]
+  risk_hint: AssistantRiskLevel
+  confidence: number
+  reason: string
+}
+
+/** 智能体选中的工具 */
+export interface AssistantSelectedTool {
+  name: string
+  domain: string
+  operation: string
+  risk: AssistantRiskLevel
+  reason: string
+}
+
+/** 工具选择结果 */
+export interface AssistantToolSelection {
+  run_id: string
+  stage: 'initial' | 'expanded' | 'approval_resume' | 'retry'
+  intent: AssistantIntentResult
+  tools: AssistantSelectedTool[]
+  tool_count: number
+}
+
+/** 工具搜索结果 */
+export interface AssistantToolSearchResult {
+  matches: Array<{
+    name: string
+    domain: string
+    operation: string
+    risk: AssistantRiskLevel
+    description: string
+    args_summary: string
+    tags: string[]
+  }>
+}
+
+/** 执行计划 */
+export interface AssistantPlan {
+  plan_id: string
+  goal: string
+  steps: AssistantPlanStep[]
+  status: 'planning' | 'running' | 'completed' | 'failed' | 'cancelled'
+}
+
+/** 执行计划步骤 */
+export interface AssistantPlanStep {
+  step_id: string
+  title: string
+  objective: string
+  suggested_tools: string[]
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'waiting_approval'
+  result_summary?: string
 }
 
 // ============================================

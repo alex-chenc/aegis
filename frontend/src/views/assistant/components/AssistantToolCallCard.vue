@@ -54,22 +54,28 @@ function getRiskTag(level: string): string {
 
 function getStatusTag(status: string): string {
   const map: Record<string, string> = {
+    pending: 'info',
     running: 'warning',
+    completed: 'success',
     success: 'success',
     failed: 'danger',
     approval_required: 'warning',
     rejected: 'info',
+    cancelled: 'info',
   }
   return map[status] || 'info'
 }
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
+    pending: '等待中',
     running: '执行中',
+    completed: '成功',
     success: '成功',
     failed: '失败',
     approval_required: '待审批',
     rejected: '已拒绝',
+    cancelled: '已取消',
   }
   return map[status] || status
 }
