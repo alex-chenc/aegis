@@ -46,22 +46,35 @@ func NewAssistantToolPolicyRepository(db *gorm.DB) AssistantToolPolicyRepository
 }
 
 func (r *assistantToolPolicyRepo) Upsert(ctx context.Context, policy *model.AssistantToolPolicy) error {
-	if policy.ID == uuid.Nil {
-		policy.ID = uuid.New()
+	// 先尝试查找现有记录
+	var existing model.AssistantToolPolicy
+	err := r.db.WithContext(ctx).
+		Where("tool_name = ?", policy.ToolName).
+		First(&existing).Error
+
+	if err == gorm.ErrRecordNotFound {
+		// 不存在，创建新记录
+		if policy.ID == uuid.Nil {
+			policy.ID = uuid.New()
+		}
+		return r.db.WithContext(ctx).Create(policy).Error
+	} else if err != nil {
+		return err
 	}
 
+	// 存在，更新记录
 	return r.db.WithContext(ctx).
-		Where("tool_name = ?", policy.ToolName).
-		Assign(map[string]interface{}{
+		Model(&existing).
+		Updates(map[string]interface{}{
 			"domain":              policy.Domain,
 			"operation":           policy.Operation,
 			"risk_level":          policy.RiskLevel,
 			"description":         policy.Description,
 			"args_summary":        policy.ArgsSummary,
 			"default_whitelisted": policy.DefaultWhitelisted,
+			"enabled":             policy.Enabled,
 			"updated_at":          time.Now(),
-		}).
-		FirstOrCreate(policy).Error
+		}).Error
 }
 
 func (r *assistantToolPolicyRepo) BatchUpsert(ctx context.Context, policies []model.AssistantToolPolicy) error {

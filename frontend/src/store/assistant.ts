@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import request from '@/api'
 import {
   getSessions,
   createSession as apiCreateSession,
@@ -23,6 +24,7 @@ import {
   type AssistantToolSelection,
   type AssistantToolSearchResult,
   type AssistantPlan,
+  type AssistantTaskType,
   type CreateSessionRequest,
   type SendMessageRequest,
   type RunHandle,
@@ -62,6 +64,8 @@ export const useAssistantStore = defineStore('assistant', () => {
   const loading = ref(false)
   /** 错误信息 */
   const error = ref<string | null>(null)
+  /** 待创建会话的任务类型（点击快捷任务后设置，发送消息时才真正创建会话） */
+  const pendingTaskType = ref<AssistantTaskType | null>(null)
 
   /** SSE 连接实例 */
   let eventSource: EventSource | null = null
@@ -91,17 +95,20 @@ export const useAssistantStore = defineStore('assistant', () => {
     error.value = null
     try {
       const queryPage = append ? sessionPage.value + 1 : 1
-      const result = await getSessions({ ...params, page: queryPage, page_size: 20 })
-      // API 返回 { sessions: [...], total: N }
+      const result = await getSessions({ ...params, page: queryPage, page_size: 10 })
+      // API 返回 { sessions: [...], total: N } 或 { items: [...], total: N }
+      // 兼容两种格式
       const items = result?.sessions || result?.items || []
+      const total = result?.total || 0
+
       if (append) {
         sessions.value = [...sessions.value, ...items]
         sessionPage.value = queryPage
       } else {
         sessions.value = items
       }
-      sessionTotal.value = result?.total || 0
-      hasMoreSessions.value = sessions.value.length < sessionTotal.value
+      sessionTotal.value = total
+      hasMoreSessions.value = sessions.value.length < total
       return result
     } catch (err: any) {
       // 不抛出错误，避免页面崩溃
@@ -111,6 +118,50 @@ export const useAssistantStore = defineStore('assistant', () => {
     } finally {
       loading.value = false
       loadingMore.value = false
+    }
+  }
+
+  /**
+   * 跳转到指定页
+   */
+  async function goToSessionPage(page: number) {
+    sessionPage.value = page
+    loading.value = true
+    error.value = null
+    try {
+      const result = await getSessions({ page, page_size: 10 })
+      const items = result?.sessions || result?.items || []
+      sessions.value = items
+      sessionTotal.value = result?.total || 0
+      hasMoreSessions.value = sessions.value.length < sessionTotal.value
+      return result
+    } catch (err: any) {
+      error.value = err.message || '获取会话列表失败'
+      sessions.value = []
+      return { sessions: [], total: 0 }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * 删除会话
+   */
+  async function deleteSession(sessionId: string) {
+    try {
+      await request.delete(`/assistant/sessions/${sessionId}`)
+      // 从列表中移除
+      sessions.value = sessions.value.filter(s => s.session_id !== sessionId)
+      sessionTotal.value = Math.max(0, sessionTotal.value - 1)
+      // 如果删除的是当前会话，清空当前会话
+      if (currentSession.value?.session_id === sessionId) {
+        currentSession.value = null
+        messages.value = []
+      }
+      return true
+    } catch (err: any) {
+      error.value = err.message || '删除会话失败'
+      return false
     }
   }
 
@@ -125,7 +176,15 @@ export const useAssistantStore = defineStore('assistant', () => {
       if (session) {
         sessions.value.unshift(session)
         currentSession.value = session
+        // 清空当前会话的所有状态
         messages.value = []
+        toolCalls.value = []
+        approvals.value = []
+        resultCards.value = []
+        contextRefs.value = []
+        intentResult.value = null
+        toolSelections.value = []
+        toolSearchResults.value = []
       }
       return session
     } catch (err: any) {
@@ -180,10 +239,28 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   /**
    * 发送消息并启动 SSE 流式连接
+   * 如果没有当前会话，会先创建一个新会话
    */
-  async function sendMessage(sessionId: string, content: string, contextRefsData?: Array<{ object_type: string; object_id: string }>) {
+  async function sendMessage(content: string, contextRefsData?: Array<{ object_type: string; object_id: string }>) {
     error.value = null
     try {
+      // 如果没有当前会话，先创建一个
+      let session = currentSession.value
+      if (!session) {
+        const createData: CreateSessionRequest = {
+          task_type: pendingTaskType.value || 'explanation',
+          initial_message: content,
+          context_refs: contextRefsData,
+        }
+        session = await createSession(createData)
+        if (!session) {
+          throw new Error('创建会话失败')
+        }
+        pendingTaskType.value = null
+      }
+
+      const sessionId = session.session_id
+
       // 先添加用户消息到本地列表
       const tempId = `temp-${Date.now()}`
       const userMessage: AssistantMessage = {
@@ -208,6 +285,25 @@ export const useAssistantStore = defineStore('assistant', () => {
     } catch (err: any) {
       error.value = err.message || '发送消息失败'
       throw err
+    }
+  }
+
+  /**
+   * 设置待创建会话的任务类型
+   */
+  function setPendingTaskType(taskType: AssistantTaskType | null) {
+    pendingTaskType.value = taskType
+    // 清空当前会话，进入"新会话"模式
+    if (taskType) {
+      currentSession.value = null
+      messages.value = []
+      toolCalls.value = []
+      approvals.value = []
+      resultCards.value = []
+      contextRefs.value = []
+      intentResult.value = null
+      toolSelections.value = []
+      toolSearchResults.value = []
     }
   }
 
@@ -501,10 +597,12 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'tool_call': {
         // 工具调用开始
         // payload: { call_id, tool_name, args }
+        // 仅处理属于当前会话的工具调用
+        if (event.session_id && event.session_id !== currentSession.value?.session_id) break
         const toolCall: AssistantToolCall = {
           id: payload.call_id,
-          session_id: currentSession.value?.session_id || '',
-          message_id: '',
+          session_id: event.session_id || currentSession.value?.session_id || '',
+          message_id: event.message_id || '',
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           args: payload.args || {},
@@ -519,6 +617,8 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'tool_result': {
         // 工具调用完成
         // payload: { call_id, result }
+        // 仅处理属于当前会话的工具调用
+        if (event.session_id && event.session_id !== currentSession.value?.session_id) break
         const idx = toolCalls.value.findIndex(tc => tc.call_id === payload.call_id || tc.id === payload.call_id)
         if (idx > -1) {
           toolCalls.value[idx].status = 'completed'
@@ -533,6 +633,8 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'tool_error': {
         // 工具调用错误
         // payload: { call_id, error }
+        // 仅处理属于当前会话的工具调用
+        if (event.session_id && event.session_id !== currentSession.value?.session_id) break
         const errIdx = toolCalls.value.findIndex(tc => tc.call_id === payload.call_id || tc.id === payload.call_id)
         if (errIdx > -1) {
           toolCalls.value[errIdx].status = 'failed'
@@ -690,6 +792,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     sessionTotal,
     hasMoreSessions,
     loadingMore,
+    pendingTaskType,
 
     // Actions
     fetchSessions,
@@ -697,6 +800,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     fetchSession,
     fetchMessages,
     sendMessage,
+    setPendingTaskType,
     cancelRun,
     cancelCurrentRun,
     fetchContextRefs,
@@ -711,5 +815,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     stopStream,
     applyStreamEvent,
     reset,
+    goToSessionPage,
+    deleteSession,
   }
 })

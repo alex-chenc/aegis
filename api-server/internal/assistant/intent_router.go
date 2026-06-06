@@ -35,7 +35,7 @@ type IntentRouter struct {
 func NewIntentRouter() *IntentRouter {
 	return &IntentRouter{
 		keywords: map[string][]string{
-			"host":          {"主机", "资产", "agent", "离线", "在线", "主机列表", "资产态势", "软件", "安装"},
+			"host":          {"主机", "资产", "agent", "离线", "在线", "主机列表", "资产态势", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么"},
 			"task":          {"任务", "基线", "检查", "修复", "扫描任务", "执行"},
 			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "受影响"},
 			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵"},
@@ -57,7 +57,30 @@ func (r *IntentRouter) SetLLMClientFactory(fn func(ctx context.Context) (*llm.LL
 }
 
 // Classify 意图分类
-func (r *IntentRouter) Classify(input IntentInput) IntentResult {
+// 混合策略：简单查询走代码匹配，复杂查询走大模型分析
+func (r *IntentRouter) Classify(ctx context.Context, input IntentInput) IntentResult {
+	query := strings.ToLower(input.Query)
+
+	// 计算查询复杂度（分词数量）
+	words := tokenizeQuery(query)
+	complexity := len(words)
+
+	// 简单查询（1-2个词）：走代码意图匹配
+	// 复杂查询（3个词以上）：走大模型解析意图
+	if complexity >= 3 && r.llmClientFn != nil {
+		// 复杂查询，尝试使用 LLM 分类
+		llmResult, err := r.ClassifyWithLLM(ctx, input)
+		if err == nil && llmResult.Confidence > 0.6 {
+			return llmResult
+		}
+	}
+
+	// 简单查询或 LLM 分类失败：走代码意图匹配
+	return r.classifyByRules(input)
+}
+
+// classifyByRules 基于规则的意图分类
+func (r *IntentRouter) classifyByRules(input IntentInput) IntentResult {
 	query := strings.ToLower(input.Query)
 
 	// Score each domain
@@ -154,7 +177,7 @@ func (r *IntentRouter) Classify(input IntentInput) IntentResult {
 // ClassifyWithLLM 低置信度时使用 LLM 分类（设计文档 6.1 节：规则置信度低时调用 LLM）
 func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (IntentResult, error) {
 	// 先用规则分类
-	result := r.Classify(input)
+	result := r.classifyByRules(input)
 
 	// 置信度足够高时直接返回
 	if result.Confidence >= 0.5 && r.llmClientFn == nil {

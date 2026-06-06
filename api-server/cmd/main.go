@@ -294,7 +294,7 @@ func main() {
 	})
 	toolRegistry := assistant.NewToolRegistry()
 	// Register all assistant tools
-	registerAssistantTools(toolRegistry, assistantLogger, hostRepo, alertRepo, taskLogRepo, vulnRepo, sigmaRuleRepo, blockPolicyRepo, blockRepo, configRepo, auditLogRepo, detectionPkgRepo, serverClient)
+	registerAssistantTools(toolRegistry, assistantLogger, hostRepo, alertRepo, taskLogRepo, vulnRepo, sigmaRuleRepo, blockPolicyRepo, blockRepo, configRepo, auditLogRepo, detectionPkgRepo, serverClient, assetCollectionRepo)
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
 	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
 	toolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
@@ -491,6 +491,7 @@ func registerAssistantTools(
 	auditLogRepo *repository.AuditLogRepo,
 	detectionPkgRepo *repository.DetectionPackageRepo,
 	serverClient *grpcclient.ServerClient,
+	assetCollectionRepo *repository.AssetCollectionRepository,
 ) {
 	// Host tools
 	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo}); err != nil {
@@ -505,7 +506,10 @@ func registerAssistantTools(
 		logger.Warn("failed to register detection tools", zap.Error(err))
 	}
 	// Vulnerability tools
-	if err := assistantTools.RegisterVulnerabilityTools(registry, assistantTools.VulnerabilityToolDeps{VulnRepo: vulnRepo}); err != nil {
+	if err := assistantTools.RegisterVulnerabilityTools(registry, assistantTools.VulnerabilityToolDeps{
+		VulnRepo:  vulnRepo,
+		AssetRepo: assetCollectionRepo,
+	}); err != nil {
 		logger.Warn("failed to register vulnerability tools", zap.Error(err))
 	}
 	// Task tools

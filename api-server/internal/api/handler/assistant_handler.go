@@ -49,6 +49,7 @@ func (h *AssistantHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/sessions", h.ListSessions)
 	group.POST("/sessions", h.CreateSession)
 	group.GET("/sessions/:session_id", h.GetSession)
+	group.DELETE("/sessions/:session_id", h.DeleteSession)
 	group.GET("/sessions/:session_id/messages", h.GetMessages)
 	group.POST("/sessions/:session_id/message", h.SendMessage)
 	group.GET("/sessions/:session_id/stream", h.StreamSession)
@@ -143,6 +144,18 @@ func (h *AssistantHandler) GetSession(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": session})
+}
+
+// DeleteSession 删除会话
+func (h *AssistantHandler) DeleteSession(c *gin.Context) {
+	sessionID := c.Param("session_id")
+
+	if err := h.assistantService.DeleteSession(c.Request.Context(), sessionID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "session deleted"})
 }
 
 // GetMessages 获取消息历史

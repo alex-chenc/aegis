@@ -139,7 +139,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			ObjectID:   ref.ObjectID,
 		})
 	}
-	intent := o.intentRouter.Classify(intentInput)
+	intent := o.intentRouter.Classify(ctx, intentInput)
 
 	// 5. 发布意图检测事件
 	o.runManager.Publish(input.SessionID, NewEvent(EventIntentDetected, input.SessionID, input.RunID, map[string]interface{}{

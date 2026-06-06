@@ -38,12 +38,36 @@ var DefaultPromptFragments = []agentruntime.PromptFragment{
 		Keywords:    []string{"攻击", "入侵", "安全", "威胁", "告警", "事件", "溯源", "研判"},
 		Priority:    80,
 		Content: `## 安全分析规范
-1. 收集证据：获取进程树、网络连接、文件操作等数据
-2. 分析攻击路径：识别攻击入口、横向移动、提权等行为
-3. 评估影响：确定受影响范围和严重程度
-4. 提出建议：给出修复和防护建议
 
-分析时应基于实际数据，不要推测或编造信息。`,
+### 第一步：收集安全事件
+- 使用 Detection.Alert.List 查询最近的告警事件
+- 使用 Detection.Alert.Get 获取告警详情
+- 使用 Detection.Statistics.Get 获取告警统计信息
+
+### 第二步：收集主机信息
+- 使用 Host.List 查询相关主机
+- 使用 Host.Get 获取主机详情
+- 使用 Host.AgentStatus.Get 检查 Agent 状态
+
+### 第三步：深入调查（需要 Agent 在线）
+- 使用 Agent.Process.List 获取进程列表
+- 使用 Agent.Network.Connections 获取网络连接
+- 使用 Agent.File.Activity 获取文件操作记录
+- 使用 Agent.User.Login 获取用户登录记录
+
+### 第四步：分析攻击路径
+- 识别攻击入口（初始访问）
+- 追踪横向移动行为
+- 检测提权行为
+- 评估数据泄露风险
+
+### 第五步：评估影响和建议
+- 确定受影响范围和严重程度
+- 给出修复和防护建议
+- 提供检测规则建议
+
+分析时应基于实际数据，不要推测或编造信息。
+每一步都应调用相应工具获取数据，不要跳过数据收集步骤。`,
 	},
 	{
 		Name:        "host_query",
@@ -54,7 +78,8 @@ var DefaultPromptFragments = []agentruntime.PromptFragment{
 使用 Host.List、Host.Get、Host.AgentStatus.Get 等工具查询主机信息。
 - 支持按状态（在线/离线）、系统类型等条件筛选
 - 可查看主机详情包括 IP、系统版本、Agent 版本等
-- 查询已安装软件使用 Software.Installed.Search`,
+- 查询已安装软件使用 Software.Installed.Search，必须传入 package_name 参数（如 postgresql、nginx、docker 等）
+- 示例：用户问"哪些资产有postgresql"→ 调用 Software.Installed.Search，args: {"package_name": "postgresql"}`,
 	},
 	{
 		Name:        "vulnerability_mgmt",

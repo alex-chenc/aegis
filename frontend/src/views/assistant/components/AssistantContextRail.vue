@@ -1,27 +1,41 @@
 <template>
   <aside class="context-rail">
-    <!-- 上下文对象 -->
-    <div class="rail-section">
+    <!-- 执行计划 -->
+    <div v-if="plan" class="rail-section">
       <div class="section-header">
-        <el-icon><Connection /></el-icon>
-        <span>上下文对象</span>
+        <el-icon><List /></el-icon>
+        <span>执行计划</span>
+        <el-tag :type="getPlanStatusType(plan.status)" size="small">
+          {{ getPlanStatusLabel(plan.status) }}
+        </el-tag>
       </div>
-      <div v-if="contextRefs.length" class="context-list">
+      <div class="plan-goal">{{ plan.goal }}</div>
+      <div class="plan-steps">
         <div
-          v-for="ref in contextRefs"
-          :key="ref.id"
-          class="context-item"
+          v-for="(step, idx) in plan.steps"
+          :key="step.step_id"
+          class="plan-step"
+          :class="step.status"
         >
-          <el-tag :type="getObjectTypeTag(ref.object_type)" size="small">
-            {{ getObjectTypeLabel(ref.object_type) }}
-          </el-tag>
-          <div class="context-info">
-            <div class="context-title">{{ ref.title || ref.object_id }}</div>
-            <div v-if="ref.summary" class="context-summary">{{ ref.summary }}</div>
+          <div class="step-number">{{ idx + 1 }}</div>
+          <div class="step-content">
+            <div class="step-title">{{ step.title }}</div>
+            <div v-if="step.result_summary" class="step-result">
+              {{ step.result_summary }}
+            </div>
           </div>
+          <el-tag :type="getStepStatusType(step.status)" size="small">
+            {{ getStepStatusLabel(step.status) }}
+          </el-tag>
         </div>
       </div>
-      <el-empty v-else description="无上下文对象" :image-size="48" />
+    </div>
+    <div v-else class="rail-section">
+      <div class="section-header">
+        <el-icon><List /></el-icon>
+        <span>执行计划</span>
+      </div>
+      <el-empty description="暂无执行计划" :image-size="48" />
     </div>
 
     <!-- 待审批动作 -->
@@ -75,37 +89,59 @@
 </template>
 
 <script setup lang="ts">
-import { Connection, Bell, Tools } from '@element-plus/icons-vue'
-import type { AssistantContextRef, AssistantToolCall, AssistantApproval } from '@/api/assistant'
+import { List, Bell, Tools } from '@element-plus/icons-vue'
+import type { AssistantToolCall, AssistantApproval, AssistantPlan } from '@/api/assistant'
 
 defineProps<{
-  contextRefs: AssistantContextRef[]
+  plan: AssistantPlan | null
   approvals: AssistantApproval[]
   toolCalls: AssistantToolCall[]
 }>()
 
-function getObjectTypeTag(type: string): string {
+function getPlanStatusType(status: string): string {
   const map: Record<string, string> = {
-    host: 'primary',
-    alert: 'danger',
-    task: 'warning',
-    vulnerability: 'danger',
-    package: 'info',
-    rule: 'info',
+    planning: 'info',
+    running: 'warning',
+    completed: 'success',
+    failed: 'danger',
+    cancelled: 'info',
   }
-  return map[type] || 'info'
+  return map[status] || 'info'
 }
 
-function getObjectTypeLabel(type: string): string {
+function getPlanStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    host: '主机',
-    alert: '告警',
-    task: '任务',
-    vulnerability: '漏洞',
-    package: '检测包',
-    rule: '规则',
+    planning: '规划中',
+    running: '执行中',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
   }
-  return map[type] || type
+  return map[status] || status
+}
+
+function getStepStatusType(status: string): string {
+  const map: Record<string, string> = {
+    pending: 'info',
+    running: 'warning',
+    completed: 'success',
+    failed: 'danger',
+    skipped: 'info',
+    waiting_approval: 'warning',
+  }
+  return map[status] || 'info'
+}
+
+function getStepStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    pending: '待执行',
+    running: '执行中',
+    completed: '已完成',
+    failed: '失败',
+    skipped: '已跳过',
+    waiting_approval: '待审批',
+  }
+  return map[status] || status
 }
 
 function getRiskTag(level: string): string {
@@ -173,40 +209,93 @@ function getStatusLabel(status: string): string {
   color: #303133;
 }
 
-.context-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.context-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+/* 计划模块样式 */
+.plan-goal {
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 12px;
   padding: 8px;
   background: #f5f7fa;
   border-radius: 6px;
 }
 
-.context-info {
+.plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.plan-step.completed {
+  background: #f0f9ff;
+}
+
+.plan-step.running {
+  background: #fdf6ec;
+}
+
+.plan-step.failed {
+  background: #fef0f0;
+}
+
+.step-number {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e4e7ed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.plan-step.completed .step-number {
+  background: #67c23a;
+  color: #fff;
+}
+
+.plan-step.running .step-number {
+  background: #e6a23c;
+  color: #fff;
+}
+
+.plan-step.failed .step-number {
+  background: #f56c6c;
+  color: #fff;
+}
+
+.step-content {
   flex: 1;
   min-width: 0;
 }
 
-.context-title {
-  font-size: 13px;
+.step-title {
+  font-size: 12px;
   font-weight: 500;
+  color: #303133;
+}
+
+.step-result {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.context-summary {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 2px;
-}
-
+/* 审批样式 */
 .approval-list {
   display: flex;
   flex-direction: column;
@@ -237,6 +326,7 @@ function getStatusLabel(status: string): string {
   color: #606266;
 }
 
+/* 工具调用样式 */
 .tool-call-list {
   display: flex;
   flex-direction: column;
@@ -258,11 +348,5 @@ function getStatusLabel(status: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mode-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 </style>

@@ -89,6 +89,11 @@ func (s *Service) ListSessions(ctx context.Context, q SessionQuery) ([]model.Ass
 	return s.sessionRepo.List(ctx, q)
 }
 
+// DeleteSession 删除会话
+func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
+	return s.sessionRepo.Delete(ctx, sessionID)
+}
+
 // CreateSession 创建会话
 func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest, operator string) (*model.AssistantSession, error) {
 	sessionID := newAssistantSessionID()
@@ -364,8 +369,10 @@ func defaultTaskType(taskType string) string {
 
 func inferTitle(message string, refs []ContextRefInput) string {
 	if message != "" {
-		if len(message) > 50 {
-			return message[:50] + "..."
+		// 取用户首次输入的前 5 个字作为会话标题
+		runes := []rune(message)
+		if len(runes) > 5 {
+			return string(runes[:5])
 		}
 		return message
 	}

@@ -170,11 +170,30 @@ func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float
 	score := 0.0
 
 	// Domain match (0.35)
+	// 1. 直接域匹配
+	domainMatched := false
 	for _, domain := range input.Intent.Domains {
 		if string(tool.Domain) == domain {
-			score += 0.35
+			domainMatched = true
 			break
 		}
+	}
+	// 2. ObjectTypes 匹配（工具的 ObjectTypes 包含意图的域）
+	if !domainMatched {
+		for _, domain := range input.Intent.Domains {
+			for _, ot := range tool.ObjectTypes {
+				if ot == domain {
+					domainMatched = true
+					break
+				}
+			}
+			if domainMatched {
+				break
+			}
+		}
+	}
+	if domainMatched {
+		score += 0.35
 	}
 
 	// Operation match (0.20)
@@ -187,30 +206,81 @@ func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float
 	}
 
 	// Keyword match (0.15) — 匹配 name, description, aliases, tags
+	// 支持双向匹配：查询包含关键词，或关键词包含查询
 	query := strings.ToLower(input.Query)
 	if query != "" {
 		matched := false
 		name := strings.ToLower(tool.Name)
 		desc := strings.ToLower(tool.Description)
+
+		// 1. 工具名或描述包含查询
 		if strings.Contains(name, query) || strings.Contains(desc, query) {
 			matched = true
 		}
+
+		// 2. 查询包含工具名（去掉点号后匹配）
+		if !matched {
+			cleanName := strings.ReplaceAll(name, ".", " ")
+			if strings.Contains(query, cleanName) {
+				matched = true
+			}
+		}
+
+		// 3. 别名匹配（双向）
 		if !matched {
 			for _, alias := range tool.Aliases {
-				if strings.Contains(strings.ToLower(alias), query) {
+				aliasLower := strings.ToLower(alias)
+				if strings.Contains(aliasLower, query) || strings.Contains(query, aliasLower) {
 					matched = true
 					break
 				}
 			}
 		}
+
+		// 4. 标签匹配（双向）
 		if !matched {
 			for _, tag := range tool.Tags {
-				if strings.Contains(strings.ToLower(tag), query) {
+				tagLower := strings.ToLower(tag)
+				if strings.Contains(tagLower, query) || strings.Contains(query, tagLower) {
 					matched = true
 					break
 				}
 			}
 		}
+
+		// 5. 查询分词匹配（将查询按空格/标点分词，任一词匹配即算匹配）
+		if !matched {
+			// 提取查询中的关键词（简单分词）
+			words := tokenizeQuery(query)
+			for _, word := range words {
+				if len(word) < 2 {
+					continue
+				}
+				if strings.Contains(name, word) || strings.Contains(desc, word) {
+					matched = true
+					break
+				}
+				for _, alias := range tool.Aliases {
+					if strings.Contains(strings.ToLower(alias), word) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+				for _, tag := range tool.Tags {
+					if strings.Contains(strings.ToLower(tag), word) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+		}
+
 		if matched {
 			score += 0.15
 		}
@@ -329,4 +399,77 @@ type ToolSelectionResult struct {
 // ToolNames 返回选中工具名列表
 func (r ToolSelectionResult) ToolNames() []string {
 	return r.SelectedTools
+}
+
+// tokenizeQuery 将查询分词（简单实现：按空格和中文标点分词）
+func tokenizeQuery(query string) []string {
+	// 替换中文标点为空格
+	replacer := strings.NewReplacer(
+		"，", " ",
+		"。", " ",
+		"？", " ",
+		"！", " ",
+		"、", " ",
+		"；", " ",
+		"：", " ",
+		"（", " ",
+		"）", " ",
+		"【", " ",
+		"】", " ",
+		"《", " ",
+		"》", " ",
+		"“", " ",
+		"”", " ",
+		"‘", " ",
+		"’", " ",
+		"「", " ",
+		"」", " ",
+		"『", " ",
+		"』", " ",
+		"(", " ",
+		")", " ",
+		"[", " ",
+		"]", " ",
+		"{", " ",
+		"}", " ",
+		"<", " ",
+		">", " ",
+		",", " ",
+		".", " ",
+		"?", " ",
+		"!", " ",
+		";", " ",
+		":", " ",
+		"'", " ",
+		"\"", " ",
+		"/", " ",
+		"\\", " ",
+		"|", " ",
+		"~", " ",
+		"`", " ",
+		"@", " ",
+		"#", " ",
+		"$", " ",
+		"%", " ",
+		"^", " ",
+		"&", " ",
+		"*", " ",
+		"+", " ",
+		"=", " ",
+		"_", " ",
+		"-", " ",
+	)
+
+	cleaned := replacer.Replace(query)
+	words := strings.Fields(cleaned)
+
+	// 过滤空字符串
+	var result []string
+	for _, w := range words {
+		w = strings.TrimSpace(w)
+		if w != "" {
+			result = append(result, w)
+		}
+	}
+	return result
 }

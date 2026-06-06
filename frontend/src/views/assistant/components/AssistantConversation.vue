@@ -63,9 +63,9 @@
             </div>
 
             <!-- 工具调用卡片 -->
-            <div v-if="msg.tool_calls?.length" class="tool-calls">
+            <div v-if="getMessageToolCalls(msg).length" class="tool-calls">
               <AssistantToolCallCard
-                v-for="call in msg.tool_calls"
+                v-for="call in getMessageToolCalls(msg)"
                 :key="call.call_id"
                 :call="call"
               />
@@ -157,6 +157,21 @@ function scrollToBottom() {
 
 watch(() => props.messages, scrollToBottom, { deep: true })
 watch(() => props.streaming, scrollToBottom)
+
+/**
+ * 获取消息关联的工具调用
+ * 优先使用 store 级别的 toolCalls（SSE 实时更新状态）
+ * 降级使用消息级别的 tool_calls（历史数据）
+ */
+function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
+  // 优先使用 store 级别的 toolCalls（SSE 实时更新）
+  const storeCalls = props.toolCalls.filter(tc =>
+    tc.message_id === msg.message_id || tc.message_id === msg.id
+  )
+  if (storeCalls.length > 0) return storeCalls
+  // 降级使用消息级别的 tool_calls（历史数据）
+  return msg.tool_calls || []
+}
 
 function formatContent(content: string): string {
   return content

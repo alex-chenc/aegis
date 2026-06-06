@@ -2,7 +2,7 @@
   <aside class="session-sidebar">
     <!-- 头部 -->
     <div class="sidebar-header">
-      <h3>智能模式</h3>
+      <h3>智能助手</h3>
       <el-button type="primary" size="small" @click="$emit('create')">
         <el-icon><Plus /></el-icon>
         新会话
@@ -24,25 +24,6 @@
       </el-input>
     </div>
 
-    <!-- 快捷任务 -->
-    <div class="quick-tasks">
-      <div class="section-title">快捷任务</div>
-      <div class="task-list">
-        <div class="task-item" @click="$emit('create', 'investigation')">
-          <el-icon><Search /></el-icon>
-          <span>安全研判</span>
-        </div>
-        <div class="task-item" @click="$emit('create', 'operations')">
-          <el-icon><Operation /></el-icon>
-          <span>运维操作</span>
-        </div>
-        <div class="task-item" @click="$emit('create', 'explanation')">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>自由提问</span>
-        </div>
-      </div>
-    </div>
-
     <!-- 会话列表 -->
     <div class="session-list">
       <div class="section-title">历史会话</div>
@@ -52,44 +33,60 @@
       <div v-else-if="sessions.length === 0" class="empty-state">
         <el-empty description="暂无会话" :image-size="48" />
       </div>
-      <div v-else class="session-items">
-        <div
-          v-for="session in sessions"
-          :key="session.session_id"
-          class="session-item"
-          :class="{ active: activeSessionId === session.session_id }"
-          @click="$emit('select', session.session_id)"
-        >
-          <div class="session-title">{{ session.title }}</div>
-          <div class="session-meta">
-            <el-tag :type="getStatusType(session.status)" size="small">
-              {{ getStatusLabel(session.status) }}
-            </el-tag>
-            <span class="session-time">{{ formatTime(session.created_at) }}</span>
+      <template v-else>
+        <div class="session-items">
+          <div
+            v-for="session in sessions"
+            :key="session.session_id"
+            class="session-item"
+            :class="{ active: activeSessionId === session.session_id }"
+            @click="$emit('select', session.session_id)"
+          >
+            <div class="session-item-header">
+              <div class="session-title">{{ session.title }}</div>
+              <el-button
+                class="delete-btn"
+                type="danger"
+                size="small"
+                :icon="Delete"
+                text
+                @click.stop="handleDelete(session.session_id)"
+              />
+            </div>
+            <div class="session-meta">
+              <el-tag :type="getStatusType(session.status)" size="small">
+                {{ getStatusLabel(session.status) }}
+              </el-tag>
+              <span class="session-time">{{ formatTime(session.created_at) }}</span>
+            </div>
+            <div class="session-stats">
+              <span>{{ session.message_count || 0 }} 条消息</span>
+              <span>{{ session.tool_call_count || 0 }} 次工具调用</span>
+            </div>
           </div>
-          <div class="session-stats">
-            <span>{{ session.message_count || 0 }} 条消息</span>
-            <span>{{ session.tool_call_count || 0 }} 次工具调用</span>
-          </div>
         </div>
-        <!-- 加载更多 -->
-        <div v-if="hasMore" class="load-more">
-          <el-button text size="small" :loading="loadingMore" @click="$emit('loadMore')">
-            加载更多
-          </el-button>
+
+        <!-- 分页（始终显示在会话列表底部） -->
+        <div v-if="total > 10" class="session-pagination">
+          <el-pagination
+            small
+            layout="prev, pager, next"
+            :total="total"
+            :page-size="10"
+            :current-page="currentPage"
+            @current-change="handlePageChange"
+          />
         </div>
-        <div v-else-if="sessions.length > 0" class="session-count">
-          共 {{ total }} 个会话
-        </div>
-      </div>
+      </template>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Plus, Search, Operation, ChatDotRound } from '@element-plus/icons-vue'
-import type { AssistantSession, AssistantTaskType } from '@/api/assistant'
+import { Plus, Search, Delete } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
+import type { AssistantSession } from '@/api/assistant'
 
 defineProps<{
   sessions: AssistantSession[]
@@ -98,19 +95,39 @@ defineProps<{
   loadingMore?: boolean
   hasMore?: boolean
   total?: number
+  currentPage?: number
 }>()
 
 const emit = defineEmits<{
   select: [sessionId: string]
-  create: [taskType?: AssistantTaskType]
+  create: []
   search: [keyword: string]
   loadMore: []
+  pageChange: [page: number]
+  delete: [sessionId: string]
 }>()
 
 const searchKeyword = ref('')
 
 function handleSearch() {
   emit('search', searchKeyword.value)
+}
+
+function handlePageChange(page: number) {
+  emit('pageChange', page)
+}
+
+async function handleDelete(sessionId: string) {
+  try {
+    await ElMessageBox.confirm('确定删除该会话？删除后不可恢复。', '删除会话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    emit('delete', sessionId)
+  } catch {
+    // 用户取消
+  }
 }
 
 function getStatusType(status: string): string {
@@ -175,10 +192,6 @@ function formatTime(time: string): string {
 
 .sidebar-search {
   padding: 12px 16px;
-}
-
-.quick-tasks {
-  padding: 0 16px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -188,28 +201,6 @@ function formatTime(time: string): string {
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-}
-
-.task-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.task-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.8);
-  transition: background 0.2s;
-}
-
-.task-item:hover {
-  background: rgba(255, 255, 255, 0.1);
 }
 
 .session-list {
@@ -239,13 +230,31 @@ function formatTime(time: string): string {
   background: rgba(64, 158, 255, 0.2);
 }
 
+.session-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .session-title {
+  flex: 1;
   font-size: 14px;
   font-weight: 500;
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.delete-btn {
+  opacity: 0;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.session-item:hover .delete-btn {
+  opacity: 1;
 }
 
 .session-meta {
@@ -272,24 +281,30 @@ function formatTime(time: string): string {
   padding: 16px;
 }
 
-.load-more {
+.session-pagination {
   display: flex;
   justify-content: center;
-  padding: 8px 0;
+  padding: 12px 0 4px;
 }
 
-.load-more .el-button {
+.session-pagination :deep(.el-pagination) {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-text-color: rgba(255, 255, 255, 0.5);
+  --el-pagination-button-color: rgba(255, 255, 255, 0.5);
+  --el-pagination-hover-color: #409eff;
+}
+
+.session-pagination :deep(.el-pagination .btn-prev),
+.session-pagination :deep(.el-pagination .btn-next),
+.session-pagination :deep(.el-pager li) {
+  background: transparent !important;
   color: rgba(255, 255, 255, 0.5);
+  min-width: 24px;
+  height: 24px;
+  line-height: 24px;
 }
 
-.load-more .el-button:hover {
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.session-count {
-  text-align: center;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-  padding: 8px 0;
+.session-pagination :deep(.el-pager li.is-active) {
+  color: #409eff;
 }
 </style>
