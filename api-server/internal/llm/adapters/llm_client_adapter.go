@@ -73,7 +73,7 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 	}
 
 	return agentruntime.LLMResponse{
-		Content: result.Content,
+		Content: cleanLLMResponse(result.Content),
 		Model:   result.Model,
 		Usage: agentruntime.LLMUsage{
 			PromptTokens:     result.Usage.PromptTokens,
@@ -152,4 +152,35 @@ func containsJSONKeyword(messages []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+// cleanLLMResponse cleans the LLM response by removing markdown code blocks,
+// BOM characters, and other formatting that would break JSON parsing.
+func cleanLLMResponse(content string) string {
+	// Remove BOM character (UTF-8 BOM: EF BB BF)
+	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
+
+	// Remove markdown code blocks
+	content = strings.TrimSpace(content)
+	if strings.HasPrefix(content, "```json") {
+		content = strings.TrimPrefix(content, "```json")
+		content = strings.TrimSuffix(content, "```")
+		content = strings.TrimSpace(content)
+	} else if strings.HasPrefix(content, "```") {
+		content = strings.TrimPrefix(content, "```")
+		content = strings.TrimSuffix(content, "```")
+		content = strings.TrimSpace(content)
+	}
+
+	// Find the first { or [ to start of JSON
+	if idx := strings.IndexAny(content, "{["); idx > 0 {
+		content = content[idx:]
+	}
+
+	// Find the last } or ] to end of JSON
+	if idx := strings.LastIndexAny(content, "}]"); idx >= 0 && idx < len(content)-1 {
+		content = content[:idx+1]
+	}
+
+	return content
 }

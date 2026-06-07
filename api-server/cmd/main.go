@@ -13,6 +13,8 @@ import (
 	"api-server/config"
 	"api-server/internal/api"
 	"api-server/internal/api/handler"
+	"api-server/internal/assistant"
+	assistantTools "api-server/internal/assistant/tools"
 	"api-server/internal/checker"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/ipdetect"
@@ -127,6 +129,19 @@ func main() {
 	commandAuditRuleRepo := repository.NewCommandAuditRuleRepo(db)
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	systemConfigRepo := repository.NewSystemConfigRepo(db)
+
+	// V6.0 Assistant repositories
+	assistantSessionRepo := repository.NewAssistantSessionRepository(db)
+	assistantMessageRepo := repository.NewAssistantMessageRepository(db)
+	assistantContextRefRepo := repository.NewAssistantContextRefRepository(db)
+	assistantToolCallRepo := repository.NewAssistantToolCallRepository(db)
+	assistantApprovalRepo := repository.NewAssistantApprovalRepository(db)
+	assistantMemoryRepo := repository.NewAssistantMemoryRepository(db)
+	assistantToolPolicyRepo := repository.NewAssistantToolPolicyRepository(db)
+	assistantInvestigationReportRepo := repository.NewAssistantInvestigationReportRepository(db)
+	assistantInvestigationEvidenceRepo := repository.NewAssistantInvestigationEvidenceRepository(db)
+	externalMCPSourceRepo := repository.NewExternalMCPSourceRepository(db)
+	externalMCPQueryLogRepo := repository.NewExternalMCPQueryLogRepository(db)
 
 	// V5.7 Script Audit Services (must initialize before services that depend on it)
 	blacklistChecker := checker.NewBlacklistChecker()
@@ -265,8 +280,86 @@ func main() {
 	assetHandler := handler.NewAssetHandler(assetCollectionService, assetQueryService, assetAnalysisService, logger.Get())
 	logger.Info("Intelligent asset collection module initialized")
 
+	// V6.0 Assistant
+	assistantLogger := logger.Get().Named("assistant")
+	contextLoader := assistant.NewContextLoader(assistant.ContextLoaderDeps{
+		HostRepo:       hostRepo,
+		AlertRepo:      alertRepo,
+		TaskRepo:       taskLogRepo,
+		ContextRefRepo: assistantContextRefRepo,
+	})
+	riskPolicy := assistant.NewRiskPolicy()
+	toolRegistry := assistant.NewToolRegistry()
+	// Register all assistant tools
+	registerAssistantTools(toolRegistry, assistantLogger, hostRepo, alertRepo, taskLogRepo, vulnRepo, sigmaRuleRepo, blockPolicyRepo, blockRepo, configRepo, auditLogRepo, detectionPkgRepo, serverClient)
+	toolCatalog := assistant.NewToolCatalog(toolRegistry)
+	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
+	toolPolicyService := assistant.NewToolPolicyService(assistantToolPolicyRepo, toolRegistry, assistantLogger)
+	runManager := assistant.NewRunManager()
+	approvalGate := assistant.NewApprovalGate(assistant.ApprovalGateDeps{
+		ApprovalRepo:  assistantApprovalRepo,
+		ToolCallRepo:  assistantToolCallRepo,
+		PolicyService: toolPolicyService,
+		RiskPolicy:    riskPolicy,
+		Logger:        assistantLogger,
+	})
+	intentRouter := assistant.NewIntentRouter()
+	runtimeFactory := assistant.NewRuntimeFactory(configRepo, assistantLogger)
+	toolDispatcher := assistant.NewToolDispatcher(toolRegistry, approvalGate, assistantToolCallRepo, assistantSessionRepo, toolPolicyService, assistantLogger)
+	orchestrator := assistant.NewOrchestrator(assistant.OrchestratorDeps{
+		ConfigRepo:     configRepo,
+		MessageRepo:    assistantMessageRepo,
+		ToolCallRepo:   assistantToolCallRepo,
+		SessionRepo:    assistantSessionRepo,
+		ToolRegistry:   toolRegistry,
+		ToolSelector:   toolSelector,
+		ToolDispatcher: toolDispatcher,
+		ContextLoader:  contextLoader,
+		IntentRouter:   intentRouter,
+		RuntimeFactory: runtimeFactory,
+		RunManager:     runManager,
+		Logger:         assistantLogger,
+	})
+	assistantService := assistant.NewService(assistant.ServiceDeps{
+		SessionRepo:    assistantSessionRepo,
+		MessageRepo:    assistantMessageRepo,
+		ContextRefRepo: assistantContextRefRepo,
+		ToolCallRepo:   assistantToolCallRepo,
+		ApprovalRepo:   assistantApprovalRepo,
+		MemoryRepo:     assistantMemoryRepo,
+		ContextLoader:  contextLoader,
+		Orchestrator:   orchestrator,
+		RunManager:     runManager,
+		Logger:         assistantLogger,
+	})
+	// V6.0 Investigation service
+	investigationSvc := assistant.NewHostAttackInvestigationService(assistant.HostAttackInvestigationServiceDeps{
+		ReportRepo:   assistantInvestigationReportRepo,
+		EvidenceRepo: assistantInvestigationEvidenceRepo,
+		HostRepo:     hostRepo,
+		AlertRepo:    alertRepo,
+		TaskRepo:     taskLogRepo,
+		VulnRepo:     vulnRepo,
+		BlockRepo:    blockRepo,
+		Logger:       assistantLogger,
+	})
+
+	// V6.0 External MCP service
+	mcpSvc := assistant.NewExternalMCPSourceService(assistant.ExternalMCPSourceServiceDeps{
+		SourceRepo:   externalMCPSourceRepo,
+		QueryLogRepo: externalMCPQueryLogRepo,
+		Logger:       assistantLogger,
+	})
+
+	assistantHandler := handler.NewAssistantHandler(assistantService, approvalGate, toolPolicyService, investigationSvc, mcpSvc, assistantLogger)
+
+	// Sync tool policies at startup
+	if err := toolPolicyService.SyncCatalogTools(context.Background()); err != nil {
+		logger.Warn("failed to sync assistant tool policies", zap.Error(err))
+	}
+
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, assistantHandler)
 	router.Setup()
 
 	// Start HTTP server
@@ -304,4 +397,56 @@ func main() {
 	serverClient.Close()
 
 	logger.Info("api-server stopped")
+}
+
+// registerAssistantTools 注册所有助手工具
+func registerAssistantTools(
+	registry *assistant.ToolRegistry,
+	logger *zap.Logger,
+	hostRepo *repository.HostRepository,
+	alertRepo *repository.AlertRepository,
+	taskLogRepo *repository.TaskLogRepository,
+	vulnRepo *repository.VulnerabilityRepo,
+	sigmaRuleRepo *repository.SigmaRuleRepository,
+	blockPolicyRepo *repository.BlockPolicyRepository,
+	blockRepo *repository.BlockRepository,
+	configRepo *repository.ConfigRepository,
+	auditLogRepo *repository.AuditLogRepo,
+	detectionPkgRepo *repository.DetectionPackageRepo,
+	serverClient *grpcclient.ServerClient,
+) {
+	// Host tools
+	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo}); err != nil {
+		logger.Warn("failed to register host tools", zap.Error(err))
+	}
+	// Detection tools
+	if err := assistantTools.RegisterDetectionTools(registry, assistantTools.DetectionToolDeps{
+		AlertRepo:     alertRepo,
+		BlockRepo:     blockRepo,
+		SigmaRuleRepo: sigmaRuleRepo,
+	}); err != nil {
+		logger.Warn("failed to register detection tools", zap.Error(err))
+	}
+	// Vulnerability tools
+	if err := assistantTools.RegisterVulnerabilityTools(registry, assistantTools.VulnerabilityToolDeps{VulnRepo: vulnRepo}); err != nil {
+		logger.Warn("failed to register vulnerability tools", zap.Error(err))
+	}
+	// Task tools
+	if err := assistantTools.RegisterTaskTools(registry, assistantTools.TaskToolDeps{TaskLogRepo: taskLogRepo}); err != nil {
+		logger.Warn("failed to register task tools", zap.Error(err))
+	}
+	// Block tools
+	if err := assistantTools.RegisterBlockTools(registry, assistantTools.BlockToolDeps{BlockPolicyRepo: blockPolicyRepo}); err != nil {
+		logger.Warn("failed to register block tools", zap.Error(err))
+	}
+	// Audit tools
+	if err := assistantTools.RegisterAuditTools(registry, assistantTools.AuditToolDeps{AuditLogRepo: auditLogRepo}); err != nil {
+		logger.Warn("failed to register audit tools", zap.Error(err))
+	}
+	// Package tools
+	if err := assistantTools.RegisterPackageTools(registry, assistantTools.PackageToolDeps{PackageRepo: detectionPkgRepo}); err != nil {
+		logger.Warn("failed to register package tools", zap.Error(err))
+	}
+
+	logger.Info("assistant tools registered", zap.Int("count", registry.Count()))
 }

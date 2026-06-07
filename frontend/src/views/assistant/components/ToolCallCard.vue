@@ -1,0 +1,150 @@
+<template>
+  <div class="tool-call-card" :class="call.status">
+    <div class="card-header">
+      <div class="tool-info">
+        <el-tag :type="getRiskTag(call.risk_level)" size="small">
+          {{ call.risk_level }}
+        </el-tag>
+        <span class="tool-name">{{ call.tool_name }}</span>
+      </div>
+      <el-tag :type="getStatusTag(call.status)" size="small">
+        {{ getStatusLabel(call.status) }}
+      </el-tag>
+    </div>
+
+    <div v-if="call.args_summary" class="card-args">
+      <span class="label">参数:</span>
+      <span class="value">{{ call.args_summary }}</span>
+    </div>
+
+    <div v-if="call.result_summary" class="card-result">
+      <span class="label">结果:</span>
+      <span class="value">{{ call.result_summary }}</span>
+    </div>
+
+    <div v-if="call.error_message" class="card-error">
+      <el-icon><Warning /></el-icon>
+      <span>{{ call.error_message }}</span>
+    </div>
+
+    <div v-if="call.duration_ms" class="card-duration">
+      耗时: {{ call.duration_ms }}ms
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { Warning } from '@element-plus/icons-vue'
+
+defineProps<{
+  call: {
+    call_id: string
+    tool_name: string
+    risk_level: string
+    status: string
+    args_summary?: string
+    result_summary?: string
+    error_message?: string
+    duration_ms?: number
+  }
+}>()
+
+function getRiskTag(level: string): string {
+  const map: Record<string, string> = {
+    readonly: 'info',
+    low: 'success',
+    medium: 'warning',
+    high: 'danger',
+    critical: 'danger',
+  }
+  return map[level] || 'info'
+}
+
+function getStatusTag(status: string): string {
+  const map: Record<string, string> = {
+    running: 'warning',
+    success: 'success',
+    failed: 'danger',
+    approval_required: 'warning',
+    rejected: 'info',
+  }
+  return map[status] || 'info'
+}
+
+function getStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    running: '执行中',
+    success: '成功',
+    failed: '失败',
+    approval_required: '待审批',
+    rejected: '已拒绝',
+  }
+  return map[status] || status
+}
+</script>
+
+<style scoped>
+.tool-call-card {
+  background: #f5f7fa;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.tool-call-card.success {
+  border-left: 3px solid #67c23a;
+}
+
+.tool-call-card.failed {
+  border-left: 3px solid #f56c6c;
+}
+
+.tool-call-card.running {
+  border-left: 3px solid #e6a23c;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.tool-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.card-args,
+.card-result {
+  margin-top: 4px;
+  color: #606266;
+}
+
+.card-args .label,
+.card-result .label {
+  color: #909399;
+  margin-right: 4px;
+}
+
+.card-error {
+  margin-top: 4px;
+  color: #f56c6c;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-duration {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+}
+</style>
