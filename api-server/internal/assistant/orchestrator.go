@@ -156,11 +156,17 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		Intent:      intent,
 		MaxTools:    24,
 	})
+	useAIAnalysisFlow := o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
+	if useAIAnalysisFlow {
+		selection.SelectedTools = o.expandComplexTaskTools(selection.SelectedTools, input.TaskType, input.UserMessage, intent)
+	}
 
 	// 7. 发布工具选择事件
 	o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, map[string]interface{}{
 		"selected_tools":  selection.SelectedTools,
 		"candidate_tools": selection.CandidateTools,
+		"runtime_profile": runtimeProfileName(useAIAnalysisFlow),
+		"max_total_turns": maxRuntimeTurns(useAIAnalysisFlow),
 	}))
 
 	// 8. 构建 agent-runtime 工具描述符
@@ -172,9 +178,10 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	// - 复杂任务（>=3步）：生成完整计划，按步骤执行
 	o.logger.Info("using agent-runtime",
 		zap.String("session_id", input.SessionID),
+		zap.String("runtime_profile", runtimeProfileName(useAIAnalysisFlow)),
 		zap.Int("tools_count", len(toolDescriptors)),
 	)
-	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors)
+	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow)
 }
 
 // fallbackResponse 降级响应
@@ -223,6 +230,90 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 		})
 	}
 	return descriptors
+}
+
+func (o *Orchestrator) expandComplexTaskTools(selected []string, taskType, userMessage string, intent IntentResult) []string {
+	if !shouldUseSecurityToolExpansion(taskType, userMessage, intent) {
+		return dedupeToolNames(selected)
+	}
+
+	extraTools := []string{
+		"Host.List",
+		"Host.Get",
+		"Host.AgentStatus.Get",
+		"Task.List",
+		"Task.GetDetail",
+		"Task.RunCheck",
+		"Vulnerability.List",
+		"Vulnerability.AffectedHosts",
+		"Software.Installed.Search",
+		"Detection.Alert.List",
+		"Detection.Alert.Get",
+		"Detection.Statistics.Get",
+		"Detection.Trend.Get",
+		"Agent.Process.List",
+		"Agent.Process.Tree",
+		"Agent.Network.List",
+		"Agent.File.OpenList",
+		"Agent.Log.Query",
+	}
+
+	expanded := append([]string{}, selected...)
+	expanded = append(expanded, extraTools...)
+	return dedupeToolNames(expanded)
+}
+
+func shouldUseSecurityToolExpansion(taskType, userMessage string, intent IntentResult) bool {
+	switch taskType {
+	case "investigation", "host_attack_investigation":
+		return true
+	}
+	if intent.Action == "analyze" || intent.Action == "investigate" {
+		return true
+	}
+	securityKeywords := []string{
+		"安全", "安全问题", "安全事件", "排查", "风险", "威胁", "攻击", "入侵",
+		"溯源", "研判", "告警", "漏洞", "基线", "取证", "异常",
+	}
+	for _, keyword := range securityKeywords {
+		if contains(userMessage, keyword) {
+			return true
+		}
+	}
+	for _, domain := range intent.Domains {
+		switch domain {
+		case "detection", "investigation", "sigma_rule", "block", "agent":
+			return true
+		}
+	}
+	return false
+}
+
+func dedupeToolNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		result = append(result, name)
+	}
+	return result
+}
+
+func runtimeProfileName(useAIAnalysisFlow bool) string {
+	if useAIAnalysisFlow {
+		return "ai_analysis"
+	}
+	return "assistant"
+}
+
+func maxRuntimeTurns(useAIAnalysisFlow bool) int {
+	if useAIAnalysisFlow {
+		return 500
+	}
+	return 80
 }
 
 // convertContextRefs 转换上下文引用
@@ -315,22 +406,35 @@ func containsSubstring(s, substr string) bool {
 
 // runAgentRuntime 统一执行入口：使用 agent-runtime Plan → React 流程
 // 使用 RuntimeFactory.Build() 集中创建 runtime（对齐设计文档 4.3 节）
-func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor) (*RunResult, error) {
+func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool) (*RunResult, error) {
 	convertedRefs := o.convertContextRefs(contextRefs)
 	msgID := "msg_" + input.RunID
+	maxIterations := 80
+	if useAIAnalysisFlow {
+		maxIterations = 500
+	}
+	o.mergeSessionMetadata(ctx, input.SessionID, map[string]interface{}{
+		"runtime_profile":    runtimeProfileName(useAIAnalysisFlow),
+		"max_total_turns":    maxIterations,
+		"current_run_id":     input.RunID,
+		"current_message_id": msgID,
+		"current_run_status": "running",
+		"run_started_at":     time.Now().UTC().Format(time.RFC3339),
+	})
 
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
 	buildResult, err := o.runtimeFactory.Build(ctx, RuntimeBuildRequest{
-		SessionID:       input.SessionID,
-		RunID:           input.RunID,
-		MessageID:       msgID,
-		Operator:        input.UserID,
-		UserInput:       input.UserMessage,
-		TaskType:        input.TaskType,
-		ContextRefs:     convertedRefs,
-		SelectedTools:   selection.SelectedTools,
-		ToolDescriptors: toolDescriptors,
-		MaxIterations:   80,
+		SessionID:         input.SessionID,
+		RunID:             input.RunID,
+		MessageID:         msgID,
+		Operator:          input.UserID,
+		UserInput:         input.UserMessage,
+		TaskType:          input.TaskType,
+		ContextRefs:       convertedRefs,
+		SelectedTools:     selection.SelectedTools,
+		ToolDescriptors:   toolDescriptors,
+		MaxIterations:     maxIterations,
+		UseAIAnalysisFlow: useAIAnalysisFlow,
 	})
 	if err != nil {
 		o.logger.Error("failed to build agent-runtime", zap.Error(err))
@@ -347,6 +451,30 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			"task_type":  input.TaskType,
 		},
 	})
+	if err != nil && ctx.Err() != nil {
+		o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+			"current_run_status":    "cancelled",
+			"last_run_cancelled_at": time.Now().UTC().Format(time.RFC3339),
+		})
+		return nil, ctx.Err()
+	}
+	if taskResult != nil {
+		metadata := map[string]interface{}{
+			"runtime_profile":         runtimeProfileName(useAIAnalysisFlow),
+			"max_total_turns":         maxIterations,
+			"current_run_id":          input.RunID,
+			"current_message_id":      msgID,
+			"current_run_status":      "completed",
+			"last_run_completed_at":   time.Now().UTC().Format(time.RFC3339),
+			"total_prompt_tokens":     taskResult.Metrics.TotalPromptTokens,
+			"total_completion_tokens": taskResult.Metrics.TotalCompletionTokens,
+			"total_tokens":            taskResult.Metrics.TotalPromptTokens + taskResult.Metrics.TotalCompletionTokens,
+			"compression_count":       len(taskResult.CompressionRecords),
+			"context_budget":          taskResult.ContextBudget,
+			"compression_records":     taskResult.CompressionRecords,
+		}
+		o.mergeSessionMetadata(context.Background(), input.SessionID, metadata)
+	}
 
 	// 处理结果
 	response := ""
@@ -381,6 +509,39 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		MessageID:   msgID,
 		FinalAnswer: response,
 	}, nil
+}
+
+func (o *Orchestrator) mergeSessionMetadata(ctx context.Context, sessionID string, updates map[string]interface{}) {
+	if o.sessionRepo == nil || sessionID == "" || len(updates) == 0 {
+		return
+	}
+
+	session, err := o.sessionRepo.FindBySessionID(ctx, sessionID)
+	if err != nil {
+		o.logger.Warn("failed to load assistant session metadata",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	metadata := unmarshalJSON(session.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	for key, value := range updates {
+		if value == nil {
+			continue
+		}
+		metadata[key] = value
+	}
+	session.Metadata = mustMarshalJSON(metadata)
+	if err := o.sessionRepo.Update(ctx, session); err != nil {
+		o.logger.Warn("failed to update assistant session metadata",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+	}
 }
 
 // cleanResponse 清理 LLM 响应

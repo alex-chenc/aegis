@@ -179,6 +179,11 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 	// --- 上下文压缩 ---
 
+	case agentruntime.HookContextBudgetChecked:
+		if event.Snapshot != nil && event.Snapshot.ContextBudget != nil {
+			s.publish(EventContextBudget, event.Snapshot.ContextBudget)
+		}
+
 	case agentruntime.HookContextCompressed:
 		payload := toMap(event.Payload)
 		strategy, _ := payload["strategy"].(string)
@@ -192,6 +197,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		s.publish(EventThinking, map[string]interface{}{
 			"content": fmt.Sprintf("上下文压缩 (%s): %d → %d tokens", strategy, beforeTokens, afterTokens),
 		})
+		s.publish(EventContextCompressed, payload)
 
 	case agentruntime.HookContextCompressionFailed:
 		payload := toMap(event.Payload)
@@ -199,6 +205,11 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		s.publish(EventThinking, map[string]interface{}{
 			"content": fmt.Sprintf("上下文压缩失败: %s", errMsg),
 		})
+		eventPayload := map[string]interface{}{"message": errMsg}
+		if len(payload) > 0 {
+			eventPayload = payload
+		}
+		s.publish(EventContextCompressionFailed, eventPayload)
 	}
 
 	return nil

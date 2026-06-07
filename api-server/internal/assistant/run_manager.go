@@ -15,6 +15,8 @@ type RunManager struct {
 	runs map[string]*ActiveRun // key: sessionID
 }
 
+const runEventHistoryLimit = 600
+
 // ActiveRun 活跃运行
 type ActiveRun struct {
 	RunID     string
@@ -25,10 +27,11 @@ type ActiveRun struct {
 	startedAt time.Time
 
 	// 审批暂停/恢复状态
-	waitingApproval   *WaitingApprovalState
-	waitingMu         sync.RWMutex
+	waitingApproval *WaitingApprovalState
+	waitingMu       sync.RWMutex
 
 	subscribers []chan AssistantEvent
+	history     []AssistantEvent
 	subMu       sync.RWMutex
 }
 
@@ -80,8 +83,7 @@ func (m *RunManager) Start(sessionID string) *ActiveRun {
 		existing.cancel()
 	}
 
-	// 使用 5 分钟超时防止 LLM 调用无限阻塞
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	run := &ActiveRun{
 		RunID:     "run_" + uuid.New().String()[:8],
 		SessionID: sessionID,
@@ -118,11 +120,16 @@ func (m *RunManager) Publish(sessionID string, event AssistantEvent) {
 		return
 	}
 
-	run.subMu.RLock()
-	defer run.subMu.RUnlock()
+	run.subMu.Lock()
+	run.history = append(run.history, event)
+	if len(run.history) > runEventHistoryLimit {
+		run.history = append([]AssistantEvent(nil), run.history[len(run.history)-runEventHistoryLimit:]...)
+	}
+	subscribers := append([]chan AssistantEvent(nil), run.subscribers...)
+	run.subMu.Unlock()
 
 	// Send to all subscribers
-	for _, ch := range run.subscribers {
+	for _, ch := range subscribers {
 		select {
 		case ch <- event:
 		default:
@@ -141,9 +148,12 @@ func (m *RunManager) Subscribe(sessionID string) (<-chan AssistantEvent, func(),
 		return nil, nil, fmt.Errorf("no active run for session %s", sessionID)
 	}
 
-	ch := make(chan AssistantEvent, 100)
+	ch := make(chan AssistantEvent, runEventHistoryLimit+100)
 
 	run.subMu.Lock()
+	for _, event := range run.history {
+		ch <- event
+	}
 	run.subscribers = append(run.subscribers, ch)
 	run.subMu.Unlock()
 

@@ -36,16 +36,16 @@ type IntentRouter struct {
 func NewIntentRouter() *IntentRouter {
 	return &IntentRouter{
 		keywords: map[string][]string{
-			"host":          {"主机", "资产", "agent", "离线", "在线", "主机列表", "资产态势", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么"},
+			"host":          {"主机", "机器", "资产", "IP", "agent", "离线", "在线", "主机列表", "资产态势", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么"},
 			"task":          {"任务", "基线", "检查", "修复", "扫描任务", "执行"},
-			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "受影响"},
-			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵"},
+			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "受影响", "安全问题", "风险"},
+			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵", "安全", "安全事件", "事件", "异常"},
 			"sigma_rule":    {"sigma", "规则", "检测规则", "规则生成", "规则激活"},
 			"package":       {"检测包", "包", "签名", "构建", "启用", "禁用", "回滚", "hook", "allowlist"},
 			"block":         {"阻断", "策略", "封禁", "白名单"},
 			"config":        {"配置", "设置", "LLM", "系统配置"},
 			"audit":         {"审计", "日志", "审计日志", "操作记录"},
-			"investigation": {"研判", "攻击研判", "攻击路径", "入口", "溯源", "攻击时间线", "置信度"},
+			"investigation": {"研判", "攻击研判", "攻击路径", "入口", "溯源", "攻击时间线", "置信度", "排查", "调查", "取证", "主机安全"},
 			"external_mcp":  {"MCP", "外部数据", "SIEM", "CMDB", "EDR", "威胁情报", "工单"},
 			"notification":  {"通知", "消息", "告警通知"},
 		},
@@ -143,7 +143,7 @@ func (r *IntentRouter) classifyByRules(input IntentInput) IntentResult {
 	var domains []string
 	maxScore := 0.0
 	for domain, score := range scores {
-		if score > 0.1 {
+		if score > 0 {
 			domains = append(domains, domain)
 			if score > maxScore {
 				maxScore = score
@@ -274,20 +274,23 @@ func (r *IntentRouter) mapContextType(objectType string) string {
 }
 
 func (r *IntentRouter) inferAction(query string) string {
-	actionKeywords := map[string][]string{
-		"query":   {"查询", "列出", "查看", "获取", "显示", "列表", "有哪些", "多少"},
-		"analyze": {"分析", "研判", "溯源", "调查", "检测", "扫描"},
-		"create":  {"创建", "新建", "生成", "添加", "注册"},
-		"update":  {"更新", "修改", "编辑", "调整"},
-		"delete":  {"删除", "移除", "清理"},
-		"execute": {"执行", "运行", "触发", "启动", "部署"},
-		"approve": {"批准", "审批", "通过", "签名"},
-		"block":   {"阻断", "封禁", "拦截", "禁止"},
+	orderedActions := []struct {
+		action   string
+		keywords []string
+	}{
+		{"block", []string{"阻断", "封禁", "拦截", "禁止"}},
+		{"approve", []string{"批准", "审批", "通过", "签名"}},
+		{"delete", []string{"删除", "移除", "清理"}},
+		{"update", []string{"更新", "修改", "编辑", "调整"}},
+		{"create", []string{"创建", "新建", "生成", "添加", "注册"}},
+		{"execute", []string{"执行", "运行", "触发", "启动", "部署"}},
+		{"analyze", []string{"分析", "研判", "溯源", "调查", "检测", "扫描", "排查", "安全问题", "安全事件", "风险", "威胁", "攻击", "入侵", "取证"}},
+		{"query", []string{"查询", "列出", "查看", "获取", "显示", "列表", "有哪些", "多少"}},
 	}
-	for action, keywords := range actionKeywords {
-		for _, kw := range keywords {
+	for _, item := range orderedActions {
+		for _, kw := range item.keywords {
 			if strings.Contains(query, kw) {
-				return action
+				return item.action
 			}
 		}
 	}

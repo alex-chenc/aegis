@@ -44,15 +44,15 @@ func (s *ToolPolicyService) SyncCatalogTools(ctx context.Context) error {
 
 	for _, tool := range tools {
 		policies = append(policies, model.AssistantToolPolicy{
-			ToolName:          tool.Name,
-			Domain:            string(tool.Domain),
-			Operation:         string(tool.Operation),
-			RiskLevel:         string(tool.Risk),
-			Description:       tool.Description,
+			ToolName:           tool.Name,
+			Domain:             string(tool.Domain),
+			Operation:          string(tool.Operation),
+			RiskLevel:          string(tool.Risk),
+			Description:        tool.Description,
 			DefaultWhitelisted: tool.DefaultWhitelisted,
-			Whitelisted:       tool.DefaultWhitelisted,
-			Enabled:           tool.Enabled,
-			Source:            "builtin",
+			Whitelisted:        tool.DefaultWhitelisted,
+			Enabled:            tool.Enabled,
+			Source:             "builtin",
 		})
 	}
 
@@ -108,6 +108,16 @@ func (s *ToolPolicyService) SetApprovalMode(ctx context.Context, mode string, op
 
 // IsToolWhitelisted 检查工具是否在白名单中
 func (s *ToolPolicyService) IsToolWhitelisted(ctx context.Context, toolName string) (bool, error) {
+	if s.policyRepo == nil {
+		if s.registry == nil {
+			return false, nil
+		}
+		tool, ok := s.registry.Get(toolName)
+		if !ok {
+			return false, nil
+		}
+		return tool.DefaultWhitelisted && tool.Enabled, nil
+	}
 	policy, err := s.policyRepo.FindByToolName(ctx, toolName)
 	if err != nil {
 		// If not found, default to not whitelisted

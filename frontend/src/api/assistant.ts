@@ -106,7 +106,7 @@ export interface AssistantToolCall {
   tool_name: string
   domain?: string
   risk_level: AssistantRiskLevel
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'approval_required' | 'rejected'
+  status: 'pending' | 'running' | 'completed' | 'success' | 'failed' | 'cancelled' | 'approval_required' | 'rejected'
   args?: Record<string, any>
   args_summary?: string
   result?: any
@@ -401,13 +401,22 @@ export interface PaginatedResponse<T> {
   page_size: number
 }
 
+/** 会话列表响应：后端返回 sessions，部分旧接口返回 items */
+export interface AssistantSessionsResponse {
+  sessions?: AssistantSession[]
+  items?: AssistantSession[]
+  total: number
+  page?: number
+  page_size?: number
+}
+
 // ============================================
 // API 函数
 // ============================================
 
 /** 获取会话列表 */
 export function getSessions(params?: SessionsQueryParams) {
-  return request<any, PaginatedResponse<AssistantSession>>({
+  return request<any, AssistantSessionsResponse>({
     url: '/assistant/sessions',
     method: 'get',
     params
@@ -659,6 +668,9 @@ export type AssistantStreamEventType =
   | 'approval_updated'
   | 'context_ref_added'
   | 'result_card'
+  | 'context_budget'
+  | 'context_compressed'
+  | 'context_compression_failed'
   | 'done'
   | 'error'
 

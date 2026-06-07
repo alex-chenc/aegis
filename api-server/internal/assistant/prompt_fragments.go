@@ -39,35 +39,47 @@ var DefaultPromptFragments = []agentruntime.PromptFragment{
 		Priority:    80,
 		Content: `## 安全分析规范
 
-### 第一步：收集安全事件
-- 使用 Detection.Alert.List 查询最近的告警事件
-- 使用 Detection.Alert.Get 获取告警详情
-- 使用 Detection.Statistics.Get 获取告警统计信息
+安全事件、主机安全性、入侵排查、风险研判都属于复杂任务，不允许只查主机基础信息后直接下结论。
 
-### 第二步：收集主机信息
-- 使用 Host.List 查询相关主机
+### 第一步：定位对象与主机画像
+- 使用 Host.List 根据 IP、主机名或关键词定位目标主机
 - 使用 Host.Get 获取主机详情
-- 使用 Host.AgentStatus.Get 检查 Agent 状态
+- 使用 Host.AgentStatus.Get 检查 Agent 在线状态
 
-### 第三步：深入调查（需要 Agent 在线）
-- 使用 Agent.Process.List 获取进程列表
-- 使用 Agent.Network.Connections 获取网络连接
-- 使用 Agent.File.Activity 获取文件操作记录
-- 使用 Agent.User.Login 获取用户登录记录
+### 第二步：读取平台侧证据
+- 使用 Detection.Alert.List 查询目标主机相关告警
+- 使用 Detection.Alert.Get 获取关键告警详情
+- 使用 Detection.Statistics.Get 和 Detection.Trend.Get 获取告警统计与趋势
+- 使用 Task.List 查询最近基线检查任务、失败任务和运行中任务
+- 必要时使用 Task.GetDetail 获取基线任务详情
+- 使用 Vulnerability.List 查询相关漏洞
+- 必要时使用 Vulnerability.AffectedHosts 和 Software.Installed.Search 关联主机、漏洞和软件资产
 
-### 第四步：分析攻击路径
+### 第三步：Agent 在线取证（只读）
+- Agent 在线时，使用 Agent.Process.List 和 Agent.Process.Tree 获取进程与进程树
+- 使用 Agent.Network.List 获取网络连接
+- 使用 Agent.File.OpenList 获取打开文件线索
+- 使用 Agent.Log.Query 查询最近日志
+- Agent 离线或工具失败时，要记录证据缺口，不得编造结论
+
+### 第四步：必要操作
+- 如现有基线数据不足，可建议使用 Task.RunCheck 发起基线检查；该操作需要审批，不得绕过审批
+- 阻断、修复、规则生成等写操作必须先说明风险并等待审批
+
+### 第五步：分析攻击路径
 - 识别攻击入口（初始访问）
 - 追踪横向移动行为
 - 检测提权行为
 - 评估数据泄露风险
 
-### 第五步：评估影响和建议
+### 第六步：评估影响和建议
 - 确定受影响范围和严重程度
 - 给出修复和防护建议
 - 提供检测规则建议
 
 分析时应基于实际数据，不要推测或编造信息。
-每一步都应调用相应工具获取数据，不要跳过数据收集步骤。`,
+每一步都应调用相应工具获取数据，不要跳过基线、漏洞、告警和 Agent 取证这些关键证据源。
+最终结论必须列出：已覆盖的数据源、关键证据、证据缺口、风险判断和下一步建议。`,
 	},
 	{
 		Name:        "host_query",

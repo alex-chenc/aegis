@@ -10,20 +10,20 @@ import (
 
 // DetectionToolDeps 检测工具依赖
 type DetectionToolDeps struct {
-	AlertRepo      *repository.AlertRepository
-	BlockRepo      *repository.BlockRepository
-	SigmaRuleRepo  *repository.SigmaRuleRepository
+	AlertRepo     *repository.AlertRepository
+	BlockRepo     *repository.BlockRepository
+	SigmaRuleRepo *repository.SigmaRuleRepository
 }
 
 // RegisterDetectionTools 注册检测域工具
 func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Alert.List",
-		Domain:      "detection",
-		Operation:   "alert_list",
-		Description: "列出告警，支持按主机名、时间范围等条件筛选",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Detection.Alert.List",
+		Domain:             "detection",
+		Operation:          "alert_list",
+		Description:        "列出告警，支持按主机名、时间范围等条件筛选",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -42,17 +42,17 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Alert.Get",
-		Domain:      "detection",
-		Operation:   "alert_get",
-		Description: "根据告警ID获取告警详情",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Detection.Alert.Get",
+		Domain:             "detection",
+		Operation:          "alert_get",
+		Description:        "根据告警ID获取告警详情",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"alert_id": map[string]interface{}{"type": "string", "description": "告警ID"},
+				"alert_id": map[string]interface{}{"type": "string", "description": "告警ID。优先传列表结果中的 alert_id（如 ALT-xxxx），也兼容列表结果中的数据库 UUID id"},
 			},
 			"required": []string{"alert_id"},
 		},
@@ -62,12 +62,12 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Statistics.Get",
-		Domain:      "detection",
-		Operation:   "statistics_get",
-		Description: "获取威胁统计概览，包含今日告警数、拦截数、受影响主机数和活跃规则数",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Detection.Statistics.Get",
+		Domain:             "detection",
+		Operation:          "statistics_get",
+		Description:        "获取威胁统计概览，包含今日告警数、拦截数、受影响主机数和活跃规则数",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type":       "object",
@@ -79,12 +79,12 @@ func RegisterDetectionTools(registry *assistant.ToolRegistry, deps DetectionTool
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Trend.Get",
-		Domain:      "detection",
-		Operation:   "trend_get",
-		Description: "获取告警趋势数据，按小时聚合",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Detection.Trend.Get",
+		Domain:             "detection",
+		Operation:          "trend_get",
+		Description:        "获取告警趋势数据，按小时聚合",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

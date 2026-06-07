@@ -23,25 +23,21 @@
           </div>
           <div class="message-body">
             <!-- 思考过程 -->
-            <div v-if="msg.thinking" class="thinking-block">
-              <div class="thinking-header">
-                <el-icon><Loading /></el-icon>
-                <span>思考过程</span>
-              </div>
-              <div class="thinking-content">{{ msg.thinking }}</div>
-            </div>
-
-            <!-- 计划卡片 -->
-            <ExecutionPlan v-if="msg.plan" :plan="normalizeMessagePlan(msg)" />
-
-            <!-- 工具调用卡片 -->
-            <div v-if="getMessageToolCalls(msg).length" class="tool-calls">
-              <AssistantToolCallCard
-                v-for="call in getMessageToolCalls(msg)"
-                :key="call.call_id"
-                :call="call"
-              />
-            </div>
+            <details v-if="msg.thinking" class="thinking-block" open>
+              <summary class="thinking-header">
+                <span class="thinking-pulse" aria-hidden="true"></span>
+                <span>思考步骤</span>
+                <el-tag size="small" effect="plain">{{ getThinkingSteps(msg).length }} 步</el-tag>
+              </summary>
+              <ol class="thinking-steps">
+                <li
+                  v-for="(step, index) in getThinkingSteps(msg)"
+                  :key="`${msg.message_id}-thinking-${index}`"
+                >
+                  {{ step }}
+                </li>
+              </ol>
+            </details>
 
             <!-- 审批卡片 -->
             <div v-if="msg.approvals?.length" class="approvals">
@@ -97,15 +93,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
-import { User, Monitor, Loading, InfoFilled } from '@element-plus/icons-vue'
-import ExecutionPlan from '@/components/ExecutionPlan.vue'
-import { normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
-import AssistantToolCallCard from './AssistantToolCallCard.vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { User, Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { gsap } from 'gsap'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
 import type { AssistantMessage, AssistantToolCall, AssistantApproval, AssistantResultCard } from '@/api/assistant'
-import type { PlanEvent } from '@/api/aiAnalysis'
 
 defineEmits<{
   approve: [approvalId: string, comment?: string]
@@ -121,6 +114,8 @@ const props = defineProps<{
 }>()
 
 const containerRef = ref<HTMLElement>()
+let motionContext: ReturnType<typeof gsap.context> | null = null
+let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 
 function scrollToBottom() {
   nextTick(() => {
@@ -133,28 +128,11 @@ function scrollToBottom() {
 watch(() => props.messages, scrollToBottom, { deep: true })
 watch(() => props.streaming, scrollToBottom)
 
-/**
- * 获取消息关联的工具调用
- * 优先使用 store 级别的 toolCalls（SSE 实时更新状态）
- * 降级使用消息级别的 tool_calls（历史数据）
- */
-function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
-  // 优先使用 store 级别的 toolCalls（SSE 实时更新）
-  const storeCalls = props.toolCalls.filter(tc =>
-    tc.message_id === msg.message_id || tc.message_id === msg.id
-  )
-  if (storeCalls.length > 0) return storeCalls
-  // 降级使用消息级别的 tool_calls（历史数据）
-  return msg.tool_calls || []
-}
-
-function normalizeMessagePlan(msg: AssistantMessage): PlanEvent | null {
-  if (!msg.plan) return null
-  return normalizePlanEvent({
-    id: `plan-${msg.id || msg.message_id}`,
-    plan_id: `plan-${msg.id || msg.message_id}`,
-    ...msg.plan,
-  })
+function getThinkingSteps(msg: AssistantMessage): string[] {
+  return (msg.thinking || '')
+    .split('\n')
+    .map(step => step.trim())
+    .filter(Boolean)
 }
 
 function formatContent(content: string): string {
@@ -164,20 +142,86 @@ function formatContent(content: string): string {
     .replace(/`(.*?)`/g, '<code>$1</code>')
 }
 
+function animateNewContent() {
+  if (!containerRef.value || typeof window === 'undefined') return
+
+  nextTick(() => {
+    const root = containerRef.value
+    if (!root) return
+    const targets = Array.from(root.querySelectorAll<HTMLElement>('.message-group:not([data-motion-ready])'))
+    const thinkingTargets = Array.from(root.querySelectorAll<HTMLElement>('.thinking-block:not([data-motion-ready])'))
+    targets.forEach(el => { el.dataset.motionReady = 'true' })
+    thinkingTargets.forEach(el => { el.dataset.motionReady = 'true' })
+    if (!targets.length && !thinkingTargets.length) return
+
+    motionContext?.add(() => {
+      if (targets.length) {
+        gsap.from(targets, {
+          autoAlpha: 0,
+          y: 12,
+          duration: 0.26,
+          ease: 'power2.out',
+          stagger: 0.03,
+        })
+      }
+      if (thinkingTargets.length) {
+        gsap.from(thinkingTargets, {
+          autoAlpha: 0,
+          y: 8,
+          duration: 0.24,
+          ease: 'power1.out',
+          stagger: 0.02,
+        })
+      }
+    })
+  })
+}
+
+function setupConversationMotion() {
+  if (!containerRef.value || typeof window === 'undefined') return
+  motionContext = gsap.context(() => {
+    motionMedia = gsap.matchMedia()
+    motionMedia.add('(prefers-reduced-motion: reduce)', () => {
+      gsap.set('.message-group, .thinking-block', { clearProps: 'all' })
+    })
+    motionMedia.add('(prefers-reduced-motion: no-preference)', () => {
+      animateNewContent()
+    })
+  }, containerRef.value)
+}
+
+watch(() => props.messages.length, animateNewContent)
+watch(() => props.messages.map(message => message.thinking || '').join('|'), animateNewContent)
+
+onMounted(setupConversationMotion)
+onUnmounted(() => {
+  motionMedia?.revert()
+  motionContext?.revert()
+  motionMedia = null
+  motionContext = null
+})
+
 </script>
 
 <style scoped>
 .conversation-container {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
-  background: #f9fafb;
+  padding: 24px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f9fafb 100%);
 }
 
 .message-list {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-width: 980px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.message-group {
+  will-change: transform, opacity;
 }
 
 .message {
@@ -213,7 +257,7 @@ function formatContent(content: string): string {
 }
 
 .message-body {
-  max-width: 75%;
+  max-width: min(82%, 820px);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -222,8 +266,9 @@ function formatContent(content: string): string {
 .message-bubble {
   background: #fff;
   padding: 12px 16px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
 }
 
 .message.user .message-bubble {
@@ -250,25 +295,63 @@ function formatContent(content: string): string {
 }
 
 .thinking-block {
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
+  background: #f8fbff;
+  border: 1px solid #bfdbfe;
   border-radius: 8px;
-  padding: 12px;
+  padding: 0;
+  overflow: hidden;
+  will-change: transform, opacity;
 }
 
 .thinking-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 10px 12px;
   font-size: 13px;
-  color: #0284c7;
-  margin-bottom: 8px;
+  color: #1d4ed8;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
 
-.thinking-content {
+.thinking-header::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #3b82f6;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
+  animation: thinkingPulse 1.8s ease-out infinite;
+  flex-shrink: 0;
+}
+
+.thinking-steps {
+  margin: 0;
+  padding: 0 14px 12px 34px;
   font-size: 13px;
-  color: #64748b;
-  white-space: pre-wrap;
+  color: #334155;
+  line-height: 1.65;
+}
+
+.thinking-steps li + li {
+  margin-top: 4px;
+}
+
+@keyframes thinkingPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
 }
 
 .plan-card {
@@ -377,8 +460,9 @@ function formatContent(content: string): string {
   gap: 4px;
   padding: 12px 16px;
   background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
 }
 
 .typing-indicator span {
@@ -400,5 +484,15 @@ function formatContent(content: string): string {
 @keyframes typing {
   0%, 60%, 100% { transform: translateY(0); }
   30% { transform: translateY(-8px); }
+}
+
+@media (max-width: 900px) {
+  .conversation-container {
+    padding: 16px;
+  }
+
+  .message-body {
+    max-width: calc(100% - 48px);
+  }
 }
 </style>

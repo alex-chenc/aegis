@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { getNotifications, markNotificationRead, markAllNotificationsRead } from '@/api/notification'
 import type { Notification } from '@/types/notification'
 import { ElMessage } from 'element-plus'
+import { getAuthToken } from '@/utils/auth'
 
 interface NotificationState {
   notifications: Notification[]
@@ -96,9 +97,14 @@ export const useNotificationStore = defineStore('notification', {
 
     // 启动轮询（每 60 秒）
     startPolling() {
+      if (!getAuthToken()) return
       if (this.pollingTimer) return
       this.fetchNotifications()
       this.pollingTimer = setInterval(() => {
+        if (!getAuthToken()) {
+          this.stopPolling()
+          return
+        }
         this.fetchNotifications()
       }, 60_000)
     },

@@ -1,13 +1,13 @@
 <template>
-  <div class="assistant-workspace">
+  <div ref="workspaceRoot" class="assistant-workspace">
     <!-- 左侧会话栏 -->
     <AssistantSessionSidebar
       :sessions="sessions"
       :active-session-id="currentSession?.session_id"
       :loading="loading"
-      :loading-more="store.loadingMore.value"
-      :has-more="store.hasMoreSessions.value"
-      :total="store.sessionTotal.value"
+      :loading-more="store.loadingMore"
+      :has-more="store.hasMoreSessions"
+      :total="store.sessionTotal"
       :current-page="currentPage"
       @select="handleSessionSelected"
       @create="handleNewSession"
@@ -30,6 +30,20 @@
             </el-tag>
           </div>
           <div class="header-right">
+            <div class="runtime-metrics" aria-label="智能体运行指标">
+              <el-tag size="small" effect="plain">
+                最大轮数 {{ maxTurnsLabel }}
+              </el-tag>
+              <el-tag size="small" effect="plain" type="info">
+                Tokens {{ tokenUsageLabel }}
+              </el-tag>
+              <ContextBudgetIndicator
+                :budget="contextBudget"
+                :compression-records="compressionRecords"
+                :total-prompt-tokens="totalPromptTokens"
+                :total-completion-tokens="totalCompletionTokens"
+              />
+            </div>
             <el-button
               v-if="streaming"
               type="danger"
@@ -86,11 +100,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { MagicStick, VideoPause } from '@element-plus/icons-vue'
+import { gsap } from 'gsap'
 import { useAssistantStore } from '@/store/assistant'
 import { getStoredAuth } from '@/utils/auth'
 import { normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
@@ -99,10 +114,14 @@ import AssistantSessionSidebar from './components/AssistantSessionSidebar.vue'
 import AssistantConversation from './components/AssistantConversation.vue'
 import AssistantComposer from './components/AssistantComposer.vue'
 import AssistantContextRail from './components/AssistantContextRail.vue'
+import ContextBudgetIndicator from '@/components/ContextBudgetIndicator.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useAssistantStore()
+const workspaceRoot = ref<HTMLElement | null>(null)
+let workspaceAnimation: ReturnType<typeof gsap.context> | null = null
+let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 
 const {
   sessions,
@@ -112,6 +131,10 @@ const {
   toolCalls,
   approvals,
   resultCards,
+  contextBudget,
+  compressionRecords,
+  totalPromptTokens,
+  totalCompletionTokens,
   streaming,
   loading,
 } = storeToRefs(store)
@@ -119,6 +142,31 @@ const {
 const pendingApprovals = computed(() =>
   approvals.value.filter(a => a.status === 'pending')
 )
+
+const sessionMetadata = computed<Record<string, any>>(() => {
+  const metadata = currentSession.value?.metadata
+  if (!metadata) return {}
+  if (typeof metadata === 'string') {
+    try {
+      const parsed = JSON.parse(metadata)
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+  return metadata
+})
+
+const maxTurnsLabel = computed(() => {
+  const turns = Number(sessionMetadata.value.max_total_turns || 0)
+  return turns > 0 ? String(turns) : '-'
+})
+
+const tokenUsageLabel = computed(() => {
+  const metadataTotal = Number(sessionMetadata.value.total_tokens || 0)
+  const total = totalPromptTokens.value + totalCompletionTokens.value || metadataTotal || contextBudget.value?.total_tokens || 0
+  return total > 0 ? formatTokens(total) : '-'
+})
 
 // 从消息中提取最新的执行计划
 const currentPlan = computed<PlanEvent | null>(() => {
@@ -160,8 +208,8 @@ async function handleSend(content: string) {
     }
     await store.sendMessage(content, refs.length > 0 ? refs : undefined)
     // 创建会话后更新 URL
-    if (store.currentSession.value?.session_id) {
-      router.replace({ query: { ...route.query, session: store.currentSession.value.session_id } })
+    if (currentSession.value?.session_id) {
+      router.replace({ query: { ...route.query, session: currentSession.value.session_id } })
     }
   } catch (err) {
     console.error('发送消息失败:', err)
@@ -196,6 +244,7 @@ async function handleReject(approvalId: string, comment?: string) {
 
 // 搜索
 function handleSearch(keyword: string) {
+  currentPage.value = 1
   store.fetchSessions({ keyword })
 }
 
@@ -214,7 +263,7 @@ async function handlePageChange(page: number) {
 
 // 删除会话
 async function handleDeleteSession(sessionId: string) {
-  const wasCurrentSession = store.currentSession.value?.session_id === sessionId
+  const wasCurrentSession = currentSession.value?.session_id === sessionId
   await store.deleteSession(sessionId)
 
   if (wasCurrentSession) {
@@ -253,6 +302,75 @@ function getStatusLabel(status: string): string {
   return map[status] || status
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function setupWorkspaceMotion() {
+  if (!workspaceRoot.value || typeof window === 'undefined') return
+
+  workspaceAnimation = gsap.context(() => {
+    const selectTargets = () => {
+      const q = gsap.utils.selector(workspaceRoot.value)
+      return {
+        sidebar: q('.session-sidebar'),
+        panel: q('.conversation-panel'),
+        rail: q('.context-rail'),
+        welcomeItems: q('.welcome-content > *'),
+      }
+    }
+
+    const runEntranceMotion = () => {
+      const targets = selectTargets()
+      const timeline = gsap.timeline({
+        defaults: { duration: 0.42, ease: 'power2.out' },
+      })
+
+      if (targets.sidebar.length) {
+        timeline.from(targets.sidebar, { autoAlpha: 0, x: -18 })
+      }
+      if (targets.panel.length) {
+        timeline.from(targets.panel, { autoAlpha: 0, y: 12 }, '<0.08')
+      }
+      if (targets.rail.length) {
+        timeline.from(targets.rail, { autoAlpha: 0, x: 18 }, '<')
+      }
+      if (targets.welcomeItems.length) {
+        timeline.from(targets.welcomeItems, {
+          autoAlpha: 0,
+          y: 14,
+          stagger: 0.06,
+          duration: 0.36,
+        }, '<0.05')
+      }
+    }
+
+    if (typeof window.matchMedia !== 'function') {
+      runEntranceMotion()
+      return
+    }
+
+    motionMedia = gsap.matchMedia()
+    motionMedia.add('(prefers-reduced-motion: reduce)', () => {
+      const targets = selectTargets()
+      const elements = [
+        ...targets.sidebar,
+        ...targets.panel,
+        ...targets.rail,
+        ...targets.welcomeItems,
+      ]
+      if (elements.length) {
+        gsap.set(elements, { clearProps: 'all' })
+      }
+    })
+    motionMedia.add('(prefers-reduced-motion: no-preference)', () => {
+      runEntranceMotion()
+    })
+  }, workspaceRoot.value)
+}
+
 onMounted(async () => {
   const auth = getStoredAuth()
   if (!auth) {
@@ -260,6 +378,8 @@ onMounted(async () => {
     router.replace('/login')
     return
   }
+
+  setupWorkspaceMotion()
 
   try {
     await store.fetchSessions()
@@ -288,6 +408,13 @@ onMounted(async () => {
     }
   }
 })
+
+onUnmounted(() => {
+  motionMedia?.revert()
+  workspaceAnimation?.revert()
+  motionMedia = null
+  workspaceAnimation = null
+})
 </script>
 
 <style scoped>
@@ -306,6 +433,7 @@ onMounted(async () => {
   min-width: 0;
   background: #fff;
   overflow: hidden;
+  will-change: transform, opacity;
 }
 
 .conversation-header {
@@ -330,6 +458,21 @@ onMounted(async () => {
   font-weight: 600;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.runtime-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 /* 欢迎页面：输入框居中 */
 .welcome-state {
   flex: 1;
@@ -344,6 +487,7 @@ onMounted(async () => {
   width: 100%;
   max-width: 680px;
   padding: 0 20px;
+  will-change: transform, opacity;
 }
 
 .welcome-icon {

@@ -37,30 +37,35 @@ type RuntimeFactoryDeps struct {
 
 // NewRuntimeFactory 创建运行时工厂
 func NewRuntimeFactory(deps RuntimeFactoryDeps) *RuntimeFactory {
+	runtimeLogger := deps.Logger
+	if runtimeLogger == nil {
+		runtimeLogger = zap.NewNop()
+	}
 	return &RuntimeFactory{
 		configRepo:     deps.ConfigRepo,
 		catalog:        deps.Catalog,
 		selector:       deps.Selector,
 		toolDispatcher: deps.ToolDispatcher,
 		runManager:     deps.RunManager,
-		logger:         deps.Logger,
+		logger:         runtimeLogger,
 	}
 }
 
 // RuntimeBuildRequest 运行时构建请求
 type RuntimeBuildRequest struct {
-	SessionID       string                        `json:"session_id"`
-	RunID           string                        `json:"run_id"`
-	MessageID       string                        `json:"message_id"`
-	Operator        string                        `json:"operator"`
-	UserInput       string                        `json:"user_input"`
-	TaskType        string                        `json:"task_type"`
-	ContextRefs     []ContextRefResult            `json:"context_refs,omitempty"`
-	PageRoute       string                        `json:"page_route,omitempty"`
-	PreviousSummary string                        `json:"previous_summary,omitempty"`
-	MaxIterations   int                           `json:"max_iterations,omitempty"`
-	SelectedTools   []string                      `json:"selected_tools,omitempty"`
-	ToolDescriptors []agentruntime.ToolDescriptor `json:"-"`
+	SessionID         string                        `json:"session_id"`
+	RunID             string                        `json:"run_id"`
+	MessageID         string                        `json:"message_id"`
+	Operator          string                        `json:"operator"`
+	UserInput         string                        `json:"user_input"`
+	TaskType          string                        `json:"task_type"`
+	ContextRefs       []ContextRefResult            `json:"context_refs,omitempty"`
+	PageRoute         string                        `json:"page_route,omitempty"`
+	PreviousSummary   string                        `json:"previous_summary,omitempty"`
+	MaxIterations     int                           `json:"max_iterations,omitempty"`
+	SelectedTools     []string                      `json:"selected_tools,omitempty"`
+	ToolDescriptors   []agentruntime.ToolDescriptor `json:"-"`
+	UseAIAnalysisFlow bool                          `json:"use_ai_analysis_flow,omitempty"`
 }
 
 // RuntimeBuildResult 运行时构建结果
@@ -120,6 +125,23 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 
 	// 8. 构建 agent-runtime 配置
 	runtimeConfig := DefaultAgentRuntimeConfig(req.MaxIterations)
+	profile := "assistant"
+	if req.UseAIAnalysisFlow {
+		runtimeConfig = DefaultAIAnalysisRuntimeConfig(req.MaxIterations)
+		profile = "ai_analysis"
+	}
+	if len(req.SelectedTools) > 0 && len(toolDescriptors) < len(req.SelectedTools) {
+		f.logger.Warn("assistant runtime built with missing selected tools",
+			zap.String("session_id", req.SessionID),
+			zap.Strings("missing_tools", missingSelectedTools(req.SelectedTools, toolDescriptors)),
+		)
+	}
+	f.logger.Info("assistant runtime config selected",
+		zap.String("session_id", req.SessionID),
+		zap.String("profile", profile),
+		zap.Int("max_total_turns", runtimeConfig.MaxTotalTurns),
+		zap.Int("tool_count", len(toolDescriptors)),
+	)
 
 	// 9. 创建 TaskRouter（智能提示词路由）
 	taskRouter := NewTaskRouterAdapter(llmAdapter, GetPromptFragments(), router.Config{
@@ -228,6 +250,65 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		CompressTargetRatio:   0.60,
 		RecentTurnsToKeep:     6,
 	}
+}
+
+// DefaultAIAnalysisRuntimeConfig mirrors the AI analysis runtime profile used by
+// api-server/internal/llm/adapters.NewAegisRuntime for complex assistant tasks.
+func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
+	if maxIterations <= 0 {
+		maxIterations = 500
+	}
+	return agentruntime.RuntimeConfig{
+		MaxTotalTurns:         maxIterations,
+		MaxPlanSteps:          8,
+		MaxStepReactTurns:     8,
+		MaxToolCalls:          100,
+		MaxToolCallsPerStep:   10,
+		MaxToolFailures:       15,
+		MaxModelFailures:      5,
+		MaxParseFailures:      3,
+		MaxNoProgressTurns:    3,
+		TaskTimeout:           2 * time.Hour,
+		ModelTimeout:          60 * time.Second,
+		ToolTimeout:           60 * time.Second,
+		HookTimeout:           10 * time.Second,
+		EnableReflection:      true,
+		EnableAudit:           true,
+		EnableCorrection:      true,
+		EnableExperience:      false,
+		AuditEveryNSteps:      3,
+		MaxAudits:             2,
+		MaxReflections:        3,
+		MaxStepRetries:        2,
+		MaxCorrections:        2,
+		AllowDynamicNewSteps:  true,
+		AllowSkipFailedStep:   true,
+		AllowBestEffortAnswer: true,
+		AllowHighRiskTools:    false,
+		AllowDangerousTools:   false,
+		MaxContextTokens:      256000,
+		ReservedOutputTokens:  8192,
+		EnableContextCompress: true,
+		ToolCompressRatio:     0.70,
+		StepCompressRatio:     0.80,
+		LLMCompressRatio:      0.95,
+		CompressTargetRatio:   0.60,
+		RecentTurnsToKeep:     6,
+	}
+}
+
+func missingSelectedTools(selected []string, descriptors []agentruntime.ToolDescriptor) []string {
+	available := make(map[string]bool, len(descriptors))
+	for _, desc := range descriptors {
+		available[desc.Name] = true
+	}
+	var missing []string
+	for _, name := range selected {
+		if !available[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // PromptInput 提示词输入

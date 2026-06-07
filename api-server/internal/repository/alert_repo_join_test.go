@@ -165,6 +165,35 @@ func TestAlertRepoFindByIDDerivesProcessCountFromCorrelationEvidence(t *testing.
 	}
 }
 
+func TestAlertRepoFindByIDAcceptsDatabaseUUID(t *testing.T) {
+	db := setupAlertJoinTestDB(t)
+	repo := NewAlertRepository(db)
+
+	alertUUID := uuid.New()
+	alert := &model.Alert{
+		ID:        alertUUID,
+		AlertID:   "ALT-flexible-id",
+		HostID:    uuid.New(),
+		PID:       1234,
+		MitreID:   "T1068",
+		Severity:  "critical",
+		DedupeKey: "test:1234:flexible",
+		HitCount:  1,
+		Status:    "pending",
+	}
+	if err := db.Create(alert).Error; err != nil {
+		t.Fatalf("failed to seed alert: %v", err)
+	}
+
+	result, err := repo.FindByID(alertUUID.String())
+	if err != nil {
+		t.Fatalf("FindByID by UUID failed: %v", err)
+	}
+	if result.AlertID != "ALT-flexible-id" {
+		t.Fatalf("AlertID = %q, want ALT-flexible-id", result.AlertID)
+	}
+}
+
 func TestAlertRepoJoinResolvesRuleTitleByRuleID(t *testing.T) {
 	db := setupAlertJoinTestDB(t)
 	repo := NewAlertRepository(db)

@@ -122,6 +122,7 @@ function getStatusLabel(status: string): string {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  will-change: transform, opacity;
 }
 
 .rail-section {

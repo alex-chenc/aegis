@@ -199,11 +199,11 @@ func TestExtractToolCallFromText_WithHostFindOffline(t *testing.T) {
 	input := "需要调用 Host.FindOffline 来查找离线主机"
 	result := extractToolCallFromText(input)
 	if result == "" {
-		t.Fatal("expected non-empty result for Host.FindOffline")
+		t.Fatal("expected non-empty result for Host.FindOffline alias")
 	}
 	t.Logf("Result: %s", result)
-	if !containsSubstring(result, `"tool_name":"Host.FindOffline"`) {
-		t.Error("expected tool_name to be Host.FindOffline")
+	if !containsSubstring(result, `"tool_name":"Host.AgentStatus.Get"`) {
+		t.Error("expected Host.FindOffline to map to Host.AgentStatus.Get")
 	}
 }
 

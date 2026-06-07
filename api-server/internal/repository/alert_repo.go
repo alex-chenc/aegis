@@ -8,6 +8,7 @@ import (
 
 	"api-server/internal/model"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -45,7 +46,7 @@ func (r *AlertRepository) FindByID(id string) (*model.Alert, error) {
 	}
 
 	var result AlertWithHost
-	err := r.db.Table("alerts").
+	query := r.db.Table("alerts").
 		Select(`alerts.*,
 			hosts.hostname,
 			COALESCE(
@@ -54,9 +55,13 @@ func (r *AlertRepository) FindByID(id string) (*model.Alert, error) {
 				alerts.mitre_name
 			) as rule_title`).
 		Joins("LEFT JOIN hosts ON alerts.host_id = hosts.id").
-		Joins("LEFT JOIN sigma_rules sr ON sr.rule_id = alerts.rule_id").
-		Where("alerts.alert_id = ?", id).
-		First(&result).Error
+		Joins("LEFT JOIN sigma_rules sr ON sr.rule_id = alerts.rule_id")
+	if parsedID, parseErr := uuid.Parse(id); parseErr == nil {
+		query = query.Where("alerts.alert_id = ? OR alerts.id = ?", id, parsedID)
+	} else {
+		query = query.Where("alerts.alert_id = ?", id)
+	}
+	err := query.First(&result).Error
 	if err != nil {
 		return nil, err
 	}

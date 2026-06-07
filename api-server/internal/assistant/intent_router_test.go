@@ -44,3 +44,25 @@ func TestClassifyByRulesKeepsGreetingAsDirectAnswer(t *testing.T) {
 		t.Fatalf("expected greeting to avoid business domains, got %v", result.Domains)
 	}
 }
+
+func TestClassifyByRulesTreatsHostSecurityTroubleshootingAsAnalysis(t *testing.T) {
+	router := NewIntentRouter()
+	result := router.classifyByRules(IntentInput{Query: "帮我排查一下192.168.152.159 这个机器上面有哪些安全问题"})
+
+	if result.Action != "analyze" {
+		t.Fatalf("expected host security troubleshooting to be analyze, got %q", result.Action)
+	}
+	assertContainsDomain(t, result.Domains, "host")
+	assertContainsDomain(t, result.Domains, "detection")
+	assertContainsDomain(t, result.Domains, "investigation")
+}
+
+func assertContainsDomain(t *testing.T, domains []string, want string) {
+	t.Helper()
+	for _, domain := range domains {
+		if domain == want {
+			return
+		}
+	}
+	t.Fatalf("expected domains %v to contain %q", domains, want)
+}

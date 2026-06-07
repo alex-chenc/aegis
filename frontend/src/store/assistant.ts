@@ -32,6 +32,7 @@ import {
   type ToolCallsQueryParams,
   type ApprovalsQueryParams,
 } from '@/api/assistant'
+import type { ContextBudgetEvent, ContextCompressedEvent } from '@/api/aiAnalysis'
 
 export const useAssistantStore = defineStore('assistant', () => {
   // ============================================
@@ -58,6 +59,14 @@ export const useAssistantStore = defineStore('assistant', () => {
   const toolSelections = ref<AssistantToolSelection[]>([])
   /** 工具搜索结果 */
   const toolSearchResults = ref<AssistantToolSearchResult[]>([])
+  /** 当前会话上下文预算 */
+  const contextBudget = ref<ContextBudgetEvent | null>(null)
+  /** 当前会话上下文压缩记录 */
+  const compressionRecords = ref<ContextCompressedEvent[]>([])
+  /** 当前会话累计 prompt tokens */
+  const totalPromptTokens = ref(0)
+  /** 当前会话累计 completion tokens */
+  const totalCompletionTokens = ref(0)
   /** 是否正在流式接收 */
   const streaming = ref(false)
   /** 全局加载状态 */
@@ -79,6 +88,80 @@ export const useAssistantStore = defineStore('assistant', () => {
   const sessionTotal = ref(0)
   const hasMoreSessions = ref(false)
   const loadingMore = ref(false)
+  const sessionQuery = ref<SessionsQueryParams>({})
+
+  function normalizeSessionQuery(params?: SessionsQueryParams): SessionsQueryParams {
+    if (!params) return {}
+    const query = { ...params }
+    delete query.page
+    delete query.page_size
+    return query
+  }
+
+  function normalizeMetadata(metadata?: Record<string, any> | string | null): Record<string, any> {
+    if (!metadata) return {}
+    if (typeof metadata === 'string') {
+      try {
+        const parsed = JSON.parse(metadata)
+        return parsed && typeof parsed === 'object' ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+    return metadata
+  }
+
+  function applySessionRuntimeMetadata(session?: AssistantSession | null) {
+    const metadata = normalizeMetadata(session?.metadata)
+    contextBudget.value = metadata.context_budget || null
+    compressionRecords.value = Array.isArray(metadata.compression_records)
+      ? metadata.compression_records
+      : []
+    totalPromptTokens.value = Number(metadata.total_prompt_tokens || 0)
+    totalCompletionTokens.value = Number(metadata.total_completion_tokens || 0)
+  }
+
+  function updateCurrentSessionMetadata(updates: Record<string, any>) {
+    if (!currentSession.value) return
+    const cleanUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined)
+    )
+    currentSession.value.metadata = {
+      ...normalizeMetadata(currentSession.value.metadata),
+      ...cleanUpdates,
+    }
+  }
+
+  function resetRuntimeMetrics() {
+    contextBudget.value = null
+    compressionRecords.value = []
+    totalPromptTokens.value = 0
+    totalCompletionTokens.value = 0
+  }
+
+  function inferSessionTitle(content: string) {
+    const trimmed = content.trim()
+    if (!trimmed) return '新会话'
+    return Array.from(trimmed).slice(0, 18).join('')
+  }
+
+  function normalizeMessages(input: AssistantMessage[]) {
+    const normalized: AssistantMessage[] = []
+    for (const msg of input || []) {
+      const prev = normalized[normalized.length - 1]
+      if (
+        prev &&
+        prev.role === 'user' &&
+        msg.role === 'user' &&
+        prev.content === msg.content &&
+        Math.abs(new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) <= 10_000
+      ) {
+        continue
+      }
+      normalized.push(msg)
+    }
+    return normalized
+  }
 
   /**
    * 获取会话列表
@@ -91,11 +174,13 @@ export const useAssistantStore = defineStore('assistant', () => {
     } else {
       loading.value = true
       sessionPage.value = 1
+      sessionQuery.value = normalizeSessionQuery(params)
     }
     error.value = null
     try {
       const queryPage = append ? sessionPage.value + 1 : 1
-      const result = await getSessions({ ...params, page: queryPage, page_size: 10 })
+      const query = append ? sessionQuery.value : normalizeSessionQuery(params)
+      const result = await getSessions({ ...query, page: queryPage, page_size: 10 })
       // API 返回 { sessions: [...], total: N } 或 { items: [...], total: N }
       // 兼容两种格式
       const items = result?.sessions || result?.items || []
@@ -129,7 +214,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     loading.value = true
     error.value = null
     try {
-      const result = await getSessions({ page, page_size: 10 })
+      const result = await getSessions({ ...sessionQuery.value, page, page_size: 10 })
       const items = result?.sessions || result?.items || []
       sessions.value = items
       sessionTotal.value = result?.total || 0
@@ -157,6 +242,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       if (currentSession.value?.session_id === sessionId) {
         currentSession.value = null
         messages.value = []
+        resetRuntimeMetrics()
       }
       return true
     } catch (err: any) {
@@ -185,6 +271,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         intentResult.value = null
         toolSelections.value = []
         toolSearchResults.value = []
+        resetRuntimeMetrics()
       }
       return session
     } catch (err: any) {
@@ -205,6 +292,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     try {
       const session = await getSession(sessionId)
       currentSession.value = session
+      applySessionRuntimeMetadata(session)
       // 同步更新列表中的会话
       const index = sessions.value.findIndex(s => s.session_id === sessionId)
       if (index > -1) {
@@ -219,6 +307,23 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
+  async function refreshSessionSnapshot(sessionId: string) {
+    try {
+      const session = await getSession(sessionId)
+      if (currentSession.value?.session_id === sessionId) {
+        currentSession.value = session
+        applySessionRuntimeMetadata(session)
+      }
+      const index = sessions.value.findIndex(s => s.session_id === sessionId)
+      if (index > -1) {
+        sessions.value[index] = session
+      }
+      return session
+    } catch {
+      return null
+    }
+  }
+
   /**
    * 获取会话消息列表
    */
@@ -227,8 +332,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     error.value = null
     try {
       const result = await getMessages(sessionId)
-      messages.value = result
-      return result
+      const normalized = normalizeMessages(result)
+      messages.value = normalized
+      return normalized
     } catch (err: any) {
       error.value = err.message || '获取消息列表失败'
       throw err
@@ -248,8 +354,8 @@ export const useAssistantStore = defineStore('assistant', () => {
       let session = currentSession.value
       if (!session) {
         const createData: CreateSessionRequest = {
+          title: inferSessionTitle(content),
           task_type: pendingTaskType.value || 'explanation',
-          initial_message: content,
           context_refs: contextRefsData,
         }
         session = await createSession(createData)
@@ -278,11 +384,24 @@ export const useAssistantStore = defineStore('assistant', () => {
       if (contextRefsData?.length) {
         data.context_refs = contextRefsData
       }
-      await apiSendMessage(sessionId, data)
+      const handle = await apiSendMessage(sessionId, data)
+      if (handle?.message_id) {
+        userMessage.id = handle.message_id
+        userMessage.message_id = handle.message_id
+      }
+      if (currentSession.value) {
+        currentSession.value.status = 'running'
+      }
+      const sessionIdx = sessions.value.findIndex(s => s.session_id === sessionId)
+      if (sessionIdx > -1) {
+        sessions.value[sessionIdx].status = 'running'
+        sessions.value[sessionIdx].message_count = (sessions.value[sessionIdx].message_count || 0) + 1
+      }
 
       // 启动 SSE 流式接收助手回复
       startStream(sessionId)
     } catch (err: any) {
+      messages.value = messages.value.filter(message => !String(message.message_id).startsWith('temp-'))
       error.value = err.message || '发送消息失败'
       throw err
     }
@@ -304,6 +423,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       intentResult.value = null
       toolSelections.value = []
       toolSearchResults.value = []
+      resetRuntimeMetrics()
     }
   }
 
@@ -467,6 +587,35 @@ export const useAssistantStore = defineStore('assistant', () => {
     return message
   }
 
+  function resolveAssistantMessageId(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
+    return event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
+  }
+
+  function appendThinkingStep(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
+    const content = String(payload.content || payload.message || '').trim()
+    if (!content) return
+    const messageId = resolveAssistantMessageId(event, payload)
+    const message = ensureAssistantMessage(messageId)
+    if (!message) return
+
+    const existingSteps = (message.thinking || '')
+      .split('\n')
+      .map(step => step.trim())
+      .filter(Boolean)
+    if (existingSteps[existingSteps.length - 1] === content) return
+    message.thinking = [...existingSteps, content].join('\n')
+  }
+
+  function summarizeToolResult(result: any) {
+    if (typeof result === 'string') return result
+    if (result === undefined || result === null) return ''
+    try {
+      return JSON.stringify(result).slice(0, 500)
+    } catch {
+      return String(result).slice(0, 500)
+    }
+  }
+
   function normalizeAssistantPlan(plan: Partial<AssistantPlan> & Record<string, any>): NonNullable<AssistantMessage['plan']> {
     const steps = Array.isArray(plan.steps) ? plan.steps : []
     return {
@@ -504,10 +653,14 @@ export const useAssistantStore = defineStore('assistant', () => {
    */
   function applyStreamEvent(event: { type: string; payload?: any; error?: string; session_id?: string; run_id?: string; message_id?: string }) {
     const payload = event.payload || {}
+    if (event.session_id && currentSession.value?.session_id && event.session_id !== currentSession.value.session_id) {
+      return
+    }
 
     switch (event.type) {
       case 'thinking':
-        // 思考状态（可选：显示 loading 指示器）
+        // 思考步骤 — 聚合到当前助手消息，供对话区折叠展示
+        appendThinkingStep(event, payload)
         break
 
       case 'intent_detected': {
@@ -521,6 +674,11 @@ export const useAssistantStore = defineStore('assistant', () => {
         // 工具选择结果
         // payload: AssistantToolSelection
         const selection = payload as AssistantToolSelection
+        updateCurrentSessionMetadata({
+          runtime_profile: payload.runtime_profile,
+          max_total_turns: payload.max_total_turns,
+          current_run_id: event.run_id,
+        })
         const existingIdx = toolSelections.value.findIndex(s => s.run_id === selection.run_id)
         if (existingIdx > -1) {
           toolSelections.value[existingIdx] = selection
@@ -603,7 +761,8 @@ export const useAssistantStore = defineStore('assistant', () => {
         if (!delta) break
         const existing = messages.value.find(m => m.id === message_id || m.message_id === message_id)
         if (existing) {
-          existing.content += delta
+          if (existing.content === delta) break
+          existing.content = delta.startsWith(existing.content) ? delta : existing.content + delta
         } else {
           messages.value.push({
             id: message_id,
@@ -625,7 +784,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         const toolCall: AssistantToolCall = {
           id: payload.call_id,
           session_id: event.session_id || currentSession.value?.session_id || '',
-          message_id: event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : ''),
+          message_id: resolveAssistantMessageId(event, payload),
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           args: payload.args || {},
@@ -633,7 +792,16 @@ export const useAssistantStore = defineStore('assistant', () => {
           risk_level: 'readonly',
           created_at: new Date().toISOString(),
         }
-        toolCalls.value.push(toolCall)
+        const existingIdx = toolCalls.value.findIndex(tc => tc.call_id === toolCall.call_id || tc.id === toolCall.call_id)
+        if (existingIdx > -1) {
+          toolCalls.value[existingIdx] = {
+            ...toolCalls.value[existingIdx],
+            ...toolCall,
+            status: toolCalls.value[existingIdx].status === 'running' ? 'running' : toolCalls.value[existingIdx].status,
+          }
+        } else {
+          toolCalls.value.push(toolCall)
+        }
         break
       }
 
@@ -646,9 +814,21 @@ export const useAssistantStore = defineStore('assistant', () => {
         if (idx > -1) {
           toolCalls.value[idx].status = 'completed'
           toolCalls.value[idx].result = payload.result
-          toolCalls.value[idx].result_summary = typeof payload.result === 'string'
-            ? payload.result
-            : JSON.stringify(payload.result).slice(0, 500)
+          toolCalls.value[idx].result_summary = summarizeToolResult(payload.result)
+        } else if (payload.call_id) {
+          toolCalls.value.push({
+            id: payload.call_id,
+            session_id: event.session_id || currentSession.value?.session_id || '',
+            message_id: resolveAssistantMessageId(event, payload),
+            call_id: payload.call_id,
+            tool_name: payload.tool_name || 'Unknown.Tool',
+            args: payload.args || {},
+            status: 'completed',
+            risk_level: 'readonly',
+            result: payload.result,
+            result_summary: summarizeToolResult(payload.result),
+            created_at: new Date().toISOString(),
+          })
         }
         break
       }
@@ -662,6 +842,19 @@ export const useAssistantStore = defineStore('assistant', () => {
         if (errIdx > -1) {
           toolCalls.value[errIdx].status = 'failed'
           toolCalls.value[errIdx].error_message = payload.error
+        } else if (payload.call_id) {
+          toolCalls.value.push({
+            id: payload.call_id,
+            session_id: event.session_id || currentSession.value?.session_id || '',
+            message_id: resolveAssistantMessageId(event, payload),
+            call_id: payload.call_id,
+            tool_name: payload.tool_name || 'Unknown.Tool',
+            args: payload.args || {},
+            status: 'failed',
+            risk_level: 'readonly',
+            error_message: payload.error,
+            created_at: new Date().toISOString(),
+          })
         }
         break
       }
@@ -707,6 +900,41 @@ export const useAssistantStore = defineStore('assistant', () => {
         break
       }
 
+      case 'context_budget': {
+        const budget = payload as ContextBudgetEvent
+        contextBudget.value = budget
+        totalPromptTokens.value = Number(budget.prompt_tokens_observed || budget.estimated_prompt_tokens || totalPromptTokens.value || 0)
+        totalCompletionTokens.value = Number(budget.completion_tokens || totalCompletionTokens.value || 0)
+        updateCurrentSessionMetadata({
+          context_budget: budget,
+          total_prompt_tokens: totalPromptTokens.value,
+          total_completion_tokens: totalCompletionTokens.value,
+          total_tokens: Number(budget.total_tokens || totalPromptTokens.value + totalCompletionTokens.value),
+          compression_count: budget.compression_count,
+        })
+        break
+      }
+
+      case 'context_compressed': {
+        const record = payload as ContextCompressedEvent & { compression_id?: string }
+        const exists = record.compression_id
+          ? compressionRecords.value.some(item => (item as any).compression_id === record.compression_id)
+          : false
+        if (!exists) {
+          compressionRecords.value.push(record)
+        }
+        updateCurrentSessionMetadata({
+          compression_records: compressionRecords.value,
+          compression_count: compressionRecords.value.length,
+        })
+        break
+      }
+
+      case 'context_compression_failed': {
+        error.value = event.error || payload.message || '上下文压缩失败'
+        break
+      }
+
       case 'done': {
         // 运行完成
         streaming.value = false
@@ -715,6 +943,8 @@ export const useAssistantStore = defineStore('assistant', () => {
         // 更新会话状态为已完成
         if (currentSession.value) {
           currentSession.value.status = 'completed'
+          updateCurrentSessionMetadata({ current_run_status: 'completed' })
+          refreshSessionSnapshot(currentSession.value.session_id)
         }
         break
       }
@@ -725,6 +955,9 @@ export const useAssistantStore = defineStore('assistant', () => {
         streaming.value = false
         eventSource?.close()
         eventSource = null
+        if (currentSession.value) {
+          refreshSessionSnapshot(currentSession.value.session_id)
+        }
         break
       }
 
@@ -740,13 +973,18 @@ export const useAssistantStore = defineStore('assistant', () => {
     loading.value = true
     error.value = null
     try {
-      await fetchSession(sessionId)
+      const session = await fetchSession(sessionId)
       await Promise.all([
         fetchMessages(sessionId),
         fetchContextRefs(sessionId),
         fetchToolCalls(sessionId),
         fetchApprovals(sessionId),
       ])
+      if (session?.status === 'running') {
+        startStream(sessionId)
+      } else {
+        stopStream()
+      }
     } catch (err: any) {
       error.value = err.message || '打开会话失败'
       throw err
@@ -792,9 +1030,15 @@ export const useAssistantStore = defineStore('assistant', () => {
     intentResult.value = null
     toolSelections.value = []
     toolSearchResults.value = []
+    resetRuntimeMetrics()
     streaming.value = false
     loading.value = false
     error.value = null
+    sessionPage.value = 1
+    sessionTotal.value = 0
+    hasMoreSessions.value = false
+    loadingMore.value = false
+    sessionQuery.value = {}
   }
 
   return {
@@ -809,6 +1053,10 @@ export const useAssistantStore = defineStore('assistant', () => {
     intentResult,
     toolSelections,
     toolSearchResults,
+    contextBudget,
+    compressionRecords,
+    totalPromptTokens,
+    totalCompletionTokens,
     streaming,
     loading,
     error,

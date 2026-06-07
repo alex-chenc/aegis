@@ -73,6 +73,9 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 3. 所有结论必须基于数据和证据
 4. 不确定时明确说明，不编造信息
 5. 简单查询最多 1-2 个步骤；只有跨主机、跨数据源、安全研判、修复建议等复杂任务才拆成 3 个及以上步骤
+6. 主机安全性、安全事件、入侵排查、风险研判属于复杂任务，计划必须覆盖：主机画像、基线/任务、漏洞、告警、Agent 在线取证、综合结论
+7. 计划中只能写“可用工具”里存在的工具名；如果关键工具不可用，把该项写入证据缺口，不得发明工具名
+8. 计划最多 8 个步骤。主机安全分析建议合并为 5-6 步：定位主机、平台侧证据（基线/漏洞/告警）、Agent 取证、关联分析、结论建议、必要审批动作
 
 ## 输出要求
 ⚠️ 严格要求：只输出一个JSON对象，不要输出任何其他文本、解释、问候或markdown格式。直接以 { 开头，以 } 结尾。
@@ -135,7 +138,19 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 - 问候、闲聊、能力说明、概念解释等简单问题 → 直接回复，使用 step_result，回答要短，不要生成计划
 - 简单数据查询 → 只调用必要工具，拿到数据后直接给结果，不要写分析报告
 - 复杂问题（安全研判、攻击溯源、跨数据源调查、修复方案）→ 按计划逐步执行，每一步都基于工具结果
+- 主机安全分析/安全事件分析 → 必须先定位主机，再读取基线任务、漏洞、告警，再在 Agent 在线时调用进程、网络、文件、日志工具，最后才能下结论
+- Agent 不在线、工具失败或数据为空 → 明确记录为证据缺口，并给出保守结论
 - 无数据支撑时明确说明“当前数据不足”，不要猜测具体主机、告警或结论
+
+## 主机安全分析最低证据要求
+当用户要求分析某台主机是否有安全问题时，至少尝试以下证据源（仅使用上方可用工具中的真实名称）：
+1. 主机画像：Host.List、Host.Get、Host.AgentStatus.Get
+2. 基线/任务：Task.List、Task.GetDetail（如需新检查再申请 Task.RunCheck 审批）
+3. 漏洞/软件：Vulnerability.List、Vulnerability.AffectedHosts、Software.Installed.Search
+4. 告警/趋势：Detection.Alert.List、Detection.Alert.Get、Detection.Statistics.Get、Detection.Trend.Get
+5. Agent 取证：Agent.Process.List、Agent.Process.Tree、Agent.Network.List、Agent.File.OpenList、Agent.Log.Query
+
+Agent 在线时至少尝试 Agent.Process.List 和 Agent.Network.List；如果网络、文件、日志工具未调用或失败，最终必须写为“证据缺口”，不要写成已排除风险。
 
 ## 禁止事项
 - 禁止在需要调用工具时输出自然语言（如"我来帮您查询..."），必须直接输出JSON
@@ -164,12 +179,17 @@ func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBund
 ### 分析类（安全分析、攻击调查、漏洞评估等）
 使用结构化报告格式：
 1. 分析结论
-2. 关键发现
-3. 安全建议（如有）
+2. 数据源覆盖情况（主机、基线、漏洞、告警、Agent 取证）
+3. 关键证据
+4. 证据缺口
+5. 安全建议（如有）
 
 ## 要求
 - 基于实际数据回复，不要编造
 - 简单查询不要加"安全建议"、"后续操作"等多余内容
+- 主机安全分析不能只依据主机基础信息下结论
+- 工具调用成功但结果为空时，数据源状态应写“已覆盖，未发现记录”；只有工具未调用或调用失败才写“未覆盖/证据缺口”
+- 不得和工具结果自相矛盾：例如已成功调用 Agent.Process.List，就不能写“Agent取证未覆盖”，应写“已覆盖进程取证，网络/文件/日志仍缺口”（如适用）
 - 语言简洁，重点突出数据本身`
 
 	return agentruntime.PromptBundle{

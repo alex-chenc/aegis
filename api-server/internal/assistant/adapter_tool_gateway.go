@@ -79,6 +79,7 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		SessionID: a.sessionID,
 		MessageID: a.messageID,
 		RunID:     a.runID,
+		CallID:    req.CallID,
 		ToolName:  req.ToolName,
 		Args:      args,
 		Operator:  a.operator,
@@ -112,13 +113,13 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 			})
 		}
 		return agentruntime.ToolResponse{
-			CallID:   req.CallID,
-			ToolName: req.ToolName,
-			Status:   agentruntime.ToolCallFailed,
-			Summary:  fmt.Sprintf("工具 %s 需要审批", req.ToolName),
+			CallID:       req.CallID,
+			ToolName:     req.ToolName,
+			Status:       agentruntime.ToolCallFailed,
+			Summary:      fmt.Sprintf("工具 %s 需要审批", req.ToolName),
 			ErrorMessage: fmt.Sprintf("approval_required:%s", result.ApprovalID),
-			StartedAt: startedAt,
-			EndedAt:   endedAt,
+			StartedAt:    startedAt,
+			EndedAt:      endedAt,
 		}, nil
 	}
 

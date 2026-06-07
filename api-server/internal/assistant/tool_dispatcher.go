@@ -45,6 +45,7 @@ type DispatchRequest struct {
 	SessionID string                 `json:"session_id"`
 	MessageID string                 `json:"message_id"`
 	RunID     string                 `json:"run_id"`
+	CallID    string                 `json:"call_id,omitempty"`
 	ToolName  string                 `json:"tool_name"`
 	Args      map[string]interface{} `json:"args"`
 	Operator  string                 `json:"operator"`
@@ -53,14 +54,14 @@ type DispatchRequest struct {
 
 // DispatchResult 调度结果
 type DispatchResult struct {
-	CallID          string                 `json:"call_id"`
-	ToolName        string                 `json:"tool_name"`
-	Success         bool                   `json:"success"`
-	Data            interface{}            `json:"data,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	DurationMs      int64                  `json:"duration_ms"`
-	ApprovalRequired bool                 `json:"approval_required,omitempty"`
-	ApprovalID      string                 `json:"approval_id,omitempty"`
+	CallID           string      `json:"call_id"`
+	ToolName         string      `json:"tool_name"`
+	Success          bool        `json:"success"`
+	Data             interface{} `json:"data,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	DurationMs       int64       `json:"duration_ms"`
+	ApprovalRequired bool        `json:"approval_required,omitempty"`
+	ApprovalID       string      `json:"approval_id,omitempty"`
 }
 
 // Dispatch 调度工具执行
@@ -72,7 +73,10 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 	}
 
 	// Create tool call record
-	callID := "call_" + uuid.New().String()[:8]
+	callID := req.CallID
+	if callID == "" {
+		callID = "call_" + uuid.New().String()[:8]
+	}
 	toolCall := &model.AssistantToolCall{
 		ID:        uuid.New(),
 		SessionID: req.SessionID,

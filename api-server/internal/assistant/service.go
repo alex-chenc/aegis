@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -27,16 +28,16 @@ type Service struct {
 
 // ServiceDeps 服务依赖
 type ServiceDeps struct {
-	SessionRepo   repository.AssistantSessionRepository
-	MessageRepo   repository.AssistantMessageRepository
+	SessionRepo    repository.AssistantSessionRepository
+	MessageRepo    repository.AssistantMessageRepository
 	ContextRefRepo repository.AssistantContextRefRepository
-	ToolCallRepo  repository.AssistantToolCallRepository
-	ApprovalRepo  repository.AssistantApprovalRepository
-	MemoryRepo    repository.AssistantMemoryRepository
-	ContextLoader *ContextLoader
-	Orchestrator  *Orchestrator
-	RunManager    *RunManager
-	Logger        *zap.Logger
+	ToolCallRepo   repository.AssistantToolCallRepository
+	ApprovalRepo   repository.AssistantApprovalRepository
+	MemoryRepo     repository.AssistantMemoryRepository
+	ContextLoader  *ContextLoader
+	Orchestrator   *Orchestrator
+	RunManager     *RunManager
+	Logger         *zap.Logger
 }
 
 // NewService 创建智能体服务
@@ -57,10 +58,10 @@ func NewService(deps ServiceDeps) *Service {
 
 // CreateSessionRequest 创建会话请求
 type CreateSessionRequest struct {
-	Title          string                `json:"title"`
-	TaskType       string                `json:"task_type"`
-	InitialMessage string                `json:"initial_message"`
-	ContextRefs    []ContextRefInput     `json:"context_refs"`
+	Title          string            `json:"title"`
+	TaskType       string            `json:"task_type"`
+	InitialMessage string            `json:"initial_message"`
+	ContextRefs    []ContextRefInput `json:"context_refs"`
 }
 
 // ContextRefInput 上下文引用输入
@@ -311,6 +312,14 @@ func (s *Service) CancelRun(ctx context.Context, sessionID string, operator stri
 
 // CompleteRun 完成运行
 func (s *Service) completeRun(ctx context.Context, sessionID, runID string, result *RunResult, err error) {
+	if errors.Is(err, context.Canceled) {
+		s.logger.Info("run cancelled", zap.String("session_id", sessionID), zap.String("run_id", runID))
+		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCancelled)
+		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, "任务已取消"))
+		s.runManager.Finish(sessionID)
+		return
+	}
+
 	if err != nil {
 		s.logger.Error("run failed", zap.String("session_id", sessionID), zap.Error(err))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)

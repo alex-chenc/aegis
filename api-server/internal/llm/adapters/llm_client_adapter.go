@@ -232,14 +232,30 @@ func normalizeToolCallFormat(content string) string {
 		}
 	}
 
-	// 不再从自然语言文本中提取工具调用（会产生空参数的不可靠调用）
-	// 如果 LLM 返回自然语言而非 JSON，让 ReAct 执行器处理解析错误并重试
+	if extracted := extractToolCallFromText(content); extracted != "" {
+		return extracted
+	}
+
 	return content
 }
 
 // extractToolCallFromText attempts to extract a tool call from natural language text.
 // This is a fallback for when the LLM returns descriptions instead of JSON.
 func extractToolCallFromText(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" || strings.HasPrefix(content, "{") || strings.HasPrefix(content, "[") {
+		return ""
+	}
+
+	toolAliases := map[string]string{
+		"Host.FindOffline": "Host.AgentStatus.Get",
+	}
+	for alias, canonical := range toolAliases {
+		if strings.Contains(content, alias) {
+			return buildExtractedToolCall(canonical)
+		}
+	}
+
 	// Known tool names that the system supports (must match tool_registry.go registrations)
 	knownTools := []string{
 		"Host.List", "Host.Get", "Host.AgentStatus.Get",
@@ -258,24 +274,28 @@ func extractToolCallFromText(content string) string {
 	// Look for known tool names in the content
 	for _, toolName := range knownTools {
 		if strings.Contains(content, toolName) {
-			// Found a tool name, construct a JSON tool call
-			normalized := map[string]interface{}{
-				"action":  "tool_call",
-				"summary": fmt.Sprintf("调用 %s", toolName),
-				"tool_call": map[string]interface{}{
-					"tool_name": toolName,
-					"reason":    "从用户请求中检测到需要调用此工具",
-					"args":      map[string]interface{}{},
-				},
-			}
-			result, err := json.Marshal(normalized)
-			if err == nil {
-				return string(result)
-			}
+			return buildExtractedToolCall(toolName)
 		}
 	}
 
 	return ""
+}
+
+func buildExtractedToolCall(toolName string) string {
+	normalized := map[string]interface{}{
+		"action":  "tool_call",
+		"summary": fmt.Sprintf("调用 %s", toolName),
+		"tool_call": map[string]interface{}{
+			"tool_name": toolName,
+			"reason":    "从模型自然语言响应中识别到工具调用意图",
+			"args":      map[string]interface{}{},
+		},
+	}
+	result, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	return string(result)
 }
 
 // extractToolName tries to extract the tool name from various JSON formats.

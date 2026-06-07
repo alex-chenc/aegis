@@ -174,6 +174,7 @@ function formatTime(time: string): string {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  will-change: transform, opacity;
 }
 
 .sidebar-header {

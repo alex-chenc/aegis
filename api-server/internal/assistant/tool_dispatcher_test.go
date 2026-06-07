@@ -8,6 +8,7 @@ import (
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
+	agentruntime "github.com/alex-chenc/agent-runtime"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -16,7 +17,14 @@ import (
 
 // fakeToolCallRepo implements repository.AssistantToolCallRepository
 type fakeToolCallRepo struct {
-	markFailedCall *markFailedRecord
+	createdCall     *model.AssistantToolCall
+	markSuccessCall *markSuccessRecord
+	markFailedCall  *markFailedRecord
+}
+
+type markSuccessRecord struct {
+	CallID   string
+	Duration int64
 }
 
 type markFailedRecord struct {
@@ -25,7 +33,8 @@ type markFailedRecord struct {
 	Duration int64
 }
 
-func (f *fakeToolCallRepo) Create(_ context.Context, _ *model.AssistantToolCall) error {
+func (f *fakeToolCallRepo) Create(_ context.Context, call *model.AssistantToolCall) error {
+	f.createdCall = call
 	return nil
 }
 func (f *fakeToolCallRepo) FindByCallID(_ context.Context, _ string) (*model.AssistantToolCall, error) {
@@ -34,7 +43,8 @@ func (f *fakeToolCallRepo) FindByCallID(_ context.Context, _ string) (*model.Ass
 func (f *fakeToolCallRepo) ListBySession(_ context.Context, _ string, _, _ int) ([]model.AssistantToolCall, int64, error) {
 	return nil, 0, nil
 }
-func (f *fakeToolCallRepo) MarkSuccess(_ context.Context, _ string, _ interface{}, _ int64) error {
+func (f *fakeToolCallRepo) MarkSuccess(_ context.Context, callID string, _ interface{}, duration int64) error {
+	f.markSuccessCall = &markSuccessRecord{CallID: callID, Duration: duration}
 	return nil
 }
 func (f *fakeToolCallRepo) MarkFailed(_ context.Context, callID, errMsg string, duration int64) error {
@@ -62,9 +72,9 @@ func (f *fakeSessionRepo) List(_ context.Context, _ repository.SessionQuery) ([]
 }
 func (f *fakeSessionRepo) Update(_ context.Context, _ *model.AssistantSession) error { return nil }
 func (f *fakeSessionRepo) UpdateStatus(_ context.Context, _, _ string) error         { return nil }
-func (f *fakeSessionRepo) IncrementMessageCount(_ context.Context, _ string) error    { return nil }
-func (f *fakeSessionRepo) IncrementToolCallCount(_ context.Context, _ string) error   { return nil }
-func (f *fakeSessionRepo) IncrementApprovalCount(_ context.Context, _ string) error   { return nil }
+func (f *fakeSessionRepo) IncrementMessageCount(_ context.Context, _ string) error   { return nil }
+func (f *fakeSessionRepo) IncrementToolCallCount(_ context.Context, _ string) error  { return nil }
+func (f *fakeSessionRepo) IncrementApprovalCount(_ context.Context, _ string) error  { return nil }
 func (f *fakeSessionRepo) Delete(_ context.Context, _ string) error                  { return nil }
 
 // --- tests ---
@@ -89,14 +99,16 @@ func newTestToolDispatcher(t *testing.T, registry *ToolRegistry) (*ToolDispatche
 func TestToolDispatcher_NormalExecution(t *testing.T) {
 	registry := NewToolRegistry()
 	_ = registry.Register(&ToolSpec{
-		Name:    "Test.Tool",
-		Enabled: true,
+		Name:               "Test.Tool",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			return map[string]interface{}{"result": "ok"}, nil
 		},
 	})
 
-dispatcher, _ := newTestToolDispatcher(t, registry)
+	dispatcher, _ := newTestToolDispatcher(t, registry)
 
 	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		SessionID: "test-session",
@@ -116,6 +128,88 @@ dispatcher, _ := newTestToolDispatcher(t, registry)
 	}
 }
 
+func TestToolDispatcher_UsesProvidedCallID(t *testing.T) {
+	registry := NewToolRegistry()
+	_ = registry.Register(&ToolSpec{
+		Name:               "Test.Tool",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"result": "ok"}, nil
+		},
+	})
+
+	dispatcher, toolCallRepo := newTestToolDispatcher(t, registry)
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID: "test-session",
+		MessageID: "msg-1",
+		CallID:    "runtime-call-1",
+		ToolName:  "Test.Tool",
+		Args:      map[string]interface{}{},
+		Approved:  true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.CallID != "runtime-call-1" {
+		t.Fatalf("expected dispatch result call ID to use runtime call ID, got %q", result.CallID)
+	}
+	if toolCallRepo.createdCall == nil || toolCallRepo.createdCall.CallID != "runtime-call-1" {
+		t.Fatalf("expected created tool call to use runtime call ID, got %#v", toolCallRepo.createdCall)
+	}
+	if toolCallRepo.markSuccessCall == nil || toolCallRepo.markSuccessCall.CallID != "runtime-call-1" {
+		t.Fatalf("expected MarkSuccess to use runtime call ID, got %#v", toolCallRepo.markSuccessCall)
+	}
+}
+
+func TestAssistantToolGatewayAdapterPublishesCompletionForRuntimeCallID(t *testing.T) {
+	registry := NewToolRegistry()
+	_ = registry.Register(&ToolSpec{
+		Name:               "Test.Tool",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"result": "ok"}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	var startedCallID string
+	var completedCallID string
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-1",
+		RunID:      "run-1",
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			startedCallID = callID
+		},
+		OnToolResult: func(callID string, result interface{}) {
+			completedCallID = callID
+		},
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "runtime-call-2",
+		ToolName: "Test.Tool",
+		Args:     map[string]interface{}{},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success response, got %s", resp.Status)
+	}
+	if startedCallID != "runtime-call-2" || completedCallID != "runtime-call-2" {
+		t.Fatalf("expected matching runtime call IDs, started=%q completed=%q", startedCallID, completedCallID)
+	}
+}
+
 func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 	registry := NewToolRegistry()
 	_ = registry.Register(&ToolSpec{
@@ -132,7 +226,7 @@ func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 		},
 	})
 
-dispatcher, toolCallRepo := newTestToolDispatcher(t, registry)
+	dispatcher, toolCallRepo := newTestToolDispatcher(t, registry)
 
 	start := time.Now()
 	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
@@ -176,7 +270,7 @@ func TestToolDispatcher_ToolHandlerError(t *testing.T) {
 		},
 	})
 
-dispatcher, _ := newTestToolDispatcher(t, registry)
+	dispatcher, _ := newTestToolDispatcher(t, registry)
 
 	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		SessionID: "test-session",
@@ -198,7 +292,7 @@ dispatcher, _ := newTestToolDispatcher(t, registry)
 
 func TestToolDispatcher_ToolNotFound(t *testing.T) {
 	registry := NewToolRegistry()
-dispatcher, _ := newTestToolDispatcher(t, registry)
+	dispatcher, _ := newTestToolDispatcher(t, registry)
 
 	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		SessionID: "test-session",
@@ -225,7 +319,7 @@ func TestToolDispatcher_TimeoutWithSlowDB(t *testing.T) {
 		},
 	})
 
-dispatcher, toolCallRepo := newTestToolDispatcher(t, registry)
+	dispatcher, toolCallRepo := newTestToolDispatcher(t, registry)
 
 	start := time.Now()
 	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
