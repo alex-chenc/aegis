@@ -68,13 +68,14 @@ export const useAssistantStore = defineStore('assistant', () => {
     error.value = null
     try {
       const result = await getSessions(params)
-      sessions.value = result?.items || []
+      // API 返回 { sessions: [...], total: N }
+      sessions.value = result?.sessions || result?.items || []
       return result
     } catch (err: any) {
       // 不抛出错误，避免页面崩溃
       error.value = err.message || '获取会话列表失败'
       sessions.value = []
-      return { items: [], total: 0 }
+      return { sessions: [], total: 0 }
     } finally {
       loading.value = false
     }

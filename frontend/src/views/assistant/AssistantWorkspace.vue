@@ -241,6 +241,13 @@ onMounted(async () => {
       // 清除无效的 session 参数，避免重复尝试
       router.replace({ query: {} })
     }
+  } else if (sessions.value.length > 0) {
+    // 如果没有指定会话，自动选择最近的会话
+    const latestSession = sessions.value[0]
+    if (latestSession?.session_id) {
+      await store.openSession(latestSession.session_id)
+      router.replace({ query: { session: latestSession.session_id } })
+    }
   }
 })
 </script>
