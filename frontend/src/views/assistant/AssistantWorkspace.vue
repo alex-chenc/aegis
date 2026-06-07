@@ -436,6 +436,11 @@ onUnmounted(() => {
   will-change: transform, opacity;
 }
 
+.conversation-panel > :deep(.composer) {
+  flex-shrink: 0;
+  margin: 12px 20px 16px;
+}
+
 .conversation-header {
   display: flex;
   align-items: center;
@@ -511,5 +516,9 @@ onUnmounted(() => {
 
 .center-composer {
   width: 100%;
+}
+
+.center-composer :deep(.composer) {
+  margin: 0;
 }
 </style>

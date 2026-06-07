@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
 func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
@@ -76,6 +78,42 @@ func TestBuildAgentToolDescriptorsIncludesExpandedSecurityTools(t *testing.T) {
 	}
 	assertContainsTool(t, names, "Detection.Alert.List")
 	assertContainsTool(t, names, "Agent.Process.List")
+}
+
+func TestEffectiveRuntimeContextBudgetUsesObservedPromptTokens(t *testing.T) {
+	result := &agentruntime.TaskResult{
+		ContextBudget: &agentruntime.ContextBudgetSnapshot{
+			MaxContextTokens:      256000,
+			ReservedOutputTokens:  8192,
+			EstimatedPromptTokens: 32,
+			ContextRatio:          0.032125,
+		},
+		ModelCalls: []agentruntime.ModelCallRecord{
+			{PromptTokens: 1200, CompletionTokens: 100},
+			{PromptTokens: 24000, CompletionTokens: 300},
+		},
+		Metrics: agentruntime.RuntimeMetrics{
+			TotalPromptTokens:     25200,
+			TotalCompletionTokens: 400,
+		},
+	}
+
+	budget := effectiveRuntimeContextBudget(result)
+	if budget == nil {
+		t.Fatal("expected budget")
+	}
+	if budget.EstimatedPromptTokens != 24000 {
+		t.Fatalf("estimated prompt tokens = %d, want 24000", budget.EstimatedPromptTokens)
+	}
+	if budget.PromptTokensObserved != 24000 {
+		t.Fatalf("observed prompt tokens = %d, want 24000", budget.PromptTokensObserved)
+	}
+	if budget.TotalTokens != 25600 {
+		t.Fatalf("total tokens = %d, want 25600", budget.TotalTokens)
+	}
+	if budget.ContextRatio <= 0.09 {
+		t.Fatalf("context ratio was not recomputed from observed prompt tokens: %f", budget.ContextRatio)
+	}
 }
 
 func assertContainsTool(t *testing.T, names []string, want string) {

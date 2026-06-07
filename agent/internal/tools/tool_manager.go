@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	hostasset "aegis-agent/internal/asset"
@@ -33,15 +34,28 @@ func NewToolManager() *ToolManager {
 func (m *ToolManager) Execute(tool string, params map[string]interface{}) (interface{}, error) {
 	switch tool {
 	case "GetProcessTree":
-		pid, err := toInt(params["pid"])
-		if err != nil {
-			return nil, err
+		pid := 1
+		if value, ok := params["pid"]; ok && value != nil {
+			parsed, err := toInt(value)
+			if err != nil {
+				return nil, err
+			}
+			if parsed > 0 {
+				pid = parsed
+			}
 		}
 		return m.GetProcessTree(pid)
 	case "GetNetworkConnections":
-		pid, err := toInt(params["pid"])
-		if err != nil {
-			return nil, err
+		pid := 0
+		if value, ok := params["pid"]; ok && value != nil {
+			parsed, err := toInt(value)
+			if err != nil {
+				return nil, err
+			}
+			if parsed < 0 {
+				return nil, fmt.Errorf("pid must be non-negative")
+			}
+			pid = parsed
 		}
 		return m.GetNetworkConnections(pid)
 	case "GetFileInfo":
@@ -251,6 +265,12 @@ func toInt64(value interface{}) (int64, error) {
 		return int64(v), nil
 	case int64:
 		return v, nil
+	case string:
+		parsed, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid numeric parameter")
+		}
+		return parsed, nil
 	default:
 		return 0, fmt.Errorf("invalid numeric parameter")
 	}
@@ -266,6 +286,12 @@ func toInt(value interface{}) (int, error) {
 		return int(v), nil
 	case int64:
 		return int(v), nil
+	case string:
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("invalid numeric parameter")
+		}
+		return parsed, nil
 	default:
 		return 0, fmt.Errorf("invalid numeric parameter")
 	}

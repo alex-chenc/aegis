@@ -16,85 +16,107 @@
           </div>
         </div>
 
-        <!-- 助手消息 -->
-        <div v-else-if="msg.role === 'assistant'" class="message assistant">
-          <div class="message-avatar">
-            <el-icon><Monitor /></el-icon>
-          </div>
-          <div class="message-body">
-            <!-- 思考步骤 - 每个步骤独立一个框 -->
-            <template v-if="msg.thinking">
-              <div
-                v-for="(step, index) in getThinkingSteps(msg)"
-                :key="`${msg.message_id}-thinking-${index}`"
-                class="thinking-block"
-              >
+        <!-- 助手消息：每个展示段都有独立头像 -->
+        <template v-else-if="msg.role === 'assistant'">
+          <div
+            v-for="segment in getAssistantSegments(msg)"
+            :key="segment.key"
+            class="message assistant"
+          >
+            <div class="message-avatar">
+              <el-icon><Monitor /></el-icon>
+            </div>
+            <div class="message-body">
+              <!-- 思考步骤 -->
+              <div v-if="segment.type === 'thinking'" class="thinking-block">
                 <div class="thinking-header">
                   <span class="thinking-pulse" aria-hidden="true"></span>
                   <span>思考</span>
                 </div>
-                <div class="thinking-content">{{ step }}</div>
-              </div>
-            </template>
-
-            <!-- 工具调用 -->
-            <div v-if="msg.tool_calls?.length" class="tool-calls">
-              <div
-                v-for="tc in msg.tool_calls"
-                :key="tc.call_id"
-                class="tool-call-card"
-                :class="`status-${tc.status}`"
-              >
-                <div class="tool-call-header">
-                  <el-icon><SetUp /></el-icon>
-                  <span class="tool-name">{{ tc.tool_name }}</span>
-                  <el-tag size="small" :type="getToolStatusType(tc.status)">{{ tc.status }}</el-tag>
+                <div class="thinking-content">
+                  <div
+                    v-for="(step, index) in segment.steps"
+                    :key="`${segment.key}-thinking-${index}`"
+                    class="thinking-step"
+                  >
+                    {{ step }}
+                  </div>
                 </div>
-                <div v-if="tc.result_summary" class="tool-call-result">{{ tc.result_summary }}</div>
               </div>
-            </div>
 
-            <!-- 审批卡片 -->
-            <div v-if="msg.approvals?.length" class="approvals">
-              <AssistantApprovalCard
-                v-for="approval in msg.approvals"
-                :key="approval.approval_id"
-                :approval="approval"
-                @approve="(id, comment) => $emit('approve', id, comment)"
-                @reject="(id, comment) => $emit('reject', id, comment)"
-              />
-            </div>
+              <!-- 消息内容（思考后的结果） -->
+              <div v-else-if="segment.type === 'content'" class="message-bubble">
+                <div class="message-content" v-html="formatContent(segment.content)"></div>
+              </div>
 
-            <!-- 消息内容 -->
-            <div v-if="msg.content" class="message-bubble">
-              <div class="message-content" v-html="formatContent(msg.content)"></div>
-            </div>
-
-            <!-- 步骤结果 -->
-            <div v-if="getStepResults(msg).length" class="step-results">
-              <div
-                v-for="(result, index) in getStepResults(msg)"
-                :key="`${msg.message_id}-result-${index}`"
-                class="step-result-card"
-              >
-                <div class="step-result-header">
-                  <el-icon><CircleCheck /></el-icon>
-                  <span>{{ result.title }}</span>
+              <!-- 工具调用和执行结果放在同一个框内 -->
+              <div v-else-if="segment.type === 'tool'" class="tool-calls">
+                <div
+                  class="tool-call-card"
+                  :class="`status-${segment.toolCall.status}`"
+                >
+                  <div class="tool-call-header">
+                    <el-icon><SetUp /></el-icon>
+                    <span class="tool-name">{{ segment.toolCall.tool_name }}</span>
+                    <el-tag size="small" :type="getToolStatusType(segment.toolCall.status)">
+                      {{ segment.toolCall.status }}
+                    </el-tag>
+                  </div>
+                  <div
+                    v-if="getToolResultText(segment.toolCall)"
+                    class="tool-call-result"
+                    :class="{ 'is-json': isJsonToolResult(segment.toolCall) }"
+                  >
+                    {{ getDisplayedToolResult(segment.toolCall) }}
+                  </div>
+                  <button
+                    v-if="isLongToolResult(segment.toolCall)"
+                    type="button"
+                    class="tool-result-toggle"
+                    @click="toggleToolResult(segment.toolCall)"
+                  >
+                    {{ isToolResultExpanded(segment.toolCall) ? '收起结果' : '展开完整结果' }}
+                  </button>
                 </div>
-                <div class="step-result-content">{{ result.summary }}</div>
               </div>
-            </div>
 
-            <!-- 结果卡片 -->
-            <div v-if="msg.result_cards?.length" class="result-cards">
-              <AssistantResultRenderer
-                v-for="(card, idx) in msg.result_cards"
-                :key="idx"
-                :card="card"
-              />
+              <!-- 审批卡片 -->
+              <div v-else-if="segment.type === 'approvals'" class="approvals">
+                <AssistantApprovalCard
+                  v-for="approval in segment.approvals"
+                  :key="approval.approval_id"
+                  :approval="approval"
+                  @approve="(id, comment) => $emit('approve', id, comment)"
+                  @reject="(id, comment) => $emit('reject', id, comment)"
+                />
+              </div>
+
+              <!-- 步骤结果 -->
+              <div v-else-if="segment.type === 'step-results'" class="step-results">
+                <div
+                  v-for="(result, index) in segment.results"
+                  :key="`${segment.key}-result-${index}`"
+                  class="step-result-card"
+                >
+                  <div class="step-result-header">
+                    <el-icon><CircleCheck /></el-icon>
+                    <span>{{ result.title }}</span>
+                  </div>
+                  <div class="step-result-content">{{ result.summary }}</div>
+                </div>
+              </div>
+
+              <!-- 结果卡片 -->
+              <div v-else-if="segment.type === 'result-cards'" class="result-cards">
+                <AssistantResultRenderer
+                  v-for="(card, idx) in segment.cards"
+                  :key="idx"
+                  :card="card"
+                />
+              </div>
             </div>
           </div>
-        </div>
+        </template>
 
         <!-- 系统消息 -->
         <div v-else-if="msg.role === 'system'" class="message system">
@@ -144,8 +166,19 @@ const props = defineProps<{
 }>()
 
 const containerRef = ref<HTMLElement>()
+const expandedToolResults = ref<Record<string, boolean>>({})
+const TOOL_RESULT_PREVIEW_LENGTH = 900
 let motionContext: ReturnType<typeof gsap.context> | null = null
 let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
+
+type StepResult = { title: string; summary: string }
+type AssistantSegment =
+  | { type: 'thinking'; key: string; steps: string[] }
+  | { type: 'content'; key: string; content: string }
+  | { type: 'tool'; key: string; toolCall: AssistantToolCall }
+  | { type: 'approvals'; key: string; approvals: AssistantApproval[] }
+  | { type: 'step-results'; key: string; results: StepResult[] }
+  | { type: 'result-cards'; key: string; cards: AssistantResultCard[] }
 
 function scrollToBottom() {
   nextTick(() => {
@@ -169,7 +202,12 @@ function getThinkingSteps(msg: AssistantMessage): string[] {
     .filter(Boolean)
 }
 
-function getStepResults(msg: AssistantMessage): Array<{ title: string; summary: string }> {
+function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
+  if (msg.tool_calls?.length) return msg.tool_calls
+  return props.toolCalls.filter(tc => tc.message_id === msg.message_id || tc.message_id === msg.id)
+}
+
+function getStepResults(msg: AssistantMessage): StepResult[] {
   if (!msg.plan?.steps) return []
   return msg.plan.steps
     .filter(step => step.result_summary)
@@ -177,6 +215,125 @@ function getStepResults(msg: AssistantMessage): Array<{ title: string; summary: 
       title: step.title,
       summary: step.result_summary || ''
     }))
+}
+
+function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
+  const segments: AssistantSegment[] = []
+  const baseKey = msg.message_id || msg.id
+
+  getThinkingSteps(msg).forEach((step, index) => {
+    segments.push({
+      type: 'thinking',
+      key: `${baseKey}-thinking-${index}`,
+      steps: [step],
+    })
+  })
+
+  if (msg.content) {
+    segments.push({
+      type: 'content',
+      key: `${baseKey}-content`,
+      content: msg.content,
+    })
+  }
+
+  for (const toolCall of getMessageToolCalls(msg)) {
+    segments.push({
+      type: 'tool',
+      key: `${baseKey}-tool-${toolCall.call_id || toolCall.id}`,
+      toolCall,
+    })
+  }
+
+  if (msg.approvals?.length) {
+    segments.push({
+      type: 'approvals',
+      key: `${baseKey}-approvals`,
+      approvals: msg.approvals,
+    })
+  }
+
+  const stepResults = getStepResults(msg)
+  if (stepResults.length) {
+    segments.push({
+      type: 'step-results',
+      key: `${baseKey}-step-results`,
+      results: stepResults,
+    })
+  }
+
+  if (msg.result_cards?.length) {
+    segments.push({
+      type: 'result-cards',
+      key: `${baseKey}-result-cards`,
+      cards: msg.result_cards,
+    })
+  }
+
+  return segments
+}
+
+function getToolResultKey(toolCall: AssistantToolCall): string {
+  return toolCall.call_id || toolCall.id
+}
+
+function formatToolResultValue(value: unknown): { text: string; isJson: boolean } {
+  if (value === undefined || value === null) return { text: '', isJson: false }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        return { text: JSON.stringify(JSON.parse(trimmed), null, 2), isJson: true }
+      } catch {
+        return { text: value, isJson: false }
+      }
+    }
+    return { text: value, isJson: false }
+  }
+
+  if (typeof value === 'object') {
+    try {
+      return { text: JSON.stringify(value, null, 2), isJson: true }
+    } catch {
+      return { text: String(value), isJson: false }
+    }
+  }
+
+  return { text: String(value), isJson: false }
+}
+
+function getToolResultView(toolCall: AssistantToolCall): { text: string; isJson: boolean } {
+  if (toolCall.error_message) return { text: toolCall.error_message, isJson: false }
+  const resultView = formatToolResultValue(toolCall.result)
+  if (resultView.text) return resultView
+  return formatToolResultValue(toolCall.result_summary || '')
+}
+
+function getToolResultText(toolCall: AssistantToolCall): string {
+  return getToolResultView(toolCall).text
+}
+
+function isJsonToolResult(toolCall: AssistantToolCall): boolean {
+  return getToolResultView(toolCall).isJson
+}
+
+function isLongToolResult(toolCall: AssistantToolCall): boolean {
+  return getToolResultText(toolCall).length > TOOL_RESULT_PREVIEW_LENGTH
+}
+
+function isToolResultExpanded(toolCall: AssistantToolCall): boolean {
+  return Boolean(expandedToolResults.value[getToolResultKey(toolCall)])
+}
+
+function getDisplayedToolResult(toolCall: AssistantToolCall): string {
+  const result = getToolResultText(toolCall)
+  if (!isLongToolResult(toolCall) || isToolResultExpanded(toolCall)) return result
+  return `${result.slice(0, TOOL_RESULT_PREVIEW_LENGTH)}\n...`
+}
+
+function toggleToolResult(toolCall: AssistantToolCall) {
+  const key = getToolResultKey(toolCall)
+  expandedToolResults.value[key] = !expandedToolResults.value[key]
 }
 
 function getToolStatusType(status: string): '' | 'success' | 'warning' | 'danger' | 'info' {
@@ -279,6 +436,9 @@ onUnmounted(() => {
 }
 
 .message-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   will-change: transform, opacity;
 }
 
@@ -494,6 +654,32 @@ onUnmounted(() => {
   color: #64748b;
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-result.is-json {
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  overflow-x: auto;
+}
+
+.tool-result-toggle {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tool-result-toggle:hover {
+  color: #1d4ed8;
 }
 
 @keyframes thinkingPulse {

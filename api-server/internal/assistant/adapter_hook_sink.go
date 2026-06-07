@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
@@ -116,10 +117,15 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 	case agentruntime.HookModelCallFinished:
 		payload := toMap(event.Payload)
-		if summary, ok := payload["output_summary"].(string); ok && summary != "" {
-			s.publish(EventThinking, map[string]interface{}{
-				"content": summary,
-			})
+		purpose, _ := payload["purpose"].(string)
+		if shouldSkipVisibleModelOutput(purpose) {
+			return nil
+		}
+		if output, ok := payload["output_summary"].(string); ok && strings.TrimSpace(output) != "" {
+			display := formatModelOutputForDisplay(output)
+			if display != "" {
+				s.publishMessageDelta(display)
+			}
 		}
 
 	// --- 工具调用 ---
@@ -222,6 +228,116 @@ func (s *AssistantHookSink) publish(eventType string, payload interface{}) {
 		event.MessageID = s.messageID
 	}
 	s.runManager.Publish(s.sessionID, event)
+}
+
+func (s *AssistantHookSink) publishMessageDelta(content string) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	messageID := s.messageID
+	if messageID == "" {
+		messageID = "msg_" + s.runID
+	}
+	s.runManager.Publish(s.sessionID, EventMessageDeltaPayload(s.sessionID, s.runID, messageID, content))
+}
+
+func shouldSkipVisibleModelOutput(purpose string) bool {
+	switch purpose {
+	case string(agentruntime.PurposePlan),
+		string(agentruntime.PurposeSummarize),
+		string(agentruntime.PurposeCompress),
+		string(agentruntime.PurposeClassify),
+		string(agentruntime.PurposeReflect),
+		string(agentruntime.PurposeAudit),
+		string(agentruntime.PurposeCorrect):
+		return true
+	default:
+		return false
+	}
+}
+
+type assistantModelOutput struct {
+	Action      string `json:"action"`
+	Summary     string `json:"summary"`
+	FinalAnswer string `json:"final_answer"`
+	ToolCall    *struct {
+		ToolName string `json:"tool_name"`
+		Reason   string `json:"reason"`
+	} `json:"tool_call"`
+	StepResult *struct {
+		Result     string        `json:"result"`
+		Evidence   []interface{} `json:"evidence"`
+		Confidence string        `json:"confidence"`
+	} `json:"step_result"`
+	Failure *struct {
+		Reason      string `json:"reason"`
+		Recoverable bool   `json:"recoverable"`
+	} `json:"failure"`
+	ExperienceRequest *struct {
+		Query  string `json:"query"`
+		Reason string `json:"reason"`
+	} `json:"experience_request"`
+}
+
+func formatModelOutputForDisplay(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	var output assistantModelOutput
+	if err := json.Unmarshal([]byte(raw), &output); err != nil {
+		return raw
+	}
+
+	switch output.Action {
+	case "tool_call":
+		return formatToolCallModelOutput(output)
+	case "step_result":
+		if output.StepResult != nil && strings.TrimSpace(output.StepResult.Result) != "" {
+			return strings.TrimSpace(output.StepResult.Result)
+		}
+		return strings.TrimSpace(output.Summary)
+	case "fail_step":
+		if output.Failure != nil && strings.TrimSpace(output.Failure.Reason) != "" {
+			return "失败原因: " + strings.TrimSpace(output.Failure.Reason)
+		}
+		return strings.TrimSpace(output.Summary)
+	case "request_experience":
+		parts := []string{}
+		if output.Summary != "" {
+			parts = append(parts, strings.TrimSpace(output.Summary))
+		}
+		if output.ExperienceRequest != nil && output.ExperienceRequest.Reason != "" {
+			parts = append(parts, "原因: "+strings.TrimSpace(output.ExperienceRequest.Reason))
+		}
+		return strings.Join(parts, "\n")
+	default:
+		if strings.TrimSpace(output.FinalAnswer) != "" {
+			return strings.TrimSpace(output.FinalAnswer)
+		}
+		if strings.TrimSpace(output.Summary) != "" {
+			return strings.TrimSpace(output.Summary)
+		}
+		return raw
+	}
+}
+
+func formatToolCallModelOutput(output assistantModelOutput) string {
+	parts := []string{}
+	if output.Summary != "" {
+		parts = append(parts, strings.TrimSpace(output.Summary))
+	}
+	if output.ToolCall != nil {
+		if output.ToolCall.ToolName != "" {
+			parts = append(parts, "工具: "+strings.TrimSpace(output.ToolCall.ToolName))
+		}
+		if output.ToolCall.Reason != "" {
+			parts = append(parts, "原因: "+strings.TrimSpace(output.ToolCall.Reason))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // toMap 将任意 payload 转换为 map[string]interface{}

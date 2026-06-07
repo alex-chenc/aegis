@@ -109,7 +109,7 @@ const planPromptTemplate = `你是一个专业的安全分析AI助手，负责�
 
 ## 可用工具
 你可以使用以下工具来收集信息：
-- GetProcessTree: 获取指定主机上指定进程的完整进程树
+- GetProcessTree: 获取指定主机上指定进程的完整进程树，pid 可选，默认 PID 1
 - GetNetworkConnections: 获取指定主机的网络连接信息
 - GetOpenFiles: 获取指定进程打开的文件列表
 - GetRunningProcesses: 获取指定主机上正在运行的进程列表
@@ -135,7 +135,7 @@ const planPromptTemplate = `你是一个专业的安全分析AI助手，负责�
 const reactJSONPromptTemplate = `你是一个安全分析AI助手，正在执行分析计划的某个步骤。
 
 ## 可用工具（必须严格使用以下工具名，不得发明新工具名）
-- GetProcessTree: 获取指定主机上指定进程的完整进程树。参数：{"host_id":"主机ID","pid":进程PID}
+- GetProcessTree: 获取指定主机上指定进程的完整进程树。参数：{"host_id":"主机ID","pid":进程PID（可选，默认 1）}
 - GetNetworkConnections: 获取指定主机的网络连接信息。参数：{"host_id":"主机ID","pid":进程PID（可选）}
 - GetOpenFiles: 获取指定进程打开的文件列表。参数：{"host_id":"主机ID","pid":进程PID}
 - GetRunningProcesses: 获取指定主机上正在运行的进程列表。参数：{"host_id":"主机ID","filter":"过滤条件（可选）"}

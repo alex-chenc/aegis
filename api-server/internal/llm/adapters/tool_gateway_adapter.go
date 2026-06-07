@@ -127,7 +127,19 @@ func resolveHostID(args map[string]any, defaultHostIDs []string) string {
 // applyToolDefaults fills in sensible defaults for specific tools when the
 // caller did not supply required parameters.
 func applyToolDefaults(toolName string, args map[string]any) {
-	if toolName != "QueryHistoricalLogs" {
+	switch toolName {
+	case "GetProcessTree":
+		if _, ok := args["pid"]; !ok {
+			args["pid"] = 1
+		}
+		return
+	case "GetNetworkConnections":
+		if _, ok := args["pid"]; !ok {
+			args["pid"] = 0
+		}
+		return
+	case "QueryHistoricalLogs":
+	default:
 		return
 	}
 

@@ -79,6 +79,24 @@ func TestToolManager_GetProcessTree(t *testing.T) {
 	t.Logf("GetProcessTree result: %+v", result)
 }
 
+func TestToolManager_GetProcessTreeDefaultsToRootPID(t *testing.T) {
+	m := NewToolManager()
+
+	result, err := m.Execute("GetProcessTree", map[string]interface{}{})
+	if err != nil {
+		t.Errorf("GetProcessTree without pid returned error: %v", err)
+		return
+	}
+
+	tree, ok := result.(*ProcessTree)
+	if !ok {
+		t.Fatalf("GetProcessTree result = %T, want *ProcessTree", result)
+	}
+	if tree.PID != 1 {
+		t.Fatalf("GetProcessTree default PID = %d, want 1", tree.PID)
+	}
+}
+
 func TestToolManager_GetNetworkConnections(t *testing.T) {
 	m := NewToolManager()
 
@@ -98,4 +116,40 @@ func TestToolManager_GetNetworkConnections(t *testing.T) {
 	}
 
 	t.Logf("GetNetworkConnections result: %+v", result)
+}
+
+func TestToolManager_GetNetworkConnectionsAllowsMissingPID(t *testing.T) {
+	m := NewToolManager()
+
+	result, err := m.Execute("GetNetworkConnections", map[string]interface{}{})
+	if err != nil {
+		t.Errorf("GetNetworkConnections without pid returned error: %v", err)
+		return
+	}
+
+	connections, ok := result.(*NetworkConnections)
+	if !ok {
+		t.Fatalf("GetNetworkConnections result = %T, want *NetworkConnections", result)
+	}
+	if connections.PID != 0 {
+		t.Fatalf("GetNetworkConnections default PID = %d, want 0", connections.PID)
+	}
+}
+
+func TestToolManager_AcceptsNumericStringPID(t *testing.T) {
+	m := NewToolManager()
+
+	result, err := m.Execute("GetNetworkConnections", map[string]interface{}{"pid": "1"})
+	if err != nil {
+		t.Errorf("GetNetworkConnections with string pid returned error: %v", err)
+		return
+	}
+
+	connections, ok := result.(*NetworkConnections)
+	if !ok {
+		t.Fatalf("GetNetworkConnections result = %T, want *NetworkConnections", result)
+	}
+	if connections.PID != 1 {
+		t.Fatalf("GetNetworkConnections PID = %d, want 1", connections.PID)
+	}
 }

@@ -11,14 +11,14 @@ import (
 var AegisTools = []agentruntime.ToolDescriptor{
 	{
 		Name:        "GetProcessTree",
-		Description: "获取指定主机上指定进程的完整进程树",
+		Description: "获取指定主机上指定进程的完整进程树；pid 可选，默认 PID 1",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"host_id": map[string]any{"type": "string", "description": "主机ID"},
-				"pid":     map[string]any{"type": "number", "description": "进程PID"},
+				"pid":     map[string]any{"type": "number", "description": "进程PID（可选，默认 1）"},
 			},
-			"required": []string{"host_id", "pid"},
+			"required": []string{"host_id"},
 		},
 		RiskLevel:        agentruntime.RiskReadOnly,
 		AutoCallable:     true,

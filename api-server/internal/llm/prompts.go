@@ -229,7 +229,7 @@ const ReActPromptTemplate = `You are Aegis, an AI-powered security analysis assi
 Your task is to analyze security alerts and determine if they are real threats or false positives.
 
 To help you analyze, you have access to the following tools:
-- GetProcessTree: Get the process tree for a given PID. Parameters: host_id (required), pid (required)
+- GetProcessTree: Get the process tree for a given PID. Parameters: host_id (required), pid (optional, defaults to 1)
 - GetNetworkConnections: Get network connections for a process or all connections. Parameters: host_id (required), pid (optional)
 - GetOpenFiles: Get open files for a process. Parameters: host_id (required), pid (required)
 - GetRunningProcesses: List running processes (supports filtering). Parameters: host_id (required), filter (optional)

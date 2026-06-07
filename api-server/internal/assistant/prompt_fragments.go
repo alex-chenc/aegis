@@ -56,7 +56,7 @@ var DefaultPromptFragments = []agentruntime.PromptFragment{
 - 必要时使用 Vulnerability.AffectedHosts 和 Software.Installed.Search 关联主机、漏洞和软件资产
 
 ### 第三步：Agent 在线取证（只读）
-- Agent 在线时，使用 Agent.Process.List 和 Agent.Process.Tree 获取进程与进程树
+- Agent 在线时，使用 Agent.Process.List 获取进程；需要进程树时，用进程列表中的具体 PID 调用 Agent.Process.Tree（未指定 PID 时默认 PID 1）
 - 使用 Agent.Network.List 获取网络连接
 - 使用 Agent.File.OpenList 获取打开文件线索
 - 使用 Agent.Log.Query 查询最近日志

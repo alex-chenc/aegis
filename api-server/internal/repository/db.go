@@ -42,6 +42,13 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Pre-migration: clean invalid JSON data in assistant_messages.thinking
+	// column before GORM AutoMigrate attempts TEXT -> JSONB conversion.
+	if err := cleanInvalidThinkingData(db); err != nil {
+		logger.Error("failed to clean invalid thinking data", zap.Error(err))
+		return nil, fmt.Errorf("failed to clean invalid thinking data: %w", err)
+	}
+
 	// Auto-migrate newer generic tables. Core legacy tables already exist in
 	// database with proper constraints.
 	if err := db.AutoMigrate(
@@ -114,6 +121,57 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	return db, nil
+}
+
+// cleanInvalidThinkingData cleans up non-JSON data in assistant_messages.thinking
+// column before GORM AutoMigrate attempts TEXT -> JSONB conversion. This prevents
+// migration failure when existing rows contain plain text mixed with JSON.
+func cleanInvalidThinkingData(db *gorm.DB) error {
+	// Check if assistant_messages table exists
+	if !db.Migrator().HasTable("assistant_messages") {
+		return nil
+	}
+
+	// Check if thinking column exists
+	if !db.Migrator().HasColumn(&model.AssistantMessage{}, "thinking") {
+		return nil
+	}
+
+	var dataType string
+	if err := db.Raw(`
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = CURRENT_SCHEMA()
+		  AND table_name = 'assistant_messages'
+		  AND column_name = 'thinking'
+		LIMIT 1
+	`).Scan(&dataType).Error; err != nil {
+		return err
+	}
+
+	if dataType == "json" || dataType == "jsonb" {
+		return nil
+	}
+
+	// Clean non-JSON thinking data by setting to NULL
+	// This includes: empty strings, plain text, and any non-JSON content
+	result := db.Exec(`
+		UPDATE assistant_messages
+		SET thinking = NULL
+		WHERE thinking IS NOT NULL
+		  AND (thinking::text = '' OR NOT (thinking::text ~ '^\s*[\[\{]'))
+	`)
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected > 0 {
+		logger.Info("cleaned invalid thinking data before migration",
+			zap.Int64("rows_affected", result.RowsAffected))
+	}
+
+	return nil
 }
 
 func detectionEnhancementSchemaStatements() []string {

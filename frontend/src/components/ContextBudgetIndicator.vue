@@ -38,7 +38,7 @@
         </div>
         <div class="popover-row">
           <span class="popover-key">已用 Tokens</span>
-          <span class="popover-value">{{ formatTokens(budget.estimated_prompt_tokens) }}</span>
+          <span class="popover-value">{{ formatTokens(promptTokensUsed) }}</span>
         </div>
         <div class="popover-row">
           <span class="popover-key">可用 Tokens</span>
@@ -88,9 +88,20 @@ const props = withDefaults(defineProps<{
 
 const visible = computed(() => props.budget != null)
 
+const promptTokensUsed = computed(() => {
+  if (!props.budget) return 0
+  const estimated = Number(props.budget.estimated_prompt_tokens || 0)
+  const observed = Number(props.budget.prompt_tokens_observed || 0)
+  const snapshotPrompt = Math.max(estimated, observed)
+  if (snapshotPrompt <= 64 && props.totalPromptTokens > 64) {
+    return props.totalPromptTokens
+  }
+  return snapshotPrompt
+})
+
 const ratio = computed(() => {
   if (!props.budget || props.budget.max_context_tokens <= 0) return 0
-  return Math.min(props.budget.context_ratio, 1.0)
+  return Math.min((promptTokensUsed.value + props.budget.reserved_output_tokens) / props.budget.max_context_tokens, 1.0)
 })
 
 const percentage = computed(() => Math.round(ratio.value * 100))
@@ -105,7 +116,7 @@ const statusClass = computed(() => {
 
 const availableTokens = computed(() => {
   if (!props.budget) return 0
-  return Math.max(0, props.budget.max_context_tokens - props.budget.estimated_prompt_tokens - props.budget.reserved_output_tokens)
+  return Math.max(0, props.budget.max_context_tokens - promptTokensUsed.value - props.budget.reserved_output_tokens)
 })
 
 const circumference = 2 * Math.PI * 15.915

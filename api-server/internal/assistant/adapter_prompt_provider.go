@@ -148,7 +148,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 2. 基线/任务：Task.List、Task.GetDetail（如需新检查再申请 Task.RunCheck 审批）
 3. 漏洞/软件：Vulnerability.List、Vulnerability.AffectedHosts、Software.Installed.Search
 4. 告警/趋势：Detection.Alert.List、Detection.Alert.Get、Detection.Statistics.Get、Detection.Trend.Get
-5. Agent 取证：Agent.Process.List、Agent.Process.Tree、Agent.Network.List、Agent.File.OpenList、Agent.Log.Query
+5. Agent 取证：Agent.Process.List、Agent.Process.Tree（优先使用进程列表中的具体 PID；未指定时默认 PID 1）、Agent.Network.List（pid 可选）、Agent.File.OpenList、Agent.Log.Query
 
 Agent 在线时至少尝试 Agent.Process.List 和 Agent.Network.List；如果网络、文件、日志工具未调用或失败，最终必须写为“证据缺口”，不要写成已排除风险。
 

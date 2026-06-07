@@ -469,6 +469,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		return nil, ctx.Err()
 	}
 	if taskResult != nil {
+		contextBudget := effectiveRuntimeContextBudget(taskResult)
 		metadata := map[string]interface{}{
 			"runtime_profile":         runtimeProfileName(useAIAnalysisFlow),
 			"max_total_turns":         maxIterations,
@@ -480,10 +481,13 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			"total_completion_tokens": taskResult.Metrics.TotalCompletionTokens,
 			"total_tokens":            taskResult.Metrics.TotalPromptTokens + taskResult.Metrics.TotalCompletionTokens,
 			"compression_count":       len(taskResult.CompressionRecords),
-			"context_budget":          taskResult.ContextBudget,
+			"context_budget":          contextBudget,
 			"compression_records":     taskResult.CompressionRecords,
 		}
 		o.mergeSessionMetadata(context.Background(), input.SessionID, metadata)
+		if contextBudget != nil {
+			o.runManager.Publish(input.SessionID, withMessageID(NewEvent(EventContextBudget, input.SessionID, input.RunID, contextBudget), msgID))
+		}
 	}
 
 	// 处理结果
@@ -526,6 +530,56 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		MessageID:   msgID,
 		FinalAnswer: response,
 	}, nil
+}
+
+func effectiveRuntimeContextBudget(result *agentruntime.TaskResult) *agentruntime.ContextBudgetSnapshot {
+	if result == nil {
+		return nil
+	}
+
+	budget := result.ContextBudget
+	if budget == nil {
+		budget = &agentruntime.ContextBudgetSnapshot{
+			MaxContextTokens:     256000,
+			ReservedOutputTokens: 8192,
+		}
+	}
+
+	effective := *budget
+	maxPromptTokens := 0
+	for _, call := range result.ModelCalls {
+		if call.PromptTokens > maxPromptTokens {
+			maxPromptTokens = call.PromptTokens
+		}
+	}
+	if maxPromptTokens == 0 {
+		maxPromptTokens = result.Metrics.TotalPromptTokens
+	}
+
+	if maxPromptTokens > effective.EstimatedPromptTokens {
+		effective.EstimatedPromptTokens = maxPromptTokens
+	}
+	if maxPromptTokens > effective.PromptTokensObserved {
+		effective.PromptTokensObserved = maxPromptTokens
+	}
+	if result.Metrics.TotalCompletionTokens > effective.CompletionTokens {
+		effective.CompletionTokens = result.Metrics.TotalCompletionTokens
+	}
+	totalTokens := result.Metrics.TotalPromptTokens + result.Metrics.TotalCompletionTokens
+	if totalTokens > effective.TotalTokens {
+		effective.TotalTokens = totalTokens
+	}
+	if len(result.CompressionRecords) > effective.CompressionCount {
+		effective.CompressionCount = len(result.CompressionRecords)
+	}
+	if effective.MaxContextTokens <= 0 {
+		effective.MaxContextTokens = 256000
+	}
+	if effective.ReservedOutputTokens <= 0 {
+		effective.ReservedOutputTokens = 8192
+	}
+	effective.ContextRatio = float64(effective.EstimatedPromptTokens+effective.ReservedOutputTokens) / float64(effective.MaxContextTokens)
+	return &effective
 }
 
 func (o *Orchestrator) mergeSessionMetadata(ctx context.Context, sessionID string, updates map[string]interface{}) {

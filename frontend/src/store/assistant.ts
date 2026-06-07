@@ -79,6 +79,14 @@ export const useAssistantStore = defineStore('assistant', () => {
   /** SSE 连接实例 */
   let eventSource: EventSource | null = null
 
+  // 循环分割状态跟踪
+  /** 上一个事件类型，用于检测循环边界 */
+  let lastEventType: string | null = null
+  /** 当前循环的消息ID */
+  let currentCycleMessageId: string | null = null
+  /** 当前运行内的循环序号，用于生成稳定的前端消息ID */
+  let currentCycleIndex = 0
+
   // ============================================
   // Actions
   // ============================================
@@ -148,19 +156,215 @@ export const useAssistantStore = defineStore('assistant', () => {
   function normalizeMessages(input: AssistantMessage[]) {
     const normalized: AssistantMessage[] = []
     for (const msg of input || []) {
+      const current = normalizeMessageForCurrentSession(msg)
       const prev = normalized[normalized.length - 1]
       if (
         prev &&
         prev.role === 'user' &&
-        msg.role === 'user' &&
-        prev.content === msg.content &&
-        Math.abs(new Date(msg.created_at).getTime() - new Date(prev.created_at).getTime()) <= 10_000
+        current.role === 'user' &&
+        prev.content === current.content &&
+        Math.abs(new Date(current.created_at).getTime() - new Date(prev.created_at).getTime()) <= 10_000
       ) {
         continue
       }
-      normalized.push(msg)
+      normalized.push(current)
     }
     return normalized
+  }
+
+  function normalizeMessageForCurrentSession(msg: AssistantMessage): AssistantMessage {
+    if (!msg.plan) return msg
+    return {
+      ...msg,
+      plan: normalizePlanForCurrentSession(msg.plan),
+    }
+  }
+
+  function normalizePlanForCurrentSession(plan: NonNullable<AssistantMessage['plan']>): NonNullable<AssistantMessage['plan']> {
+    const sessionStatus = currentSession.value?.status
+    const terminalStatus = sessionStatus === 'completed' || sessionStatus === 'failed' || sessionStatus === 'cancelled'
+      ? sessionStatus
+      : ''
+    if (!terminalStatus) {
+      return {
+        ...plan,
+        steps: (plan.steps || []).map(step => ({ ...step })),
+      }
+    }
+
+    return {
+      ...plan,
+      status: terminalStatus,
+      steps: (plan.steps || []).map(step => ({
+        ...step,
+        status: step.status === 'pending' || step.status === 'running'
+          ? terminalStatus
+          : step.status,
+      })),
+    }
+  }
+
+  function normalizeThinkingSteps(thinking: AssistantMessage['thinking']): string[] {
+    if (Array.isArray(thinking)) {
+      return thinking.map(step => String(step).trim()).filter(Boolean)
+    }
+    return (thinking || '')
+      .split('\n')
+      .map(step => step.trim())
+      .filter(Boolean)
+  }
+
+  function isHistoryDisplayMessage(msg: AssistantMessage) {
+    return msg.message_id.includes('_history_')
+  }
+
+  function getRelatedToolCalls(msg: AssistantMessage) {
+    const toolCallMap = new Map<string, AssistantToolCall>()
+    const addToolCall = (tc: AssistantToolCall) => {
+      toolCallMap.set(tc.call_id || tc.id, tc)
+    }
+
+    for (const tc of msg.tool_calls || []) {
+      addToolCall(tc)
+    }
+    for (const tc of toolCalls.value) {
+      const sameSession = !msg.session_id || !tc.session_id || tc.session_id === msg.session_id
+      const sameMessage = tc.message_id === msg.message_id || tc.message_id === msg.id
+      if (sameSession && sameMessage) {
+        addToolCall(tc)
+      }
+    }
+
+    return Array.from(toolCallMap.values()).sort((left, right) => {
+      const leftTime = new Date(left.created_at || '').getTime() || 0
+      const rightTime = new Date(right.created_at || '').getTime() || 0
+      return leftTime - rightTime
+    })
+  }
+
+  function cloneHistoryMessage(
+    source: AssistantMessage,
+    index: number,
+    overrides: Partial<AssistantMessage>
+  ): AssistantMessage {
+    const baseId = source.message_id || source.id || 'assistant'
+    const messageId = `${baseId}_history_${index}`
+    return {
+      ...source,
+      id: messageId,
+      message_id: messageId,
+      content: '',
+      thinking: undefined,
+      plan: undefined,
+      tool_calls: undefined,
+      approvals: undefined,
+      result_cards: undefined,
+      context_refs: undefined,
+      ...overrides,
+    }
+  }
+
+  function rebuildAssistantHistoryCycles() {
+    const rebuilt: AssistantMessage[] = []
+    let changed = false
+
+    for (const msg of messages.value) {
+      if (msg.role !== 'assistant' || isHistoryDisplayMessage(msg)) {
+        rebuilt.push(msg)
+        continue
+      }
+
+      const relatedToolCalls = getRelatedToolCalls(msg)
+      const thinkingSteps = normalizeThinkingSteps(msg.thinking)
+      const hasToolMarker = thinkingSteps.some(step => /^正在调用工具[:：]\s*/.test(step))
+      const hasRenderableResult = Boolean(
+        msg.content ||
+        msg.plan ||
+        msg.approvals?.length ||
+        msg.result_cards?.length ||
+        msg.context_refs?.length
+      )
+      const shouldRebuild = relatedToolCalls.length > 0 ||
+        hasToolMarker ||
+        thinkingSteps.length > 1 ||
+        (thinkingSteps.length === 1 && hasRenderableResult)
+      if (!shouldRebuild) {
+        rebuilt.push(msg)
+        continue
+      }
+
+      changed = true
+      const displayMessages: AssistantMessage[] = []
+      const usedToolCalls = new Set<string>()
+      let displayIndex = 1
+
+      const pushThinkingStep = (step: string) => {
+        displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+          thinking: [step],
+        }))
+      }
+
+      const pushToolCall = (toolCall: AssistantToolCall) => {
+        const toolMessageId = `${msg.message_id || msg.id}_history_${displayIndex}`
+        displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+          tool_calls: [{
+            ...toolCall,
+            message_id: toolMessageId,
+          }],
+        }))
+      }
+
+      const takeToolCall = (toolName?: string) => {
+        const normalizedName = toolName?.trim()
+        let match = relatedToolCalls.find(tc =>
+          !usedToolCalls.has(tc.call_id || tc.id) &&
+          (!normalizedName || tc.tool_name === normalizedName)
+        )
+        if (!match) {
+          match = relatedToolCalls.find(tc => !usedToolCalls.has(tc.call_id || tc.id))
+        }
+        if (match) {
+          usedToolCalls.add(match.call_id || match.id)
+        }
+        return match
+      }
+
+      for (const step of thinkingSteps) {
+        const toolMatch = step.match(/^正在调用工具[:：]\s*(.+)$/)
+        if (!toolMatch) {
+          pushThinkingStep(step)
+          continue
+        }
+
+        const toolCall = takeToolCall(toolMatch[1])
+        if (toolCall) {
+          pushToolCall(toolCall)
+        } else {
+          pushThinkingStep(step)
+        }
+      }
+
+      for (const toolCall of relatedToolCalls) {
+        if (usedToolCalls.has(toolCall.call_id || toolCall.id)) continue
+        pushToolCall(toolCall)
+      }
+
+      if (hasRenderableResult) {
+        displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+          content: msg.content,
+          plan: msg.plan,
+          approvals: msg.approvals,
+          result_cards: msg.result_cards,
+          context_refs: msg.context_refs,
+        }))
+      }
+
+      rebuilt.push(...(displayMessages.length ? displayMessages : [msg]))
+    }
+
+    if (changed) {
+      messages.value = rebuilt
+    }
   }
 
   /**
@@ -334,7 +538,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       const result = await getMessages(sessionId)
       const normalized = normalizeMessages(result)
       messages.value = normalized
-      return normalized
+      return messages.value
     } catch (err: any) {
       error.value = err.message || '获取消息列表失败'
       throw err
@@ -468,6 +672,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     try {
       const result = await apiGetToolCalls(sessionId, params)
       toolCalls.value = result.items
+      rebuildAssistantHistoryCycles()
       return result
     } catch (err: any) {
       error.value = err.message || '获取工具调用列表失败'
@@ -535,6 +740,11 @@ export const useAssistantStore = defineStore('assistant', () => {
     stopStream()
     streaming.value = true
 
+    // 重置循环分割状态
+    lastEventType = null
+    currentCycleMessageId = null
+    currentCycleIndex = 0
+
     eventSource = createAssistantStream(sessionId)
 
     eventSource.onmessage = (event) => {
@@ -591,10 +801,87 @@ export const useAssistantStore = defineStore('assistant', () => {
     return event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
   }
 
+  function nextCycleMessageId(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
+    currentCycleIndex += 1
+    const base = resolveAssistantMessageId(event, payload) || 'msg'
+    return `${base}_cycle_${currentCycleIndex}`
+  }
+
+  /**
+   * 检查消息是否有内容或工具调用（用于循环边界检测）
+   */
+  function hasContentOrToolCalls(messageId: string): boolean {
+    const msg = findMessage(messageId)
+    if (!msg) return false
+    return Boolean(msg.content || msg.tool_calls?.length)
+  }
+
+  function hasFinishedToolCalls(messageId: string): boolean {
+    const msg = findMessage(messageId)
+    return Boolean(msg?.tool_calls?.some(tc =>
+      tc.status === 'completed' ||
+      tc.status === 'success' ||
+      tc.status === 'failed' ||
+      tc.status === 'cancelled' ||
+      tc.status === 'rejected'
+    ))
+  }
+
+  /**
+   * 检查是否需要创建新的循环消息
+   * 循环边界条件：
+   * 1. 上一个事件是 message_delta（内容已写入）
+   * 2. 上一个事件是 tool_result（工具调用已完成）
+   * 3. 当前消息已有内容或工具调用
+   */
+  function shouldCreateNewCycle(): boolean {
+    if (lastEventType === 'message_delta' || lastEventType === 'tool_result' || lastEventType === 'tool_error') {
+      return true
+    }
+    if (currentCycleMessageId && hasContentOrToolCalls(currentCycleMessageId)) {
+      return true
+    }
+    return false
+  }
+
+  function isContinuationOfCurrentContent(delta: string): boolean {
+    if (!currentCycleMessageId) return false
+    const msg = findMessage(currentCycleMessageId)
+    if (!msg?.content) return false
+    return delta.startsWith(msg.content) || msg.content.endsWith(delta)
+  }
+
+  function shouldCreateResultCycle(incomingMessageId: string | undefined, delta: string): boolean {
+    if (!currentCycleMessageId) return false
+    if (isContinuationOfCurrentContent(delta)) return false
+    if (lastEventType === 'tool_result' || lastEventType === 'tool_error') {
+      return true
+    }
+    if (hasFinishedToolCalls(currentCycleMessageId)) {
+      return true
+    }
+    if (
+      lastEventType === 'message_delta' &&
+      incomingMessageId &&
+      incomingMessageId !== currentCycleMessageId
+    ) {
+      return true
+    }
+    return false
+  }
+
   function appendThinkingStep(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
     const content = String(payload.content || payload.message || '').trim()
     if (!content) return
-    const messageId = resolveAssistantMessageId(event, payload)
+
+    // 循环边界检测：如果当前消息已有内容或工具调用，创建新消息
+    if (shouldCreateNewCycle()) {
+      // 创建新消息用于新循环
+      currentCycleMessageId = nextCycleMessageId(event, payload)
+    }
+
+    const messageId = currentCycleMessageId || resolveAssistantMessageId(event, payload)
+    currentCycleMessageId = messageId
     const message = ensureAssistantMessage(messageId)
     if (!message) return
 
@@ -610,6 +897,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     if (steps[steps.length - 1] === content) return
     steps.push(content)
     message.thinking = steps
+
+    // 更新事件类型
+    lastEventType = 'thinking'
   }
 
   function summarizeToolResult(result: any) {
@@ -801,20 +1091,36 @@ export const useAssistantStore = defineStore('assistant', () => {
         // payload: { message_id, delta }
         const { message_id, delta } = payload
         if (!delta) break
-        const existing = messages.value.find(m => m.id === message_id || m.message_id === message_id)
+
+        if (shouldCreateResultCycle(message_id, delta)) {
+          currentCycleMessageId = message_id && !findMessage(message_id)
+            ? message_id
+            : nextCycleMessageId(event, payload)
+        }
+
+        // 使用当前循环的消息ID，如果没有则使用事件中的message_id
+        const targetId = currentCycleMessageId || message_id || resolveAssistantMessageId(event, payload)
+        const existing = messages.value.find(m => m.id === targetId || m.message_id === targetId)
         if (existing) {
           if (existing.content === delta) break
           existing.content = delta.startsWith(existing.content) ? delta : existing.content + delta
+          currentCycleMessageId = targetId
         } else {
+          // 创建新消息
           messages.value.push({
-            id: message_id,
+            id: targetId,
             session_id: currentSession.value?.session_id || '',
-            message_id: message_id,
+            message_id: targetId,
             role: 'assistant',
             content: delta,
             created_at: new Date().toISOString(),
           })
+          // 更新当前循环消息ID
+          currentCycleMessageId = targetId
         }
+
+        // 更新事件类型
+        lastEventType = 'message_delta'
         break
       }
 
@@ -823,10 +1129,15 @@ export const useAssistantStore = defineStore('assistant', () => {
         // payload: { call_id, tool_name, args }
         // 仅处理属于当前会话的工具调用
         if (event.session_id && event.session_id !== currentSession.value?.session_id) break
+
+        // 使用当前循环的消息ID
+        const toolCallMsgId = currentCycleMessageId || resolveAssistantMessageId(event, payload)
+        currentCycleMessageId = toolCallMsgId
+
         const toolCall: AssistantToolCall = {
           id: payload.call_id,
           session_id: event.session_id || currentSession.value?.session_id || '',
-          message_id: resolveAssistantMessageId(event, payload),
+          message_id: toolCallMsgId,
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           args: payload.args || {},
@@ -834,6 +1145,8 @@ export const useAssistantStore = defineStore('assistant', () => {
           risk_level: 'readonly',
           created_at: new Date().toISOString(),
         }
+
+        // 更新全局工具调用列表
         const existingIdx = toolCalls.value.findIndex(tc => tc.call_id === toolCall.call_id || tc.id === toolCall.call_id)
         if (existingIdx > -1) {
           toolCalls.value[existingIdx] = {
@@ -844,6 +1157,27 @@ export const useAssistantStore = defineStore('assistant', () => {
         } else {
           toolCalls.value.push(toolCall)
         }
+
+        // 关联工具调用到当前循环的消息
+        const toolCallMessage = ensureAssistantMessage(toolCallMsgId)
+        if (toolCallMessage) {
+          if (!toolCallMessage.tool_calls) {
+            toolCallMessage.tool_calls = []
+          }
+          // 检查是否已存在
+          const existingInMsg = toolCallMessage.tool_calls.findIndex(tc => tc.call_id === payload.call_id)
+          if (existingInMsg > -1) {
+            toolCallMessage.tool_calls[existingInMsg] = {
+              ...toolCallMessage.tool_calls[existingInMsg],
+              ...toolCall,
+            }
+          } else {
+            toolCallMessage.tool_calls.push(toolCall)
+          }
+        }
+
+        // 更新事件类型
+        lastEventType = 'tool_call'
         break
       }
 
@@ -852,6 +1186,8 @@ export const useAssistantStore = defineStore('assistant', () => {
         // payload: { call_id, result }
         // 仅处理属于当前会话的工具调用
         if (event.session_id && event.session_id !== currentSession.value?.session_id) break
+
+        // 更新全局工具调用列表
         const idx = toolCalls.value.findIndex(tc => tc.call_id === payload.call_id || tc.id === payload.call_id)
         if (idx > -1) {
           toolCalls.value[idx].status = 'completed'
@@ -872,6 +1208,22 @@ export const useAssistantStore = defineStore('assistant', () => {
             created_at: new Date().toISOString(),
           })
         }
+
+        // 更新消息中的工具调用状态
+        if (currentCycleMessageId) {
+          const toolResultMsg = findMessage(currentCycleMessageId)
+          if (toolResultMsg?.tool_calls) {
+            const tcInMsg = toolResultMsg.tool_calls.find(tc => tc.call_id === payload.call_id)
+            if (tcInMsg) {
+              tcInMsg.status = 'completed'
+              tcInMsg.result = payload.result
+              tcInMsg.result_summary = summarizeToolResult(payload.result)
+            }
+          }
+        }
+
+        // 更新事件类型
+        lastEventType = 'tool_result'
         break
       }
 
@@ -898,6 +1250,21 @@ export const useAssistantStore = defineStore('assistant', () => {
             created_at: new Date().toISOString(),
           })
         }
+
+        // 更新消息中的工具调用状态
+        if (currentCycleMessageId) {
+          const toolErrorMsg = findMessage(currentCycleMessageId)
+          if (toolErrorMsg?.tool_calls) {
+            const tcInMsg = toolErrorMsg.tool_calls.find(tc => tc.call_id === payload.call_id)
+            if (tcInMsg) {
+              tcInMsg.status = 'failed'
+              tcInMsg.error_message = payload.error
+            }
+          }
+        }
+
+        // 更新事件类型
+        lastEventType = 'tool_error'
         break
       }
 
@@ -945,8 +1312,12 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'context_budget': {
         const budget = payload as ContextBudgetEvent
         contextBudget.value = budget
-        totalPromptTokens.value = Number(budget.prompt_tokens_observed || budget.estimated_prompt_tokens || totalPromptTokens.value || 0)
-        totalCompletionTokens.value = Number(budget.completion_tokens || totalCompletionTokens.value || 0)
+        const observedPromptTokens = Number(budget.prompt_tokens_observed || budget.estimated_prompt_tokens || 0)
+        const totalTokens = Number(budget.total_tokens || 0)
+        const completionTokens = Number(budget.completion_tokens || 0)
+        const cumulativePromptTokens = totalTokens > completionTokens ? totalTokens - completionTokens : 0
+        totalPromptTokens.value = Math.max(totalPromptTokens.value || 0, observedPromptTokens, cumulativePromptTokens)
+        totalCompletionTokens.value = Math.max(totalCompletionTokens.value || 0, completionTokens)
         updateCurrentSessionMetadata({
           context_budget: budget,
           total_prompt_tokens: totalPromptTokens.value,
@@ -1026,6 +1397,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         fetchToolCalls(sessionId),
         fetchApprovals(sessionId),
       ])
+      rebuildAssistantHistoryCycles()
       if (session?.status === 'running') {
         startStream(sessionId)
       } else {
@@ -1085,6 +1457,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     hasMoreSessions.value = false
     loadingMore.value = false
     sessionQuery.value = {}
+    lastEventType = null
+    currentCycleMessageId = null
+    currentCycleIndex = 0
   }
 
   return {

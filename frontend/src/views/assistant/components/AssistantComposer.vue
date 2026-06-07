@@ -61,13 +61,31 @@ function handleSend() {
 
 <style scoped>
 .composer {
-  padding: 16px 20px;
+  padding: 14px;
   background: #fff;
-  border-top: 1px solid #e4e7ed;
+  border: 1px solid #dbe4ef;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
 }
 
 .composer-input {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.composer-input :deep(.el-textarea__inner) {
+  min-height: 72px !important;
+  border-radius: 12px;
+  border-color: #dbe4ef;
+  background: #f8fafc;
+  box-shadow: none;
+  line-height: 1.55;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.composer-input :deep(.el-textarea__inner:focus) {
+  border-color: #409eff;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
 }
 
 .composer-actions {
@@ -85,5 +103,11 @@ function handleSend() {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.composer-actions :deep(.el-button) {
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-weight: 600;
 }
 </style>
