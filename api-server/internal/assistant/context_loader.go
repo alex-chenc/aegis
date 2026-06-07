@@ -4,21 +4,24 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/alex-chenc/aegis/api-server/internal/repository"
+	"api-server/internal/repository"
+	"github.com/google/uuid"
 )
 
 // ContextLoader 上下文加载器
 type ContextLoader struct {
-	hostRepo    repository.HostRepository
-	alertRepo   repository.AlertRepository
-	taskRepo    repository.TaskLogRepository
+	hostRepo       *repository.HostRepository
+	alertRepo      *repository.AlertRepository
+	taskRepo       *repository.TaskLogRepository
+	contextRefRepo repository.AssistantContextRefRepository
 }
 
 // ContextLoaderDeps 上下文加载器依赖
 type ContextLoaderDeps struct {
-	HostRepo  repository.HostRepository
-	AlertRepo repository.AlertRepository
-	TaskRepo  repository.TaskLogRepository
+	HostRepo       *repository.HostRepository
+	AlertRepo      *repository.AlertRepository
+	TaskRepo       *repository.TaskLogRepository
+	ContextRefRepo repository.AssistantContextRefRepository
 }
 
 // ContextObject 上下文对象
@@ -34,10 +37,37 @@ type ContextObject struct {
 // NewContextLoader 创建上下文加载器
 func NewContextLoader(deps ContextLoaderDeps) *ContextLoader {
 	return &ContextLoader{
-		hostRepo:  deps.HostRepo,
-		alertRepo: deps.AlertRepo,
-		taskRepo:  deps.TaskRepo,
+		hostRepo:       deps.HostRepo,
+		alertRepo:      deps.AlertRepo,
+		taskRepo:       deps.TaskRepo,
+		contextRefRepo: deps.ContextRefRepo,
 	}
+}
+
+// ResolveSession 解析会话上下文
+func (l *ContextLoader) ResolveSession(ctx context.Context, sessionID string) ([]ContextObject, error) {
+	if l.contextRefRepo == nil {
+		return nil, nil
+	}
+
+	refs, err := l.contextRefRepo.ListBySession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	var objects []ContextObject
+	for _, ref := range refs {
+		obj := ContextObject{
+			ObjectType: ref.ObjectType,
+			ObjectID:   ref.ObjectID,
+			Title:      ref.Title,
+			Summary:    ref.Summary,
+			RoutePath:  ref.RoutePath,
+		}
+		objects = append(objects, obj)
+	}
+
+	return objects, nil
 }
 
 // Resolve 解析上下文对象
@@ -63,7 +93,12 @@ func (l *ContextLoader) resolveHost(ctx context.Context, hostID string) (*Contex
 		return nil, fmt.Errorf("host repo not available")
 	}
 
-	host, err := l.hostRepo.FindByID(hostID)
+	parsedID, err := uuid.Parse(hostID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid host ID: %w", err)
+	}
+
+	host, err := l.hostRepo.FindByID(parsedID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +107,7 @@ func (l *ContextLoader) resolveHost(ctx context.Context, hostID string) (*Contex
 		ObjectType: "host",
 		ObjectID:   hostID,
 		Title:      host.Hostname,
-		Summary:    fmt.Sprintf("IP: %s, OS: %s", host.IP, host.OS),
+		Summary:    fmt.Sprintf("IP: %s, OS: %s", host.IPAddress, host.OSType),
 		RoutePath:  "/hosts",
 		Data:       host,
 	}, nil
@@ -91,7 +126,7 @@ func (l *ContextLoader) resolveAlert(ctx context.Context, alertID string) (*Cont
 	return &ContextObject{
 		ObjectType: "alert",
 		ObjectID:   alertID,
-		Title:      alert.Title,
+		Title:      alert.RuleTitle,
 		Summary:    fmt.Sprintf("Severity: %s, Host: %s", alert.Severity, alert.HostID),
 		RoutePath:  "/detection/alerts",
 		Data:       alert,
@@ -103,7 +138,12 @@ func (l *ContextLoader) resolveTask(ctx context.Context, taskID string) (*Contex
 		return nil, fmt.Errorf("task repo not available")
 	}
 
-	task, err := l.taskRepo.FindByID(taskID)
+	parsedID, err := uuid.Parse(taskID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid task ID: %w", err)
+	}
+
+	task, err := l.taskRepo.FindByID(parsedID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +151,7 @@ func (l *ContextLoader) resolveTask(ctx context.Context, taskID string) (*Contex
 	return &ContextObject{
 		ObjectType: "task",
 		ObjectID:   taskID,
-		Title:      fmt.Sprintf("Task: %s", task.Type),
+		Title:      fmt.Sprintf("Task: %s", task.TaskType),
 		Summary:    fmt.Sprintf("Status: %s", task.Status),
 		RoutePath:  "/baseline/tasks/" + taskID,
 		Data:       task,

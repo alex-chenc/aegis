@@ -10,7 +10,7 @@ services:
 
   # PostgreSQL 关系型数据库 (with pgvector for vector similarity search)
   postgres:
-    image: pgvector/pgvector:pg16
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
     container_name: aegis-postgres
     restart: unless-stopped
     environment:
@@ -64,7 +64,7 @@ services:
 
   # Redis 高速缓存
   redis:
-    image: redis:7-alpine
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/redis:7-alpine
     container_name: aegis-redis
     restart: unless-stopped
     command:
@@ -100,7 +100,7 @@ services:
 
   # MinIO 对象存储
   minio:
-    image: minio/minio:latest
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:latest
     container_name: aegis-minio
     restart: unless-stopped
     environment:
@@ -123,7 +123,7 @@ services:
 
   # Kafka 依赖的 Zookeeper
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/confluentinc/cp-zookeeper:7.5.0
     container_name: aegis-zookeeper
     restart: unless-stopped
     environment:
@@ -141,7 +141,7 @@ services:
 
   # Kafka 消息队列
   kafka:
-    image: confluentinc/cp-kafka:7.5.0
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/confluentinc/cp-kafka:7.5.0
     container_name: aegis-kafka
     restart: unless-stopped
     depends_on:
@@ -168,7 +168,7 @@ services:
 
   # MinIO 初始化容器（一次性运行，创建 Bucket）
   minio-init:
-    image: minio/mc:latest
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/mc:latest
     container_name: aegis-minio-init
     depends_on:
       minio:

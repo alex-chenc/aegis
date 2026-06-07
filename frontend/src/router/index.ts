@@ -226,6 +226,13 @@ const routes = [
     name: 'EBPFHooks',
     component: EBPFHooks,
     meta: { title: 'eBPF Hook 白名单' }
+  },
+  // V6.0 智能助手
+  {
+    path: '/assistant',
+    name: 'Assistant',
+    component: () => import('../views/assistant/AssistantWorkspace.vue'),
+    meta: { title: '智能助手', requiresAuth: true }
   }
 ]
 

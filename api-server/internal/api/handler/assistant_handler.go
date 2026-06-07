@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
-	"github.com/alex-chenc/aegis/api-server/internal/assistant"
-	"github.com/alex-chenc/aegis/api-server/internal/api/middleware"
+	"api-server/internal/assistant"
+	"api-server/internal/model"
+	"api-server/internal/repository"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -14,6 +17,9 @@ import (
 type AssistantHandler struct {
 	assistantService *assistant.Service
 	approvalGate     *assistant.ApprovalGate
+	policyService    *assistant.ToolPolicyService
+	investigationSvc *assistant.HostAttackInvestigationService
+	mcpService       *assistant.ExternalMCPSourceService
 	logger           *zap.Logger
 }
 
@@ -21,11 +27,17 @@ type AssistantHandler struct {
 func NewAssistantHandler(
 	assistantService *assistant.Service,
 	approvalGate *assistant.ApprovalGate,
+	policyService *assistant.ToolPolicyService,
+	investigationSvc *assistant.HostAttackInvestigationService,
+	mcpService *assistant.ExternalMCPSourceService,
 	logger *zap.Logger,
 ) *AssistantHandler {
 	return &AssistantHandler{
 		assistantService: assistantService,
 		approvalGate:     approvalGate,
+		policyService:    policyService,
+		investigationSvc: investigationSvc,
+		mcpService:       mcpService,
 		logger:           logger,
 	}
 }
@@ -108,7 +120,7 @@ func (h *AssistantHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
-	operator := middleware.GetUsername(c)
+	operator := c.GetString("username")
 	session, err := h.assistantService.CreateSession(c.Request.Context(), req, operator)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -154,7 +166,7 @@ func (h *AssistantHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	operator := middleware.GetUsername(c)
+	operator := c.GetString("username")
 	handle, err := h.assistantService.SendMessage(c.Request.Context(), sessionID, req, operator)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -183,7 +195,7 @@ func (h *AssistantHandler) StreamSession(c *gin.Context) {
 // CancelRun 取消运行
 func (h *AssistantHandler) CancelRun(c *gin.Context) {
 	sessionID := c.Param("session_id")
-	operator := middleware.GetUsername(c)
+	operator := c.GetString("username")
 
 	if err := h.assistantService.CancelRun(c.Request.Context(), sessionID, operator); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -250,116 +262,409 @@ func (h *AssistantHandler) ListApprovals(c *gin.Context) {
 
 // ListTools 列出工具
 func (h *AssistantHandler) ListTools(c *gin.Context) {
-	// TODO: Implement tool listing from ToolCatalog
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"tools": []interface{}{}, "total": 0}})
+	domain := c.Query("domain")
+	riskLevel := c.Query("risk_level")
+	keyword := c.Query("keyword")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+
+	whitelistedStr := c.Query("whitelisted")
+	var whitelisted *bool
+	if whitelistedStr == "true" {
+		t := true
+		whitelisted = &t
+	} else if whitelistedStr == "false" {
+		f := false
+		whitelisted = &f
+	}
+
+	query := repository.ToolPolicyQuery{
+		Domain:      domain,
+		RiskLevel:   riskLevel,
+		Whitelisted: whitelisted,
+		Keyword:     keyword,
+		Page:        page,
+		PageSize:    pageSize,
+	}
+
+	tools, total, err := h.policyService.ListTools(c.Request.Context(), query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"tools": tools,
+			"total": total,
+		},
+	})
 }
 
 // GetToolApprovalPolicy 获取工具审批策略
 func (h *AssistantHandler) GetToolApprovalPolicy(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"mode": "whitelist"}})
+	mode, err := h.policyService.GetApprovalMode(c.Request.Context())
+	if err != nil {
+		mode = "whitelist"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{"mode": mode},
+	})
 }
 
 // UpdateToolApprovalPolicy 更新工具审批策略
 func (h *AssistantHandler) UpdateToolApprovalPolicy(c *gin.Context) {
-	// TODO: Implement
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.policyService.SetApprovalMode(c.Request.Context(), req.Mode); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "policy updated"})
 }
 
 // UpdateToolWhitelist 更新工具白名单
 func (h *AssistantHandler) UpdateToolWhitelist(c *gin.Context) {
-	// TODO: Implement
+	toolName := c.Param("tool_name")
+
+	var req struct {
+		Whitelisted bool `json:"whitelisted"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	operator := c.GetString("username")
+	if err := h.policyService.UpdateWhitelist(c.Request.Context(), toolName, req.Whitelisted, operator); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "whitelist updated"})
 }
 
 // BatchUpdateToolWhitelist 批量更新工具白名单
 func (h *AssistantHandler) BatchUpdateToolWhitelist(c *gin.Context) {
-	// TODO: Implement
+	var req struct {
+		Items []repository.WhitelistUpdateItem `json:"items"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	operator := c.GetString("username")
+	if err := h.policyService.BatchUpdateWhitelist(c.Request.Context(), req.Items, operator); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "whitelist updated"})
 }
 
 // ResetToolWhitelistDefaults 重置工具白名单默认值
 func (h *AssistantHandler) ResetToolWhitelistDefaults(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "whitelist reset"})
+	operator := c.GetString("username")
+	if err := h.policyService.ResetDefaultWhitelist(c.Request.Context(), operator); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "whitelist reset to defaults"})
 }
 
-// GetApproval 获取审批
+// GetApproval 获取审批详情
 func (h *AssistantHandler) GetApproval(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	approvalID := c.Param("approval_id")
+
+	approval, err := h.approvalGate.GetApproval(c.Request.Context(), approvalID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "approval not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": approval})
 }
 
 // Approve 批准
 func (h *AssistantHandler) Approve(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "approved"})
+	approvalID := c.Param("approval_id")
+
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	operator := c.GetString("username")
+	result, err := h.approvalGate.Approve(c.Request.Context(), approvalID, operator, req.Comment)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
 // Reject 拒绝
 func (h *AssistantHandler) Reject(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "rejected"})
+	approvalID := c.Param("approval_id")
+
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	operator := c.GetString("username")
+	approval, err := h.approvalGate.Reject(c.Request.Context(), approvalID, operator, req.Comment)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": approval})
 }
 
 // CreateHostAttackInvestigation 创建主机攻击研判
 func (h *AssistantHandler) CreateHostAttackInvestigation(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	if h.investigationSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "investigation service not available"})
+		return
+	}
+
+	var req struct {
+		HostID   string   `json:"host_id"`
+		AlertIDs []string `json:"alert_ids"`
+		CVEIDs   []string `json:"cve_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	operator := c.GetString("username")
+	input := model.HostAttackInvestigationInput{
+		HostID:   req.HostID,
+		AlertIDs: req.AlertIDs,
+		CVEIDs:   req.CVEIDs,
+	}
+
+	result, err := h.investigationSvc.CreateInvestigation(c.Request.Context(), input, operator)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
-// GetInvestigation 获取研判
+// GetInvestigation 获取研判报告
 func (h *AssistantHandler) GetInvestigation(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	if h.investigationSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "investigation service not available"})
+		return
+	}
+
+	investigationID := c.Param("investigation_id")
+	report, err := h.investigationSvc.GetInvestigation(c.Request.Context(), investigationID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "investigation not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": report})
 }
 
 // ListInvestigationEvidence 列出研判证据
 func (h *AssistantHandler) ListInvestigationEvidence(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"items": []interface{}{}, "total": 0}})
+	if h.investigationSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "investigation service not available"})
+		return
+	}
+
+	investigationID := c.Param("investigation_id")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	sourceType := c.Query("source_type")
+
+	query := repository.EvidenceQuery{
+		SourceType: sourceType,
+		Page:       page,
+		PageSize:   pageSize,
+	}
+
+	evidence, total, err := h.investigationSvc.ListEvidence(c.Request.Context(), investigationID, query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"items": evidence,
+			"total": total,
+		},
+	})
 }
 
 // ListMCPSources 列出 MCP 数据源
 func (h *AssistantHandler) ListMCPSources(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"sources": []interface{}{}, "total": 0}})
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	query := repository.MCPSourceQuery{
+		SourceType: c.Query("source_type"),
+		Keyword:    c.Query("keyword"),
+		Page:       page,
+		PageSize:   pageSize,
+	}
+
+	sources, total, err := h.mcpService.ListSources(c.Request.Context(), query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"sources": sources,
+			"total":   total,
+		},
+	})
 }
 
 // CreateMCPSource 创建 MCP 数据源
 func (h *AssistantHandler) CreateMCPSource(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	var source model.ExternalMCPSource
+	if err := c.ShouldBindJSON(&source); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	operator := c.GetString("username")
+	source.CreatedBy = operator
+
+	if err := h.mcpService.CreateSource(c.Request.Context(), &source); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": source})
 }
 
 // GetMCPSource 获取 MCP 数据源
 func (h *AssistantHandler) GetMCPSource(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	source, err := h.mcpService.GetSource(c.Request.Context(), sourceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "source not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": source})
 }
 
 // UpdateMCPSource 更新 MCP 数据源
 func (h *AssistantHandler) UpdateMCPSource(c *gin.Context) {
-	// TODO: Implement
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	var source model.ExternalMCPSource
+	if err := c.ShouldBindJSON(&source); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	source.SourceID = sourceID
+	operator := c.GetString("username")
+	source.UpdatedBy = operator
+
+	if err := h.mcpService.UpdateSource(c.Request.Context(), &source); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "updated"})
 }
 
 // DeleteMCPSource 删除 MCP 数据源
 func (h *AssistantHandler) DeleteMCPSource(c *gin.Context) {
-	// TODO: Implement
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	if err := h.mcpService.DeleteSource(c.Request.Context(), sourceID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "deleted"})
 }
 
-// TestMCPSource 测试 MCP 数据源
+// TestMCPSource 测试 MCP 数据源连接
 func (h *AssistantHandler) TestMCPSource(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"success": true}})
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	result, err := h.mcpService.TestConnection(c.Request.Context(), sourceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
 // SyncMCPSchema 同步 MCP Schema
 func (h *AssistantHandler) SyncMCPSchema(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": nil})
+	if h.mcpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MCP service not available"})
+		return
+	}
+
+	sourceID := c.Param("source_id")
+	result, err := h.mcpService.SyncSchema(c.Request.Context(), sourceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
 // SSE Writer
@@ -368,11 +673,13 @@ type sseWriter struct {
 }
 
 func (w *sseWriter) Write(event assistant.AssistantEvent) error {
-	w.gin.Writer.Write([]byte("data: "))
-	if err := w.gin.Writer.Encode(event); err != nil {
+	data, err := json.Marshal(event)
+	if err != nil {
 		return err
 	}
-	w.gin.Writer.Write([]byte("\n\n"))
-	w.gin.Writer.Flush()
+	fmt.Fprintf(w.gin.Writer, "data: %s\n\n", string(data))
+	if f, ok := w.gin.Writer.(http.Flusher); ok {
+		f.Flush()
+	}
 	return nil
 }

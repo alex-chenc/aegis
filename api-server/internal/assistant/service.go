@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/alex-chenc/aegis/api-server/internal/model"
-	"github.com/alex-chenc/aegis/api-server/internal/repository"
+	"api-server/internal/model"
+	"api-server/internal/repository"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -80,12 +79,6 @@ type SendMessageRequest struct {
 type RunHandle struct {
 	RunID     string `json:"run_id"`
 	MessageID string `json:"message_id"`
-}
-
-// RunResult 运行结果
-type RunResult struct {
-	MessageID  string `json:"message_id"`
-	FinalAnswer string `json:"final_answer"`
 }
 
 // SessionQuery 会话查询参数

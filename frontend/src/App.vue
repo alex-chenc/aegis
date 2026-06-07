@@ -1,7 +1,8 @@
 <template>
   <router-view v-if="isAuthLayout" />
-  <el-container v-else class="app-container">
-    <el-aside width="220px" class="sidebar">
+  <el-container v-else class="app-container" :class="{ 'assistant-mode': isAssistantMode }">
+    <!-- 普通模式才显示侧边栏 -->
+    <el-aside v-if="!isAssistantMode" width="220px" class="sidebar">
       <div class="logo">
         <span class="logo-mark" aria-hidden="true">
           <span class="brand-shield"></span>
@@ -147,7 +148,7 @@
 
       <div class="sidebar-footer">
         <span class="status-dot" />
-        <span class="version">控制面在线 · V5.8</span>
+        <span class="version">控制面在线 · V6.0</span>
       </div>
     </el-aside>
 
@@ -155,16 +156,25 @@
       <el-header class="app-header">
         <div class="header-left">
           <div class="route-kicker">Security Operations</div>
-          <el-breadcrumb separator="/">
+          <el-breadcrumb v-if="!isAssistantMode" separator="/">
             <el-breadcrumb-item v-for="item in breadcrumbs" :key="item.path">
               {{ item.title }}
             </el-breadcrumb-item>
           </el-breadcrumb>
+          <div v-else class="assistant-title">
+            <el-icon><MagicStick /></el-icon>
+            <span>智能安全助手</span>
+          </div>
         </div>
         <div class="header-right">
-          <div class="system-chip">
-            <span class="status-dot" />
-            API 正常
+          <!-- 模式切换 -->
+          <div class="mode-switch">
+            <el-segmented
+              v-model="currentMode"
+              :options="modeOptions"
+              size="small"
+              @change="handleModeChange"
+            />
           </div>
           <NotificationBell />
           <el-tooltip content="刷新" placement="bottom">
@@ -174,7 +184,7 @@
         </div>
       </el-header>
 
-      <el-main class="app-main">
+      <el-main class="app-main" :class="{ 'assistant-main': isAssistantMode }">
         <router-view />
       </el-main>
     </el-container>
@@ -182,10 +192,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link, MagicStick } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
@@ -194,6 +204,30 @@ import { createIdleLogout } from '@/utils/sessionTimeout'
 const route = useRoute()
 const router = useRouter()
 
+// 模式切换
+const currentMode = ref<'normal' | 'assistant'>('normal')
+const modeOptions = [
+  { label: '运维审计', value: 'normal' },
+  { label: '智能助手', value: 'assistant' },
+]
+
+const isAssistantMode = computed(() => {
+  return route.path === '/assistant' || currentMode.value === 'assistant'
+})
+
+function handleModeChange(mode: string | number) {
+  if (mode === 'assistant') {
+    router.push('/assistant')
+  } else {
+    router.push('/hosts')
+  }
+}
+
+// 监听路由变化，同步模式
+watch(() => route.path, (path) => {
+  currentMode.value = path === '/assistant' ? 'assistant' : 'normal'
+}, { immediate: true })
+
 const activeMenu = computed(() => {
   return route.path
 })
@@ -201,14 +235,14 @@ const activeMenu = computed(() => {
 const breadcrumbs = computed(() => {
   const matched = route.matched.filter(item => item.meta && item.meta.title)
   const crumbs = [{ path: '/', title: '首页' }]
-  
+
   matched.forEach(item => {
     crumbs.push({
       path: item.path,
       title: item.meta.title as string
     })
   })
-  
+
   return crumbs
 })
 
@@ -268,6 +302,12 @@ watch(() => route.fullPath, () => {
   width: max(100vw, var(--aegis-desktop-min-width));
   background:
     linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 220px, transparent 220px),
+    radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
+    linear-gradient(135deg, #edf5ff, #f8fafc);
+}
+
+.app-container.assistant-mode {
+  background:
     radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
     linear-gradient(135deg, #edf5ff, #f8fafc);
 }
@@ -412,6 +452,19 @@ watch(() => route.fullPath, () => {
   text-transform: uppercase;
 }
 
+.assistant-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.assistant-title .el-icon {
+  color: #409eff;
+}
+
 .system-chip {
   display: inline-flex;
   align-items: center;
@@ -429,7 +482,12 @@ watch(() => route.fullPath, () => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
 }
 
 .app-main {
@@ -440,6 +498,14 @@ watch(() => route.fullPath, () => {
     linear-gradient(135deg, rgba(241, 247, 253, 0.96), rgba(248, 250, 252, 0.94));
   padding: 24px;
   overflow-y: auto;
+}
+
+.app-main.assistant-main {
+  padding: 0;
+  background: #f5f7fa;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 :deep(.el-menu) {
@@ -498,5 +564,11 @@ watch(() => route.fullPath, () => {
 
 :deep(.el-sub-menu.is-active > .el-sub-menu__title .el-icon) {
   color: #67e8f9 !important;
+}
+
+:deep(.el-segmented) {
+  --el-segmented-bg-color: rgba(0, 0, 0, 0.04);
+  --el-segmented-item-selected-bg-color: #409eff;
+  --el-segmented-item-selected-color: #fff;
 }
 </style>

@@ -32,6 +32,7 @@ type Router struct {
 	commandAuditHandler    *handler.CommandAuditHandler
 	auditLogHandler        *handler.AuditLogHandler
 	assetHandler           *handler.AssetHandler
+	assistantHandler       *handler.AssistantHandler
 }
 
 func NewRouter(
@@ -54,6 +55,7 @@ func NewRouter(
 	commandAuditHandler *handler.CommandAuditHandler,
 	auditLogHandler *handler.AuditLogHandler,
 	assetHandler *handler.AssetHandler,
+	assistantHandler *handler.AssistantHandler,
 ) *Router {
 	return &Router{
 		roleRepo:               roleRepo,
@@ -75,6 +77,7 @@ func NewRouter(
 		commandAuditHandler:    commandAuditHandler,
 		auditLogHandler:        auditLogHandler,
 		assetHandler:           assetHandler,
+		assistantHandler:       assistantHandler,
 	}
 }
 
@@ -299,6 +302,12 @@ func (r *Router) Setup() {
 				packages.DELETE("/:package_id", r.detectionPkgHandler.DeletePackage)
 				packages.POST("/batch-delete", r.detectionPkgHandler.BatchDeletePackages)
 			}
+		}
+
+		// Assistant (V6.0)
+		assistant := v1.Group("/assistant")
+		{
+			r.assistantHandler.RegisterRoutes(assistant)
 		}
 
 		// 通知接口

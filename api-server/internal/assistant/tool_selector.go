@@ -1,0 +1,242 @@
+package assistant
+
+import (
+	"sort"
+	"strings"
+)
+
+// ToolSelector 工具选择器
+type ToolSelector struct {
+	catalog  *ToolCatalog
+	registry *ToolRegistry
+}
+
+// NewToolSelector 创建工具选择器
+func NewToolSelector(catalog *ToolCatalog, registry *ToolRegistry) *ToolSelector {
+	return &ToolSelector{
+		catalog:  catalog,
+		registry: registry,
+	}
+}
+
+// Select 根据意图选择工具
+func (s *ToolSelector) Select(input ToolSelectionInput) *ToolSelectionResult {
+	allTools := s.registry.List()
+
+	// Score each tool
+	type scoredTool struct {
+		tool  *ToolSpec
+		score float64
+	}
+	var scored []scoredTool
+
+	for _, tool := range allTools {
+		if !tool.Enabled {
+			continue
+		}
+
+		score := s.scoreTool(tool, input)
+
+		// Filter: critical tools excluded unless explicit intent
+		if tool.RiskLevel == "critical" && !input.ExplicitHighRisk {
+			continue
+		}
+
+		// Filter: write tools limited
+		if s.isWriteTool(tool) && !input.ExplicitWrite {
+			if tool.RiskLevel == "high" || tool.RiskLevel == "critical" {
+				continue
+			}
+		}
+
+		if score > 0 {
+			scored = append(scored, scoredTool{tool: tool, score: score})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	// Apply limits
+	maxTools := input.MaxTools
+	if maxTools <= 0 {
+		maxTools = 24
+	}
+	maxWriteTools := input.MaxWriteTools
+	if maxWriteTools <= 0 {
+		maxWriteTools = 6
+	}
+
+	var selected []*ToolSpec
+	writeCount := 0
+	for _, st := range scored {
+		if len(selected) >= maxTools {
+			break
+		}
+		if s.isWriteTool(st.tool) {
+			if writeCount >= maxWriteTools {
+				continue
+			}
+			writeCount++
+		}
+		selected = append(selected, st.tool)
+	}
+
+	// Always include resident tools
+	residentTools := []string{"Tool.Search", "Context.Get", "Session.Summarize"}
+	for _, name := range residentTools {
+		found := false
+		for _, t := range selected {
+			if t.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if tool, ok := s.registry.Get(name); ok {
+				selected = append(selected, tool)
+			}
+		}
+	}
+
+	// Build result
+	var selectedNames []string
+	var candidateNames []string
+	for _, t := range selected {
+		selectedNames = append(selectedNames, t.Name)
+	}
+	for _, st := range scored {
+		candidateNames = append(candidateNames, st.tool.Name)
+	}
+
+	return &ToolSelectionResult{
+		SelectedTools:  selectedNames,
+		CandidateTools: candidateNames,
+		Query:          input.Query,
+		Intent:         input.Intent,
+		MaxTools:       maxTools,
+	}
+}
+
+// Expand 扩展工具集（用于 Tool.Search 两阶段扩展）
+func (s *ToolSelector) Expand(currentTools []string, expansionQuery string, maxAdd int) []string {
+	if maxAdd <= 0 {
+		maxAdd = 10
+	}
+
+	currentSet := make(map[string]bool)
+	for _, name := range currentTools {
+		currentSet[name] = true
+	}
+
+	// Search for matching tools
+	searchResults := s.catalog.Search(expansionQuery, SearchOptions{MaxResults: maxAdd * 2})
+
+	var expanded []string
+	for _, tool := range searchResults {
+		if len(expanded) >= maxAdd {
+			break
+		}
+		if !currentSet[tool.Name] {
+			expanded = append(expanded, tool.Name)
+		}
+	}
+
+	return expanded
+}
+
+func (s *ToolSelector) scoreTool(tool *ToolSpec, input ToolSelectionInput) float64 {
+	score := 0.0
+
+	// Domain match (0.35)
+	for _, domain := range input.Intent.Domains {
+		if tool.Domain == domain {
+			score += 0.35
+			break
+		}
+	}
+
+	// Operation match (0.20)
+	if input.Intent.Action != "" && strings.Contains(strings.ToLower(tool.Operation), strings.ToLower(input.Intent.Action)) {
+		score += 0.20
+	}
+
+	// Keyword match (0.15)
+	query := strings.ToLower(input.Query)
+	if query != "" {
+		name := strings.ToLower(tool.Name)
+		desc := strings.ToLower(tool.Description)
+		if strings.Contains(name, query) || strings.Contains(desc, query) {
+			score += 0.15
+		}
+	}
+
+	// Page route match (0.10)
+	if input.PageRoute != "" {
+		pageRoute := strings.ToLower(input.PageRoute)
+		domain := strings.ToLower(tool.Domain)
+		if strings.Contains(pageRoute, domain) {
+			score += 0.10
+		}
+	}
+
+	// Context object match (0.10)
+	for _, ref := range input.ContextRefs {
+		if tool.Domain == s.mapContextToDomain(ref.ObjectType) {
+			score += 0.10
+			break
+		}
+	}
+
+	// Risk fit (0.05) - prefer readonly for general queries
+	if tool.RiskLevel == "readonly" {
+		score += 0.05
+	}
+
+	// Query tools always prioritized
+	if tool.RiskLevel == "readonly" && input.Intent.Action == "query" {
+		score += 0.05
+	}
+
+	return score
+}
+
+func (s *ToolSelector) isWriteTool(tool *ToolSpec) bool {
+	return tool.RiskLevel != "readonly"
+}
+
+func (s *ToolSelector) mapContextToDomain(objectType string) string {
+	mapping := map[string]string{
+		"host":              "host",
+		"alert":             "detection",
+		"task":              "task",
+		"vulnerability":     "vulnerability",
+		"detection_package": "package",
+		"package":           "package",
+		"sigma_rule":        "sigma_rule",
+	}
+	return mapping[objectType]
+}
+
+// ToolSelectionInput 工具选择输入
+type ToolSelectionInput struct {
+	Query            string      `json:"query"`
+	PageRoute        string      `json:"page_route,omitempty"`
+	ContextRefs      []ContextRefInput `json:"context_refs,omitempty"`
+	Intent           IntentResult `json:"intent"`
+	MaxTools         int          `json:"max_tools,omitempty"`
+	MaxWriteTools    int          `json:"max_write_tools,omitempty"`
+	ExplicitHighRisk bool         `json:"explicit_high_risk,omitempty"`
+	ExplicitWrite    bool         `json:"explicit_write,omitempty"`
+}
+
+// ToolSelectionResult 工具选择结果
+type ToolSelectionResult struct {
+	SelectedTools  []string     `json:"selected_tools"`
+	CandidateTools []string     `json:"candidate_tools"`
+	Query          string       `json:"query"`
+	Intent         IntentResult `json:"intent"`
+	MaxTools       int          `json:"max_tools"`
+}
