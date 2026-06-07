@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -189,12 +191,20 @@ func (o *Orchestrator) fallbackResponse(ctx context.Context, input RunInput, rea
 	msgID := "msg_" + input.RunID
 	response := fmt.Sprintf("抱歉，%s\n\n您的问题是: %s\n\n请稍后重试或联系管理员。", reason, input.UserMessage)
 
-	_ = o.messageRepo.Create(ctx, &model.AssistantMessage{
+	// 从事件历史中提取 thinking 和 plan 数据
+	thinkingContent := o.extractThinkingFromHistory(input.SessionID)
+	planData := o.extractPlanFromHistory(input.SessionID)
+
+	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
+	saveCtx := context.Background()
+	_ = o.messageRepo.Create(saveCtx, &model.AssistantMessage{
 		ID:        uuid.New(),
 		SessionID: input.SessionID,
 		MessageID: msgID,
 		Role:      "assistant",
 		Content:   response,
+		Thinking:  thinkingContent,
+		Plan:      planData,
 	})
 
 	o.runManager.Publish(input.SessionID, EventDonePayload(input.SessionID, input.RunID))
@@ -491,13 +501,20 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	// 发布消息增量事件
 	o.runManager.Publish(input.SessionID, EventMessageDeltaPayload(input.SessionID, input.RunID, msgID, response))
 
-	// 保存助手消息
-	if err := o.messageRepo.Create(ctx, &model.AssistantMessage{
+	// 从事件历史中提取 thinking 和 plan 数据
+	thinkingContent := o.extractThinkingFromHistory(input.SessionID)
+	planData := o.extractPlanFromHistory(input.SessionID)
+
+	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
+	saveCtx := context.Background()
+	if err := o.messageRepo.Create(saveCtx, &model.AssistantMessage{
 		ID:        uuid.New(),
 		SessionID: input.SessionID,
 		MessageID: msgID,
 		Role:      "assistant",
 		Content:   response,
+		Thinking:  thinkingContent,
+		Plan:      planData,
 	}); err != nil {
 		o.logger.Error("failed to save assistant message", zap.Error(err))
 	}
@@ -682,12 +699,20 @@ func (o *Orchestrator) ResumeAfterApproval(ctx context.Context, req ResumeAfterA
 	// 保存消息
 	o.runManager.Publish(req.SessionID, EventMessageDeltaPayload(req.SessionID, run.RunID, msgID, response))
 
-	if err := o.messageRepo.Create(ctx, &model.AssistantMessage{
+	// 从事件历史中提取 thinking 和 plan 数据
+	thinkingContent := o.extractThinkingFromHistory(req.SessionID)
+	planData := o.extractPlanFromHistory(req.SessionID)
+
+	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
+	saveCtx := context.Background()
+	if err := o.messageRepo.Create(saveCtx, &model.AssistantMessage{
 		ID:        uuid.New(),
 		SessionID: req.SessionID,
 		MessageID: msgID,
 		Role:      "assistant",
 		Content:   response,
+		Thinking:  thinkingContent,
+		Plan:      planData,
 	}); err != nil {
 		o.logger.Error("failed to save resume message", zap.Error(err))
 	}
@@ -724,4 +749,63 @@ func (o *Orchestrator) buildPreviousSummary(ctx context.Context, sessionID strin
 		summary.WriteString(fmt.Sprintf("[%s] %s\n", msg.Role, content))
 	}
 	return summary.String()
+}
+
+// extractThinkingFromHistory 从事件历史中提取 thinking 内容
+// 返回 JSON 数组，每个元素是一个思考步骤
+func (o *Orchestrator) extractThinkingFromHistory(sessionID string) datatypes.JSON {
+	run, ok := o.runManager.Get(sessionID)
+	if !ok {
+		return nil
+	}
+
+	var thinkingSteps []string
+	for _, event := range run.History() {
+		if event.Type == EventThinking {
+			if payload, ok := event.Payload.(map[string]interface{}); ok {
+				if content, ok := payload["content"].(string); ok && content != "" {
+					thinkingSteps = append(thinkingSteps, content)
+				}
+			}
+		}
+	}
+
+	if len(thinkingSteps) == 0 {
+		return nil
+	}
+
+	jsonBytes, err := json.Marshal(thinkingSteps)
+	if err != nil {
+		return nil
+	}
+	return datatypes.JSON(jsonBytes)
+}
+
+// extractPlanFromHistory 从事件历史中提取 plan 数据
+// 返回最后一个 plan 事件的 JSON 数据
+func (o *Orchestrator) extractPlanFromHistory(sessionID string) datatypes.JSON {
+	run, ok := o.runManager.Get(sessionID)
+	if !ok {
+		return nil
+	}
+
+	var planData datatypes.JSON
+	for _, event := range run.History() {
+		if event.Type == EventPlan {
+			if event.Payload != nil {
+				switch v := event.Payload.(type) {
+				case datatypes.JSON:
+					planData = v
+				case []byte:
+					planData = datatypes.JSON(v)
+				default:
+					if b, err := json.Marshal(v); err == nil {
+						planData = datatypes.JSON(b)
+					}
+				}
+			}
+		}
+	}
+
+	return planData
 }

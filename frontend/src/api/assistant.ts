@@ -66,7 +66,7 @@ export interface AssistantMessage {
   message_id: string
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
-  thinking?: string
+  thinking?: string | string[]  // 支持字符串（兼容旧数据）或数组（新格式）
   plan?: {
     goal: string
     status: string

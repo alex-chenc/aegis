@@ -598,12 +598,18 @@ export const useAssistantStore = defineStore('assistant', () => {
     const message = ensureAssistantMessage(messageId)
     if (!message) return
 
-    const existingSteps = (message.thinking || '')
-      .split('\n')
-      .map(step => step.trim())
-      .filter(Boolean)
-    if (existingSteps[existingSteps.length - 1] === content) return
-    message.thinking = [...existingSteps, content].join('\n')
+    // 兼容旧格式（字符串）和新格式（数组）
+    let steps: string[] = []
+    if (Array.isArray(message.thinking)) {
+      steps = message.thinking
+    } else if (typeof message.thinking === 'string' && message.thinking) {
+      steps = message.thinking.split('\n').map(s => s.trim()).filter(Boolean)
+    }
+
+    // 去重：如果最后一个步骤和新内容相同，则跳过
+    if (steps[steps.length - 1] === content) return
+    steps.push(content)
+    message.thinking = steps
   }
 
   function summarizeToolResult(result: any) {
@@ -627,6 +633,42 @@ export const useAssistantStore = defineStore('assistant', () => {
         status: step.status || 'pending',
         result_summary: step.result_summary,
       })),
+    }
+  }
+
+  // 更新计划状态为已完成
+  function updatePlanStatusToCompleted() {
+    // 遍历所有消息，找到最新的计划并更新状态
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const msg = messages.value[i]
+      if (msg.role === 'assistant' && msg.plan) {
+        msg.plan.status = 'completed'
+        // 将所有运行中的步骤也标记为完成
+        for (const step of msg.plan.steps) {
+          if (step.status === 'running' || step.status === 'pending') {
+            step.status = 'completed'
+          }
+        }
+        break
+      }
+    }
+  }
+
+  // 更新计划状态为失败
+  function updatePlanStatusToFailed() {
+    // 遍历所有消息，找到最新的计划并更新状态
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const msg = messages.value[i]
+      if (msg.role === 'assistant' && msg.plan) {
+        msg.plan.status = 'failed'
+        // 将运行中的步骤标记为失败
+        for (const step of msg.plan.steps) {
+          if (step.status === 'running') {
+            step.status = 'failed'
+          }
+        }
+        break
+      }
     }
   }
 
@@ -946,6 +988,8 @@ export const useAssistantStore = defineStore('assistant', () => {
           updateCurrentSessionMetadata({ current_run_status: 'completed' })
           refreshSessionSnapshot(currentSession.value.session_id)
         }
+        // 更新计划状态为已完成
+        updatePlanStatusToCompleted()
         break
       }
 
@@ -958,6 +1002,8 @@ export const useAssistantStore = defineStore('assistant', () => {
         if (currentSession.value) {
           refreshSessionSnapshot(currentSession.value.session_id)
         }
+        // 更新计划状态为失败
+        updatePlanStatusToFailed()
         break
       }
 

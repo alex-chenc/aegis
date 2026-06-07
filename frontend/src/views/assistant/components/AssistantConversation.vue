@@ -22,22 +22,37 @@
             <el-icon><Monitor /></el-icon>
           </div>
           <div class="message-body">
-            <!-- 思考过程 -->
-            <details v-if="msg.thinking" class="thinking-block" open>
-              <summary class="thinking-header">
-                <span class="thinking-pulse" aria-hidden="true"></span>
-                <span>思考步骤</span>
-                <el-tag size="small" effect="plain">{{ getThinkingSteps(msg).length }} 步</el-tag>
-              </summary>
-              <ol class="thinking-steps">
-                <li
-                  v-for="(step, index) in getThinkingSteps(msg)"
-                  :key="`${msg.message_id}-thinking-${index}`"
-                >
-                  {{ step }}
-                </li>
-              </ol>
-            </details>
+            <!-- 思考步骤 - 每个步骤独立一个框 -->
+            <template v-if="msg.thinking">
+              <div
+                v-for="(step, index) in getThinkingSteps(msg)"
+                :key="`${msg.message_id}-thinking-${index}`"
+                class="thinking-block"
+              >
+                <div class="thinking-header">
+                  <span class="thinking-pulse" aria-hidden="true"></span>
+                  <span>思考</span>
+                </div>
+                <div class="thinking-content">{{ step }}</div>
+              </div>
+            </template>
+
+            <!-- 工具调用 -->
+            <div v-if="msg.tool_calls?.length" class="tool-calls">
+              <div
+                v-for="tc in msg.tool_calls"
+                :key="tc.call_id"
+                class="tool-call-card"
+                :class="`status-${tc.status}`"
+              >
+                <div class="tool-call-header">
+                  <el-icon><SetUp /></el-icon>
+                  <span class="tool-name">{{ tc.tool_name }}</span>
+                  <el-tag size="small" :type="getToolStatusType(tc.status)">{{ tc.status }}</el-tag>
+                </div>
+                <div v-if="tc.result_summary" class="tool-call-result">{{ tc.result_summary }}</div>
+              </div>
+            </div>
 
             <!-- 审批卡片 -->
             <div v-if="msg.approvals?.length" class="approvals">
@@ -53,6 +68,21 @@
             <!-- 消息内容 -->
             <div v-if="msg.content" class="message-bubble">
               <div class="message-content" v-html="formatContent(msg.content)"></div>
+            </div>
+
+            <!-- 步骤结果 -->
+            <div v-if="getStepResults(msg).length" class="step-results">
+              <div
+                v-for="(result, index) in getStepResults(msg)"
+                :key="`${msg.message_id}-result-${index}`"
+                class="step-result-card"
+              >
+                <div class="step-result-header">
+                  <el-icon><CircleCheck /></el-icon>
+                  <span>{{ result.title }}</span>
+                </div>
+                <div class="step-result-content">{{ result.summary }}</div>
+              </div>
             </div>
 
             <!-- 结果卡片 -->
@@ -94,7 +124,7 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { User, Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { User, Monitor, InfoFilled, CircleCheck, SetUp } from '@element-plus/icons-vue'
 import { gsap } from 'gsap'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
@@ -129,10 +159,38 @@ watch(() => props.messages, scrollToBottom, { deep: true })
 watch(() => props.streaming, scrollToBottom)
 
 function getThinkingSteps(msg: AssistantMessage): string[] {
+  // 支持数组格式（新）和字符串格式（旧）
+  if (Array.isArray(msg.thinking)) {
+    return msg.thinking.filter(Boolean)
+  }
   return (msg.thinking || '')
     .split('\n')
     .map(step => step.trim())
     .filter(Boolean)
+}
+
+function getStepResults(msg: AssistantMessage): Array<{ title: string; summary: string }> {
+  if (!msg.plan?.steps) return []
+  return msg.plan.steps
+    .filter(step => step.result_summary)
+    .map(step => ({
+      title: step.title,
+      summary: step.result_summary || ''
+    }))
+}
+
+function getToolStatusType(status: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+  switch (status) {
+    case 'completed':
+    case 'success':
+      return 'success'
+    case 'running':
+      return 'warning'
+    case 'failed':
+      return 'danger'
+    default:
+      return 'info'
+  }
 }
 
 function formatContent(content: string): string {
@@ -330,16 +388,112 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.thinking-steps {
-  margin: 0;
-  padding: 0 14px 12px 34px;
+.thinking-content {
+  padding: 0 14px 12px 14px;
   font-size: 13px;
   color: #334155;
   line-height: 1.65;
 }
 
-.thinking-steps li + li {
-  margin-top: 4px;
+.thinking-step {
+  padding: 4px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.thinking-step:last-child {
+  border-bottom: none;
+}
+
+.step-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-result-card {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.step-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 8px;
+}
+
+.step-result-header .el-icon {
+  color: #22c55e;
+}
+
+.step-result-content {
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-call-card {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.tool-call-card.status-completed,
+.tool-call-card.status-success {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.tool-call-card.status-failed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.tool-call-card.status-completed .tool-call-header,
+.tool-call-card.status-success .tool-call-header {
+  color: #166534;
+}
+
+.tool-call-card.status-failed .tool-call-header {
+  color: #991b1b;
+}
+
+.tool-call-header .el-icon {
+  font-size: 14px;
+}
+
+.tool-name {
+  flex: 1;
+}
+
+.tool-call-result {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 @keyframes thinkingPulse {

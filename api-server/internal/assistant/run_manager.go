@@ -213,3 +213,12 @@ func (m *RunManager) IsRunning(sessionID string) bool {
 	_, ok := m.runs[sessionID]
 	return ok
 }
+
+// History 获取事件历史
+func (r *ActiveRun) History() []AssistantEvent {
+	r.subMu.RLock()
+	defer r.subMu.RUnlock()
+	result := make([]AssistantEvent, len(r.history))
+	copy(result, r.history)
+	return result
+}

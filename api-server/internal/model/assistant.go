@@ -36,7 +36,7 @@ type AssistantMessage struct {
 	MessageID   string         `gorm:"type:varchar(100);uniqueIndex;not null" json:"message_id"`
 	Role        string         `gorm:"type:varchar(20);not null" json:"role"`
 	Content     string         `gorm:"type:text" json:"content"`
-	Thinking    string         `gorm:"type:text" json:"thinking,omitempty"`
+	Thinking    datatypes.JSON `gorm:"type:jsonb" json:"thinking,omitempty"` // JSON 数组，每个元素是一个思考步骤
 	Plan        datatypes.JSON `gorm:"type:jsonb" json:"plan,omitempty"`
 	ToolCalls   datatypes.JSON `gorm:"type:jsonb" json:"tool_calls,omitempty"`
 	Approvals   datatypes.JSON `gorm:"type:jsonb" json:"approvals,omitempty"`

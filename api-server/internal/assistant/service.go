@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"api-server/internal/repository"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
 
 // Service 智能体服务
@@ -328,12 +330,21 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		// 错误时也保存一条助手消息，避免用户看到空白
 		errMsg := fmt.Sprintf("抱歉，执行过程中出现错误: %s", err.Error())
 		msgID := "msg_" + runID
-		_ = s.messageRepo.Create(ctx, &model.AssistantMessage{
+
+		// 从事件历史中提取 thinking 和 plan 数据
+		thinkingContent := s.extractThinkingFromHistory(sessionID)
+		planData := s.extractPlanFromHistory(sessionID)
+
+		// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
+		saveCtx := context.Background()
+		_ = s.messageRepo.Create(saveCtx, &model.AssistantMessage{
 			ID:        uuid.New(),
 			SessionID: sessionID,
 			MessageID: msgID,
 			Role:      "assistant",
 			Content:   errMsg,
+			Thinking:  thinkingContent,
+			Plan:      planData,
 		})
 		s.runManager.Publish(sessionID, EventMessageDeltaPayload(sessionID, runID, msgID, errMsg))
 	} else {
@@ -357,6 +368,64 @@ func (s *Service) ListToolCalls(ctx context.Context, sessionID string, page, pag
 // ListApprovals 列出审批
 func (s *Service) ListApprovals(ctx context.Context, sessionID string, page, pageSize int) ([]model.AssistantApproval, int64, error) {
 	return s.approvalRepo.ListBySession(ctx, sessionID, page, pageSize)
+}
+
+// extractThinkingFromHistory 从事件历史中提取 thinking 内容
+// 返回 JSON 数组，每个元素是一个思考步骤
+func (s *Service) extractThinkingFromHistory(sessionID string) datatypes.JSON {
+	run, ok := s.runManager.Get(sessionID)
+	if !ok {
+		return nil
+	}
+
+	var thinkingSteps []string
+	for _, event := range run.History() {
+		if event.Type == EventThinking {
+			if payload, ok := event.Payload.(map[string]interface{}); ok {
+				if content, ok := payload["content"].(string); ok && content != "" {
+					thinkingSteps = append(thinkingSteps, content)
+				}
+			}
+		}
+	}
+
+	if len(thinkingSteps) == 0 {
+		return nil
+	}
+
+	jsonBytes, err := json.Marshal(thinkingSteps)
+	if err != nil {
+		return nil
+	}
+	return datatypes.JSON(jsonBytes)
+}
+
+// extractPlanFromHistory 从事件历史中提取 plan 数据
+func (s *Service) extractPlanFromHistory(sessionID string) datatypes.JSON {
+	run, ok := s.runManager.Get(sessionID)
+	if !ok {
+		return nil
+	}
+
+	var planData datatypes.JSON
+	for _, event := range run.History() {
+		if event.Type == EventPlan {
+			if event.Payload != nil {
+				switch v := event.Payload.(type) {
+				case datatypes.JSON:
+					planData = v
+				case []byte:
+					planData = datatypes.JSON(v)
+				default:
+					if b, err := json.Marshal(v); err == nil {
+						planData = datatypes.JSON(b)
+					}
+				}
+			}
+		}
+	}
+
+	return planData
 }
 
 // Helper functions
