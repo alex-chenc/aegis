@@ -24,6 +24,7 @@ type ToolDomain string
 const (
 	DomainSystem        ToolDomain = "system"
 	DomainHost          ToolDomain = "host"
+	DomainAsset         ToolDomain = "asset"
 	DomainBaseline      ToolDomain = "baseline"
 	DomainTask          ToolDomain = "task"
 	DomainVulnerability ToolDomain = "vulnerability"

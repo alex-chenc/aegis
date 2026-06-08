@@ -20,7 +20,7 @@ frontend/.env.*.local
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
-
+frontend/test-results/*
 agent/dist/*
 !agent/dist/.gitkeep
 agent/*.exe

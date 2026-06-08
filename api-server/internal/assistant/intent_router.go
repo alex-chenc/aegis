@@ -36,7 +36,9 @@ type IntentRouter struct {
 func NewIntentRouter() *IntentRouter {
 	return &IntentRouter{
 		keywords: map[string][]string{
-			"host":          {"主机", "机器", "资产", "IP", "agent", "离线", "在线", "主机列表", "资产态势", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么"},
+			"host":          {"主机", "机器", "IP", "agent", "离线", "在线", "主机列表"},
+			"asset":         {"资产", "资产态势", "资产概览", "资产统计", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么", "资产清点", "资源清点", "资产采集", "资源采集", "实时采集", "应用资产", "软件资产"},
+			"baseline":      {"基线", "基线模板", "基线规则", "基线脚本", "检测脚本", "修复脚本", "基线检查", "基线修复", "基线上传", "基线识别"},
 			"task":          {"任务", "基线", "检查", "修复", "扫描任务", "执行"},
 			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "受影响", "安全问题", "风险"},
 			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵", "安全", "安全事件", "事件", "异常"},
@@ -117,7 +119,9 @@ func (r *IntentRouter) classifyByRules(input IntentInput) IntentResult {
 		// Direct route mapping
 		routeDomainMap := map[string]string{
 			"/hosts":         "host",
-			"/baseline":      "task",
+			"/hosts/assets":  "asset",
+			"/assets":        "asset",
+			"/baseline":      "baseline",
 			"/vulnerability": "vulnerability",
 			"/detection":     "detection",
 			"/settings":      "config",
@@ -209,7 +213,7 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 返回格式:
 {"domains":["域"],"action":"动作","object":"对象","risk_hint":"风险级别","need_write":false,"confidence":0.8,"reason":"分类依据"}
 
-域可选值: host, task, vulnerability, detection, sigma_rule, package, block, config, audit, investigation, external_mcp, notification
+域可选值: host, asset, baseline, task, vulnerability, detection, sigma_rule, package, block, config, audit, investigation, external_mcp, notification
 动作可选值: query, analyze, create, update, delete, execute, approve, block
 风险级别可选值: readonly, low, medium, high, critical`
 
@@ -263,6 +267,11 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 func (r *IntentRouter) mapContextType(objectType string) string {
 	mapping := map[string]string{
 		"host":              "host",
+		"asset":             "asset",
+		"file":              "asset",
+		"baseline_template": "baseline",
+		"baseline_rule":     "baseline",
+		"sigma_rule_upload": "sigma_rule",
 		"alert":             "detection",
 		"task":              "task",
 		"vulnerability":     "vulnerability",
@@ -283,7 +292,7 @@ func (r *IntentRouter) inferAction(query string) string {
 		{"delete", []string{"删除", "移除", "清理"}},
 		{"update", []string{"更新", "修改", "编辑", "调整"}},
 		{"create", []string{"创建", "新建", "生成", "添加", "注册"}},
-		{"execute", []string{"执行", "运行", "触发", "启动", "部署"}},
+		{"execute", []string{"执行", "运行", "触发", "启动", "部署", "采集"}},
 		{"analyze", []string{"分析", "研判", "溯源", "调查", "检测", "扫描", "排查", "安全问题", "安全事件", "风险", "威胁", "攻击", "入侵", "取证"}},
 		{"query", []string{"查询", "列出", "查看", "获取", "显示", "列表", "有哪些", "多少"}},
 	}
@@ -299,9 +308,9 @@ func (r *IntentRouter) inferAction(query string) string {
 
 func (r *IntentRouter) inferObject(query string) string {
 	objectKeywords := map[string]string{
-		"主机": "host", "资产": "host",
+		"主机": "host", "资产": "asset", "软件": "asset", "应用": "asset",
 		"告警": "alert", "威胁": "alert",
-		"任务": "task", "基线": "task",
+		"任务": "task", "基线": "baseline",
 		"漏洞": "vulnerability", "CVE": "vulnerability",
 		"规则": "sigma_rule", "sigma": "sigma_rule",
 		"检测包": "package", "包": "package",

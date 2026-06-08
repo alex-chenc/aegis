@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"encoding/json"
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -83,9 +83,9 @@ type AuditInfoResponse struct {
 }
 
 type AuditHitRule struct {
-	RuleName   string `json:"rule_name"`
-	Severity   string `json:"severity"`
-	LineNumber int    `json:"line_number"`
+	RuleName    string `json:"rule_name"`
+	Severity    string `json:"severity"`
+	LineNumber  int    `json:"line_number"`
 	MatchedText string `json:"matched_text,omitempty"`
 }
 
@@ -289,16 +289,16 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	}
 
 	for _, log := range logs {
-		switch log.Status {
-		case "pending":
+		switch strings.ToUpper(log.Status) {
+		case "PENDING":
 			status.Pending++
-		case "running":
+		case "RUNNING":
 			status.Running++
-		case "success":
+		case "SUCCESS":
 			status.Success++
-		case "failed":
+		case "FAILED":
 			status.Failed++
-		case "timeout":
+		case "TIMEOUT":
 			status.Timeout++
 		}
 	}

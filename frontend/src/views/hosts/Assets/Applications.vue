@@ -25,6 +25,9 @@
           <el-option label="Web 服务" value="web_service" />
           <el-option label="Web 框架" value="web_framework" />
           <el-option label="Web 站点" value="web_site" />
+          <el-option label="AI LLM" value="llm_service" />
+          <el-option label="AI Agent" value="ai_agent" />
+          <el-option label="MCP" value="mcp_server" />
           <el-option label="其他" value="other" />
         </el-select>
 
@@ -251,6 +254,9 @@
             <el-option label="Web 服务" value="web_service" />
             <el-option label="Web 框架" value="web_framework" />
             <el-option label="Web 站点" value="web_site" />
+            <el-option label="AI LLM" value="llm_service" />
+            <el-option label="AI Agent" value="ai_agent" />
+            <el-option label="MCP" value="mcp_server" />
             <el-option label="其他" value="other" />
           </el-select>
         </el-form-item>
@@ -306,6 +312,9 @@ const categoryTitles: Record<string, string> = {
   web_service: 'Web 服务资产',
   web_framework: 'Web 框架资产',
   web_site: 'Web 站点资产',
+  llm_service: 'AI LLM 资产',
+  ai_agent: 'AI Agent 资产',
+  mcp_server: 'MCP 资产',
 }
 
 const pageTitle = computed(() => {
@@ -406,6 +415,9 @@ function getCategoryType(category: string) {
     web_service: 'danger',
     web_framework: 'primary',
     web_site: 'success',
+    llm_service: 'primary',
+    ai_agent: 'success',
+    mcp_server: 'warning',
     other: 'info',
     unknown: 'info',
   }
@@ -419,6 +431,9 @@ function getCategoryLabel(category: string) {
     web_service: 'Web 服务',
     web_framework: 'Web 框架',
     web_site: 'Web 站点',
+    llm_service: 'AI LLM',
+    ai_agent: 'AI Agent',
+    mcp_server: 'MCP',
     other: '其他',
     unknown: '未知',
   }

@@ -94,6 +94,35 @@ var DefaultPromptFragments = []agentruntime.PromptFragment{
 - 示例：用户问"哪些资产有postgresql"→ 调用 Software.Installed.Search，args: {"package_name": "postgresql"}`,
 	},
 	{
+		Name:        "asset_inventory",
+		Description: "资产清点和实时采集",
+		Keywords:    []string{"资产清点", "资源清点", "资产采集", "实时采集", "运行进程", "网络连接", "打开文件"},
+		Priority:    80,
+		Content: `## 资产清点（实时采集）
+当用户要求"资产清点"、"资源清点"或"实时采集"时，必须使用 Agent 工具进行实时数据采集，而不是只查询数据库。
+
+### 采集流程
+1. 先用 Host.List 获取目标主机列表（在线主机）
+2. 对每台在线主机，调用以下 Agent 工具进行实时采集：
+   - Agent.Process.List：获取运行进程列表
+   - Agent.Network.List：获取网络连接
+   - Agent.File.OpenList：获取打开文件
+   - Agent.Log.Query：查询最近日志（如有需要）
+
+### 输出格式
+资产清点结果应包含：
+- 主机基本信息（ID、主机名、IP、系统、Agent 状态）
+- 运行进程统计（进程数、关键进程）
+- 网络连接统计（连接数、监听端口）
+- 打开文件统计
+- 异常发现（如有）
+
+### 注意事项
+- Agent 离线的主机无法进行实时采集，需标注"Agent 离线，无法采集"
+- 采集失败时记录错误原因
+- 不要只返回主机列表，必须进行实际的资源采集`,
+	},
+	{
 		Name:        "vulnerability_mgmt",
 		Description: "漏洞管理和修复",
 		Keywords:    []string{"漏洞", "CVE", "补丁", "修复", "风险"},

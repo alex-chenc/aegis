@@ -115,7 +115,7 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 			ToolCallID: callID,
 			SessionID:  req.SessionID,
 			ToolName:   req.ToolName,
-			RiskLevel:  tool.RiskLevel,
+			RiskLevel:  string(tool.Risk),
 			Title:      fmt.Sprintf("审批: %s", tool.Description),
 			Args:       req.Args,
 			Operator:   req.Operator,

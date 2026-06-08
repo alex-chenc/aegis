@@ -40,6 +40,22 @@
       <HostAttackInvestigationPanel :data="card.payload" />
     </div>
 
+    <!-- 任务状态摘要 -->
+    <div v-else-if="card.type === 'task_status'" class="task-status-summary">
+      <div class="task-status-topline">
+        <span>{{ card.payload.task_group_id || card.payload.task_id || '任务' }}</span>
+        <el-tag :type="getTaskStatusTag(String(card.payload.status || 'pending'))" size="small">
+          {{ getTaskStatusLabel(String(card.payload.status || 'pending')) }}
+        </el-tag>
+      </div>
+      <div class="task-status-grid">
+        <div v-for="item in getTaskMetrics(card.payload)" :key="item.label" class="task-status-metric">
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+        </div>
+      </div>
+    </div>
+
     <!-- 默认渲染 -->
     <div v-else class="default-content">
       <pre>{{ JSON.stringify(card.payload, null, 2) }}</pre>
@@ -79,6 +95,35 @@ function getSeverityTag(severity: string): string {
     low: 'info',
   }
   return map[severity] || 'info'
+}
+
+function getTaskStatusTag(status: string): string {
+  const normalized = status.toLowerCase()
+  if (['success', 'completed'].includes(normalized)) return 'success'
+  if (['failed', 'timeout'].includes(normalized)) return 'danger'
+  if (['running', 'pending'].includes(normalized)) return 'warning'
+  return 'info'
+}
+
+function getTaskStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    pending: '等待中',
+    running: '运行中',
+    success: '成功',
+    completed: '完成',
+    failed: '失败',
+    timeout: '超时',
+  }
+  return map[status.toLowerCase()] || status
+}
+
+function getTaskMetrics(payload: Record<string, any>) {
+  return [
+    { label: '总数', value: payload.total ?? payload.task_count ?? 0 },
+    { label: '成功', value: payload.success ?? payload.success_count ?? 0 },
+    { label: '运行', value: payload.running ?? payload.running_count ?? 0 },
+    { label: '失败', value: payload.failed ?? payload.failed_count ?? 0 },
+  ]
 }
 
 function renderMarkdown(payload: Record<string, unknown>): string {
@@ -158,6 +203,46 @@ function renderMarkdown(payload: Record<string, unknown>): string {
 
 .investigation-result {
   margin-top: 8px;
+}
+
+.task-status-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-status-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.task-status-metric {
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.task-status-metric span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-status-metric strong {
+  color: #1f2937;
+  font-size: 15px;
 }
 
 .default-content pre {

@@ -18,7 +18,9 @@ import (
 type AssistantHandler struct {
 	assistantService *assistant.Service
 	approvalGate     *assistant.ApprovalGate
+	toolDispatcher   *assistant.ToolDispatcher
 	policyService    *assistant.ToolPolicyService
+	fileUploadSvc    *assistant.FileUploadService
 	investigationSvc *assistant.HostAttackInvestigationService
 	mcpService       *assistant.ExternalMCPSourceService
 	logger           *zap.Logger
@@ -28,7 +30,9 @@ type AssistantHandler struct {
 func NewAssistantHandler(
 	assistantService *assistant.Service,
 	approvalGate *assistant.ApprovalGate,
+	toolDispatcher *assistant.ToolDispatcher,
 	policyService *assistant.ToolPolicyService,
+	fileUploadSvc *assistant.FileUploadService,
 	investigationSvc *assistant.HostAttackInvestigationService,
 	mcpService *assistant.ExternalMCPSourceService,
 	logger *zap.Logger,
@@ -36,7 +40,9 @@ func NewAssistantHandler(
 	return &AssistantHandler{
 		assistantService: assistantService,
 		approvalGate:     approvalGate,
+		toolDispatcher:   toolDispatcher,
 		policyService:    policyService,
+		fileUploadSvc:    fileUploadSvc,
 		investigationSvc: investigationSvc,
 		mcpService:       mcpService,
 		logger:           logger,
@@ -55,6 +61,7 @@ func (h *AssistantHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/sessions/:session_id/stream", h.StreamSession)
 	group.POST("/sessions/:session_id/cancel", h.CancelRun)
 	group.GET("/sessions/:session_id/context-refs", h.ListContextRefs)
+	group.POST("/sessions/:session_id/files", h.UploadSessionFile)
 	group.GET("/sessions/:session_id/tool-calls", h.ListToolCalls)
 	group.GET("/sessions/:session_id/approvals", h.ListApprovals)
 
@@ -231,6 +238,36 @@ func (h *AssistantHandler) ListContextRefs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": refs})
+}
+
+// UploadSessionFile 上传文件并附加到会话上下文
+func (h *AssistantHandler) UploadSessionFile(c *gin.Context) {
+	if h.fileUploadSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "assistant file upload service not available"})
+		return
+	}
+
+	sessionID := c.Param("session_id")
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing file"})
+		return
+	}
+
+	purpose := c.DefaultPostForm("purpose", assistant.AssistantUploadPurposeAnalysis)
+	operator := c.GetString("username")
+	result, err := h.fileUploadSvc.UploadSessionFile(c.Request.Context(), sessionID, file, purpose, operator)
+	if err != nil {
+		h.logger.Warn("assistant file upload failed",
+			zap.String("session_id", sessionID),
+			zap.String("purpose", purpose),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
 // ListToolCalls 列出工具调用
@@ -427,6 +464,30 @@ func (h *AssistantHandler) Approve(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.toolDispatcher != nil {
+		dispatchResult, execErr := h.toolDispatcher.ExecuteApprovedTool(c.Request.Context(), approvalID, operator)
+		if execErr != nil {
+			_ = h.approvalGate.MarkFailed(c.Request.Context(), approvalID, execErr.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": execErr.Error()})
+			return
+		}
+
+		result.ToolResult = &assistant.ToolExecutionResult{
+			Success:    dispatchResult.Success,
+			Data:       dispatchResult.Data,
+			Error:      dispatchResult.Error,
+			DurationMs: dispatchResult.DurationMs,
+		}
+		if dispatchResult.Success {
+			_ = h.approvalGate.MarkExecuted(c.Request.Context(), approvalID)
+		} else {
+			_ = h.approvalGate.MarkFailed(c.Request.Context(), approvalID, dispatchResult.Error)
+		}
+		if updatedApproval, getErr := h.approvalGate.GetApproval(c.Request.Context(), approvalID); getErr == nil {
+			result.Approval = updatedApproval
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})

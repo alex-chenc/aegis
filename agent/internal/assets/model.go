@@ -12,8 +12,23 @@ type HostAssetSnapshot struct {
 	Arch        string         `json:"arch"`
 	Packages    []PackageAsset `json:"packages"`
 	Processes   []ProcessAsset `json:"processes"`
+	AIAssets    []AIAsset      `json:"ai_assets"`
 	CollectedAt time.Time      `json:"collected_at"`
 	Errors      []CollectError `json:"errors"`
+}
+
+// AIAsset AI 资产（LLM 服务 / AI Agent / MCP Server）
+type AIAsset struct {
+	Category    string            `json:"category"`     // llm_service, ai_agent, mcp_server
+	Name        string            `json:"name"`         // 服务名称 (如 "ollama", "claude-code")
+	DisplayName string            `json:"display_name"` // 显示名称
+	Version     string            `json:"version"`      // 版本号
+	Source      string            `json:"source"`       // 检测来源: probe/config/process
+	Endpoint    string            `json:"endpoint"`     // 服务端点 (如 "http://localhost:11434")
+	ListenPorts []int             `json:"listen_ports"` // 监听端口
+	ConfigPath  string            `json:"config_path"`  // 配置文件路径
+	PIDs        []int             `json:"pids"`         // 关联进程 PID
+	Extra       map[string]string `json:"extra"`        // 额外信息 (如 models, tools)
 }
 
 // ProcessSnapshotChunk 进程快照分片

@@ -573,6 +573,9 @@ func (s *AssetAnalysisService) validateAnalysisResult(result *ApplicationAnalysi
 		"web_service":   true,
 		"web_framework": true,
 		"web_site":      true,
+		"llm_service":   true,
+		"ai_agent":      true,
+		"mcp_server":    true,
 		"other":         true,
 		"unknown":       true,
 	}

@@ -92,6 +92,27 @@ const routes = [
     props: { defaultCategory: 'web_site' }
   },
   {
+    path: '/hosts/assets/llm-services',
+    name: 'AssetsLLMServices',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'AI LLM 资产' },
+    props: { defaultCategory: 'llm_service' }
+  },
+  {
+    path: '/hosts/assets/ai-agents',
+    name: 'AssetsAIAgents',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'AI Agent 资产' },
+    props: { defaultCategory: 'ai_agent' }
+  },
+  {
+    path: '/hosts/assets/mcp-servers',
+    name: 'AssetsMCPServers',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: 'MCP 资产' },
+    props: { defaultCategory: 'mcp_server' }
+  },
+  {
     path: '/hosts/assets/collections',
     name: 'AssetsCollections',
     redirect: '/hosts/assets',

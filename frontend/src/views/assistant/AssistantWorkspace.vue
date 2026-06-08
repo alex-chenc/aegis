@@ -70,7 +70,12 @@
         <!-- 输入框在底部 -->
         <AssistantComposer
           :disabled="streaming"
+          :approval-mode="approvalMode"
+          :mode-loading="approvalModeLoading"
+          :uploading="uploadingFile"
           @send="handleSend"
+          @approval-mode-change="handleApprovalModeChange"
+          @upload-file="handleUploadFile"
         />
       </template>
 
@@ -83,7 +88,12 @@
           <div class="center-composer">
             <AssistantComposer
               :disabled="false"
+              :approval-mode="approvalMode"
+              :mode-loading="approvalModeLoading"
+              :uploading="uploadingFile"
               @send="handleSend"
+              @approval-mode-change="handleApprovalModeChange"
+              @upload-file="handleUploadFile"
             />
           </div>
         </div>
@@ -93,6 +103,7 @@
     <!-- 右侧上下文栏 -->
     <AssistantContextRail
       :plan="currentPlan"
+      :context-refs="contextRefs"
       :approvals="pendingApprovals"
       :tool-calls="toolCalls"
     />
@@ -109,6 +120,12 @@ import { gsap } from 'gsap'
 import { useAssistantStore } from '@/store/assistant'
 import { getStoredAuth } from '@/utils/auth'
 import { normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
+import {
+  getToolApprovalPolicy,
+  updateToolApprovalPolicy,
+  type AssistantFileUploadPurpose,
+  type AssistantToolApprovalMode,
+} from '@/api/assistant'
 import type { PlanEvent } from '@/api/aiAnalysis'
 import AssistantSessionSidebar from './components/AssistantSessionSidebar.vue'
 import AssistantConversation from './components/AssistantConversation.vue'
@@ -122,6 +139,9 @@ const store = useAssistantStore()
 const workspaceRoot = ref<HTMLElement | null>(null)
 let workspaceAnimation: ReturnType<typeof gsap.context> | null = null
 let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
+const approvalMode = ref<AssistantToolApprovalMode>('whitelist')
+const approvalModeLoading = ref(false)
+const uploadingFile = ref(false)
 
 const {
   sessions,
@@ -214,6 +234,65 @@ async function handleSend(content: string) {
     }
   } catch (err) {
     console.error('发送消息失败:', err)
+  }
+}
+
+async function fetchApprovalMode() {
+  try {
+    const policy = await getToolApprovalPolicy()
+    approvalMode.value = policy?.mode || 'whitelist'
+  } catch {
+    approvalMode.value = 'whitelist'
+  }
+}
+
+async function handleApprovalModeChange(mode: AssistantToolApprovalMode) {
+  const previous = approvalMode.value
+  approvalMode.value = mode
+  approvalModeLoading.value = true
+  try {
+    await updateToolApprovalPolicy({ mode })
+    ElMessage.success('工具权限模式已更新')
+  } catch (err: any) {
+    approvalMode.value = previous
+    ElMessage.error(err?.message || '权限模式更新失败')
+  } finally {
+    approvalModeLoading.value = false
+  }
+}
+
+async function ensureSessionForUpload(file: File, purpose: AssistantFileUploadPurpose) {
+  if (currentSession.value) return currentSession.value
+  const titlePrefix: Record<AssistantFileUploadPurpose, string> = {
+    analysis: '文件分析',
+    baseline_template: '基线模板',
+    sigma_rule: 'Sigma 规则',
+  }
+  const session = await store.createSession({
+    title: `${titlePrefix[purpose]}：${file.name}`.slice(0, 48),
+    task_type: purpose === 'analysis' ? 'explanation' : 'operations',
+  })
+  if (!session) {
+    throw new Error('创建会话失败')
+  }
+  router.replace({ query: { ...route.query, session: session.session_id } })
+  return session
+}
+
+async function handleUploadFile(file: File, purpose: AssistantFileUploadPurpose) {
+  uploadingFile.value = true
+  try {
+    await ensureSessionForUpload(file, purpose)
+    const result = await store.uploadSessionFile(file, purpose)
+    if (currentSession.value?.session_id) {
+      await store.fetchContextRefs(currentSession.value.session_id)
+    }
+    const title = result.context_ref?.title || file.name
+    ElMessage.success(`已上传：${title}`)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '文件上传失败')
+  } finally {
+    uploadingFile.value = false
   }
 }
 
@@ -381,6 +460,8 @@ onMounted(async () => {
   }
 
   setupWorkspaceMotion()
+
+  await fetchApprovalMode()
 
   try {
     await store.fetchSessions()

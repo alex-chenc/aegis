@@ -8,6 +8,9 @@ export interface AssetSummary {
   web_service_count: number
   web_framework_count: number
   web_site_count: number
+  llm_service_count: number
+  ai_agent_count: number
+  mcp_server_count: number
   needs_review_count: number
   last_collection_at: string | null
 }

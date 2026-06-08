@@ -207,6 +207,9 @@ type AssetSummary struct {
 	WebServiceCount   int64      `json:"web_service_count"`
 	WebFrameworkCount int64      `json:"web_framework_count"`
 	WebSiteCount      int64      `json:"web_site_count"`
+	LLMServiceCount   int64      `json:"llm_service_count"`
+	AIAgentCount      int64      `json:"ai_agent_count"`
+	MCPServerCount    int64      `json:"mcp_server_count"`
 	NeedsReviewCount  int64      `json:"needs_review_count"`
 	LastCollectionAt  *time.Time `json:"last_collection_at"`
 }

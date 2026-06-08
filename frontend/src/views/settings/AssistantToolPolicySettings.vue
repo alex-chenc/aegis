@@ -254,6 +254,7 @@ const hasSelection = computed(() => selectedTools.value.length > 0)
 const domainOptions = [
   { label: '系统', value: 'system' },
   { label: '主机', value: 'host' },
+  { label: '资产', value: 'asset' },
   { label: '基线', value: 'baseline' },
   { label: '任务', value: 'task' },
   { label: '漏洞', value: 'vulnerability' },
@@ -352,7 +353,7 @@ async function handleWhitelistChange(row: any, whitelisted: boolean) {
   }
 
   try {
-    await updateToolWhitelist(row.tool_name, { auto_approve: whitelisted })
+    await updateToolWhitelist(row.tool_name, { whitelisted })
     ElMessage.success(whitelisted ? '已加入白名单' : '已移出白名单')
   } catch (e: any) {
     row.whitelisted = !whitelisted
@@ -380,11 +381,11 @@ async function handleBatchWhitelist(whitelisted: boolean) {
   }
 
   try {
-    const entries = selectedTools.value.map(t => ({
+    const items = selectedTools.value.map(t => ({
       tool_name: t.tool_name,
-      auto_approve: whitelisted
+      whitelisted
     }))
-    await batchUpdateWhitelist({ entries })
+    await batchUpdateWhitelist({ items })
     ElMessage.success(whitelisted ? '已批量加入白名单' : '已批量移出白名单')
     await fetchTools()
   } catch (e: any) {

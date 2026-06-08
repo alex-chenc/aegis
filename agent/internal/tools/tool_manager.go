@@ -159,6 +159,9 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			}
 		}
 		return m.collectHostAssets(hostID, collectTypes, includePackageFiles, includeListenPorts, maxProcessCount)
+	case "AssetCollectAIAssets":
+		hostID, _ := params["host_id"].(string)
+		return m.collectAIAssets(hostID)
 	case "AssetCollectProcessSnapshot":
 		hostID, _ := params["host_id"].(string)
 		offset := 0
@@ -208,6 +211,52 @@ func (m *ToolManager) collectHostAssets(hostID string, collectTypes []string, in
 		IncludeListenPorts:  includeListenPorts,
 		MaxProcessCount:     maxProcessCount,
 	})
+}
+
+func (m *ToolManager) collectAIAssets(hostID string) ([]assets.AIAsset, error) {
+	m.logger.Info("Collecting AI assets via whitelisted tool",
+		zap.String("host_id", hostID))
+
+	// 先采集进程以获取监听端口
+	processCollector := assets.NewProcessCollector(m.logger, 2000)
+	processes, err := processCollector.Collect(context.Background(), true)
+	if err != nil {
+		m.logger.Warn("Process collection failed for AI asset detection", zap.Error(err))
+		processes = nil
+	}
+
+	// 构建端口 -> PID 映射
+	listenPorts := make(map[int][]int)
+	for _, p := range processes {
+		for _, port := range p.ListenPorts {
+			if port > 0 {
+				listenPorts[port] = append(listenPorts[port], p.PID)
+			}
+		}
+	}
+
+	var allAssets []assets.AIAsset
+
+	// LLM 服务探测
+	llmCollector := assets.NewLLMServiceCollector(m.logger)
+	llmAssets := llmCollector.Collect(context.Background(), listenPorts)
+	allAssets = append(allAssets, llmAssets...)
+
+	// AI Agent 配置扫描
+	agentCollector := assets.NewAIAgentCollector(m.logger)
+	agentAssets := agentCollector.Collect(context.Background())
+	allAssets = append(allAssets, agentAssets...)
+
+	// MCP Server 配置解析
+	mcpCollector := assets.NewMCPCollector(m.logger)
+	mcpAssets := mcpCollector.Collect(context.Background())
+	allAssets = append(allAssets, mcpAssets...)
+
+	m.logger.Info("AI asset collection completed",
+		zap.String("host_id", hostID),
+		zap.Int("total", len(allAssets)))
+
+	return allAssets, nil
 }
 
 func (m *ToolManager) collectProcessSnapshot(hostID string, offset, limit int, includeListenPorts bool, maxProcessCount int) (*assets.ProcessSnapshotChunk, error) {

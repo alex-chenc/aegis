@@ -281,6 +281,11 @@ func (r *AssetCollectionRepository) GetSummary() (*model.AssetSummary, error) {
 	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_framework", "deleted").Count(&summary.WebFrameworkCount)
 	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_site", "deleted").Count(&summary.WebSiteCount)
 
+	// AI 资产分类数量
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "llm_service", "deleted").Count(&summary.LLMServiceCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "ai_agent", "deleted").Count(&summary.AIAgentCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "mcp_server", "deleted").Count(&summary.MCPServerCount)
+
 	// 待复核数量
 	r.db.Model(&model.HostApplicationAsset{}).Where("review_status = ?", "pending").Count(&summary.NeedsReviewCount)
 

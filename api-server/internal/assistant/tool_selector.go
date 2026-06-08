@@ -339,6 +339,11 @@ func (s *ToolSelector) isWriteTool(tool *ToolSpec) bool {
 func (s *ToolSelector) mapContextToDomain(objectType string) string {
 	mapping := map[string]string{
 		"host":              "host",
+		"asset":             "asset",
+		"asset_collection":  "asset",
+		"file":              "asset",
+		"baseline_template": "baseline",
+		"baseline_rule":     "baseline",
 		"alert":             "detection",
 		"task":              "task",
 		"vulnerability":     "vulnerability",
@@ -353,18 +358,24 @@ func (s *ToolSelector) mapContextToDomain(objectType string) string {
 // agent 工具（进程采集、网络采集等）通过 gRPC 调用目标主机 Agent，
 // 只应在安全分析场景下使用。普通资源查询应直接查数据库。
 func (s *ToolSelector) IntentRequiresAgentTools(intent IntentResult) bool {
-	// 1. 分析类动作 → 需要 agent 工具
-	if intent.Action == "analyze" || intent.Action == "investigate" {
-		return true
-	}
-
-	// 2. 安全分析相关领域 → 需要 agent 工具
 	securityDomains := map[string]bool{
 		"detection":     true,
 		"investigation": true,
 		"sigma_rule":    true,
 		"block":         true,
 	}
+
+	// 1. 分析类动作仅在安全现场域下注入 agent 工具。
+	if intent.Action == "analyze" || intent.Action == "investigate" {
+		for _, d := range intent.Domains {
+			if securityDomains[d] {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 2. 安全分析相关领域 → 需要 agent 工具
 	for _, d := range intent.Domains {
 		if securityDomains[d] {
 			return true
@@ -377,14 +388,14 @@ func (s *ToolSelector) IntentRequiresAgentTools(intent IntentResult) bool {
 
 // ToolSelectionInput 工具选择输入
 type ToolSelectionInput struct {
-	Query            string           `json:"query"`
-	PageRoute        string           `json:"page_route,omitempty"`
+	Query            string            `json:"query"`
+	PageRoute        string            `json:"page_route,omitempty"`
 	ContextRefs      []ContextRefInput `json:"context_refs,omitempty"`
-	Intent           IntentResult     `json:"intent"`
-	MaxTools         int              `json:"max_tools,omitempty"`
-	MaxWriteTools    int              `json:"max_write_tools,omitempty"`
-	ExplicitHighRisk bool             `json:"explicit_high_risk,omitempty"`
-	ExplicitWrite    bool             `json:"explicit_write,omitempty"`
+	Intent           IntentResult      `json:"intent"`
+	MaxTools         int               `json:"max_tools,omitempty"`
+	MaxWriteTools    int               `json:"max_write_tools,omitempty"`
+	ExplicitHighRisk bool              `json:"explicit_high_risk,omitempty"`
+	ExplicitWrite    bool              `json:"explicit_write,omitempty"`
 }
 
 // ToolSelectionResult 工具选择结果

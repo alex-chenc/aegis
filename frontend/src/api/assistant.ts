@@ -141,24 +141,38 @@ export interface AssistantApproval {
 /** 工具策略 */
 export interface AssistantToolPolicy {
   mode: AssistantToolApprovalMode
-  whitelist: AssistantToolWhitelistEntry[]
 }
 
 /** 工具白名单条目 */
 export interface AssistantToolWhitelistEntry {
   tool_name: string
   risk_level: AssistantRiskLevel
-  auto_approve: boolean
-  max_input_params?: Record<string, any>
+  whitelisted: boolean
+  default_whitelisted?: boolean
+  enabled?: boolean
 }
 
 /** 工具信息 */
 export interface AssistantTool {
-  name: string
+  id?: string
+  name?: string
+  tool_name?: string
+  domain?: string
+  operation?: string
   description: string
   risk_level: AssistantRiskLevel
-  input_schema: Record<string, any>
+  input_schema?: Record<string, any>
+  args_summary?: string
   category?: string
+  whitelisted?: boolean
+  default_whitelisted?: boolean
+  enabled?: boolean
+}
+
+export interface AssistantToolsResponse {
+  tools?: AssistantTool[]
+  items?: AssistantTool[]
+  total: number
 }
 
 /** MCP 数据源 */
@@ -343,18 +357,27 @@ export interface UpdateMCPSourceRequest {
 
 /** 更新工具白名单请求 */
 export interface UpdateToolWhitelistRequest {
-  auto_approve: boolean
-  max_input_params?: Record<string, any>
+  whitelisted: boolean
 }
 
 /** 批量更新白名单请求 */
 export interface BatchUpdateWhitelistRequest {
-  entries: { tool_name: string; auto_approve: boolean }[]
+  items: { tool_name: string; whitelisted: boolean }[]
 }
 
 /** 审批操作请求 */
 export interface ApprovalActionRequest {
   comment?: string
+}
+
+export interface ApprovalActionResult {
+  approval: AssistantApproval
+  tool_result?: {
+    success: boolean
+    data?: any
+    error?: string
+    duration_ms?: number
+  }
 }
 
 /** 分页查询参数 */
@@ -408,6 +431,16 @@ export interface AssistantSessionsResponse {
   total: number
   page?: number
   page_size?: number
+}
+
+export type AssistantFileUploadPurpose = 'analysis' | 'baseline_template' | 'sigma_rule'
+
+export interface AssistantFileUploadResult {
+  purpose: AssistantFileUploadPurpose
+  filename: string
+  size: number
+  context_ref: AssistantContextRef
+  data?: Record<string, any>
 }
 
 // ============================================
@@ -473,6 +506,18 @@ export function getContextRefs(sessionId: string) {
   })
 }
 
+/** 上传文件并附加到会话上下文 */
+export function uploadAssistantFile(sessionId: string, file: File, purpose: AssistantFileUploadPurpose = 'analysis') {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('purpose', purpose)
+  return request<any, AssistantFileUploadResult>({
+    url: `/assistant/sessions/${sessionId}/files`,
+    method: 'post',
+    data: formData
+  })
+}
+
 /** 获取工具调用列表 */
 export function getToolCalls(sessionId: string, params?: ToolCallsQueryParams) {
   return request<any, PaginatedResponse<AssistantToolCall>>({
@@ -493,7 +538,7 @@ export function getApprovals(sessionId: string, params?: ApprovalsQueryParams) {
 
 /** 获取可用工具列表 */
 export function getTools(params?: PaginationParams) {
-  return request<any, PaginatedResponse<AssistantTool>>({
+  return request<any, AssistantToolsResponse>({
     url: '/assistant/tools',
     method: 'get',
     params
@@ -510,7 +555,7 @@ export function getToolApprovalPolicy() {
 
 /** 更新工具审批策略 */
 export function updateToolApprovalPolicy(data: Partial<AssistantToolPolicy>) {
-  return request<any, AssistantToolPolicy>({
+  return request<any, void>({
     url: '/assistant/tool-approval-policy',
     method: 'put',
     data
@@ -553,7 +598,7 @@ export function getApproval(approvalId: string) {
 
 /** 通过审批 */
 export function approveApproval(approvalId: string, data?: ApprovalActionRequest) {
-  return request<any, AssistantApproval>({
+  return request<any, ApprovalActionResult>({
     url: `/assistant/approvals/${approvalId}/approve`,
     method: 'post',
     data

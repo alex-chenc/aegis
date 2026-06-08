@@ -9,6 +9,7 @@ import {
   sendMessage as apiSendMessage,
   cancelRun as apiCancelRun,
   getContextRefs as apiGetContextRefs,
+  uploadAssistantFile as apiUploadAssistantFile,
   getToolCalls as apiGetToolCalls,
   getApprovals as apiGetApprovals,
   approveApproval as apiApproveApproval,
@@ -20,6 +21,8 @@ import {
   type AssistantToolCall,
   type AssistantApproval,
   type AssistantResultCard,
+  type AssistantFileUploadPurpose,
+  type AssistantFileUploadResult,
   type AssistantIntentResult,
   type AssistantToolSelection,
   type AssistantToolSearchResult,
@@ -1003,6 +1006,22 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
+  async function uploadSessionFile(file: File, purpose: AssistantFileUploadPurpose = 'analysis'): Promise<AssistantFileUploadResult> {
+    if (!currentSession.value?.session_id) {
+      throw new Error('请先创建会话')
+    }
+    const result = await apiUploadAssistantFile(currentSession.value.session_id, file, purpose)
+    if (result?.context_ref) {
+      const index = contextRefs.value.findIndex(ref => ref.id === result.context_ref.id)
+      if (index >= 0) {
+        contextRefs.value[index] = result.context_ref
+      } else {
+        contextRefs.value.push(result.context_ref)
+      }
+    }
+    return result
+  }
+
   /**
    * 获取工具调用列表
    */
@@ -1073,10 +1092,11 @@ export const useAssistantStore = defineStore('assistant', () => {
     error.value = null
     try {
       const result = await apiApproveApproval(approvalId, comment ? { comment } : undefined)
+      const approval = (result as any).approval || result
       // 更新本地审批列表（兼容 id 和 approval_id 两种查找方式）
       const index = approvals.value.findIndex(a => a.approval_id === approvalId || a.id === approvalId)
       if (index > -1) {
-        approvals.value[index] = result
+        approvals.value[index] = approval
       }
       return result
     } catch (err: any) {
@@ -1870,6 +1890,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     cancelRun,
     cancelCurrentRun,
     fetchContextRefs,
+    uploadSessionFile,
     fetchToolCalls,
     fetchApprovals,
     approveApproval,

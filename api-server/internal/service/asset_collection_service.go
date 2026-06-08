@@ -262,6 +262,27 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.Error(err))
 	}
 
+	// 采集 AI 资产（LLM 服务 / AI Agent / MCP Server）
+	aiAssetCount := 0
+	aiAssets, err := s.collectAIAssets(ctx, hostID)
+	if err != nil {
+		s.logger.Warn("AI asset collection failed",
+			zap.String("host_id", hostID),
+			zap.Error(err))
+	} else if len(aiAssets) > 0 {
+		count, err := s.saveAIAssetsFromList(hostUUID, snapshot.Hostname, snapshot.IPAddress, snapshot.OSType, aiAssets)
+		if err != nil {
+			s.logger.Error("Failed to save AI assets",
+				zap.String("host_id", hostID),
+				zap.Error(err))
+		} else {
+			aiAssetCount = count
+			s.logger.Info("AI assets saved",
+				zap.String("host_id", hostID),
+				zap.Int("count", count))
+		}
+	}
+
 	applicationCount := 0
 	if hasCollectType(types, "application_analysis") {
 		if s.analysisService == nil {
@@ -293,7 +314,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 	taskHost.Status = assetCollectionStatusCompleted
 	taskHost.SoftwareCount = 0
 	taskHost.ProcessCount = len(snapshot.Processes)
-	taskHost.ApplicationCount = applicationCount
+	taskHost.ApplicationCount = applicationCount + aiAssetCount
 	taskHost.RawSnapshotID = &processSnapshot.ID
 	taskHost.CollectFinishedAt = ptrTime(time.Now())
 	if err := s.repo.UpdateTaskHost(taskHost); err != nil {
@@ -306,6 +327,83 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 		zap.Int("application_count", applicationCount))
 
 	return nil
+}
+
+// collectAIAssets 调用 Agent 的 AI 资产采集工具
+func (s *AssetCollectionService) collectAIAssets(ctx context.Context, hostID string) ([]AIAsset, error) {
+	args := map[string]interface{}{
+		"host_id": hostID,
+	}
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build AI asset arguments: %w", err)
+	}
+
+	aiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	resp, err := s.serverClient.ExecuteTool(aiCtx, uuid.New().String(), hostID, "AssetCollectAIAssets", string(argsJSON), 60)
+	if err != nil {
+		return nil, fmt.Errorf("AI asset collection call failed: %w", err)
+	}
+	if resp == nil || !resp.Success {
+		errMsg := "AI asset collection failed"
+		if resp != nil && resp.Error != "" {
+			errMsg = resp.Error
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	var aiAssets []AIAsset
+	if err := json.Unmarshal([]byte(resp.Result), &aiAssets); err != nil {
+		return nil, fmt.Errorf("failed to parse AI assets: %w", err)
+	}
+
+	return aiAssets, nil
+}
+
+// saveAIAssetsFromList 将 AI 资产列表保存到数据库
+func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname, ipAddress, osType string, aiAssets []AIAsset) (int, error) {
+	count := 0
+	for _, ai := range aiAssets {
+		// 构建 fingerprint 用于去重
+		fpInput := fmt.Sprintf("%s:%s:%s", hostID.String(), ai.Category, ai.Name)
+		fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fpInput)))
+
+		listenPortsJSON := mustMarshalJSON(ai.ListenPorts)
+
+		app := &model.HostApplicationAsset{
+			ID:           uuid.New(),
+			HostID:       hostID,
+			Hostname:     hostname,
+			IPAddress:    ipAddress,
+			OSType:       osType,
+			Category:     ai.Category,
+			Name:         ai.Name,
+			DisplayName:  ai.DisplayName,
+			Version:      ai.Version,
+			ListenPorts:  listenPortsJSON,
+			InstallPath:  ai.ConfigPath,
+			StartPath:    ai.Endpoint,
+			AIConfidence: 0.9, // Agent 侧直接采集，高置信度
+			ReviewStatus: "auto",
+			Status:       "active",
+			Fingerprint:  fp,
+			CollectedAt:  time.Now(),
+			FirstSeenAt:  time.Now(),
+			LastSeenAt:   time.Now(),
+		}
+
+		if err := s.repo.UpsertApplicationAsset(app); err != nil {
+			s.logger.Error("Failed to upsert AI asset",
+				zap.String("name", ai.Name),
+				zap.String("category", ai.Category),
+				zap.Error(err))
+			continue
+		}
+		count++
+	}
+	return count, nil
 }
 
 func (s *AssetCollectionService) collectProcessSnapshot(ctx context.Context, hostID string) (HostAssetSnapshot, error) {
@@ -580,7 +678,22 @@ type HostAssetSnapshot struct {
 	Arch        string         `json:"arch"`
 	Packages    []PackageAsset `json:"packages,omitempty"`
 	Processes   []ProcessAsset `json:"processes"`
+	AIAssets    []AIAsset      `json:"ai_assets,omitempty"`
 	CollectedAt time.Time      `json:"collected_at"`
+}
+
+// AIAsset AI 资产（LLM 服务 / AI Agent / MCP Server）
+type AIAsset struct {
+	Category    string            `json:"category"`
+	Name        string            `json:"name"`
+	DisplayName string            `json:"display_name"`
+	Version     string            `json:"version"`
+	Source      string            `json:"source"`
+	Endpoint    string            `json:"endpoint"`
+	ListenPorts []int             `json:"listen_ports"`
+	ConfigPath  string            `json:"config_path"`
+	PIDs        []int             `json:"pids"`
+	Extra       map[string]string `json:"extra"`
 }
 
 // ProcessSnapshotChunk 进程快照分片

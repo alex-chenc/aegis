@@ -13,7 +13,7 @@
 
     <div v-show="isExpanded" class="plan-body">
       <!-- Plan goal -->
-      <div v-if="plan.goal" class="plan-goal">
+      <div v-if="plan.goal && !titleOnly" class="plan-goal">
         <el-icon><Aim /></el-icon>
         <span>{{ plan.goal }}</span>
       </div>
@@ -28,8 +28,8 @@
         >
           <div class="step-index">{{ index + 1 }}</div>
           <div class="step-info">
-            <div class="step-desc">{{ step.description }}</div>
-            <div v-if="step.tool_names?.length" class="step-tools">
+            <div class="step-desc" :title="stepTitle(step, index)">{{ stepTitle(step, index) }}</div>
+            <div v-if="!titleOnly && step.tool_names?.length" class="step-tools">
               <el-tag
                 v-for="tool in step.tool_names"
                 :key="tool"
@@ -40,7 +40,7 @@
                 {{ tool }}
               </el-tag>
             </div>
-            <div v-if="step.result_summary" class="step-result">
+            <div v-if="!titleOnly && step.result_summary" class="step-result">
               {{ step.result_summary }}
             </div>
           </div>
@@ -51,7 +51,7 @@
       </div>
 
       <!-- Audit / Reflection / Correction timeline -->
-      <div v-if="timelineEvents.length > 0" class="timeline-section">
+      <div v-if="!titleOnly && timelineEvents.length > 0" class="timeline-section">
         <div class="timeline-title">
           <el-icon><Clock /></el-icon>
           <span>分析事件</span>
@@ -75,13 +75,14 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { List, ArrowDown, Aim, Clock } from '@element-plus/icons-vue'
-import type { PlanEvent, AuditEvent, ReflectionEvent, CorrectionEvent } from '@/api/aiAnalysis'
+import type { PlanEvent, PlanStep, AuditEvent, ReflectionEvent, CorrectionEvent } from '@/api/aiAnalysis'
 
 const props = defineProps<{
   plan: PlanEvent | null
   audits?: AuditEvent[]
   reflections?: ReflectionEvent[]
   corrections?: CorrectionEvent[]
+  titleOnly?: boolean
 }>()
 
 const isExpanded = ref(true)
@@ -94,6 +95,8 @@ const completedCount = computed(() => {
   if (!props.plan) return 0
   return props.plan.steps.filter(s => s.status === 'completed').length
 })
+
+const titleOnly = computed(() => props.titleOnly === true)
 
 interface TimelineEntry {
   type: 'primary' | 'success' | 'warning' | 'danger'
@@ -172,6 +175,10 @@ function statusLabel(status: string): string {
     pending: '待执行'
   }
   return map[status] || status
+}
+
+function stepTitle(step: PlanStep, index: number) {
+  return step.title || step.description || step.objective || `步骤 ${index + 1}`
 }
 </script>
 
@@ -289,6 +296,12 @@ function statusLabel(status: string): string {
 .step-desc {
   font-size: 13px;
   color: var(--el-text-color-primary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .step-tools {

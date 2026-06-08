@@ -155,10 +155,12 @@ func main() {
 	scriptGenService := service.NewScriptGenerationService(ruleRepo, scriptVersionRepo, configRepo, minioClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 2, scriptAuditService)
 	taskService := service.NewTaskService(taskLogRepo, hostRepo, ruleRepo, healingLogRepo, redisClient, serverClient)
 	taskService.SetAuditService(scriptAuditService)
+	taskService.SetScriptGenService(scriptGenService)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3, scriptAuditService)
 	// V5.8: Asset repository for vulnerability scanning
 	assetCollectionRepo := repository.NewAssetCollectionRepository(db)
 	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService, assetCollectionRepo)
+	vulnService.SetTaskService(taskService)
 	logger.Info("Vulnerability service initialized with asset repository for V5.8 asset-based scanning")
 	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, scriptAuditService, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
@@ -294,7 +296,26 @@ func main() {
 	})
 	toolRegistry := assistant.NewToolRegistry()
 	// Register all assistant tools
-	registerAssistantTools(toolRegistry, assistantLogger, hostRepo, alertRepo, taskLogRepo, vulnRepo, sigmaRuleRepo, blockPolicyRepo, blockRepo, configRepo, auditLogRepo, detectionPkgRepo, serverClient, assetCollectionRepo)
+	registerAssistantTools(
+		toolRegistry,
+		assistantLogger,
+		hostRepo,
+		alertRepo,
+		taskLogRepo,
+		vulnRepo,
+		sigmaRuleRepo,
+		blockPolicyRepo,
+		blockRepo,
+		configRepo,
+		auditLogRepo,
+		detectionPkgRepo,
+		serverClient,
+		assetCollectionRepo,
+		assetCollectionService,
+		assetQueryService,
+		vulnService,
+		hostVulnerabilityScriptService,
+	)
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
 	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
 	toolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
@@ -348,6 +369,12 @@ func main() {
 		Orchestrator:   orchestrator,
 		RunManager:     runManager,
 		Logger:         assistantLogger,
+	})
+	assistantFileUploadService := assistant.NewFileUploadService(assistant.FileUploadServiceDeps{
+		ContextRepo:     assistantContextRefRepo,
+		TemplateService: templateService,
+		SigmaService:    sigmaRuleUploadService,
+		Logger:          assistantLogger,
 	})
 	// V6.0 Investigation service
 	investigationSvc := assistant.NewHostAttackInvestigationService(assistant.HostAttackInvestigationServiceDeps{
@@ -405,7 +432,12 @@ func main() {
 		logger.Warn("failed to register notification tools", zap.Error(err))
 	}
 	// Baseline tools
-	if err := assistantTools.RegisterBaselineTools(toolRegistry, assistantTools.BaselineToolDeps{TaskService: taskService}); err != nil {
+	if err := assistantTools.RegisterBaselineTools(toolRegistry, assistantTools.BaselineToolDeps{
+		TaskService:      taskService,
+		TemplateRepo:     templateRepo,
+		RuleRepo:         ruleRepo,
+		ScriptGenService: scriptGenService,
+	}); err != nil {
 		logger.Warn("failed to register baseline tools", zap.Error(err))
 	}
 	// Detection write tools
@@ -429,7 +461,7 @@ func main() {
 
 	_ = mcpClientFactory
 
-	assistantHandler := handler.NewAssistantHandler(assistantService, approvalGate, toolPolicyService, investigationSvc, mcpSvc, assistantLogger)
+	assistantHandler := handler.NewAssistantHandler(assistantService, approvalGate, toolDispatcher, toolPolicyService, assistantFileUploadService, investigationSvc, mcpSvc, assistantLogger)
 
 	// Sync tool policies at startup
 	if err := toolPolicyService.SyncCatalogTools(context.Background()); err != nil {
@@ -493,6 +525,10 @@ func registerAssistantTools(
 	detectionPkgRepo *repository.DetectionPackageRepo,
 	serverClient *grpcclient.ServerClient,
 	assetCollectionRepo *repository.AssetCollectionRepository,
+	assetCollectionService *service.AssetCollectionService,
+	assetQueryService *service.AssetQueryService,
+	vulnService *service.VulnerabilityService,
+	hostVulnerabilityScriptService *service.HostVulnerabilityScriptService,
 ) {
 	// Host tools
 	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo}); err != nil {
@@ -508,10 +544,20 @@ func registerAssistantTools(
 	}
 	// Vulnerability tools
 	if err := assistantTools.RegisterVulnerabilityTools(registry, assistantTools.VulnerabilityToolDeps{
-		VulnRepo:  vulnRepo,
-		AssetRepo: assetCollectionRepo,
+		VulnRepo:          vulnRepo,
+		AssetRepo:         assetCollectionRepo,
+		VulnService:       vulnService,
+		HostScriptService: hostVulnerabilityScriptService,
 	}); err != nil {
 		logger.Warn("failed to register vulnerability tools", zap.Error(err))
+	}
+	// Asset tools
+	if err := assistantTools.RegisterAssetTools(registry, assistantTools.AssetToolDeps{
+		CollectionService: assetCollectionService,
+		QueryService:      assetQueryService,
+		AssetRepo:         assetCollectionRepo,
+	}); err != nil {
+		logger.Warn("failed to register asset tools", zap.Error(err))
 	}
 	// Task tools
 	if err := assistantTools.RegisterTaskTools(registry, assistantTools.TaskToolDeps{TaskLogRepo: taskLogRepo}); err != nil {

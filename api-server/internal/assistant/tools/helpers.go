@@ -30,6 +30,16 @@ func getIntArg(args map[string]interface{}, key string, defaultVal int) int {
 	return defaultVal
 }
 
+// getBoolArg extracts a boolean argument from the args map with a default value.
+func getBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return defaultVal
+}
+
 // parseUUID parses a UUID string from args, returns error if missing or invalid.
 func parseUUID(args map[string]interface{}, key string) (uuid.UUID, error) {
 	s := getStringArg(args, key, "")
@@ -37,4 +47,17 @@ func parseUUID(args map[string]interface{}, key string) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("%s is required", key)
 	}
 	return uuid.Parse(s)
+}
+
+func buildTaskRef(kind, id, taskGroupID, statusURL, routePath string) map[string]interface{} {
+	ref := map[string]interface{}{
+		"kind":       kind,
+		"id":         id,
+		"status_url": statusURL,
+		"route_path": routePath,
+	}
+	if taskGroupID != "" {
+		ref["task_group_id"] = taskGroupID
+	}
+	return ref
 }

@@ -76,6 +76,42 @@
       </el-col>
     </el-row>
 
+    <el-row :gutter="16" class="stats-row">
+      <el-col :xs="24" :sm="12" :lg="8">
+        <el-card shadow="hover" class="stat-card" @click="navigateTo('/hosts/assets/llm-services')">
+          <div class="stat-content">
+            <div>
+              <div class="stat-value">{{ summary?.llm_service_count || 0 }}</div>
+              <div class="stat-label">AI LLM</div>
+            </div>
+            <el-icon class="stat-icon" :size="36"><Cpu /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :lg="8">
+        <el-card shadow="hover" class="stat-card" @click="navigateTo('/hosts/assets/ai-agents')">
+          <div class="stat-content">
+            <div>
+              <div class="stat-value">{{ summary?.ai_agent_count || 0 }}</div>
+              <div class="stat-label">AI Agent</div>
+            </div>
+            <el-icon class="stat-icon success" :size="36"><Avatar /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :lg="8">
+        <el-card shadow="hover" class="stat-card" @click="navigateTo('/hosts/assets/mcp-servers')">
+          <div class="stat-content">
+            <div>
+              <div class="stat-value">{{ summary?.mcp_server_count || 0 }}</div>
+              <div class="stat-label">MCP</div>
+            </div>
+            <el-icon class="stat-icon warning" :size="36"><Connection /></el-icon>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <div class="overview-grid">
       <el-card shadow="never" class="category-panel">
         <template #header>
@@ -120,6 +156,18 @@
           <div class="analysis-metric">
             <span class="metric-label">Web 站点</span>
             <strong>{{ summary?.web_site_count || 0 }}</strong>
+          </div>
+          <div class="analysis-metric">
+            <span class="metric-label">AI LLM</span>
+            <strong>{{ summary?.llm_service_count || 0 }}</strong>
+          </div>
+          <div class="analysis-metric">
+            <span class="metric-label">AI Agent</span>
+            <strong>{{ summary?.ai_agent_count || 0 }}</strong>
+          </div>
+          <div class="analysis-metric">
+            <span class="metric-label">MCP</span>
+            <strong>{{ summary?.mcp_server_count || 0 }}</strong>
           </div>
           <div class="analysis-metric">
             <span class="metric-label">待复核</span>
@@ -175,6 +223,7 @@ import {
   Refresh,
   Grid,
   Link,
+  Avatar,
 } from '@element-plus/icons-vue'
 import { useAssetStore } from '@/store/assets'
 import { storeToRefs } from 'pinia'
@@ -245,6 +294,27 @@ const categoryCards = computed(() => [
     path: '/hosts/assets/web-sites',
     icon: Link,
     tone: 'success',
+  },
+  {
+    name: 'AI LLM',
+    count: summary.value?.llm_service_count || 0,
+    path: '/hosts/assets/llm-services',
+    icon: Cpu,
+    tone: 'primary',
+  },
+  {
+    name: 'AI Agent',
+    count: summary.value?.ai_agent_count || 0,
+    path: '/hosts/assets/ai-agents',
+    icon: Avatar,
+    tone: 'success',
+  },
+  {
+    name: 'MCP',
+    count: summary.value?.mcp_server_count || 0,
+    path: '/hosts/assets/mcp-servers',
+    icon: Connection,
+    tone: 'warning',
   },
 ])
 

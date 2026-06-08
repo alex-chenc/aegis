@@ -51,33 +51,7 @@
 
               <!-- 工具调用和执行结果放在同一个框内 -->
               <div v-else-if="segment.type === 'tool'" class="tool-calls">
-                <div
-                  class="tool-call-card"
-                  :class="`status-${segment.toolCall.status}`"
-                >
-                  <div class="tool-call-header">
-                    <el-icon><SetUp /></el-icon>
-                    <span class="tool-name">{{ segment.toolCall.tool_name }}</span>
-                    <el-tag size="small" :type="getToolStatusType(segment.toolCall.status)">
-                      {{ segment.toolCall.status }}
-                    </el-tag>
-                  </div>
-                  <div
-                    v-if="getToolResultText(segment.toolCall)"
-                    class="tool-call-result"
-                    :class="{ 'is-json': isJsonToolResult(segment.toolCall) }"
-                  >
-                    {{ getDisplayedToolResult(segment.toolCall) }}
-                  </div>
-                  <button
-                    v-if="isLongToolResult(segment.toolCall)"
-                    type="button"
-                    class="tool-result-toggle"
-                    @click="toggleToolResult(segment.toolCall)"
-                  >
-                    {{ isToolResultExpanded(segment.toolCall) ? '收起结果' : '展开完整结果' }}
-                  </button>
-                </div>
+                <AssistantToolResultCard :tool-call="segment.toolCall" />
               </div>
 
               <!-- 审批卡片 -->
@@ -146,10 +120,11 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { User, Monitor, InfoFilled, CircleCheck, SetUp } from '@element-plus/icons-vue'
+import { User, Monitor, InfoFilled, CircleCheck } from '@element-plus/icons-vue'
 import { gsap } from 'gsap'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
+import AssistantToolResultCard from './AssistantToolResultCard.vue'
 import type { AssistantMessage, AssistantToolCall, AssistantApproval, AssistantResultCard } from '@/api/assistant'
 
 defineEmits<{
@@ -166,8 +141,6 @@ const props = defineProps<{
 }>()
 
 const containerRef = ref<HTMLElement>()
-const expandedToolResults = ref<Record<string, boolean>>({})
-const TOOL_RESULT_PREVIEW_LENGTH = 560
 let motionContext: ReturnType<typeof gsap.context> | null = null
 let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 
@@ -426,83 +399,6 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
   }
 
   return segments
-}
-
-function getToolResultKey(toolCall: AssistantToolCall): string {
-  return toolCall.call_id || toolCall.id
-}
-
-function formatToolResultValue(value: unknown): { text: string; isJson: boolean } {
-  if (value === undefined || value === null) return { text: '', isJson: false }
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-      try {
-        return { text: JSON.stringify(JSON.parse(trimmed), null, 2), isJson: true }
-      } catch {
-        return { text: value, isJson: false }
-      }
-    }
-    return { text: value, isJson: false }
-  }
-
-  if (typeof value === 'object') {
-    try {
-      return { text: JSON.stringify(value, null, 2), isJson: true }
-    } catch {
-      return { text: String(value), isJson: false }
-    }
-  }
-
-  return { text: String(value), isJson: false }
-}
-
-function getToolResultView(toolCall: AssistantToolCall): { text: string; isJson: boolean } {
-  if (toolCall.error_message) return { text: toolCall.error_message, isJson: false }
-  const resultView = formatToolResultValue(toolCall.result)
-  if (resultView.text) return resultView
-  return formatToolResultValue(toolCall.result_summary || '')
-}
-
-function getToolResultText(toolCall: AssistantToolCall): string {
-  return getToolResultView(toolCall).text
-}
-
-function isJsonToolResult(toolCall: AssistantToolCall): boolean {
-  return getToolResultView(toolCall).isJson
-}
-
-function isLongToolResult(toolCall: AssistantToolCall): boolean {
-  return getToolResultText(toolCall).length > TOOL_RESULT_PREVIEW_LENGTH
-}
-
-function isToolResultExpanded(toolCall: AssistantToolCall): boolean {
-  return Boolean(expandedToolResults.value[getToolResultKey(toolCall)])
-}
-
-function getDisplayedToolResult(toolCall: AssistantToolCall): string {
-  const result = getToolResultText(toolCall)
-  if (!isLongToolResult(toolCall) || isToolResultExpanded(toolCall)) return result
-  return `${result.slice(0, TOOL_RESULT_PREVIEW_LENGTH)}\n...`
-}
-
-function toggleToolResult(toolCall: AssistantToolCall) {
-  const key = getToolResultKey(toolCall)
-  expandedToolResults.value[key] = !expandedToolResults.value[key]
-}
-
-function getToolStatusType(status: string): '' | 'success' | 'warning' | 'danger' | 'info' {
-  switch (status) {
-    case 'completed':
-    case 'success':
-      return 'success'
-    case 'running':
-      return 'warning'
-    case 'failed':
-      return 'danger'
-    default:
-      return 'info'
-  }
 }
 
 function formatContent(content: string): string {

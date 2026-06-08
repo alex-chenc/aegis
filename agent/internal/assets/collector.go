@@ -12,6 +12,9 @@ type AssetCollector struct {
 	logger           *zap.Logger
 	packageCollector *PackageCollector
 	processCollector *ProcessCollector
+	llmCollector     *LLMServiceCollector
+	agentCollector   *AIAgentCollector
+	mcpCollector     *MCPCollector
 }
 
 // NewAssetCollector 创建资产采集器
@@ -20,6 +23,9 @@ func NewAssetCollector(logger *zap.Logger) *AssetCollector {
 		logger:           logger,
 		packageCollector: NewPackageCollector(logger),
 		processCollector: NewProcessCollector(logger, 2000),
+		llmCollector:     NewLLMServiceCollector(logger),
+		agentCollector:   NewAIAgentCollector(logger),
+		mcpCollector:     NewMCPCollector(logger),
 	}
 }
 
@@ -62,6 +68,12 @@ func (c *AssetCollector) Collect(ctx context.Context, hostID, hostname, ipAddres
 		c.logger.Info("Process collection completed", zap.Int("count", len(processes)))
 	}
 
+	// 采集 AI 资产（LLM 服务 / AI Agent / MCP Server）
+	c.logger.Info("Collecting AI assets")
+	aiAssets := c.collectAIAssets(ctx, snapshot.Processes)
+	snapshot.AIAssets = aiAssets
+	c.logger.Info("AI asset collection completed", zap.Int("count", len(aiAssets)))
+
 	duration := time.Since(startTime)
 	c.logger.Info("Asset collection completed",
 		zap.Int("packages", len(snapshot.Packages)),
@@ -70,4 +82,33 @@ func (c *AssetCollector) Collect(ctx context.Context, hostID, hostname, ipAddres
 		zap.Duration("duration", duration))
 
 	return snapshot, nil
+}
+
+// collectAIAssets 编排 3 个 AI 资产采集器
+func (c *AssetCollector) collectAIAssets(ctx context.Context, processes []ProcessAsset) []AIAsset {
+	var allAssets []AIAsset
+
+	// 1. 构建端口 -> PID 映射（用于 LLM 服务探测）
+	listenPorts := make(map[int][]int)
+	for _, p := range processes {
+		for _, port := range p.ListenPorts {
+			if port > 0 {
+				listenPorts[port] = append(listenPorts[port], p.PID)
+			}
+		}
+	}
+
+	// 2. LLM 服务探测
+	llmAssets := c.llmCollector.Collect(ctx, listenPorts)
+	allAssets = append(allAssets, llmAssets...)
+
+	// 3. AI Agent 配置扫描
+	agentAssets := c.agentCollector.Collect(ctx)
+	allAssets = append(allAssets, agentAssets...)
+
+	// 4. MCP Server 配置解析
+	mcpAssets := c.mcpCollector.Collect(ctx)
+	allAssets = append(allAssets, mcpAssets...)
+
+	return allAssets
 }
