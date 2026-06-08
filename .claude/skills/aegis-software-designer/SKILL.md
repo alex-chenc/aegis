@@ -38,7 +38,9 @@ When interacting with the user, detect the user's input language and use the sam
 - `docs/aegis_system_design_v5.5/` — V5.5 版本设计文档（架构参考基准）
 - `docs/aegis_system_design_v5.6/` — V5.6 版本设计文档
 - `docs/aegis_system_design_v5.7/` — V5.7 版本设计文档
-- `docs/aegis_system_design_v5.8/` — V5.8 版本设计文档（最新）
+- `docs/aegis_system_design_v5.8/` — V5.8 版本设计文档
+- `docs/aegis_system_design_v6.0/` — V6.0 版本设计文档（最新）
+
 
 ### Bug Fix Document Directory
 - `docs/aegis_system_design_v{version}/fix/{bug_description}_fix.md`
@@ -153,19 +155,28 @@ When interacting with the user, detect the user's input language and use the sam
 ## Bug Fix Workflow
 
 1. **[Analysis]** Analyze bug symptoms, logs, reproduction path, and impact scope
-2. **[Reproduce]** Reproduce the bug and record stable reproduction steps
-3. **[Root Cause - /root-cause-debugging]** Invoke `root-cause-debugging` skill: trace the complete bug-related call chain, analyze root cause based on business logic, identify all key functions on the bug path, and determine the minimal safe fix
-4. **[Fix Design]** Write or update bug fix design document
-5. **[Regression Test Case Design]** Write regression test cases based on root cause and fix design, but do not execute tests
-6. **[Implementation Plan]** Break down fix tasks based on fix design and regression test cases
-7. **[Fix Implementation]** Implement the full fix code required by the bug according to the confirmed fix design
-8. **[Logging Check - /daily-program-logging]** Invoke `daily-program-logging` skill to ensure the fix includes proper operational logging, especially around the fixed code path, error handling, and any new retry/fallback logic added
-9. **[Self Check]** Check fix completeness against the fix design and regression test cases
-10. **[Regression Test Execution - /aegis-build-test]** Execute regression tests according to the test cases written in step 5
-11. **[Build Verification - /aegis-build-test]** Run project build verification
-12. **[Code Review - /code-review]** Perform code review
-13. **[Bug Fix Doc]** Create bug fix document in `docs/aegis_system_design_v{version}/fix/`
-14. **[Documentation]** Update related documentation
+2. **[Log Investigation]** Collect and analyze logs from all relevant services before diving into code:
+   - **Service Logs**: `docker compose logs <service>` for api-server, server, dc, agent
+   - **Application Logs**: Check structured log output for error messages, stack traces, request IDs
+   - **System Logs**: Check host system logs (syslog, journalctl) for infrastructure issues
+   - **Error Extraction**: Extract error messages, timestamps, correlation IDs, and error patterns from logs
+   - **Call Chain Tracing**: Use request IDs or correlation IDs to trace the complete request flow across services
+   - **Pattern Analysis**: Identify recurring errors, timing patterns, and failure sequences
+   - **Log-to-Code Mapping**: Map log error messages to source code locations for targeted investigation
+   - Record all findings: error messages, timestamps, affected services, and potential root cause indicators
+3. **[Reproduce]** Reproduce the bug using insights from log analysis; record stable reproduction steps
+4. **[Root Cause - /root-cause-debugging]** Invoke `root-cause-debugging` skill: trace the complete bug-related call chain, analyze root cause based on business logic, identify all key functions on the bug path, and determine the minimal safe fix
+5. **[Fix Design]** Write or update bug fix design document
+6. **[Regression Test Case Design]** Write regression test cases based on root cause and fix design, but do not execute tests
+7. **[Implementation Plan]** Break down fix tasks based on fix design and regression test cases
+8. **[Fix Implementation]** Implement the full fix code required by the bug according to the confirmed fix design
+9. **[Logging Check - /daily-program-logging]** Invoke `daily-program-logging` skill to ensure the fix includes proper operational logging, especially around the fixed code path, error handling, and any new retry/fallback logic added
+10. **[Self Check]** Check fix completeness against the fix design and regression test cases
+11. **[Regression Test Execution - /aegis-build-test]** Execute regression tests according to the test cases written in step 6
+12. **[Build Verification - /aegis-build-test]** Run project build verification
+13. **[Code Review - /code-review]** Perform code review
+14. **[Bug Fix Doc]** Create bug fix document in `docs/aegis_system_design_v{version}/fix/`
+15. **[Documentation]** Update related documentation
 
 ## Documentation Rules
 
@@ -290,6 +301,46 @@ User Request
 [Code Review - /code-review]
     ↓
 [Bug Fix Doc (if bug fix)] → docs/aegis_system_design_v{version}/fix/{bug}_fix.md
+    ↓
+[Update Documentation]
+    ↓
+Done
+```
+
+### Bug Fix Quick Reference
+
+```
+Bug Report
+    ↓
+[Create Task Plan (TodoWrite)] ← MANDATORY FIRST STEP
+    ↓
+[Analysis] → Analyze bug symptoms and impact scope
+    ↓
+[Log Investigation] → Collect logs from all services, extract errors, trace call chains
+    ↓
+[Reproduce] → Use log insights to reproduce bug
+    ↓
+[Root Cause - /root-cause-debugging] → Trace call chain, analyze root cause
+    ↓
+[Fix Design] → Write fix design document
+    ↓
+[User Approval]
+    ↓
+[Regression Test Cases] → Write test cases → do NOT execute
+    ↓
+[Implement Fix]
+    ↓
+[Logging Check - /daily-program-logging]
+    ↓
+[Self Check]
+    ↓
+[Regression Tests - /aegis-build-test]
+    ↓
+[Build Verification - /aegis-build-test]
+    ↓
+[Code Review - /code-review]
+    ↓
+[Bug Fix Doc] → docs/aegis_system_design_v{version}/fix/{bug}_fix.md
     ↓
 [Update Documentation]
     ↓

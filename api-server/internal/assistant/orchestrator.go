@@ -194,6 +194,7 @@ func (o *Orchestrator) fallbackResponse(ctx context.Context, input RunInput, rea
 	// 从事件历史中提取 thinking 和 plan 数据
 	thinkingContent := o.extractThinkingFromHistory(input.SessionID)
 	planData := o.extractPlanFromHistory(input.SessionID)
+	o.persistSessionRuntimeEvents(context.Background(), input.SessionID, msgID, compactRuntimeDisplayEvents(o.extractRunHistory(input.SessionID), input.RunID, msgID))
 
 	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
 	saveCtx := context.Background()
@@ -508,6 +509,12 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	// 从事件历史中提取 thinking 和 plan 数据
 	thinkingContent := o.extractThinkingFromHistory(input.SessionID)
 	planData := o.extractPlanFromHistory(input.SessionID)
+	o.persistSessionRuntimeEvents(
+		context.Background(),
+		input.SessionID,
+		msgID,
+		compactRuntimeDisplayEvents(o.extractRunHistory(input.SessionID), input.RunID, msgID),
+	)
 
 	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
 	saveCtx := context.Background()
@@ -610,6 +617,45 @@ func (o *Orchestrator) mergeSessionMetadata(ctx context.Context, sessionID strin
 	if err := o.sessionRepo.Update(ctx, session); err != nil {
 		o.logger.Warn("failed to update assistant session metadata",
 			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+	}
+}
+
+func (o *Orchestrator) persistSessionRuntimeEvents(ctx context.Context, sessionID, messageID string, events []assistantRuntimeDisplayEvent) {
+	if o.sessionRepo == nil || sessionID == "" || messageID == "" || len(events) == 0 {
+		return
+	}
+
+	session, err := o.sessionRepo.FindBySessionID(ctx, sessionID)
+	if err != nil {
+		o.logger.Warn("failed to load assistant session for runtime event persistence",
+			zap.String("session_id", sessionID),
+			zap.String("message_id", messageID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	metadata := unmarshalJSON(session.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+
+	byMessage := make(map[string]interface{})
+	if existing, ok := metadata[assistantRuntimeEventsMetadataKey].(map[string]interface{}); ok {
+		for key, value := range existing {
+			byMessage[key] = value
+		}
+	}
+	byMessage[messageID] = events
+	metadata[assistantRuntimeEventsMetadataKey] = byMessage
+
+	session.Metadata = mustMarshalJSON(metadata)
+	if err := o.sessionRepo.Update(ctx, session); err != nil {
+		o.logger.Warn("failed to persist assistant runtime events",
+			zap.String("session_id", sessionID),
+			zap.String("message_id", messageID),
 			zap.Error(err),
 		)
 	}
@@ -835,6 +881,14 @@ func (o *Orchestrator) extractThinkingFromHistory(sessionID string) datatypes.JS
 	return datatypes.JSON(jsonBytes)
 }
 
+func (o *Orchestrator) extractRunHistory(sessionID string) []AssistantEvent {
+	run, ok := o.runManager.Get(sessionID)
+	if !ok {
+		return nil
+	}
+	return run.History()
+}
+
 // extractPlanFromHistory 从事件历史中提取 plan 数据
 // 返回最后一个 plan 事件的 JSON 数据
 func (o *Orchestrator) extractPlanFromHistory(sessionID string) datatypes.JSON {
@@ -842,24 +896,5 @@ func (o *Orchestrator) extractPlanFromHistory(sessionID string) datatypes.JSON {
 	if !ok {
 		return nil
 	}
-
-	var planData datatypes.JSON
-	for _, event := range run.History() {
-		if event.Type == EventPlan {
-			if event.Payload != nil {
-				switch v := event.Payload.(type) {
-				case datatypes.JSON:
-					planData = v
-				case []byte:
-					planData = datatypes.JSON(v)
-				default:
-					if b, err := json.Marshal(v); err == nil {
-						planData = datatypes.JSON(b)
-					}
-				}
-			}
-		}
-	}
-
-	return planData
+	return extractPlanFromEvents(run.History())
 }

@@ -170,18 +170,19 @@ const tokenUsageLabel = computed(() => {
 
 // 从消息中提取最新的执行计划
 const currentPlan = computed<PlanEvent | null>(() => {
-  // 从最新的助手消息中查找包含 plan 的消息
-  for (let i = messages.value.length - 1; i >= 0; i--) {
-    const msg = messages.value[i]
-    if (msg.role === 'assistant' && msg.plan) {
-      return normalizePlanEvent({
-        id: `plan-${msg.id || msg.message_id}`,
-        plan_id: `plan-${msg.id || msg.message_id}`,
-        ...msg.plan,
-      })
-    }
-  }
-  return null
+  const candidates = messages.value.filter(msg => msg.role === 'assistant' && msg.plan)
+  if (!candidates.length) return null
+
+  const maxStepCount = Math.max(...candidates.map(msg => msg.plan?.steps?.length || 0))
+  const bestCandidates = candidates.filter(msg => (msg.plan?.steps?.length || 0) === maxStepCount)
+  const msg = bestCandidates[bestCandidates.length - 1]
+  if (!msg.plan) return null
+
+  return normalizePlanEvent({
+    id: `plan-${msg.id || msg.message_id}`,
+    plan_id: `plan-${msg.id || msg.message_id}`,
+    ...msg.plan,
+  })
 })
 
 // 选择会话

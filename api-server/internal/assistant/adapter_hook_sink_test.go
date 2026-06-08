@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"api-server/internal/model"
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
 )
@@ -81,7 +83,7 @@ func TestAssistantHookSinkPublishesCompressionEvents(t *testing.T) {
 	}
 }
 
-func TestAssistantHookSinkPublishesModelOutputAsMessageDelta(t *testing.T) {
+func TestAssistantHookSinkDoesNotPublishModelOutputAsMessageDelta(t *testing.T) {
 	manager := NewRunManager()
 	run := manager.Start("session-1")
 	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
@@ -103,19 +105,136 @@ func TestAssistantHookSinkPublishesModelOutputAsMessageDelta(t *testing.T) {
 	}
 	defer unsubscribe()
 
-	event := receiveEvent(t, ch)
-	if event.Type != EventMessageDelta {
-		t.Fatalf("expected %q event, got %q", EventMessageDelta, event.Type)
+	select {
+	case event := <-ch:
+		t.Fatalf("expected no event for intermediate model output, got %q", event.Type)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if event.MessageID != "msg-1" {
-		t.Fatalf("expected message id to be preserved, got %q", event.MessageID)
+}
+
+func TestAssistantHookSinkPublishesStepCompletedWithResultSummary(t *testing.T) {
+	manager := NewRunManager()
+	run := manager.Start("session-1")
+	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
+
+	err := sink.Handle(context.Background(), agentruntime.HookEvent{
+		Type:   agentruntime.HookModelCallFinished,
+		StepID: "step-1",
+		Payload: map[string]interface{}{
+			"purpose":        string(agentruntime.PurposeReact),
+			"output_summary": `{"action":"step_result","summary":"主机状态采集完成","step_result":{"result":"已获取 2 台主机，2 台在线","evidence":["Host.List","Host.AgentStatus.Get"],"confidence":"high"}}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle model output returned error: %v", err)
 	}
-	payload, ok := event.Payload.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map payload, got %#v", event.Payload)
+
+	err = sink.Handle(context.Background(), agentruntime.HookEvent{
+		Type:   agentruntime.HookStepCompleted,
+		StepID: "step-1",
+		Snapshot: &agentruntime.TaskSnapshot{
+			CurrentPlan: &agentruntime.Plan{
+				Steps: []agentruntime.PlanStep{{
+					StepID: "step-1",
+					Title:  "获取主机资产和在线状态",
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle returned error: %v", err)
 	}
-	if payload["delta"] != "主机状态正常" {
-		t.Fatalf("expected parsed model output, got %#v", payload["delta"])
+
+	ch, unsubscribe, err := manager.Subscribe("session-1")
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	defer unsubscribe()
+
+	stepEvent := receiveEvent(t, ch)
+	if stepEvent.Type != EventStepCompleted {
+		t.Fatalf("expected %q event, got %q", EventStepCompleted, stepEvent.Type)
+	}
+	payload := toMap(stepEvent.Payload)
+	if payload["result_summary"] != "已获取 2 台主机，2 台在线" {
+		t.Fatalf("result_summary = %#v", payload["result_summary"])
+	}
+
+	thinking := receiveEvent(t, ch)
+	if thinking.Type != EventThinking {
+		t.Fatalf("expected thinking event after step_completed, got %q", thinking.Type)
+	}
+}
+
+func TestAssistantHookSinkDoesNotPublishTransientStepFailure(t *testing.T) {
+	manager := NewRunManager()
+	run := manager.Start("session-1")
+	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
+
+	for _, eventType := range []agentruntime.HookEventType{
+		agentruntime.HookStepFailed,
+		agentruntime.HookStepRetrying,
+	} {
+		err := sink.Handle(context.Background(), agentruntime.HookEvent{
+			Type:   eventType,
+			StepID: "step-1",
+			Snapshot: &agentruntime.TaskSnapshot{
+				CurrentPlan: &agentruntime.Plan{
+					Steps: []agentruntime.PlanStep{{
+						StepID: "step-1",
+						Title:  "获取主机资产和在线状态",
+					}},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Handle returned error for %q: %v", eventType, err)
+		}
+	}
+
+	ch, unsubscribe, err := manager.Subscribe("session-1")
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	defer unsubscribe()
+
+	select {
+	case event := <-ch:
+		t.Fatalf("expected no visible event for transient step failure/retry, got %q", event.Type)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestAssistantHookSinkDoesNotPublishAuditEvents(t *testing.T) {
+	manager := NewRunManager()
+	run := manager.Start("session-1")
+	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
+
+	for _, eventType := range []agentruntime.HookEventType{
+		agentruntime.HookAuditStarted,
+		agentruntime.HookAuditFinished,
+	} {
+		err := sink.Handle(context.Background(), agentruntime.HookEvent{
+			Type: eventType,
+			Payload: map[string]interface{}{
+				"checked": true,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Handle returned error for %q: %v", eventType, err)
+		}
+	}
+
+	ch, unsubscribe, err := manager.Subscribe("session-1")
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	defer unsubscribe()
+
+	select {
+	case event := <-ch:
+		t.Fatalf("expected no visible event for audit hooks, got %q", event.Type)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -175,4 +294,64 @@ func TestAssistantHookSinkSkipsReflectionModelOutput(t *testing.T) {
 		t.Fatalf("expected no event for reflection model output, got %q", event.Type)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func TestAssistantHookSinkPersistsReflectionWithoutPublishingThinking(t *testing.T) {
+	manager := NewRunManager()
+	run := manager.Start("session-1")
+	repo := &fakeAssistantMemoryRepo{}
+	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop()).
+		WithMemoryRepository(repo)
+
+	err := sink.Handle(context.Background(), agentruntime.HookEvent{
+		Type:   agentruntime.HookReflectionFinished,
+		TaskID: "task-1",
+		StepID: "step-1",
+		Payload: map[string]interface{}{
+			"root_cause":     "工具参数缺失",
+			"recommendation": "retry_step",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+
+	if len(repo.created) != 1 {
+		t.Fatalf("expected one persisted reflection, got %d", len(repo.created))
+	}
+	if repo.created[0].MemoryType != assistantReflectionMemoryType {
+		t.Fatalf("memory type = %q, want %q", repo.created[0].MemoryType, assistantReflectionMemoryType)
+	}
+	if repo.created[0].Content == "" || !strings.Contains(repo.created[0].Content, "工具参数缺失") {
+		t.Fatalf("unexpected reflection content: %q", repo.created[0].Content)
+	}
+
+	ch, unsubscribe, err := manager.Subscribe("session-1")
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	defer unsubscribe()
+
+	select {
+	case event := <-ch:
+		t.Fatalf("expected no visible reflection event, got %q", event.Type)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+type fakeAssistantMemoryRepo struct {
+	created []model.AssistantMemory
+}
+
+func (f *fakeAssistantMemoryRepo) Create(_ context.Context, memory *model.AssistantMemory) error {
+	f.created = append(f.created, *memory)
+	return nil
+}
+
+func (f *fakeAssistantMemoryRepo) ListBySession(context.Context, string, string) ([]model.AssistantMemory, error) {
+	return nil, nil
+}
+
+func (f *fakeAssistantMemoryRepo) DeleteBySession(context.Context, string) error {
+	return nil
 }

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
+	"api-server/internal/model"
+	"api-server/internal/repository"
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
 )
@@ -18,17 +21,29 @@ type AssistantHookSink struct {
 	runID      string
 	messageID  string
 	logger     *zap.Logger
+	memoryRepo repository.AssistantMemoryRepository
+
+	mu                  sync.Mutex
+	stepResultSummaries map[string]string
 }
 
 // NewAssistantHookSink 创建 HookSink
 func NewAssistantHookSink(runManager *RunManager, sessionID, runID, messageID string, logger *zap.Logger) *AssistantHookSink {
 	return &AssistantHookSink{
-		runManager: runManager,
-		sessionID:  sessionID,
-		runID:      runID,
-		messageID:  messageID,
-		logger:     logger,
+		runManager:          runManager,
+		sessionID:           sessionID,
+		runID:               runID,
+		messageID:           messageID,
+		logger:              logger,
+		stepResultSummaries: make(map[string]string),
 	}
+}
+
+// WithMemoryRepository enables persisting internal reflection results without
+// exposing them as visible thinking events.
+func (s *AssistantHookSink) WithMemoryRepository(repo repository.AssistantMemoryRepository) *AssistantHookSink {
+	s.memoryRepo = repo
+	return s
 }
 
 // Handle 实现 agentruntime.HookSink 接口
@@ -85,24 +100,21 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 	case agentruntime.HookStepCompleted:
 		stepTitle := findAssistantStepTitle(event, event.StepID)
 		s.publish(EventStepCompleted, map[string]interface{}{
-			"step_id": event.StepID,
-			"title":   stepTitle,
+			"step_id":        event.StepID,
+			"title":          stepTitle,
+			"result_summary": s.findStepResultSummary(event.StepID, stepTitle),
 		})
 		s.publish(EventThinking, map[string]interface{}{
 			"content": fmt.Sprintf("步骤完成: %s", stepTitle),
 		})
 
 	case agentruntime.HookStepFailed:
-		stepTitle := findAssistantStepTitle(event, event.StepID)
-		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("步骤失败: %s", stepTitle),
-		})
+		// Step failures can be transient when the runtime retries or applies
+		// reflection. Do not expose them as final-looking timeline items.
 
 	case agentruntime.HookStepRetrying:
-		stepTitle := findAssistantStepTitle(event, event.StepID)
-		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("正在重试步骤: %s", stepTitle),
-		})
+		// Internal recovery signal; the user-facing timeline should resume at
+		// the next tool call or completed/skipped step.
 
 	case agentruntime.HookStepSkipped:
 		stepTitle := findAssistantStepTitle(event, event.StepID)
@@ -116,17 +128,10 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		// no-op
 
 	case agentruntime.HookModelCallFinished:
-		payload := toMap(event.Payload)
-		purpose, _ := payload["purpose"].(string)
-		if shouldSkipVisibleModelOutput(purpose) {
-			return nil
-		}
-		if output, ok := payload["output_summary"].(string); ok && strings.TrimSpace(output) != "" {
-			display := formatModelOutputForDisplay(output)
-			if display != "" {
-				s.publishMessageDelta(display)
-			}
-		}
+		// 模型中间输出通常是 ReAct JSON、步骤总结或最终答案草稿。
+		// 可见最终答案由 orchestrator 在任务结束后统一发布，避免前端出现多份分析报告。
+		s.rememberStepResult(event)
+		return nil
 
 	// --- 工具调用 ---
 
@@ -135,8 +140,11 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		// 这里仅发送 thinking 事件
 		payload := toMap(event.Payload)
 		toolName, _ := payload["tool_name"].(string)
+		callID, _ := payload["call_id"].(string)
 		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("正在调用工具: %s", toolName),
+			"content":   fmt.Sprintf("正在调用工具: %s", toolName),
+			"call_id":   callID,
+			"tool_name": toolName,
 		})
 
 	case agentruntime.HookToolCallFinished:
@@ -145,32 +153,19 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 	// --- 审计 ---
 
 	case agentruntime.HookAuditStarted:
-		s.publish(EventThinking, map[string]interface{}{
-			"content": "正在审计执行进度...",
-		})
+		// 审计是 agent-runtime 的内部一致性检查，不作为前端可见思考展示。
 
 	case agentruntime.HookAuditFinished:
-		payload := toMap(event.Payload)
-		auditJSON, _ := json.Marshal(payload)
-		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("审计完成: %s", string(auditJSON)),
-		})
+		// payload 为空时会序列化为 null；审计结果仅用于内部恢复，不展示到前端。
 
 	// --- 反思 ---
+	// 反思是内部恢复策略：不展示到前端，只持久化为后续经验。
 
 	case agentruntime.HookReflectionStarted:
-		s.publish(EventThinking, map[string]interface{}{
-			"content": "正在反思执行过程...",
-		})
+		// no-op: 不在前端显示“正在反思”
 
 	case agentruntime.HookReflectionFinished:
-		payload := toMap(event.Payload)
-		rootCause, _ := payload["root_cause"].(string)
-		if rootCause != "" {
-			s.publish(EventThinking, map[string]interface{}{
-				"content": fmt.Sprintf("反思结果: %s", rootCause),
-			})
-		}
+		s.persistReflection(ctx, event)
 
 	// --- 纠正 ---
 
@@ -228,6 +223,57 @@ func (s *AssistantHookSink) publish(eventType string, payload interface{}) {
 		event.MessageID = s.messageID
 	}
 	s.runManager.Publish(s.sessionID, event)
+}
+
+func (s *AssistantHookSink) persistReflection(ctx context.Context, event agentruntime.HookEvent) {
+	if s.memoryRepo == nil {
+		return
+	}
+	payload := toMap(event.Payload)
+	if len(payload) == 0 {
+		return
+	}
+
+	content := formatReflectionMemoryContent(payload)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	metadata := map[string]interface{}{
+		"run_id":     s.runID,
+		"message_id": s.messageID,
+		"task_id":    event.TaskID,
+		"step_id":    event.StepID,
+		"payload":    payload,
+	}
+	if err := s.memoryRepo.Create(ctx, &model.AssistantMemory{
+		SessionID:  s.sessionID,
+		MemoryType: assistantReflectionMemoryType,
+		Content:    content,
+		Metadata:   mustMarshalJSON(metadata),
+	}); err != nil {
+		s.logger.Warn("failed to persist assistant reflection",
+			zap.String("session_id", s.sessionID),
+			zap.String("run_id", s.runID),
+			zap.Error(err),
+		)
+	}
+}
+
+func formatReflectionMemoryContent(payload map[string]interface{}) string {
+	parts := make([]string, 0, 4)
+	if rootCause := strings.TrimSpace(fmt.Sprint(payload["root_cause"])); rootCause != "" && rootCause != "<nil>" {
+		parts = append(parts, "root_cause: "+rootCause)
+	}
+	if recommendation := strings.TrimSpace(fmt.Sprint(payload["recommendation"])); recommendation != "" && recommendation != "<nil>" {
+		parts = append(parts, "recommendation: "+recommendation)
+	}
+	if query := strings.TrimSpace(fmt.Sprint(payload["experience_query"])); query != "" && query != "<nil>" {
+		parts = append(parts, "experience_query: "+query)
+	}
+	if hint := strings.TrimSpace(fmt.Sprint(payload["correction_hint"])); hint != "" && hint != "<nil>" {
+		parts = append(parts, "correction_hint: "+hint)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (s *AssistantHookSink) publishMessageDelta(content string) {
@@ -376,4 +422,56 @@ func findAssistantStepTitle(event agentruntime.HookEvent, stepID string) string 
 		}
 	}
 	return stepID
+}
+
+func (s *AssistantHookSink) rememberStepResult(event agentruntime.HookEvent) {
+	if strings.TrimSpace(event.StepID) == "" {
+		return
+	}
+	payload := toMap(event.Payload)
+	purpose, _ := payload["purpose"].(string)
+	if purpose != string(agentruntime.PurposeReact) {
+		return
+	}
+	outputSummary, _ := payload["output_summary"].(string)
+	resultSummary := extractStepResultSummary(outputSummary)
+	if resultSummary == "" {
+		return
+	}
+	s.mu.Lock()
+	s.stepResultSummaries[event.StepID] = resultSummary
+	s.mu.Unlock()
+}
+
+func (s *AssistantHookSink) findStepResultSummary(stepID, stepTitle string) string {
+	if strings.TrimSpace(stepID) != "" {
+		s.mu.Lock()
+		resultSummary := s.stepResultSummaries[stepID]
+		s.mu.Unlock()
+		if strings.TrimSpace(resultSummary) != "" {
+			return resultSummary
+		}
+	}
+	if strings.TrimSpace(stepTitle) == "" {
+		return "步骤已完成"
+	}
+	return fmt.Sprintf("已完成步骤：%s", stepTitle)
+}
+
+func extractStepResultSummary(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var output assistantModelOutput
+	if err := json.Unmarshal([]byte(raw), &output); err != nil {
+		return ""
+	}
+	if output.Action != "step_result" {
+		return ""
+	}
+	if output.StepResult != nil && strings.TrimSpace(output.StepResult.Result) != "" {
+		return strings.TrimSpace(output.StepResult.Result)
+	}
+	return strings.TrimSpace(output.Summary)
 }

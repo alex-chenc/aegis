@@ -167,11 +167,11 @@ const props = defineProps<{
 
 const containerRef = ref<HTMLElement>()
 const expandedToolResults = ref<Record<string, boolean>>({})
-const TOOL_RESULT_PREVIEW_LENGTH = 900
+const TOOL_RESULT_PREVIEW_LENGTH = 560
 let motionContext: ReturnType<typeof gsap.context> | null = null
 let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 
-type StepResult = { title: string; summary: string }
+type StepResult = { key: string; title: string; summary: string }
 type AssistantSegment =
   | { type: 'thinking'; key: string; steps: string[] }
   | { type: 'content'; key: string; content: string }
@@ -193,25 +193,90 @@ watch(() => props.streaming, scrollToBottom)
 
 function getThinkingSteps(msg: AssistantMessage): string[] {
   // 支持数组格式（新）和字符串格式（旧）
-  if (Array.isArray(msg.thinking)) {
-    return msg.thinking.filter(Boolean)
-  }
-  return (msg.thinking || '')
-    .split('\n')
-    .map(step => step.trim())
+  const normalize = (steps: string[]) => steps
+    .map(step => String(step).trim())
     .filter(Boolean)
+    .filter(step => !isHiddenInternalThinkingStep(step))
+
+  if (Array.isArray(msg.thinking)) {
+    return normalize(msg.thinking)
+  }
+  return normalize((msg.thinking || '')
+    .split('\n')
+  )
+}
+
+function isHiddenInternalThinkingStep(step: string) {
+  return /^正在反思执行过程/.test(step) ||
+    /^反思结果[:：]/.test(step) ||
+    /^步骤失败[:：]/.test(step) ||
+    /^正在重试步骤[:：]/.test(step) ||
+    /^正在审计执行进度/.test(step) ||
+    /^审计完成(?:[:：]|$)/.test(step)
 }
 
 function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
-  if (msg.tool_calls?.length) return msg.tool_calls
-  return props.toolCalls.filter(tc => tc.message_id === msg.message_id || tc.message_id === msg.id)
+  const related = props.toolCalls.filter(tc =>
+    tc.message_id === msg.message_id ||
+    tc.message_id === msg.id ||
+    msg.tool_calls?.some(item => item.call_id === tc.call_id || item.id === tc.id)
+  )
+  const byKey = new Map<string, AssistantToolCall>()
+  for (const tc of msg.tool_calls || []) {
+    byKey.set(getToolCallKey(tc), tc)
+  }
+  for (const tc of related) {
+    const existing = byKey.get(getToolCallKey(tc))
+    byKey.set(getToolCallKey(tc), existing ? { ...existing, ...tc } : tc)
+  }
+  return Array.from(byKey.values()).sort((left, right) => {
+    const leftTime = new Date(left.created_at || '').getTime() || 0
+    const rightTime = new Date(right.created_at || '').getTime() || 0
+    return leftTime - rightTime
+  })
+}
+
+function getToolCallKey(toolCall: AssistantToolCall): string {
+  return toolCall.call_id || toolCall.id
+}
+
+function matchToolCallThinkingStep(step: string): string | null {
+  const match = step.match(/^正在调用工具[:：]\s*(.+)$/)
+  return match?.[1]?.trim() || null
+}
+
+function matchStepCompletedThinkingStep(step: string): string | null {
+  const match = step.match(/^步骤完成[:：]\s*(.+)$/)
+  return match?.[1]?.trim() || null
+}
+
+function isHistoryDisplayMessage(msg: AssistantMessage) {
+  return msg.message_id.includes('_history_')
+}
+
+function shouldRenderStepResults(msg: AssistantMessage): boolean {
+  if (!msg.plan?.steps) return false
+  const hasCompletedStepThinking = getThinkingSteps(msg).some(step => Boolean(matchStepCompletedThinkingStep(step)))
+  return !(isHistoryDisplayMessage(msg) && Boolean(msg.content) && !hasCompletedStepThinking)
+}
+
+function isToolCallDisplaySettled(toolCall: AssistantToolCall): boolean {
+  return [
+    'completed',
+    'success',
+    'failed',
+    'cancelled',
+    'approval_required',
+    'rejected',
+  ].includes(toolCall.status)
 }
 
 function getStepResults(msg: AssistantMessage): StepResult[] {
-  if (!msg.plan?.steps) return []
+  if (!shouldRenderStepResults(msg)) return []
   return msg.plan.steps
     .filter(step => step.result_summary)
     .map(step => ({
+      key: step.step_id || step.title,
       title: step.title,
       summary: step.result_summary || ''
     }))
@@ -220,54 +285,144 @@ function getStepResults(msg: AssistantMessage): StepResult[] {
 function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
   const segments: AssistantSegment[] = []
   const baseKey = msg.message_id || msg.id
+  const toolCalls = getMessageToolCalls(msg)
+  const stepResults = getStepResults(msg)
+  const messageIndex = props.messages.findIndex(item =>
+    item.id === msg.id &&
+    item.message_id === msg.message_id
+  )
+  const nextAssistantMessage = messageIndex >= 0
+    ? props.messages.slice(messageIndex + 1).find(item => item.role === 'assistant')
+    : undefined
+  const nextMessageToolCalls = nextAssistantMessage ? getMessageToolCalls(nextAssistantMessage) : []
+  const usedToolCalls = new Set<string>()
+  const usedStepResults = new Set<string>()
+  let blockedByPendingTool = false
 
-  getThinkingSteps(msg).forEach((step, index) => {
+  const pushThinkingStep = (step: string, index: number) => {
     segments.push({
       type: 'thinking',
       key: `${baseKey}-thinking-${index}`,
       steps: [step],
     })
-  })
-
-  if (msg.content) {
-    segments.push({
-      type: 'content',
-      key: `${baseKey}-content`,
-      content: msg.content,
-    })
   }
 
-  for (const toolCall of getMessageToolCalls(msg)) {
+  const pushToolCall = (toolCall: AssistantToolCall) => {
+    const key = getToolCallKey(toolCall)
+    usedToolCalls.add(key)
     segments.push({
       type: 'tool',
-      key: `${baseKey}-tool-${toolCall.call_id || toolCall.id}`,
+      key: `${baseKey}-tool-${key}`,
       toolCall,
     })
+    if (!isToolCallDisplaySettled(toolCall)) {
+      blockedByPendingTool = true
+    }
   }
 
-  if (msg.approvals?.length) {
-    segments.push({
-      type: 'approvals',
-      key: `${baseKey}-approvals`,
-      approvals: msg.approvals,
-    })
-  }
-
-  const stepResults = getStepResults(msg)
-  if (stepResults.length) {
+  const pushStepResult = (stepResult: StepResult, index: number) => {
+    usedStepResults.add(stepResult.key)
     segments.push({
       type: 'step-results',
-      key: `${baseKey}-step-results`,
-      results: stepResults,
+      key: `${baseKey}-step-result-${index}-${stepResult.key}`,
+      results: [stepResult],
     })
   }
 
-  if (msg.result_cards?.length) {
-    segments.push({
-      type: 'result-cards',
-      key: `${baseKey}-result-cards`,
-      cards: msg.result_cards,
-    })
+  const takeToolCall = (toolName: string) => {
+    const normalizedName = toolName.trim()
+    const match = toolCalls.find(toolCall =>
+      !usedToolCalls.has(getToolCallKey(toolCall)) &&
+      toolCall.tool_name === normalizedName
+    )
+    return match
+  }
+
+  const hasMatchingToolCallInNextMessage = (toolName: string) => {
+    const normalizedName = toolName.trim()
+    return nextMessageToolCalls.some(toolCall => toolCall.tool_name === normalizedName)
+  }
+
+  const takeStepResult = (stepTitle: string, index: number): StepResult => {
+    const normalizedTitle = stepTitle.trim()
+    const match = stepResults.find(result =>
+      !usedStepResults.has(result.key) &&
+      result.title === normalizedTitle
+    )
+    if (match) return match
+
+    return {
+      key: `fallback-${index}-${normalizedTitle}`,
+      title: normalizedTitle,
+      summary: `已完成步骤：${normalizedTitle}`,
+    }
+  }
+
+  getThinkingSteps(msg).forEach((step, index) => {
+    if (blockedByPendingTool) return
+
+    const toolName = matchToolCallThinkingStep(step)
+    if (toolName) {
+      const toolCall = takeToolCall(toolName)
+      if (toolCall) {
+        pushThinkingStep(step, index)
+        pushToolCall(toolCall)
+      } else if (hasMatchingToolCallInNextMessage(toolName)) {
+        pushThinkingStep(step, index)
+      } else if (!msg.content) {
+        blockedByPendingTool = true
+      }
+      return
+    }
+
+    pushThinkingStep(step, index)
+    const completedStepTitle = matchStepCompletedThinkingStep(step)
+    if (completedStepTitle) {
+      pushStepResult(takeStepResult(completedStepTitle, index), index)
+    }
+  })
+
+  if (!blockedByPendingTool) {
+    for (const toolCall of toolCalls) {
+      if (usedToolCalls.has(getToolCallKey(toolCall))) continue
+      pushToolCall(toolCall)
+      if (blockedByPendingTool) break
+    }
+  }
+
+  if (!blockedByPendingTool) {
+    if (msg.content) {
+      segments.push({
+        type: 'content',
+        key: `${baseKey}-content`,
+        content: msg.content,
+      })
+    }
+
+    if (msg.approvals?.length) {
+      segments.push({
+        type: 'approvals',
+        key: `${baseKey}-approvals`,
+        approvals: msg.approvals,
+      })
+    }
+
+    const remainingStepResults = stepResults.filter(result => !usedStepResults.has(result.key))
+    if (remainingStepResults.length) {
+      segments.push({
+        type: 'step-results',
+        key: `${baseKey}-step-results`,
+        results: remainingStepResults,
+      })
+    }
+
+    if (msg.result_cards?.length) {
+      segments.push({
+        type: 'result-cards',
+        key: `${baseKey}-result-cards`,
+        cards: msg.result_cards,
+      })
+    }
   }
 
   return segments
@@ -422,14 +577,14 @@ onUnmounted(() => {
 .conversation-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 18px 24px;
   background: linear-gradient(180deg, #f8fafc 0%, #f9fafb 100%);
 }
 
 .message-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
   max-width: 980px;
   margin: 0 auto;
   width: 100%;
@@ -438,7 +593,7 @@ onUnmounted(() => {
 .message-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   will-change: transform, opacity;
 }
 
@@ -478,7 +633,7 @@ onUnmounted(() => {
   max-width: min(82%, 820px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .message-bubble {
@@ -525,7 +680,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   font-size: 13px;
   color: #1d4ed8;
   font-weight: 600;
@@ -549,7 +704,7 @@ onUnmounted(() => {
 }
 
 .thinking-content {
-  padding: 0 14px 12px 14px;
+  padding: 0 14px 10px 14px;
   font-size: 13px;
   color: #334155;
   line-height: 1.65;
@@ -574,7 +729,7 @@ onUnmounted(() => {
   background: #f0fdf4;
   border: 1px solid #86efac;
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px 12px;
 }
 
 .step-result-header {
@@ -655,6 +810,8 @@ onUnmounted(() => {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .tool-call-result.is-json {

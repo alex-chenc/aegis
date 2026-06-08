@@ -206,12 +206,118 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   function normalizeThinkingSteps(thinking: AssistantMessage['thinking']): string[] {
     if (Array.isArray(thinking)) {
-      return thinking.map(step => String(step).trim()).filter(Boolean)
+      return thinking.map(step => String(step).trim()).filter(Boolean).filter(step => !isHiddenInternalThinkingStep(step))
     }
     return (thinking || '')
       .split('\n')
       .map(step => step.trim())
       .filter(Boolean)
+      .filter(step => !isHiddenInternalThinkingStep(step))
+  }
+
+  function matchToolCallThinkingStep(step: string) {
+    return step.match(/^正在调用工具[:：]\s*(.+)$/)
+  }
+
+  function matchStepCompletedThinkingStep(step: string) {
+    const match = step.match(/^步骤完成[:：]\s*(.+)$/)
+    return match?.[1]?.trim() || ''
+  }
+
+  function isHiddenInternalThinkingStep(step: string) {
+    return /^正在反思执行过程/.test(step) ||
+      /^反思结果[:：]/.test(step) ||
+      /^步骤失败[:：]/.test(step) ||
+      /^正在重试步骤[:：]/.test(step) ||
+      /^正在审计执行进度/.test(step) ||
+      /^审计完成(?:[:：]|$)/.test(step)
+  }
+
+  function buildStepResultPlan(source: AssistantMessage, completedStepTitle: string): AssistantMessage['plan'] | undefined {
+    const title = completedStepTitle.trim()
+    if (!title) return undefined
+
+    const steps = source.plan?.steps || []
+    const matchedStep = steps.find(step => step.title === title)
+    const resultSummary = matchedStep?.result_summary || `已完成步骤：${title}`
+
+    return {
+      goal: source.plan?.goal || '',
+      status: source.plan?.status || 'running',
+      steps: [{
+        step_id: matchedStep?.step_id || `step-result-${title}`,
+        title,
+        status: 'completed',
+        result_summary: resultSummary,
+      }],
+    }
+  }
+
+  function extractPlanFromRuntimeEvents(events: RuntimeDisplayEvent[]): AssistantMessage['plan'] | undefined {
+    let plan: NonNullable<AssistantMessage['plan']> | undefined
+
+    for (const event of events) {
+      const payload = event.payload || {}
+      if (event.type === 'plan') {
+        plan = normalizeAssistantPlan(payload as AssistantPlan)
+        continue
+      }
+
+      if (!plan || !['step_started', 'step_completed'].includes(event.type)) {
+        continue
+      }
+
+      const stepId = String(payload.step_id || payload.id || '').trim()
+      if (!stepId) continue
+
+      const step = plan.steps.find(item => item.step_id === stepId)
+      if (!step) continue
+
+      if (event.type === 'step_started') {
+        step.status = payload.status || 'running'
+      } else {
+        step.status = payload.status || 'completed'
+        const resultSummary = payload.result_summary || payload.summary
+        if (resultSummary) {
+          step.result_summary = resultSummary
+        }
+      }
+
+      if (payload.title && !step.title) {
+        step.title = payload.title
+      }
+    }
+
+    return plan
+  }
+
+  type RuntimeDisplayEvent = {
+    type: string
+    run_id?: string
+    message_id?: string
+    timestamp?: string
+    payload?: Record<string, any>
+  }
+
+  function normalizeRuntimeDisplayEvents(input: any): RuntimeDisplayEvent[] {
+    if (!Array.isArray(input)) return []
+    return input
+      .map(item => item && typeof item === 'object' ? item as RuntimeDisplayEvent : null)
+      .filter((item): item is RuntimeDisplayEvent => Boolean(item?.type))
+  }
+
+  function getRuntimeDisplayEventsForMessage(msg: AssistantMessage): RuntimeDisplayEvent[] {
+    const metadata = normalizeMetadata(currentSession.value?.metadata)
+    const timeline = metadata.assistant_runtime_events
+    if (Array.isArray(timeline)) {
+      return normalizeRuntimeDisplayEvents(timeline).filter(event =>
+        !event.message_id || event.message_id === msg.message_id || event.message_id === msg.id
+      )
+    }
+    if (timeline && typeof timeline === 'object') {
+      return normalizeRuntimeDisplayEvents(timeline[msg.message_id] || timeline[msg.id])
+    }
+    return []
   }
 
   function isHistoryDisplayMessage(msg: AssistantMessage) {
@@ -240,6 +346,114 @@ export const useAssistantStore = defineStore('assistant', () => {
       const rightTime = new Date(right.created_at || '').getTime() || 0
       return leftTime - rightTime
     })
+  }
+
+  function isSettledToolCallStatus(status: AssistantToolCall['status']) {
+    return [
+      'completed',
+      'success',
+      'failed',
+      'cancelled',
+      'approval_required',
+      'rejected',
+    ].includes(status)
+  }
+
+  function sortedToolCallsForMessage(messageId: string) {
+    return toolCalls.value
+      .filter(tc => {
+        const sameSession = !currentSession.value?.session_id || tc.session_id === currentSession.value.session_id
+        return sameSession && tc.message_id === messageId
+      })
+      .sort((left, right) => {
+        const leftTime = new Date(left.created_at || '').getTime() || 0
+        const rightTime = new Date(right.created_at || '').getTime() || 0
+        return leftTime - rightTime
+      })
+  }
+
+  function resolveRunningMessageIdFromSession() {
+    const metadata = normalizeMetadata(currentSession.value?.metadata)
+    const messageId = String(metadata.current_message_id || '').trim()
+    if (messageId) return messageId
+    const runId = String(metadata.current_run_id || '').trim()
+    return runId ? `msg_${runId}` : ''
+  }
+
+  function restoreRunningAssistantTimeline() {
+    const metadata = normalizeMetadata(currentSession.value?.metadata)
+    const isRunning = currentSession.value?.status === 'running' || metadata.current_run_status === 'running'
+    if (!isRunning) return
+
+    const messageId = resolveRunningMessageIdFromSession()
+    if (!messageId) return
+
+    const relatedToolCalls = sortedToolCallsForMessage(messageId)
+    if (relatedToolCalls.length === 0) {
+      currentCycleMessageId = messageId
+      return
+    }
+
+    let message = messages.value.find(msg =>
+      msg.role === 'assistant' &&
+      !isHistoryDisplayMessage(msg) &&
+      (msg.message_id === messageId || msg.id === messageId)
+    )
+
+    if (!message) {
+      const hasHistoryFragments = messages.value.some(msg =>
+        msg.role === 'assistant' &&
+        isHistoryDisplayMessage(msg) &&
+        msg.message_id.startsWith(`${messageId}_history_`)
+      )
+      if (!hasHistoryFragments) {
+        message = {
+          id: messageId,
+          session_id: currentSession.value?.session_id || relatedToolCalls[0]?.session_id || '',
+          message_id: messageId,
+          role: 'assistant',
+          content: '',
+          thinking: relatedToolCalls.map(tc => `正在调用工具: ${tc.tool_name}`),
+          tool_calls: relatedToolCalls.map(tc => ({
+            ...tc,
+            message_id: messageId,
+          })),
+          created_at: relatedToolCalls[0]?.created_at || currentSession.value?.updated_at || new Date().toISOString(),
+        }
+        messages.value.push(message)
+      }
+    } else {
+      const toolCallMap = new Map<string, AssistantToolCall>()
+      for (const tc of message.tool_calls || []) {
+        toolCallMap.set(tc.call_id || tc.id, tc)
+      }
+      for (const tc of relatedToolCalls) {
+        toolCallMap.set(tc.call_id || tc.id, {
+          ...tc,
+          message_id: message.message_id,
+        })
+      }
+      message.tool_calls = Array.from(toolCallMap.values()).sort((left, right) => {
+        const leftTime = new Date(left.created_at || '').getTime() || 0
+        const rightTime = new Date(right.created_at || '').getTime() || 0
+        return leftTime - rightTime
+      })
+
+      const steps = normalizeThinkingSteps(message.thinking)
+      const hasToolMarker = steps.some(step => matchToolCallThinkingStep(step))
+      if (!hasToolMarker) {
+        message.thinking = [
+          ...steps,
+          ...relatedToolCalls.map(tc => `正在调用工具: ${tc.tool_name}`),
+        ]
+      }
+    }
+
+    currentCycleMessageId = messageId
+    const lastToolCall = relatedToolCalls[relatedToolCalls.length - 1]
+    lastEventType = lastToolCall && isSettledToolCallStatus(lastToolCall.status)
+      ? 'tool_result'
+      : 'tool_call'
   }
 
   function cloneHistoryMessage(
@@ -276,14 +490,129 @@ export const useAssistantStore = defineStore('assistant', () => {
 
       const relatedToolCalls = getRelatedToolCalls(msg)
       const thinkingSteps = normalizeThinkingSteps(msg.thinking)
-      const hasToolMarker = thinkingSteps.some(step => /^正在调用工具[:：]\s*/.test(step))
+      const runtimeEvents = getRuntimeDisplayEventsForMessage(msg)
+      const hasToolMarker = thinkingSteps.some(step => matchToolCallThinkingStep(step))
+      const runtimePlan = extractPlanFromRuntimeEvents(runtimeEvents)
+      const sourcePlan = msg.plan || runtimePlan
+      const planSourceMessage = sourcePlan ? { ...msg, plan: sourcePlan } : msg
       const hasRenderableResult = Boolean(
         msg.content ||
-        msg.plan ||
+        sourcePlan ||
         msg.approvals?.length ||
         msg.result_cards?.length ||
         msg.context_refs?.length
       )
+      if (runtimeEvents.length > 0) {
+        changed = true
+        const displayMessages: AssistantMessage[] = []
+        const usedToolCalls = new Set<string>()
+        let displayIndex = 1
+
+        const pushThinkingStep = (step: string) => {
+          const content = step.trim()
+          if (!content || isHiddenInternalThinkingStep(content)) return
+          const completedStepTitle = matchStepCompletedThinkingStep(content)
+          displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+            thinking: [content],
+            plan: completedStepTitle ? buildStepResultPlan(planSourceMessage, completedStepTitle) : undefined,
+          }))
+        }
+
+        const pushToolCall = (toolCall: AssistantToolCall) => {
+          const toolMessageId = `${msg.message_id || msg.id}_history_${displayIndex}`
+          displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+            tool_calls: [{
+              ...toolCall,
+              message_id: toolMessageId,
+            }],
+          }))
+        }
+
+        const takeToolCallByCallID = (callID?: string) => {
+          const normalizedCallID = callID?.trim()
+          if (!normalizedCallID) return undefined
+          const match = relatedToolCalls.find(tc =>
+            !usedToolCalls.has(tc.call_id || tc.id) &&
+            (tc.call_id === normalizedCallID || tc.id === normalizedCallID)
+          )
+          if (match) {
+            usedToolCalls.add(match.call_id || match.id)
+          }
+          return match
+        }
+
+        const takeToolCallByName = (toolName?: string) => {
+          const normalizedName = toolName?.trim()
+          if (!normalizedName) return undefined
+          const match = relatedToolCalls.find(tc =>
+            !usedToolCalls.has(tc.call_id || tc.id) &&
+            tc.tool_name === normalizedName
+          )
+          if (match) {
+            usedToolCalls.add(match.call_id || match.id)
+          }
+          return match
+        }
+
+        for (const event of runtimeEvents) {
+          const payload = event.payload || {}
+          if (event.type === 'thinking') {
+            const content = String(payload.content || payload.message || '').trim()
+            const toolMatch = matchToolCallThinkingStep(content)
+            if (toolMatch) {
+              const eventCallID = String(payload.call_id || '').trim()
+              const toolCall = eventCallID
+                ? takeToolCallByCallID(eventCallID)
+                : takeToolCallByName(String(payload.tool_name || toolMatch[1] || ''))
+              if (toolCall) {
+                pushThinkingStep(content)
+                pushToolCall(toolCall)
+              }
+              continue
+            }
+            pushThinkingStep(content)
+          } else if (event.type === 'tool_call') {
+            const eventCallID = String(payload.call_id || '').trim()
+            const toolCall = eventCallID
+              ? takeToolCallByCallID(eventCallID)
+              : takeToolCallByName(String(payload.tool_name || ''))
+            if (toolCall) {
+              pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
+              pushToolCall(toolCall)
+            }
+          }
+        }
+
+        for (const toolCall of relatedToolCalls) {
+          if (usedToolCalls.has(toolCall.call_id || toolCall.id)) continue
+          pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
+          pushToolCall(toolCall)
+        }
+
+        const hasRenderableFinalResult = Boolean(
+          msg.content ||
+          msg.approvals?.length ||
+          msg.result_cards?.length ||
+          msg.context_refs?.length
+        )
+
+        if (hasRenderableFinalResult || sourcePlan) {
+          displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
+            content: msg.content,
+            plan: sourcePlan,
+            approvals: msg.approvals,
+            result_cards: msg.result_cards,
+            context_refs: msg.context_refs,
+          }))
+        }
+
+        rebuilt.push(...(displayMessages.length ? displayMessages : [msg]))
+        continue
+      }
+      if (hasToolMarker && relatedToolCalls.length === 0) {
+        rebuilt.push(msg)
+        continue
+      }
       const shouldRebuild = relatedToolCalls.length > 0 ||
         hasToolMarker ||
         thinkingSteps.length > 1 ||
@@ -299,8 +628,10 @@ export const useAssistantStore = defineStore('assistant', () => {
       let displayIndex = 1
 
       const pushThinkingStep = (step: string) => {
+        const completedStepTitle = matchStepCompletedThinkingStep(step)
         displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
           thinking: [step],
+          plan: completedStepTitle ? buildStepResultPlan(msg, completedStepTitle) : undefined,
         }))
       }
 
@@ -316,11 +647,13 @@ export const useAssistantStore = defineStore('assistant', () => {
 
       const takeToolCall = (toolName?: string) => {
         const normalizedName = toolName?.trim()
-        let match = relatedToolCalls.find(tc =>
-          !usedToolCalls.has(tc.call_id || tc.id) &&
-          (!normalizedName || tc.tool_name === normalizedName)
-        )
-        if (!match) {
+        let match: AssistantToolCall | undefined
+        if (normalizedName) {
+          match = relatedToolCalls.find(tc =>
+            !usedToolCalls.has(tc.call_id || tc.id) &&
+            tc.tool_name === normalizedName
+          )
+        } else {
           match = relatedToolCalls.find(tc => !usedToolCalls.has(tc.call_id || tc.id))
         }
         if (match) {
@@ -330,26 +663,32 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
 
       for (const step of thinkingSteps) {
-        const toolMatch = step.match(/^正在调用工具[:：]\s*(.+)$/)
-        if (!toolMatch) {
-          pushThinkingStep(step)
+        const toolMatch = matchToolCallThinkingStep(step)
+        if (toolMatch) {
+          const toolCall = takeToolCall(toolMatch[1])
+          if (toolCall) {
+            pushThinkingStep(step)
+            pushToolCall(toolCall)
+          }
           continue
         }
-
-        const toolCall = takeToolCall(toolMatch[1])
-        if (toolCall) {
-          pushToolCall(toolCall)
-        } else {
-          pushThinkingStep(step)
-        }
+        pushThinkingStep(step)
       }
 
       for (const toolCall of relatedToolCalls) {
         if (usedToolCalls.has(toolCall.call_id || toolCall.id)) continue
+        pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
         pushToolCall(toolCall)
       }
 
-      if (hasRenderableResult) {
+      const hasRenderableFinalResult = Boolean(
+        msg.content ||
+        msg.approvals?.length ||
+        msg.result_cards?.length ||
+        msg.context_refs?.length
+      )
+
+      if (hasRenderableFinalResult || msg.plan) {
         displayMessages.push(cloneHistoryMessage(msg, displayIndex++, {
           content: msg.content,
           plan: msg.plan,
@@ -670,9 +1009,41 @@ export const useAssistantStore = defineStore('assistant', () => {
   async function fetchToolCalls(sessionId: string, params?: ToolCallsQueryParams) {
     error.value = null
     try {
-      const result = await apiGetToolCalls(sessionId, params)
+      const pageSize = params?.page_size || 100
+      const query: ToolCallsQueryParams = { ...params, page_size: pageSize }
+      if (params?.page) {
+        const result = await apiGetToolCalls(sessionId, query)
+        toolCalls.value = result.items
+        return result
+      }
+
+      const firstPage = await apiGetToolCalls(sessionId, { ...query, page: 1 })
+      const pageItems = [...(firstPage.items || [])]
+      const effectivePageSize = firstPage.page_size || pageSize
+      const total = firstPage.total || pageItems.length
+      const totalPages = Math.ceil(total / effectivePageSize)
+
+      if (totalPages > 1) {
+        const restPages = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, index) =>
+            apiGetToolCalls(sessionId, { ...query, page: index + 2, page_size: effectivePageSize })
+          )
+        )
+        for (const pageResult of restPages) {
+          pageItems.push(...(pageResult.items || []))
+        }
+      }
+
+      const result = {
+        ...firstPage,
+        items: pageItems,
+        total,
+        page: 1,
+        page_size: effectivePageSize,
+      }
       toolCalls.value = result.items
-      rebuildAssistantHistoryCycles()
+      // 不在此处调用 rebuildAssistantHistoryCycles()
+      // 由调用方（openSession）在所有数据加载完成后统一重建，避免竞态条件
       return result
     } catch (err: any) {
       error.value = err.message || '获取工具调用列表失败'
@@ -873,6 +1244,7 @@ export const useAssistantStore = defineStore('assistant', () => {
   function appendThinkingStep(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
     const content = String(payload.content || payload.message || '').trim()
     if (!content) return
+    if (isHiddenInternalThinkingStep(content)) return
 
     // 循环边界检测：如果当前消息已有内容或工具调用，创建新消息
     if (shouldCreateNewCycle()) {
@@ -1077,8 +1449,9 @@ export const useAssistantStore = defineStore('assistant', () => {
             const stepDone = stepDoneMsg.plan.steps.find(s => s.step_id === payload.step_id)
             if (stepDone) {
               stepDone.status = payload.status || 'completed'
-              if (payload.result_summary) {
-                stepDone.result_summary = payload.result_summary
+              const resultSummary = payload.result_summary || payload.summary
+              if (resultSummary) {
+                stepDone.result_summary = resultSummary
               }
             }
           }
@@ -1400,6 +1773,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       rebuildAssistantHistoryCycles()
       if (session?.status === 'running') {
         startStream(sessionId)
+        restoreRunningAssistantTimeline()
       } else {
         stopStream()
       }
@@ -1507,6 +1881,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     stopStream,
     applyStreamEvent,
     reset,
+    rebuildAssistantHistoryCycles,
     goToSessionPage,
     deleteSession,
   }

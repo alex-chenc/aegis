@@ -406,26 +406,7 @@ func (s *Service) extractPlanFromHistory(sessionID string) datatypes.JSON {
 	if !ok {
 		return nil
 	}
-
-	var planData datatypes.JSON
-	for _, event := range run.History() {
-		if event.Type == EventPlan {
-			if event.Payload != nil {
-				switch v := event.Payload.(type) {
-				case datatypes.JSON:
-					planData = v
-				case []byte:
-					planData = datatypes.JSON(v)
-				default:
-					if b, err := json.Marshal(v); err == nil {
-						planData = datatypes.JSON(b)
-					}
-				}
-			}
-		}
-	}
-
-	return planData
+	return extractPlanFromEvents(run.History())
 }
 
 // Helper functions

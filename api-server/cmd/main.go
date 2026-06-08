@@ -319,6 +319,7 @@ func main() {
 		Selector:       toolSelector,
 		ToolDispatcher: toolDispatcher,
 		RunManager:     runManager,
+		MemoryRepo:     assistantMemoryRepo,
 		Logger:         assistantLogger,
 	})
 	orchestrator := assistant.NewOrchestrator(assistant.OrchestratorDeps{

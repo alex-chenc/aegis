@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
@@ -22,6 +23,7 @@ type RuntimeFactory struct {
 	selector       *ToolSelector
 	toolDispatcher *ToolDispatcher
 	runManager     *RunManager
+	memoryRepo     repository.AssistantMemoryRepository
 	logger         *zap.Logger
 }
 
@@ -32,6 +34,7 @@ type RuntimeFactoryDeps struct {
 	Selector       *ToolSelector
 	ToolDispatcher *ToolDispatcher
 	RunManager     *RunManager
+	MemoryRepo     repository.AssistantMemoryRepository
 	Logger         *zap.Logger
 }
 
@@ -47,6 +50,7 @@ func NewRuntimeFactory(deps RuntimeFactoryDeps) *RuntimeFactory {
 		selector:       deps.Selector,
 		toolDispatcher: deps.ToolDispatcher,
 		runManager:     deps.RunManager,
+		memoryRepo:     deps.MemoryRepo,
 		logger:         runtimeLogger,
 	}
 }
@@ -115,10 +119,13 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	})
 
 	// 5. 创建 HookSink
-	hookSink := NewAssistantHookSink(f.runManager, req.SessionID, req.RunID, req.MessageID, f.logger)
+	hookSink := NewAssistantHookSink(f.runManager, req.SessionID, req.RunID, req.MessageID, f.logger).
+		WithMemoryRepository(f.memoryRepo)
 
 	// 6. 创建 PromptProvider
-	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput)
+	reflectionMemories := f.loadReflectionMemories(ctx, req.SessionID, 5)
+	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput).
+		WithReflectionMemories(reflectionMemories)
 
 	// 7. 创建 LLM 适配器
 	llmAdapter := adapters.NewLLMClientAdapter(llmClient, nil)
@@ -129,6 +136,9 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	if req.UseAIAnalysisFlow {
 		runtimeConfig = DefaultAIAnalysisRuntimeConfig(req.MaxIterations)
 		profile = "ai_analysis"
+	}
+	if f.memoryRepo != nil {
+		runtimeConfig.EnableExperience = true
 	}
 	if len(req.SelectedTools) > 0 && len(toolDescriptors) < len(req.SelectedTools) {
 		f.logger.Warn("assistant runtime built with missing selected tools",
@@ -152,7 +162,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	})
 
 	// 10. 创建 agent-runtime 实例
-	runtime, err := agentruntime.New(
+	runtimeOptions := []agentruntime.Option{
 		agentruntime.WithLLMClient(llmAdapter),
 		agentruntime.WithToolGateway(toolGateway),
 		agentruntime.WithTools(toolDescriptors),
@@ -160,7 +170,12 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		agentruntime.WithPromptProvider(promptProvider),
 		agentruntime.WithConfig(runtimeConfig),
 		agentruntime.WithRouter(taskRouter),
-	)
+	}
+	if f.memoryRepo != nil {
+		runtimeOptions = append(runtimeOptions, agentruntime.WithExperienceProvider(newAssistantReflectionExperienceProvider(f.memoryRepo, req.SessionID)))
+	}
+
+	runtime, err := agentruntime.New(runtimeOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent-runtime: %w", err)
 	}
@@ -169,6 +184,30 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		Runtime:     runtime,
 		UserContext: userContext,
 	}, nil
+}
+
+func (f *RuntimeFactory) loadReflectionMemories(ctx context.Context, sessionID string, limit int) []string {
+	if f.memoryRepo == nil || sessionID == "" {
+		return nil
+	}
+	memories, err := f.memoryRepo.ListBySession(ctx, sessionID, assistantReflectionMemoryType)
+	if err != nil {
+		f.logger.Warn("failed to load assistant reflection memories",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+		return nil
+	}
+	if limit <= 0 || limit > len(memories) {
+		limit = len(memories)
+	}
+	result := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		if content := strings.TrimSpace(memories[i].Content); content != "" {
+			result = append(result, content)
+		}
+	}
+	return result
 }
 
 // BuildLLMClient 构建 LLM 客户端
@@ -234,7 +273,7 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		AuditEveryNSteps:      3,
 		MaxAudits:             2,
 		MaxReflections:        2,
-		MaxStepRetries:        2,
+		MaxStepRetries:        1,
 		MaxCorrections:        2,
 		AllowDynamicNewSteps:  true,
 		AllowSkipFailedStep:   true,
@@ -279,7 +318,7 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 		AuditEveryNSteps:      3,
 		MaxAudits:             2,
 		MaxReflections:        3,
-		MaxStepRetries:        2,
+		MaxStepRetries:        1,
 		MaxCorrections:        2,
 		AllowDynamicNewSteps:  true,
 		AllowSkipFailedStep:   true,

@@ -175,4 +175,3 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | Kafka | 29092 |
 
 
-## 纯AI设计，开发，测试项目
