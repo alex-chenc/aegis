@@ -162,6 +162,9 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 		"工具选择应覆盖用户最终目标",
 		"采集只是证据来源之一",
 		"当前工具不足时使用 Tool.Search",
+		"同一工具用同一参数已成功时，直接复用已有结果",
+		"汇总、总结、输出结论、整理结果",
+		"中间步骤的 step_result 只写该步骤产物",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
@@ -174,6 +177,34 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 		if strings.Contains(bundle.SystemPrompt, forbidden) {
 			t.Fatalf("react prompt should not contain fixed workflow %q\n%s", forbidden, bundle.SystemPrompt)
 		}
+	}
+}
+
+func TestAssistantPlanAndSummarizePromptsAvoidDuplicateFinalReports(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Host.List", Description: "列出主机"},
+		{Name: "Software.Installed.Search", Description: "查询已安装软件"},
+	}, nil, "operations", "更新存活的 Agent资产，资产中是否存在 MySQL 软件，软件中是否存在漏洞")
+
+	plan, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposePlan})
+	if err != nil {
+		t.Fatalf("Build(plan) error = %v", err)
+	}
+	for _, want := range []string{
+		"不要把“汇总分析结果/输出最终结论”规划成需要再次调用工具的独立步骤",
+		"不得重复查询已成功获取的数据",
+	} {
+		if !strings.Contains(plan.SystemPrompt, want) {
+			t.Fatalf("plan prompt missing %q\n%s", want, plan.SystemPrompt)
+		}
+	}
+
+	summarize, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeSummarize})
+	if err != nil {
+		t.Fatalf("Build(summarize) error = %v", err)
+	}
+	if !strings.Contains(summarize.SystemPrompt, "合并去重后只给一次最终结论") {
+		t.Fatalf("summarize prompt missing duplicate-final-report guard\n%s", summarize.SystemPrompt)
 	}
 }
 

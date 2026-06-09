@@ -97,6 +97,10 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		}
 	}
 
+	if cachedResp, ok := a.reuseSuccessfulReadonlyToolCall(ctx, req, args, startedAt); ok {
+		return cachedResp, nil
+	}
+
 	// 通知工具调用开始
 	if a.onToolCall != nil {
 		a.onToolCall(req.CallID, req.ToolName, args)
@@ -196,6 +200,78 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		StartedAt:    startedAt,
 		EndedAt:      endedAt,
 	}, nil
+}
+
+func (a *AssistantToolGatewayAdapter) reuseSuccessfulReadonlyToolCall(ctx context.Context, req agentruntime.ToolRequest, args map[string]interface{}, startedAt time.Time) (agentruntime.ToolResponse, bool) {
+	if a.dispatcher == nil || a.dispatcher.toolCallRepo == nil || a.dispatcher.registry == nil {
+		return agentruntime.ToolResponse{}, false
+	}
+	tool, ok := a.dispatcher.registry.Get(req.ToolName)
+	if !ok || !canReuseAssistantToolResult(tool) {
+		return agentruntime.ToolResponse{}, false
+	}
+
+	calls, _, err := a.dispatcher.toolCallRepo.ListBySession(ctx, a.sessionID, 1, 100)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Debug("failed to inspect previous assistant tool calls for reuse",
+				zap.String("session_id", a.sessionID),
+				zap.String("tool_name", req.ToolName),
+				zap.Error(err),
+			)
+		}
+		return agentruntime.ToolResponse{}, false
+	}
+
+	currentArgs := canonicalToolArgs(args)
+	for _, call := range calls {
+		if call.MessageID != a.messageID ||
+			call.ToolName != req.ToolName ||
+			call.Status != model.ToolCallStatusSuccess ||
+			canonicalToolArgs(unmarshalJSON(call.Args)) != currentArgs {
+			continue
+		}
+		if a.logger != nil {
+			a.logger.Info("reusing successful assistant tool call",
+				zap.String("session_id", a.sessionID),
+				zap.String("message_id", a.messageID),
+				zap.String("tool_name", req.ToolName),
+				zap.String("original_call_id", call.CallID),
+				zap.String("runtime_call_id", req.CallID),
+			)
+		}
+		return agentruntime.ToolResponse{
+			CallID:    req.CallID,
+			ToolName:  req.ToolName,
+			Status:    agentruntime.ToolCallSuccess,
+			Content:   string(call.Result),
+			Summary:   fmt.Sprintf("工具 %s 已复用本轮会话中相同参数的成功结果", req.ToolName),
+			StartedAt: startedAt,
+			EndedAt:   time.Now(),
+		}, true
+	}
+	return agentruntime.ToolResponse{}, false
+}
+
+func canReuseAssistantToolResult(tool *ToolSpec) bool {
+	if tool == nil {
+		return false
+	}
+	if tool.Risk == ToolRiskReadonly {
+		return true
+	}
+	return tool.Idempotent && (tool.Operation == OpList || tool.Operation == OpGet || tool.Operation == OpSearch)
+}
+
+func canonicalToolArgs(args map[string]interface{}) string {
+	if args == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 func (a *AssistantToolGatewayAdapter) normalizeBaselineToolArgs(toolName string, args map[string]interface{}) map[string]interface{} {

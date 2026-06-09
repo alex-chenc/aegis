@@ -21,6 +21,7 @@ type fakeToolCallRepo struct {
 	createdCall     *model.AssistantToolCall
 	markSuccessCall *markSuccessRecord
 	markFailedCall  *markFailedRecord
+	calls           []model.AssistantToolCall
 }
 
 type markSuccessRecord struct {
@@ -36,20 +37,33 @@ type markFailedRecord struct {
 
 func (f *fakeToolCallRepo) Create(_ context.Context, call *model.AssistantToolCall) error {
 	f.createdCall = call
+	f.calls = append(f.calls, *call)
 	return nil
 }
 func (f *fakeToolCallRepo) FindByCallID(_ context.Context, _ string) (*model.AssistantToolCall, error) {
 	return nil, nil
 }
 func (f *fakeToolCallRepo) ListBySession(_ context.Context, _ string, _, _ int) ([]model.AssistantToolCall, int64, error) {
-	return nil, 0, nil
+	return append([]model.AssistantToolCall{}, f.calls...), int64(len(f.calls)), nil
 }
-func (f *fakeToolCallRepo) MarkSuccess(_ context.Context, callID string, _ interface{}, duration int64) error {
+func (f *fakeToolCallRepo) MarkSuccess(_ context.Context, callID string, result interface{}, duration int64) error {
 	f.markSuccessCall = &markSuccessRecord{CallID: callID, Duration: duration}
+	for i := range f.calls {
+		if f.calls[i].CallID == callID {
+			f.calls[i].Status = model.ToolCallStatusSuccess
+			f.calls[i].Result = mustMarshalJSON(result)
+		}
+	}
 	return nil
 }
 func (f *fakeToolCallRepo) MarkFailed(_ context.Context, callID, errMsg string, duration int64) error {
 	f.markFailedCall = &markFailedRecord{CallID: callID, ErrorMsg: errMsg, Duration: duration}
+	for i := range f.calls {
+		if f.calls[i].CallID == callID {
+			f.calls[i].Status = model.ToolCallStatusFailed
+			f.calls[i].ErrorMessage = errMsg
+		}
+	}
 	return nil
 }
 func (f *fakeToolCallRepo) MarkApprovalRequired(_ context.Context, _, _ string) error {
@@ -208,6 +222,69 @@ func TestAssistantToolGatewayAdapterPublishesCompletionForRuntimeCallID(t *testi
 	}
 	if startedCallID != "runtime-call-2" || completedCallID != "runtime-call-2" {
 		t.Fatalf("expected matching runtime call IDs, started=%q completed=%q", startedCallID, completedCallID)
+	}
+}
+
+func TestAssistantToolGatewayAdapterReusesSuccessfulReadonlyToolCall(t *testing.T) {
+	registry := NewToolRegistry()
+	executeCount := 0
+	_ = registry.Register(&ToolSpec{
+		Name:               "Test.Readonly",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			executeCount++
+			return map[string]interface{}{"result": "ok", "host_id": args["host_id"]}, nil
+		},
+	})
+
+	dispatcher, repo := newTestToolDispatcher(t, registry)
+	startedCount := 0
+	resultCount := 0
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-1",
+		RunID:      "run-1",
+		Logger:     zap.NewNop(),
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			startedCount++
+		},
+		OnToolResult: func(callID string, result interface{}) {
+			resultCount++
+		},
+	})
+
+	args := map[string]interface{}{"host_id": "host-1"}
+	first, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "runtime-call-1",
+		ToolName: "Test.Readonly",
+		Args:     args,
+	})
+	if err != nil || first.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("first call failed: resp=%#v err=%v", first, err)
+	}
+	second, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "runtime-call-2",
+		ToolName: "Test.Readonly",
+		Args:     map[string]interface{}{"host_id": "host-1"},
+	})
+	if err != nil || second.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("second call failed: resp=%#v err=%v", second, err)
+	}
+
+	if executeCount != 1 {
+		t.Fatalf("expected one real tool execution, got %d", executeCount)
+	}
+	if len(repo.calls) != 1 {
+		t.Fatalf("expected one persisted tool call, got %d", len(repo.calls))
+	}
+	if startedCount != 1 || resultCount != 1 {
+		t.Fatalf("expected only the real call to publish callbacks, started=%d result=%d", startedCount, resultCount)
+	}
+	if !strings.Contains(second.Content, "host-1") {
+		t.Fatalf("expected cached response content, got %s", second.Content)
 	}
 }
 
