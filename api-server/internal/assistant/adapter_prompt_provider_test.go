@@ -72,3 +72,93 @@ func TestAssistantSummarizePromptRequiresClearHostSecurityResult(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistantPromptProviderIncludesMandatoryToolSequenceGuide(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Baseline.Template.Status.Get", Description: "查询基线模板解析状态"},
+		{Name: "Baseline.Template.Rules.List", Description: "查询基线规则"},
+		{Name: "Baseline.Script.Generate", Description: "生成基线脚本"},
+		{Name: "Task.RunCheck", Description: "下发基线检测任务"},
+		{Name: "Task.RunFix", Description: "下发基线修复任务"},
+		{Name: "Task.List", Description: "查询任务列表"},
+	}, nil, "operations", strings.Join([]string{
+		"请按顺序调用：Baseline.Template.Status.Get、Baseline.Template.Rules.List、Baseline.Script.Generate(CHECK)、Baseline.Script.Generate(FIX)、Task.RunCheck、Task.RunFix、Task.List。",
+		"模板 template_id=tpl-1，规则 rule_id=rule-1，目标 host_id=host-1。",
+	}, "\n"))
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"用户指定工具执行约束",
+		"1. Baseline.Template.Status.Get",
+		"2. Baseline.Template.Rules.List",
+		"3. Baseline.Script.Generate",
+		"4. Baseline.Script.Generate",
+		"5. Task.RunCheck",
+		"6. Task.RunFix",
+		"7. Task.List",
+		"Task.List 只能在 Task.RunCheck/Task.RunFix 下发后用于查询进度或结果",
+		"完成检测脚本和修复脚本生成后，下一步必须下发 Task.RunCheck",
+	} {
+		if !strings.Contains(bundle.SystemPrompt, want) {
+			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+}
+
+func TestAssistantPromptProviderIncludesAssetCollectionSequenceCompletionGuide(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Asset.Collection.Trigger", Description: "触发资产采集"},
+		{Name: "Asset.Collection.Get", Description: "查询采集详情"},
+		{Name: "Asset.Application.List", Description: "查询应用资产"},
+		{Name: "Asset.Summary.Get", Description: "查询资产概览"},
+	}, nil, "operations", strings.Join([]string{
+		"请严格按顺序调用工具：Asset.Collection.Trigger、Asset.Collection.Get、Asset.Application.List、Asset.Summary.Get。",
+		"不要只文字说明。",
+	}, "\n"))
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"资产采集闭环",
+		"asset_collection_sequence_complete=true",
+		"all_requested_tools_success=true",
+		"verified_result_summary",
+		"不要再调用 Task.GetDetail、Tool.Search",
+	} {
+		if !strings.Contains(bundle.SystemPrompt, want) {
+			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+}
+
+func TestAssistantPromptProviderIncludesVulnerabilityExecuteSequenceGuide(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Vulnerability.Script.Status", Description: "查询漏洞脚本状态"},
+		{Name: "Vulnerability.Script.Execute", Description: "执行漏洞脚本"},
+	}, nil, "operations", strings.Join([]string{
+		"请严格按顺序调用工具：Vulnerability.Script.Status、Vulnerability.Script.Execute。",
+		`Vulnerability.Script.Execute 参数 cve_id="CVE-2023-50495", script_type="fix", host_ids=["host-1"]。`,
+	}, "\n"))
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"漏洞 POC/FIX 闭环",
+		"vulnerability_script_sequence_complete=true",
+		"executions 中的 task_group_id",
+	} {
+		if !strings.Contains(bundle.SystemPrompt, want) {
+			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+}

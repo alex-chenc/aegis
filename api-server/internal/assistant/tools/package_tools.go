@@ -16,12 +16,19 @@ type PackageToolDeps struct {
 // RegisterPackageTools 注册检测包域工具
 func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.List",
-		Domain:      "package",
-		Operation:   "list",
-		Description: "列出检测包，支持按状态和关键字筛选",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Package.List",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpList,
+		Capability:         "list_detection_packages",
+		Description:        "列出动态检测包，支持按状态和关键字筛选",
+		Aliases:            []string{"动态检测包", "检测包列表", "规则包", "eBPF 检测包", "检测包状态"},
+		Tags:               []string{"package", "detection_package", "dynamic", "ebpf", "sigma"},
+		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -38,12 +45,19 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.Get",
-		Domain:      "package",
-		Operation:   "get",
-		Description: "根据包ID获取检测包详情（最新版本）",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Package.Get",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpGet,
+		Capability:         "get_detection_package",
+		Description:        "根据包ID获取动态检测包详情（最新版本）",
+		Aliases:            []string{"检测包详情", "动态检测包详情", "规则包详情", "包版本"},
+		Tags:               []string{"package", "detection_package", "dynamic", "version"},
+		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

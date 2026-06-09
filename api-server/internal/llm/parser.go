@@ -31,11 +31,25 @@ func ParseRules(llmResponse string) ([]*model.AegisRule, error) {
 
 	var extractedRules []ExtractedRule
 	if err := json.Unmarshal([]byte(jsonStr), &extractedRules); err != nil {
-		logger.Error("failed to unmarshal rules",
+		repairedJSON := repairInvalidJSONStringEscapes(jsonStr)
+		if repairedJSON == jsonStr {
+			logger.Error("failed to unmarshal rules",
+				zap.Error(err),
+				zap.String("json", truncate(jsonStr, 500)),
+			)
+			return nil, fmt.Errorf("failed to parse rules: %w", err)
+		}
+		if retryErr := json.Unmarshal([]byte(repairedJSON), &extractedRules); retryErr != nil {
+			logger.Error("failed to unmarshal repaired rules",
+				zap.Error(retryErr),
+				zap.NamedError("original_error", err),
+				zap.String("json", truncate(repairedJSON, 500)),
+			)
+			return nil, fmt.Errorf("failed to parse rules: %w", retryErr)
+		}
+		logger.Warn("repaired invalid JSON escapes in LLM rule response",
 			zap.Error(err),
-			zap.String("json", truncate(jsonStr, 500)),
 		)
-		return nil, fmt.Errorf("failed to parse rules: %w", err)
 	}
 
 	// Convert to model.AegisRule
@@ -143,15 +157,34 @@ func extractJSON(response string) string {
 		return ""
 	}
 
-	// Find matching ] or }
+	// Find matching ] or }, ignoring brackets inside JSON strings.
 	bracket := response[start]
 	closeBracket := getCloseBracket(bracket)
 	count := 0
+	inString := false
+	escaped := false
 
 	for i := start; i < len(response); i++ {
-		if response[i] == bracket {
+		c := response[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		if c == bracket {
 			count++
-		} else if response[i] == closeBracket {
+		} else if c == closeBracket {
 			count--
 			if count == 0 {
 				return response[start : i+1]
@@ -174,6 +207,65 @@ func getCloseBracket(b byte) byte {
 		return ')'
 	default:
 		return b
+	}
+}
+
+func repairInvalidJSONStringEscapes(jsonStr string) string {
+	var b strings.Builder
+	b.Grow(len(jsonStr))
+
+	changed := false
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(jsonStr); i++ {
+		c := jsonStr[i]
+		if !inString {
+			b.WriteByte(c)
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+
+		if escaped {
+			b.WriteByte('\\')
+			if !isValidJSONEscape(c) {
+				b.WriteByte('\\')
+				changed = true
+			}
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+
+		switch c {
+		case '\\':
+			escaped = true
+		case '"':
+			inString = false
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+
+	if escaped {
+		b.WriteByte('\\')
+	}
+
+	if !changed {
+		return jsonStr
+	}
+	return b.String()
+}
+
+func isValidJSONEscape(c byte) bool {
+	switch c {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u':
+		return true
+	default:
+		return false
 	}
 }
 

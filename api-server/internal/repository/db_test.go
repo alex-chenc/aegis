@@ -43,3 +43,20 @@ func TestSigmaRuleEnhancementSchemaStatementsIncludeUploadColumns(t *testing.T) 
 		}
 	}
 }
+
+func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
+	statements := strings.Join(assetCollectionSchemaStatements(), "\n")
+
+	requiredFragments := []string{
+		"DROP CONSTRAINT chk_host_application_category",
+		"'llm_service'",
+		"'ai_agent'",
+		"'mcp_server'",
+	}
+
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("expected asset collection schema to include %q", fragment)
+		}
+	}
+}

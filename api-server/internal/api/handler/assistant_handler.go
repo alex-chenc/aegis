@@ -466,6 +466,11 @@ func (h *AssistantHandler) Approve(c *gin.Context) {
 		return
 	}
 
+	if result.Approval != nil && h.assistantService.SignalApprovalApproved(result.Approval, operator, req.Comment) {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
+		return
+	}
+
 	if h.toolDispatcher != nil {
 		dispatchResult, execErr := h.toolDispatcher.ExecuteApprovedTool(c.Request.Context(), approvalID, operator)
 		if execErr != nil {
@@ -508,6 +513,8 @@ func (h *AssistantHandler) Reject(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	_ = h.assistantService.SignalApprovalRejected(approval, operator, req.Comment)
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": approval})
 }

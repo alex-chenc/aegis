@@ -73,9 +73,11 @@
           :approval-mode="approvalMode"
           :mode-loading="approvalModeLoading"
           :uploading="uploadingFile"
+          :upload-items="uploadItems"
           @send="handleSend"
           @approval-mode-change="handleApprovalModeChange"
           @upload-file="handleUploadFile"
+          @remove-upload="handleRemoveUpload"
         />
       </template>
 
@@ -91,9 +93,11 @@
               :approval-mode="approvalMode"
               :mode-loading="approvalModeLoading"
               :uploading="uploadingFile"
+              :upload-items="uploadItems"
               @send="handleSend"
               @approval-mode-change="handleApprovalModeChange"
               @upload-file="handleUploadFile"
+              @remove-upload="handleRemoveUpload"
             />
           </div>
         </div>
@@ -103,7 +107,7 @@
     <!-- 右侧上下文栏 -->
     <AssistantContextRail
       :plan="currentPlan"
-      :context-refs="contextRefs"
+      :context-refs="railContextRefs"
       :approvals="pendingApprovals"
       :tool-calls="toolCalls"
     />
@@ -142,6 +146,15 @@ let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 const approvalMode = ref<AssistantToolApprovalMode>('whitelist')
 const approvalModeLoading = ref(false)
 const uploadingFile = ref(false)
+type UploadItemStatus = 'uploading' | 'success' | 'error'
+type UploadItem = {
+  id: string
+  name: string
+  purpose: AssistantFileUploadPurpose
+  status: UploadItemStatus
+  error?: string
+}
+const uploadItems = ref<UploadItem[]>([])
 
 const {
   sessions,
@@ -161,6 +174,14 @@ const {
 
 const pendingApprovals = computed(() =>
   approvals.value.filter(a => a.status === 'pending')
+)
+
+const railContextRefs = computed(() =>
+  contextRefs.value.filter(ref => ![
+    'file',
+    'baseline_template',
+    'sigma_rule_upload',
+  ].includes(ref.object_type))
 )
 
 const sessionMetadata = computed<Record<string, any>>(() => {
@@ -280,6 +301,13 @@ async function ensureSessionForUpload(file: File, purpose: AssistantFileUploadPu
 }
 
 async function handleUploadFile(file: File, purpose: AssistantFileUploadPurpose) {
+  const item: UploadItem = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    name: file.name,
+    purpose,
+    status: 'uploading',
+  }
+  uploadItems.value.push(item)
   uploadingFile.value = true
   try {
     await ensureSessionForUpload(file, purpose)
@@ -288,12 +316,20 @@ async function handleUploadFile(file: File, purpose: AssistantFileUploadPurpose)
       await store.fetchContextRefs(currentSession.value.session_id)
     }
     const title = result.context_ref?.title || file.name
+    item.name = title
+    item.status = 'success'
     ElMessage.success(`已上传：${title}`)
   } catch (err: any) {
-    ElMessage.error(err?.message || '文件上传失败')
+    item.status = 'error'
+    item.error = err?.message || '文件上传失败'
+    ElMessage.error(item.error)
   } finally {
     uploadingFile.value = false
   }
+}
+
+function handleRemoveUpload(id: string) {
+  uploadItems.value = uploadItems.value.filter(item => item.id !== id)
 }
 
 // 取消运行

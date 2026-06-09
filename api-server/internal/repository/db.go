@@ -590,10 +590,11 @@ func assetCollectionSchemaStatements() []string {
 			END IF;
 		END $$`,
 		`DO $$ BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_host_application_category') THEN
-				ALTER TABLE host_application_assets ADD CONSTRAINT chk_host_application_category
-					CHECK (category IN ('database','web_service','web_framework','web_site','other','unknown'));
+			IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_host_application_category') THEN
+				ALTER TABLE host_application_assets DROP CONSTRAINT chk_host_application_category;
 			END IF;
+			ALTER TABLE host_application_assets ADD CONSTRAINT chk_host_application_category
+				CHECK (category IN ('database','web_service','web_framework','web_site','llm_service','ai_agent','mcp_server','other','unknown'));
 		END $$`,
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_host_application_review') THEN

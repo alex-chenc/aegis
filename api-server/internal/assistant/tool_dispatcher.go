@@ -54,14 +54,15 @@ type DispatchRequest struct {
 
 // DispatchResult 调度结果
 type DispatchResult struct {
-	CallID           string      `json:"call_id"`
-	ToolName         string      `json:"tool_name"`
-	Success          bool        `json:"success"`
-	Data             interface{} `json:"data,omitempty"`
-	Error            string      `json:"error,omitempty"`
-	DurationMs       int64       `json:"duration_ms"`
-	ApprovalRequired bool        `json:"approval_required,omitempty"`
-	ApprovalID       string      `json:"approval_id,omitempty"`
+	CallID           string                   `json:"call_id"`
+	ToolName         string                   `json:"tool_name"`
+	Success          bool                     `json:"success"`
+	Data             interface{}              `json:"data,omitempty"`
+	Error            string                   `json:"error,omitempty"`
+	DurationMs       int64                    `json:"duration_ms"`
+	ApprovalRequired bool                     `json:"approval_required,omitempty"`
+	ApprovalID       string                   `json:"approval_id,omitempty"`
+	Approval         *model.AssistantApproval `json:"approval,omitempty"`
 }
 
 // Dispatch 调度工具执行
@@ -127,12 +128,14 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 		// Mark tool call as requiring approval
 		_ = d.toolCallRepo.MarkApprovalRequired(ctx, callID, approval.ApprovalID)
 		_ = d.sessionRepo.IncrementApprovalCount(ctx, req.SessionID)
+		_ = d.sessionRepo.UpdateStatus(ctx, req.SessionID, model.SessionStatusWaitingApproval)
 
 		return &DispatchResult{
 			CallID:           callID,
 			ToolName:         req.ToolName,
 			ApprovalRequired: true,
 			ApprovalID:       approval.ApprovalID,
+			Approval:         approval,
 		}, nil
 	}
 

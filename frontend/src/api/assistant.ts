@@ -711,6 +711,7 @@ export type AssistantStreamEventType =
   | 'tool_error'
   | 'approval_required'
   | 'approval_updated'
+  | 'run_waiting_approval'
   | 'context_ref_added'
   | 'result_card'
   | 'context_budget'

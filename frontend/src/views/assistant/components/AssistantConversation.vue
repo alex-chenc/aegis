@@ -209,6 +209,32 @@ function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
   })
 }
 
+function getMessageApprovals(msg: AssistantMessage, toolCalls: AssistantToolCall[]): AssistantApproval[] {
+  const byKey = new Map<string, AssistantApproval>()
+  for (const approval of msg.approvals || []) {
+    byKey.set(approval.approval_id || approval.id, approval)
+  }
+  const messageToolCallIds = new Set(toolCalls.flatMap(toolCall =>
+    [toolCall.call_id, toolCall.id].filter(Boolean)
+  ))
+  for (const approval of props.approvals) {
+    if (
+      approval.session_id === msg.session_id &&
+      (
+        approval.tool_call_id && messageToolCallIds.has(approval.tool_call_id) ||
+        msg.approvals?.some(item => item.approval_id === approval.approval_id || item.id === approval.id)
+      )
+    ) {
+      byKey.set(approval.approval_id || approval.id, approval)
+    }
+  }
+  return Array.from(byKey.values()).sort((left, right) => {
+    const leftTime = new Date(left.created_at || '').getTime() || 0
+    const rightTime = new Date(right.created_at || '').getTime() || 0
+    return leftTime - rightTime
+  })
+}
+
 function getToolCallKey(toolCall: AssistantToolCall): string {
   return toolCall.call_id || toolCall.id
 }
@@ -259,6 +285,7 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
   const segments: AssistantSegment[] = []
   const baseKey = msg.message_id || msg.id
   const toolCalls = getMessageToolCalls(msg)
+  const approvals = getMessageApprovals(msg, toolCalls)
   const stepResults = getStepResults(msg)
   const messageIndex = props.messages.findIndex(item =>
     item.id === msg.id &&
@@ -364,19 +391,19 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
   }
 
   if (!blockedByPendingTool) {
+    if (approvals.length) {
+      segments.push({
+        type: 'approvals',
+        key: `${baseKey}-approvals`,
+        approvals,
+      })
+    }
+
     if (msg.content) {
       segments.push({
         type: 'content',
         key: `${baseKey}-content`,
         content: msg.content,
-      })
-    }
-
-    if (msg.approvals?.length) {
-      segments.push({
-        type: 'approvals',
-        key: `${baseKey}-approvals`,
-        approvals: msg.approvals,
       })
     }
 

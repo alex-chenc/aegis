@@ -27,8 +27,10 @@ type ActiveRun struct {
 	startedAt time.Time
 
 	// 审批暂停/恢复状态
-	waitingApproval *WaitingApprovalState
-	waitingMu       sync.RWMutex
+	waitingApproval  *WaitingApprovalState
+	approvalWaiters  map[string]chan ApprovalDecision
+	rejectedApproval *ApprovalDecision
+	waitingMu        sync.RWMutex
 
 	subscribers []chan AssistantEvent
 	history     []AssistantEvent
@@ -45,10 +47,25 @@ type WaitingApprovalState struct {
 	RequestedAt time.Time              `json:"requested_at"`
 }
 
+// ApprovalDecision 表示用户对一次工具审批的处理结果。
+type ApprovalDecision struct {
+	ApprovalID string
+	Approved   bool
+	Operator   string
+	Comment    string
+	DecidedAt  time.Time
+}
+
 // SetWaitingApproval 设置审批等待状态
 func (r *ActiveRun) SetWaitingApproval(state *WaitingApprovalState) {
 	r.waitingMu.Lock()
 	defer r.waitingMu.Unlock()
+	if r.approvalWaiters == nil {
+		r.approvalWaiters = make(map[string]chan ApprovalDecision)
+	}
+	if _, ok := r.approvalWaiters[state.ApprovalID]; !ok {
+		r.approvalWaiters[state.ApprovalID] = make(chan ApprovalDecision, 1)
+	}
 	r.waitingApproval = state
 }
 
@@ -63,7 +80,68 @@ func (r *ActiveRun) GetWaitingApproval() *WaitingApprovalState {
 func (r *ActiveRun) ClearWaitingApproval() {
 	r.waitingMu.Lock()
 	defer r.waitingMu.Unlock()
+	if r.waitingApproval != nil && r.approvalWaiters != nil {
+		delete(r.approvalWaiters, r.waitingApproval.ApprovalID)
+	}
 	r.waitingApproval = nil
+}
+
+// WaitForApproval 等待用户审批当前工具调用。
+func (r *ActiveRun) WaitForApproval(ctx context.Context, approvalID string) (ApprovalDecision, error) {
+	r.waitingMu.RLock()
+	ch, ok := r.approvalWaiters[approvalID]
+	r.waitingMu.RUnlock()
+	if !ok {
+		return ApprovalDecision{}, fmt.Errorf("approval %s is not waiting", approvalID)
+	}
+
+	select {
+	case decision := <-ch:
+		return decision, nil
+	case <-ctx.Done():
+		return ApprovalDecision{}, ctx.Err()
+	}
+}
+
+// ResolveApproval 将审批结果通知给正在等待的工具调用。
+func (r *ActiveRun) ResolveApproval(decision ApprovalDecision) bool {
+	r.waitingMu.RLock()
+	ch, ok := r.approvalWaiters[decision.ApprovalID]
+	r.waitingMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if decision.DecidedAt.IsZero() {
+		decision.DecidedAt = time.Now()
+	}
+	select {
+	case ch <- decision:
+		return true
+	default:
+		return false
+	}
+}
+
+// MarkApprovalRejected 记录审批拒绝并取消当前运行。
+func (r *ActiveRun) MarkApprovalRejected(decision ApprovalDecision) {
+	r.waitingMu.Lock()
+	if decision.DecidedAt.IsZero() {
+		decision.DecidedAt = time.Now()
+	}
+	r.rejectedApproval = &decision
+	r.waitingMu.Unlock()
+	r.cancel()
+}
+
+// RejectedApproval 获取审批拒绝状态。
+func (r *ActiveRun) RejectedApproval() *ApprovalDecision {
+	r.waitingMu.RLock()
+	defer r.waitingMu.RUnlock()
+	if r.rejectedApproval == nil {
+		return nil
+	}
+	decision := *r.rejectedApproval
+	return &decision
 }
 
 // NewRunManager 创建运行管理器
@@ -85,12 +163,13 @@ func (m *RunManager) Start(sessionID string) *ActiveRun {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &ActiveRun{
-		RunID:     "run_" + uuid.New().String()[:8],
-		SessionID: sessionID,
-		ctx:       ctx,
-		cancel:    cancel,
-		events:    make(chan AssistantEvent, 100),
-		startedAt: time.Now(),
+		RunID:           "run_" + uuid.New().String()[:8],
+		SessionID:       sessionID,
+		ctx:             ctx,
+		cancel:          cancel,
+		events:          make(chan AssistantEvent, 100),
+		startedAt:       time.Now(),
+		approvalWaiters: make(map[string]chan ApprovalDecision),
 	}
 
 	m.runs[sessionID] = run

@@ -1093,11 +1093,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     try {
       const result = await apiApproveApproval(approvalId, comment ? { comment } : undefined)
       const approval = (result as any).approval || result
-      // 更新本地审批列表（兼容 id 和 approval_id 两种查找方式）
-      const index = approvals.value.findIndex(a => a.approval_id === approvalId || a.id === approvalId)
-      if (index > -1) {
-        approvals.value[index] = approval
-      }
+      upsertApproval(approval)
+      updateMessageApproval(approval)
       return result
     } catch (err: any) {
       error.value = err.message || '审批操作失败'
@@ -1112,11 +1109,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     error.value = null
     try {
       const result = await apiRejectApproval(approvalId, comment ? { comment } : undefined)
-      // 更新本地审批列表（兼容 id 和 approval_id 两种查找方式）
-      const index = approvals.value.findIndex(a => a.approval_id === approvalId || a.id === approvalId)
-      if (index > -1) {
-        approvals.value[index] = result
-      }
+      upsertApproval(result)
+      updateMessageApproval(result)
       return result
     } catch (err: any) {
       error.value = err.message || '审批操作失败'
@@ -1190,6 +1184,28 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   function resolveAssistantMessageId(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
     return event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
+  }
+
+  function upsertApproval(approval: AssistantApproval) {
+    const index = approvals.value.findIndex(a =>
+      a.approval_id === approval.approval_id || a.id === approval.id
+    )
+    if (index > -1) {
+      approvals.value[index] = approval
+    } else {
+      approvals.value.push(approval)
+    }
+  }
+
+  function updateMessageApproval(approval: AssistantApproval) {
+    for (const msg of messages.value) {
+      const index = msg.approvals?.findIndex(a =>
+        a.approval_id === approval.approval_id || a.id === approval.id
+      ) ?? -1
+      if (index > -1 && msg.approvals) {
+        msg.approvals[index] = approval
+      }
+    }
   }
 
   function nextCycleMessageId(event: { run_id?: string; message_id?: string }, payload: Record<string, any>) {
@@ -1664,19 +1680,67 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'approval_required': {
         // 新增待审批项
         const approval = payload as AssistantApproval
-        approvals.value.push(approval)
+        upsertApproval(approval)
+        const approvalMsgId = resolveAssistantMessageId(event, payload) || currentCycleMessageId
+        const approvalMessage = approvalMsgId ? ensureAssistantMessage(approvalMsgId) : null
+        if (approvalMessage) {
+          if (!approvalMessage.approvals) {
+            approvalMessage.approvals = []
+          }
+          const existingApprovalIdx = approvalMessage.approvals.findIndex(a =>
+            a.approval_id === approval.approval_id || a.id === approval.id
+          )
+          if (existingApprovalIdx > -1) {
+            approvalMessage.approvals[existingApprovalIdx] = approval
+          } else {
+            approvalMessage.approvals.push(approval)
+          }
+          if (approval.tool_call_id && approvalMessage.tool_calls) {
+            const call = approvalMessage.tool_calls.find(tc =>
+              tc.call_id === approval.tool_call_id || tc.id === approval.tool_call_id
+            )
+            if (call) {
+              call.status = 'approval_required'
+            }
+          }
+        }
+        if (approval.tool_call_id) {
+          const toolIdx = toolCalls.value.findIndex(tc =>
+            tc.call_id === approval.tool_call_id || tc.id === approval.tool_call_id
+          )
+          if (toolIdx > -1) {
+            toolCalls.value[toolIdx].status = 'approval_required'
+          }
+        }
         if (currentSession.value) {
           currentSession.value.status = 'waiting_approval'
         }
+        lastEventType = 'approval_required'
         break
       }
 
       case 'approval_updated': {
         // 审批已处理，更新状态
         const resolved = payload as AssistantApproval
-        const approvalIdx = approvals.value.findIndex(a => a.id === resolved.id)
-        if (approvalIdx > -1) {
-          approvals.value[approvalIdx] = resolved
+        upsertApproval(resolved)
+        for (const msg of messages.value) {
+          const approvalIdx = msg.approvals?.findIndex(a =>
+            a.approval_id === resolved.approval_id || a.id === resolved.id
+          ) ?? -1
+          if (approvalIdx > -1 && msg.approvals) {
+            msg.approvals[approvalIdx] = resolved
+          }
+        }
+        break
+      }
+
+      case 'run_waiting_approval': {
+        if (currentSession.value) {
+          currentSession.value.status = 'waiting_approval'
+          updateCurrentSessionMetadata({
+            current_run_status: 'waiting_approval',
+            waiting_approval_id: payload.approval_id,
+          })
         }
         break
       }
@@ -1791,7 +1855,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         fetchApprovals(sessionId),
       ])
       rebuildAssistantHistoryCycles()
-      if (session?.status === 'running') {
+      if (session?.status === 'running' || session?.status === 'waiting_approval') {
         startStream(sessionId)
         restoreRunningAssistantTimeline()
       } else {

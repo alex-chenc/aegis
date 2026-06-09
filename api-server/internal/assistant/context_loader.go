@@ -66,6 +66,7 @@ func (l *ContextLoader) ResolveSession(ctx context.Context, sessionID string) ([
 			Title:      ref.Title,
 			Summary:    ref.Summary,
 			RoutePath:  ref.RoutePath,
+			Data:       unmarshalJSON(ref.Snapshot),
 		}
 		objects = append(objects, obj)
 	}

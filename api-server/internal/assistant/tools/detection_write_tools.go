@@ -22,12 +22,19 @@ type DetectionWriteToolDeps struct {
 // RegisterDetectionWriteTools 注册检测域写操作工具
 func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps DetectionWriteToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Alert.Resolve",
-		Domain:      "detection",
-		Operation:   "alert_resolve",
-		Description: "将告警标记为已解决",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Detection.Alert.Resolve",
+		Domain:             assistant.DomainDetection,
+		Operation:          assistant.OpUpdate,
+		Capability:         "resolve_detection_alert",
+		Description:        "将异常检测告警标记为已解决",
+		Aliases:            []string{"处置告警", "解决告警", "关闭异常事件", "标记已解决"},
+		Tags:               []string{"detection", "alert", "resolve", "operation"},
+		ObjectTypes:        []string{"alert", "detection", "event"},
+		PageRoutes:         []string{"/detection", "/detection/alerts", "/detection/ai-analysis"},
+		Risk:               assistant.ToolRiskLow,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -45,12 +52,19 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Detection.Alert.Block",
-		Domain:      "detection",
-		Operation:   "alert_block",
-		Description: "对告警关联的进程/连接执行阻断操作（高风险，需审批）",
-		Risk:        assistant.ToolRiskCritical,
-		Enabled:     true,
+		Name:               "Detection.Alert.Block",
+		Domain:             assistant.DomainDetection,
+		Operation:          assistant.OpExecute,
+		Capability:         "block_detection_alert",
+		Description:        "对异常检测告警关联的进程、文件或连接执行阻断操作（高风险，需审批）",
+		Aliases:            []string{"阻断告警", "阻断异常事件", "kill 进程", "隔离文件", "阻断连接"},
+		Tags:               []string{"detection", "alert", "block", "response", "critical"},
+		ObjectTypes:        []string{"alert", "detection", "event", "block"},
+		PageRoutes:         []string{"/detection", "/detection/alerts", "/detection/ai-analysis"},
+		Risk:               assistant.ToolRiskCritical,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

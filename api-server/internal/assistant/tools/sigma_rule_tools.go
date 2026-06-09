@@ -16,19 +16,26 @@ type RuleGenerationServiceForTools interface {
 
 // SigmaRuleToolDeps Sigma规则工具依赖
 type SigmaRuleToolDeps struct {
-	SigmaRuleRepo    *repository.SigmaRuleRepository
-	RuleGenService   RuleGenerationServiceForTools
+	SigmaRuleRepo  *repository.SigmaRuleRepository
+	RuleGenService RuleGenerationServiceForTools
 }
 
 // RegisterSigmaRuleTools 注册Sigma规则域工具
 func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "SigmaRule.List",
-		Domain:      "sigma_rule",
-		Operation:   "list",
-		Description: "列出Sigma规则，支持按状态、关键字筛选",
-		Risk:        assistant.ToolRiskReadonly,
-		Enabled:     true,
+		Name:               "SigmaRule.List",
+		Domain:             assistant.DomainSigmaRule,
+		Operation:          assistant.OpList,
+		Capability:         "list_sigma_rules",
+		Description:        "列出异常检测 Sigma 规则，支持按状态、关键字筛选",
+		Aliases:            []string{"规则识别", "Sigma 规则", "异常检测规则", "检测规则列表", "规则命中"},
+		Tags:               []string{"sigma", "sigma_rule", "detection", "rule", "abnormal"},
+		ObjectTypes:        []string{"sigma_rule", "detection", "alert"},
+		PageRoutes:         []string{"/detection/rules", "/detection", "/detection/ai-analysis"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -45,12 +52,19 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "SigmaRule.Generate",
-		Domain:      "sigma_rule",
-		Operation:   "generate",
-		Description: "基于告警样本使用AI生成Sigma规则",
-		Risk:        assistant.ToolRiskMedium,
-		Enabled:     true,
+		Name:               "SigmaRule.Generate",
+		Domain:             assistant.DomainSigmaRule,
+		Operation:          assistant.OpGenerate,
+		Capability:         "generate_sigma_rule",
+		Description:        "基于异常告警样本和 MITRE 技术使用 AI 生成 Sigma 检测规则",
+		Aliases:            []string{"生成 Sigma 规则", "规则自动生成", "异常检测规则生成", "AI 规则生成", "规则识别生成"},
+		Tags:               []string{"sigma", "sigma_rule", "detection", "rule", "generate", "ai-analysis"},
+		ObjectTypes:        []string{"sigma_rule", "detection", "alert"},
+		PageRoutes:         []string{"/detection/rules", "/detection", "/detection/ai-analysis"},
+		Risk:               assistant.ToolRiskMedium,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

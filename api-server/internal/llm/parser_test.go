@@ -63,6 +63,46 @@ func TestParseScript_AddsShebang(t *testing.T) {
 	}
 }
 
+func TestParseRulesRepairsInvalidBackslashEscapes(t *testing.T) {
+	rules, err := ParseRules(`[
+  {
+    "title": "AIDE配置保护审计工具完整性",
+    "check_content": "使用命令 egrep '(\sbin/(audit|au))' /etc/aide/aide.conf 检查审计工具条目",
+    "fix_content": "编辑 /etc/aide/aide.conf 添加 /sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512"
+  }
+]`)
+	if err != nil {
+		t.Fatalf("ParseRules returned error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected one rule, got %d", len(rules))
+	}
+	if !strings.Contains(rules[0].CheckContent, `\sbin`) {
+		t.Fatalf("expected literal backslash to be preserved, got %q", rules[0].CheckContent)
+	}
+}
+
+func TestParseRulesExtractJSONIgnoresBracketsInsideStrings(t *testing.T) {
+	rules, err := ParseRules(`LLM说明：
+[
+  {
+    "title": "审计日志格式",
+    "check_content": "确认日志格式包含字段 [user] 和 [action]，不要截断 JSON",
+    "fix_content": "调整日志模板"
+  }
+]
+后续说明`)
+	if err != nil {
+		t.Fatalf("ParseRules returned error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected one rule, got %d", len(rules))
+	}
+	if rules[0].Title != "审计日志格式" {
+		t.Fatalf("unexpected title: %q", rules[0].Title)
+	}
+}
+
 func TestTryParseStepInfersHistoricalLogToolFromFencedJSON(t *testing.T) {
 	agent := NewReActAgent(nil, nil, "session-test", 1)
 

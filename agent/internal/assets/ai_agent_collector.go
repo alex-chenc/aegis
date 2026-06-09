@@ -2,6 +2,7 @@ package assets
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,8 +15,9 @@ import (
 // 扫描已知 Agent 配置路径，识别安装的 AI Agent 框架
 // 参考 Snyk Agent Scan 的 discoverer 架构
 type AIAgentCollector struct {
-	logger  *zap.Logger
-	homeDir string
+	logger   *zap.Logger
+	homeDir  string
+	homeDirs []string
 }
 
 // AgentProfile Agent 检测配置
@@ -27,45 +29,69 @@ type AgentProfile struct {
 
 // NewAIAgentCollector 创建 AI Agent 配置扫描器
 func NewAIAgentCollector(logger *zap.Logger) *AIAgentCollector {
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		home = "/root"
+	homeDirs := discoverHomeDirs()
+	home := ""
+	if len(homeDirs) > 0 {
+		home = homeDirs[0]
 	}
 	return &AIAgentCollector{
-		logger:  logger,
-		homeDir: home,
+		logger:   logger,
+		homeDir:  home,
+		homeDirs: homeDirs,
 	}
 }
 
 // Collect 扫描已知 Agent 配置路径
 func (c *AIAgentCollector) Collect(ctx context.Context) []AIAsset {
 	var results []AIAsset
+	seen := make(map[string]bool)
+	homeDirs := c.homeDirs
+	if len(homeDirs) == 0 && c.homeDir != "" {
+		homeDirs = []string{c.homeDir}
+	}
 
-	for _, profile := range agentProfiles() {
-		for _, cfgPath := range profile.ConfigPaths {
-			fullPath := expandPath(cfgPath, c.homeDir)
-			if !pathExists(fullPath) {
-				continue
+	for _, homeDir := range homeDirs {
+		select {
+		case <-ctx.Done():
+			c.logger.Warn("AI agent collection cancelled", zap.Error(ctx.Err()))
+			return results
+		default:
+		}
+
+		for _, profile := range agentProfiles() {
+			for _, cfgPath := range profile.ConfigPaths {
+				fullPath := expandPath(cfgPath, homeDir)
+				if !pathExists(fullPath) {
+					continue
+				}
+				key := profile.Name + ":" + fullPath
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+
+				// 尝试从配置目录读取版本
+				version := detectAgentVersion(fullPath)
+
+				asset := AIAsset{
+					Category:    "ai_agent",
+					Name:        profile.Name,
+					DisplayName: profile.DisplayName,
+					Version:     version,
+					Source:      "config",
+					ConfigPath:  fullPath,
+					Extra: map[string]string{
+						"config_dir": fullPath,
+						"home_dir":   homeDir,
+					},
+				}
+				results = append(results, asset)
+				c.logger.Info("AI agent detected",
+					zap.String("agent", profile.Name),
+					zap.String("config_path", fullPath),
+					zap.String("version", version))
+				break // 单个 home 下一个 Agent 只需匹配一个路径
 			}
-
-			// 尝试从配置目录读取版本
-			version := detectAgentVersion(fullPath)
-
-			asset := AIAsset{
-				Category:    "ai_agent",
-				Name:        profile.Name,
-				DisplayName: profile.DisplayName,
-				Version:     version,
-				Source:      "config",
-				ConfigPath:  fullPath,
-				Extra:       map[string]string{"config_dir": fullPath},
-			}
-			results = append(results, asset)
-			c.logger.Info("AI agent detected",
-				zap.String("agent", profile.Name),
-				zap.String("config_path", fullPath),
-				zap.String("version", version))
-			break // 一个 Agent 只需匹配一个路径
 		}
 	}
 
@@ -214,16 +240,11 @@ func detectAgentVersion(configDir string) string {
 	// 尝试读取 package.json
 	pkgPath := filepath.Join(configDir, "package.json")
 	if data, err := os.ReadFile(pkgPath); err == nil {
-		// 简单提取 version 字段
-		content := string(data)
-		if idx := strings.Index(content, `"version"`); idx >= 0 {
-			rest := content[idx:]
-			if start := strings.Index(rest, `"`); start >= 0 {
-				rest = rest[start+1:]
-				if end := strings.Index(rest, `"`); end > 0 {
-					return rest[:end]
-				}
-			}
+		var pkg struct {
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(data, &pkg); err == nil {
+			return strings.TrimSpace(pkg.Version)
 		}
 	}
 

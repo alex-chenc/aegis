@@ -25,12 +25,19 @@ type PackageWriteToolDeps struct {
 // RegisterPackageWriteTools 注册检测包写操作工具
 func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWriteToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.Draft.Generate",
-		Domain:      "package",
-		Operation:   "draft_generate",
-		Description: "生成检测包草稿",
-		Risk:        assistant.ToolRiskMedium,
-		Enabled:     true,
+		Name:               "Package.Draft.Generate",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpGenerate,
+		Capability:         "generate_detection_package_draft",
+		Description:        "根据 Hook 计划和 Sigma 规则生成动态检测包草稿",
+		Aliases:            []string{"生成检测包", "生成动态检测包", "检测包草稿", "创建规则包", "动态包草稿"},
+		Tags:               []string{"package", "detection_package", "dynamic", "draft", "sigma", "ebpf"},
+		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskMedium,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -73,12 +80,19 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.Build.Start",
-		Domain:      "package",
-		Operation:   "build_start",
-		Description: "启动检测包构建",
-		Risk:        assistant.ToolRiskMedium,
-		Enabled:     true,
+		Name:               "Package.Build.Start",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpExecute,
+		Capability:         "start_detection_package_build",
+		Description:        "启动动态检测包构建任务",
+		Aliases:            []string{"构建检测包", "启动构建", "编译动态检测包", "检测包构建"},
+		Tags:               []string{"package", "detection_package", "dynamic", "build", "task"},
+		ObjectTypes:        []string{"detection_package", "package", "task"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskMedium,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -100,12 +114,19 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.Sign",
-		Domain:      "package",
-		Operation:   "sign",
-		Description: "签名检测包（高风险操作，需审批）",
-		Risk:        assistant.ToolRiskCritical,
-		Enabled:     true,
+		Name:               "Package.Sign",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpApprove,
+		Capability:         "sign_detection_package",
+		Description:        "签名动态检测包（高风险操作，需审批）",
+		Aliases:            []string{"签名检测包", "检测包签名", "批准检测包", "发布签名"},
+		Tags:               []string{"package", "detection_package", "dynamic", "sign", "critical"},
+		ObjectTypes:        []string{"detection_package", "package"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskCritical,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -127,12 +148,19 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Package.Enable",
-		Domain:      "package",
-		Operation:   "enable",
-		Description: "启用检测包，将检测包分发到所有Agent（高风险操作，需审批）",
-		Risk:        assistant.ToolRiskCritical,
-		Enabled:     true,
+		Name:               "Package.Enable",
+		Domain:             assistant.DomainPackage,
+		Operation:          assistant.OpDispatch,
+		Capability:         "enable_detection_package",
+		Description:        "启用动态检测包并分发到 Agent（高风险操作，需审批）",
+		Aliases:            []string{"启用检测包", "分发检测包", "下发动态检测包", "启用规则包", "发布检测包"},
+		Tags:               []string{"package", "detection_package", "dynamic", "enable", "dispatch", "critical"},
+		ObjectTypes:        []string{"detection_package", "package", "agent"},
+		PageRoutes:         []string{"/detection/packages", "/packages", "/detection"},
+		Risk:               assistant.ToolRiskCritical,
+		AutoCallable:       false,
+		Idempotent:         false,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -169,11 +197,11 @@ func makePackageDraftGenerateHandler(svc DetectionPackageServiceForTools) assist
 		operator := getStringArg(args, "operator", "assistant")
 
 		req := service.CreateDraftRequest{
-			Title:           title,
-			TargetVersion:   targetVersion,
-			Description:     getStringArg(args, "description", ""),
-			HookPlanYAML:    getStringArg(args, "hook_plan_yaml", ""),
-			SigmaRulesYAML:  getStringArg(args, "sigma_rules_yaml", ""),
+			Title:          title,
+			TargetVersion:  targetVersion,
+			Description:    getStringArg(args, "description", ""),
+			HookPlanYAML:   getStringArg(args, "hook_plan_yaml", ""),
+			SigmaRulesYAML: getStringArg(args, "sigma_rules_yaml", ""),
 		}
 
 		if cveIDs, err := getStringSliceArg(args, "cve_ids"); err == nil {

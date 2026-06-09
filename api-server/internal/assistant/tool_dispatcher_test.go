@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +211,280 @@ func TestAssistantToolGatewayAdapterPublishesCompletionForRuntimeCallID(t *testi
 	}
 }
 
+func TestAssistantToolGatewayAdapterAutoCompletesAssetCollectionSequence(t *testing.T) {
+	registry := NewToolRegistry()
+	for _, spec := range []*ToolSpec{
+		{
+			Name:               "Asset.Collection.Trigger",
+			Risk:               ToolRiskMedium,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"task_id": "collection-1", "status": "collecting"}, nil
+			},
+		},
+		{
+			Name:               "Asset.Collection.Get",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"task": map[string]interface{}{"id": "collection-1", "status": "completed"}}, nil
+			},
+		},
+		{
+			Name:               "Asset.Application.List",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"data": []map[string]interface{}{{"name": "claude-code"}}, "total": 1}, nil
+			},
+		},
+		{
+			Name:               "Asset.Summary.Get",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"summary": map[string]interface{}{"ai_agent_count": 1}}, nil
+			},
+		},
+	} {
+		if err := registry.Register(spec); err != nil {
+			t.Fatalf("register %s: %v", spec.Name, err)
+		}
+	}
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	var started []string
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-asset",
+		RunID:      "run-asset",
+		UserInput:  "请严格按顺序调用工具：Asset.Collection.Trigger、Asset.Collection.Get、Asset.Application.List、Asset.Summary.Get。",
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			started = append(started, toolName)
+		},
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "asset-trigger-call",
+		ToolName: "Asset.Collection.Trigger",
+		Args:     map[string]interface{}{"scope": "hosts", "host_ids": []string{"host-1"}, "types": []string{"process"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
+	}
+	if !strings.Contains(resp.Content, `"asset_collection_sequence_complete":true`) {
+		t.Fatalf("expected enriched asset collection result, got %s", resp.Content)
+	}
+	for _, want := range []string{
+		"Asset.Collection.Trigger",
+		"Asset.Collection.Get",
+		"Asset.Application.List",
+		"Asset.Summary.Get",
+	} {
+		if !containsString(started, want) {
+			t.Fatalf("expected %s to be called, got %v", want, started)
+		}
+	}
+}
+
+func TestAssistantToolGatewayAdapterAutoCompletesVulnerabilityScriptExecuteSequence(t *testing.T) {
+	registry := NewToolRegistry()
+	for _, spec := range []*ToolSpec{
+		{
+			Name:               "Vulnerability.Script.Status",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"summary": map[string]interface{}{"generated": 1}}, nil
+			},
+		},
+		{
+			Name:               "Vulnerability.Script.Execute",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"task_group_id": "task-" + args["script_type"].(string)}, nil
+			},
+		},
+	} {
+		if err := registry.Register(spec); err != nil {
+			t.Fatalf("register %s: %v", spec.Name, err)
+		}
+	}
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	var started []string
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-vuln",
+		RunID:      "run-vuln",
+		UserInput: strings.Join([]string{
+			`Vulnerability.Script.Status 参数 cve_id="CVE-2023-50495", script_type="poc"。`,
+			`Vulnerability.Script.Execute 参数 cve_id="CVE-2023-50495", script_type="poc", host_ids=["cf18f7f7-5b45-46e2-9889-160dddc4ee30"]。`,
+			`Vulnerability.Script.Execute 参数 cve_id="CVE-2023-50495", script_type="fix", host_ids=["cf18f7f7-5b45-46e2-9889-160dddc4ee30"]。`,
+		}, "\n"),
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			started = append(started, toolName)
+		},
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "vuln-status-call",
+		ToolName: "Vulnerability.Script.Status",
+		Args:     map[string]interface{}{"cve_id": "CVE-2023-50495", "script_type": "poc"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
+	}
+	if !strings.Contains(resp.Content, `"vulnerability_script_sequence_complete":true`) {
+		t.Fatalf("expected enriched vulnerability result, got %s", resp.Content)
+	}
+	if countString(started, "Vulnerability.Script.Execute") != 2 {
+		t.Fatalf("expected two execute calls, got %v", started)
+	}
+}
+
+func TestAssistantToolGatewayAdapterAutoCompletesDetectionSequence(t *testing.T) {
+	registry := NewToolRegistry()
+	for _, name := range []string{
+		"Detection.Alert.List",
+		"Detection.Alert.Get",
+		"Detection.Statistics.Get",
+		"Detection.Trend.Get",
+		"SigmaRule.List",
+		"Investigation.HostAttack.Analyze",
+	} {
+		toolName := name
+		if err := registry.Register(&ToolSpec{
+			Name:               toolName,
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"ok": true, "tool": toolName}, nil
+			},
+		}); err != nil {
+			t.Fatalf("register %s: %v", toolName, err)
+		}
+	}
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	var started []string
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-detection",
+		RunID:      "run-detection",
+		UserInput: strings.Join([]string{
+			`Detection.Alert.List 参数 page=1,page_size=10。`,
+			`Detection.Alert.Get 参数 alert_id="ALT-e69edac6"。`,
+			`Detection.Statistics.Get。`,
+			`Detection.Trend.Get 参数 hours=24。`,
+			`SigmaRule.List 参数 page=1,page_size=10,status="active"。`,
+			`Investigation.HostAttack.Analyze 参数 host_id="cf18f7f7-5b45-46e2-9889-160dddc4ee30"。`,
+		}, "\n"),
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			started = append(started, toolName)
+		},
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "detection-start",
+		ToolName: "Detection.Alert.Get",
+		Args:     map[string]interface{}{"alert_id": "ALT-e69edac6"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
+	}
+	if !strings.Contains(resp.Content, `"detection_sequence_complete":true`) {
+		t.Fatalf("expected enriched detection result, got %s", resp.Content)
+	}
+	for _, want := range []string{
+		"Detection.Alert.List",
+		"Detection.Alert.Get",
+		"Detection.Statistics.Get",
+		"Detection.Trend.Get",
+		"SigmaRule.List",
+		"Investigation.HostAttack.Analyze",
+	} {
+		if !containsString(started, want) {
+			t.Fatalf("expected %s to be called, got %v", want, started)
+		}
+	}
+}
+
+func TestAssistantToolGatewayAdapterAutoCompletesPackageSequence(t *testing.T) {
+	registry := NewToolRegistry()
+	for _, name := range []string{"Package.List", "Package.Get", "Package.Build.Start"} {
+		toolName := name
+		if err := registry.Register(&ToolSpec{
+			Name:               toolName,
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+			Enabled:            true,
+			Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"ok": true, "tool": toolName, "package_id": args["package_id"]}, nil
+			},
+		}); err != nil {
+			t.Fatalf("register %s: %v", toolName, err)
+		}
+	}
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	var started []string
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "test-session",
+		MessageID:  "msg-package",
+		RunID:      "run-package",
+		UserInput: strings.Join([]string{
+			`Package.List 参数 page=1,page_size=20。`,
+			`Package.Get 参数 package_id="b1c4300a-d050-4b12-8b0f-b41fce167b1e"。`,
+			`Package.Build.Start 参数 package_id="codex-e2e-123", operator="playwright"。`,
+		}, "\n"),
+		OnToolCall: func(callID, toolName string, args interface{}) {
+			started = append(started, toolName)
+		},
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "package-start",
+		ToolName: "Package.List",
+		Args:     map[string]interface{}{"page": 1, "page_size": 20},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
+	}
+	if !strings.Contains(resp.Content, `"package_sequence_complete":true`) {
+		t.Fatalf("expected enriched package result, got %s", resp.Content)
+	}
+	for _, want := range []string{"Package.List", "Package.Get", "Package.Build.Start"} {
+		if !containsString(started, want) {
+			t.Fatalf("expected %s to be called, got %v", want, started)
+		}
+	}
+}
+
 func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 	registry := NewToolRegistry()
 	_ = registry.Register(&ToolSpec{
@@ -258,6 +533,25 @@ func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 	if toolCallRepo.markFailedCall.ErrorMsg == "" {
 		t.Fatalf("expected non-empty error message in MarkFailed call")
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countString(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
 }
 
 func TestToolDispatcher_ToolHandlerError(t *testing.T) {

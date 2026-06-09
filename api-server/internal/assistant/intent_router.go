@@ -37,13 +37,13 @@ func NewIntentRouter() *IntentRouter {
 	return &IntentRouter{
 		keywords: map[string][]string{
 			"host":          {"主机", "机器", "IP", "agent", "离线", "在线", "主机列表"},
-			"asset":         {"资产", "资产态势", "资产概览", "资产统计", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么", "资产清点", "资源清点", "资产采集", "资源采集", "实时采集", "应用资产", "软件资产"},
+			"asset":         {"资产", "资产态势", "资产概览", "资产统计", "软件", "安装", "已安装", "哪些主机", "哪些资产", "什么资产", "有什么软件", "装了什么", "资产清点", "资源清点", "资产采集", "资源采集", "实时采集", "应用资产", "软件资产", "AI资产", "AI Agent", "LLM服务", "MCP Server", "MCP资产"},
 			"baseline":      {"基线", "基线模板", "基线规则", "基线脚本", "检测脚本", "修复脚本", "基线检查", "基线修复", "基线上传", "基线识别"},
 			"task":          {"任务", "基线", "检查", "修复", "扫描任务", "执行"},
-			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "受影响", "安全问题", "风险"},
-			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵", "安全", "安全事件", "事件", "异常"},
-			"sigma_rule":    {"sigma", "规则", "检测规则", "规则生成", "规则激活"},
-			"package":       {"检测包", "包", "签名", "构建", "启用", "禁用", "回滚", "hook", "allowlist"},
+			"vulnerability": {"漏洞", "CVE", "补丁", "修复脚本", "POC", "POC检测", "漏洞修复", "受影响", "安全问题", "风险"},
+			"detection":     {"告警", "威胁", "检测", "阻断", "告警趋势", "威胁统计", "攻击矩阵", "安全", "安全事件", "事件", "异常", "异常检测", "异常事件", "AI分析"},
+			"sigma_rule":    {"sigma", "规则", "检测规则", "规则生成", "规则激活", "规则识别", "异常检测规则"},
+			"package":       {"检测包", "动态检测包", "规则包", "包", "签名", "构建", "启用", "禁用", "回滚", "hook", "allowlist"},
 			"block":         {"阻断", "策略", "封禁", "白名单"},
 			"config":        {"配置", "设置", "LLM", "系统配置"},
 			"audit":         {"审计", "日志", "审计日志", "操作记录"},
@@ -308,12 +308,12 @@ func (r *IntentRouter) inferAction(query string) string {
 
 func (r *IntentRouter) inferObject(query string) string {
 	objectKeywords := map[string]string{
-		"主机": "host", "资产": "asset", "软件": "asset", "应用": "asset",
+		"主机": "host", "资产": "asset", "软件": "asset", "应用": "asset", "AI资产": "asset",
 		"告警": "alert", "威胁": "alert",
 		"任务": "task", "基线": "baseline",
 		"漏洞": "vulnerability", "CVE": "vulnerability",
 		"规则": "sigma_rule", "sigma": "sigma_rule",
-		"检测包": "package", "包": "package",
+		"检测包": "package", "动态检测包": "package", "包": "package",
 		"阻断": "block", "策略": "block",
 		"配置": "config",
 		"审计": "audit",

@@ -303,6 +303,7 @@ func makeBaselineScriptGenerateHandler(svc ScriptGenerationServiceForTools) assi
 				"template_id": templateID.String(),
 				"script_type": scriptType,
 				"result":      result,
+				"next_action": baselineScriptNextAction(scriptType),
 				"route_path":  "/baseline",
 			}, nil
 		}
@@ -328,8 +329,20 @@ func makeBaselineScriptGenerateHandler(svc ScriptGenerationServiceForTools) assi
 			"script_type": scriptType,
 			"queued":      queued,
 			"total":       len(queued),
+			"next_action": baselineScriptNextAction(scriptType),
 			"route_path":  "/baseline",
 		}, nil
+	}
+}
+
+func baselineScriptNextAction(scriptType string) string {
+	switch strings.ToUpper(strings.TrimSpace(scriptType)) {
+	case "CHECK":
+		return "检测脚本已处理；如果用户要求完整基线闭环，继续调用 Baseline.Script.Generate，script_type=FIX。"
+	case "FIX":
+		return "修复脚本已处理；如果用户提供了 rule_ids 和 host_ids，继续调用 Task.RunCheck 下发检测任务，然后按用户要求调用 Task.RunFix，最后用 Task.List 或 Task.GetDetail 查询状态。"
+	default:
+		return ""
 	}
 }
 
@@ -353,6 +366,7 @@ func makeRunCheckHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			"task_group_id": result.TaskGroupID.String(),
 			"task_ids":      result.TaskIDs,
 			"task_type":     "CHECK",
+			"next_action":   "检测任务已下发；如果用户要求修复，继续调用 Task.RunFix，使用相同 rule_ids 和 host_ids；随后调用 Task.List 或 Task.GetDetail 查看任务状态。",
 			"task_ref": buildTaskRef(
 				"baseline_task",
 				result.TaskGroupID.String(),
@@ -384,6 +398,7 @@ func makeRunFixHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			"task_group_id": result.TaskGroupID.String(),
 			"task_ids":      result.TaskIDs,
 			"task_type":     "FIX",
+			"next_action":   "修复任务已下发；继续调用 Task.List 或 Task.GetDetail 查询任务状态和结果。",
 			"task_ref": buildTaskRef(
 				"baseline_task",
 				result.TaskGroupID.String(),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -254,6 +255,7 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 					Title:      ref.Title,
 					Summary:    ref.Summary,
 					RoutePath:  ref.RoutePath,
+					Snapshot:   mustMarshalJSON(ref.Data),
 				})
 			}
 		}
@@ -315,6 +317,32 @@ func (s *Service) CancelRun(ctx context.Context, sessionID string, operator stri
 // CompleteRun 完成运行
 func (s *Service) completeRun(ctx context.Context, sessionID, runID string, result *RunResult, err error) {
 	if errors.Is(err, context.Canceled) {
+		if run, ok := s.runManager.Get(sessionID); ok {
+			if decision := run.RejectedApproval(); decision != nil {
+				msg := "审批已拒绝，运行已停止"
+				if decision.Comment != "" {
+					msg += ": " + decision.Comment
+				}
+				s.logger.Info("run stopped after approval rejection",
+					zap.String("session_id", sessionID),
+					zap.String("run_id", runID),
+					zap.String("approval_id", decision.ApprovalID),
+				)
+				_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
+				s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, msg))
+				_ = s.messageRepo.Create(context.Background(), &model.AssistantMessage{
+					ID:        uuid.New(),
+					SessionID: sessionID,
+					MessageID: "msg_" + runID,
+					Role:      "assistant",
+					Content:   msg,
+					Thinking:  s.extractThinkingFromHistory(sessionID),
+					Plan:      s.extractPlanFromHistory(sessionID),
+				})
+				s.runManager.Finish(sessionID)
+				return
+			}
+		}
 		s.logger.Info("run cancelled", zap.String("session_id", sessionID), zap.String("run_id", runID))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCancelled)
 		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, "任务已取消"))
@@ -368,6 +396,42 @@ func (s *Service) ListToolCalls(ctx context.Context, sessionID string, page, pag
 // ListApprovals 列出审批
 func (s *Service) ListApprovals(ctx context.Context, sessionID string, page, pageSize int) ([]model.AssistantApproval, int64, error) {
 	return s.approvalRepo.ListBySession(ctx, sessionID, page, pageSize)
+}
+
+// SignalApprovalApproved 将用户批准结果发送给正在等待的工具调用。
+func (s *Service) SignalApprovalApproved(approval *model.AssistantApproval, operator string, comment string) bool {
+	if approval == nil || s.runManager == nil {
+		return false
+	}
+	run, ok := s.runManager.Get(approval.SessionID)
+	if !ok {
+		return false
+	}
+	return run.ResolveApproval(ApprovalDecision{
+		ApprovalID: approval.ApprovalID,
+		Approved:   true,
+		Operator:   operator,
+		Comment:    comment,
+		DecidedAt:  time.Now(),
+	})
+}
+
+// SignalApprovalRejected 将用户拒绝结果发送给正在等待的工具调用。
+func (s *Service) SignalApprovalRejected(approval *model.AssistantApproval, operator string, comment string) bool {
+	if approval == nil || s.runManager == nil {
+		return false
+	}
+	run, ok := s.runManager.Get(approval.SessionID)
+	if !ok {
+		return false
+	}
+	return run.ResolveApproval(ApprovalDecision{
+		ApprovalID: approval.ApprovalID,
+		Approved:   false,
+		Operator:   operator,
+		Comment:    comment,
+		DecidedAt:  time.Now(),
+	})
 }
 
 // extractThinkingFromHistory 从事件历史中提取 thinking 内容

@@ -51,6 +51,29 @@
       </div>
     </div>
 
+    <div v-if="uploadItems.length" class="upload-chip-row">
+      <div
+        v-for="item in uploadItems"
+        :key="item.id"
+        class="upload-chip"
+        :class="item.status"
+      >
+        <el-icon class="file-icon"><Document /></el-icon>
+        <span class="file-name" :title="item.name">{{ item.name }}</span>
+        <el-icon v-if="item.status === 'uploading'" class="status-icon loading"><Loading /></el-icon>
+        <el-icon v-else-if="item.status === 'success'" class="status-icon success"><CircleCheck /></el-icon>
+        <el-tooltip v-else :content="item.error || '上传失败'" placement="top">
+          <el-icon class="status-icon error"><CircleClose /></el-icon>
+        </el-tooltip>
+        <el-button
+          class="chip-close"
+          link
+          :icon="Close"
+          @click="$emit('remove-upload', item.id)"
+        />
+      </div>
+    </div>
+
     <div class="composer-input">
       <el-input
         ref="inputRef"
@@ -81,24 +104,35 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { List, Lock, Promotion, Unlock, Upload } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Close, Document, List, Loading, Lock, Promotion, Unlock, Upload } from '@element-plus/icons-vue'
 import type { AssistantFileUploadPurpose, AssistantToolApprovalMode } from '@/api/assistant'
+
+type UploadItem = {
+  id: string
+  name: string
+  purpose: AssistantFileUploadPurpose
+  status: 'uploading' | 'success' | 'error'
+  error?: string
+}
 
 const props = withDefaults(defineProps<{
   disabled: boolean
   approvalMode?: AssistantToolApprovalMode
   modeLoading?: boolean
   uploading?: boolean
+  uploadItems?: UploadItem[]
 }>(), {
   approvalMode: 'whitelist',
   modeLoading: false,
   uploading: false,
+  uploadItems: () => [],
 })
 
 const emit = defineEmits<{
   send: [content: string]
   'approval-mode-change': [mode: AssistantToolApprovalMode]
   'upload-file': [file: File, purpose: AssistantFileUploadPurpose]
+  'remove-upload': [id: string]
 }>()
 
 const inputRef = ref()
@@ -187,6 +221,80 @@ function handleFileSelected(event: Event) {
 
 .hidden-file-input {
   display: none;
+}
+
+.upload-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 10px;
+}
+
+.upload-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 360px);
+  min-height: 30px;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid #dbe4ef;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+}
+
+.upload-chip.error {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.file-icon {
+  color: #64748b;
+  flex: none;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.status-icon {
+  flex: none;
+}
+
+.status-icon.loading {
+  color: #409eff;
+  animation: spin 0.8s linear infinite;
+}
+
+.status-icon.success {
+  color: #16a34a;
+}
+
+.status-icon.error {
+  color: #dc2626;
+}
+
+.chip-close {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  color: #64748b;
+  flex: none;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .composer-input {

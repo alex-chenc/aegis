@@ -114,11 +114,14 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 				Title:      ref.Title,
 				Summary:    ref.Summary,
 				RoutePath:  ref.RoutePath,
+				Data:       unmarshalJSON(ref.Snapshot),
 			}
 			// 尝试加载完整数据
 			if o.contextLoader != nil {
 				if resolved, err := o.contextLoader.Resolve(ctx, ref.ObjectType, ref.ObjectID); err == nil && resolved != nil {
-					obj.Data = resolved.Data
+					if resolved.Data != nil {
+						obj.Data = resolved.Data
+					}
 					if obj.Title == "" {
 						obj.Title = resolved.Title
 					}
@@ -244,34 +247,80 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 }
 
 func (o *Orchestrator) expandComplexTaskTools(selected []string, taskType, userMessage string, intent IntentResult) []string {
-	if !shouldUseSecurityToolExpansion(taskType, userMessage, intent) {
-		return dedupeToolNames(selected)
+	extraTools := []string{}
+
+	if shouldUseSecurityToolExpansion(taskType, userMessage, intent) {
+		extraTools = append(extraTools,
+			"Host.List",
+			"Host.Get",
+			"Host.AgentStatus.Get",
+			"Task.List",
+			"Task.GetDetail",
+			"Task.RunCheck",
+			"Task.RunFix",
+			"Vulnerability.List",
+			"Vulnerability.AffectedHosts",
+			"Software.Installed.Search",
+			"Detection.Alert.List",
+			"Detection.Alert.Get",
+			"Detection.Statistics.Get",
+			"Detection.Trend.Get",
+			"Agent.Process.List",
+			"Agent.Process.Tree",
+			"Agent.Network.List",
+			"Agent.File.OpenList",
+			"Agent.Log.Query",
+		)
 	}
 
-	extraTools := []string{
-		"Host.List",
-		"Host.Get",
-		"Host.AgentStatus.Get",
-		"Task.List",
-		"Task.GetDetail",
-		"Task.RunCheck",
-		"Vulnerability.List",
-		"Vulnerability.AffectedHosts",
-		"Software.Installed.Search",
-		"Detection.Alert.List",
-		"Detection.Alert.Get",
-		"Detection.Statistics.Get",
-		"Detection.Trend.Get",
-		"Agent.Process.List",
-		"Agent.Process.Tree",
-		"Agent.Network.List",
-		"Agent.File.OpenList",
-		"Agent.Log.Query",
+	if shouldUseBaselineToolExpansion(userMessage, intent) {
+		extraTools = append(extraTools,
+			"Baseline.Template.List",
+			"Baseline.Template.Status.Get",
+			"Baseline.Template.Rules.List",
+			"Baseline.Script.Generate",
+			"Task.RunCheck",
+			"Task.RunFix",
+			"Task.List",
+			"Task.GetDetail",
+		)
+	}
+
+	if len(extraTools) == 0 {
+		return dedupeToolNames(selected)
 	}
 
 	expanded := append([]string{}, selected...)
 	expanded = append(expanded, extraTools...)
 	return dedupeToolNames(expanded)
+}
+
+func shouldUseBaselineToolExpansion(userMessage string, intent IntentResult) bool {
+	for _, domain := range intent.Domains {
+		if domain == "baseline" || domain == "baseline_template" || domain == "baseline_rule" {
+			return true
+		}
+	}
+	text := strings.ToLower(userMessage)
+	keywords := []string{
+		"基线",
+		"baseline",
+		"检测脚本",
+		"修复脚本",
+		"脚本生成",
+		"下发任务",
+		"runcheck",
+		"runfix",
+		"task.run",
+		"task.runcheck",
+		"task.runfix",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldUseSecurityToolExpansion(taskType, userMessage string, intent IntentResult) bool {
@@ -336,9 +385,20 @@ func (o *Orchestrator) convertContextRefs(refs []ContextObject) []ContextRefResu
 			ObjectID:   ref.ObjectID,
 			Title:      ref.Title,
 			Summary:    ref.Summary,
+			Data:       normalizeContextData(ref.Data),
 		})
 	}
 	return results
+}
+
+func normalizeContextData(data interface{}) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	if typed, ok := data.(map[string]interface{}); ok {
+		return typed
+	}
+	return map[string]interface{}{"value": data}
 }
 
 // isComplexTask 判断任务是否需要 agent-runtime 的 Plan → React 流程
@@ -462,6 +522,17 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			"task_type":  input.TaskType,
 		},
 	})
+	if run, ok := o.runManager.Get(input.SessionID); ok {
+		if decision := run.RejectedApproval(); decision != nil {
+			o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+				"current_run_status":     "approval_rejected",
+				"last_run_rejected_at":   time.Now().UTC().Format(time.RFC3339),
+				"rejected_approval_id":   decision.ApprovalID,
+				"rejected_approval_note": decision.Comment,
+			})
+			return nil, context.Canceled
+		}
+	}
 	if err != nil && ctx.Err() != nil {
 		o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
 			"current_run_status":    "cancelled",
@@ -491,12 +562,24 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		}
 	}
 
+	fallbackResponse := ""
+	if err == nil {
+		if count, summary, fallbackErr := o.executeExplicitToolSequenceFallback(context.Background(), input, msgID); fallbackErr != nil {
+			o.logger.Error("explicit tool sequence fallback failed", zap.Error(fallbackErr), zap.String("session_id", input.SessionID))
+			err = fallbackErr
+		} else if count > 0 {
+			fallbackResponse = summary
+		}
+	}
+
 	// 处理结果
 	response := ""
 
 	if err != nil {
 		o.logger.Error("agent-runtime error", zap.Error(err))
 		response = fmt.Sprintf("抱歉，执行过程中出现错误: %s\n\n您的问题是: %s\n\n请稍后重试或联系管理员。", err.Error(), input.UserMessage)
+	} else if fallbackResponse != "" {
+		response = fallbackResponse
 	} else if taskResult != nil && taskResult.FinalAnswer != "" {
 		response = taskResult.FinalAnswer
 	} else {

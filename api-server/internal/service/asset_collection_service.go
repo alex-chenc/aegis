@@ -367,31 +367,59 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname
 	count := 0
 	for _, ai := range aiAssets {
 		// 构建 fingerprint 用于去重
-		fpInput := fmt.Sprintf("%s:%s:%s", hostID.String(), ai.Category, ai.Name)
+		identity := ai.Endpoint
+		if identity == "" {
+			identity = ai.ConfigPath
+		}
+		if identity == "" && ai.Extra != nil {
+			if url := ai.Extra["url"]; url != "" {
+				identity = url
+			} else if command := ai.Extra["command_line"]; command != "" {
+				identity = command
+			}
+		}
+		fpInput := fmt.Sprintf("%s:%s:%s:%s", hostID.String(), ai.Category, ai.Name, identity)
 		fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fpInput)))
 
 		listenPortsJSON := mustMarshalJSON(ai.ListenPorts)
+		configPaths := []string{}
+		if ai.ConfigPath != "" {
+			configPaths = append(configPaths, ai.ConfigPath)
+		}
+		evidence := []map[string]string{
+			{
+				"source":      ai.Source,
+				"category":    ai.Category,
+				"config_path": ai.ConfigPath,
+				"endpoint":    ai.Endpoint,
+			},
+		}
 
 		app := &model.HostApplicationAsset{
-			ID:           uuid.New(),
-			HostID:       hostID,
-			Hostname:     hostname,
-			IPAddress:    ipAddress,
-			OSType:       osType,
-			Category:     ai.Category,
-			Name:         ai.Name,
-			DisplayName:  ai.DisplayName,
-			Version:      ai.Version,
-			ListenPorts:  listenPortsJSON,
-			InstallPath:  ai.ConfigPath,
-			StartPath:    ai.Endpoint,
-			AIConfidence: 0.9, // Agent 侧直接采集，高置信度
-			ReviewStatus: "auto",
-			Status:       "active",
-			Fingerprint:  fp,
-			CollectedAt:  time.Now(),
-			FirstSeenAt:  time.Now(),
-			LastSeenAt:   time.Now(),
+			ID:            uuid.New(),
+			HostID:        hostID,
+			Hostname:      hostname,
+			IPAddress:     ipAddress,
+			OSType:        osType,
+			Category:      ai.Category,
+			Name:          ai.Name,
+			DisplayName:   ai.DisplayName,
+			Version:       ai.Version,
+			VersionSource: ai.Source,
+			ListenPorts:   listenPortsJSON,
+			InstallPath:   ai.ConfigPath,
+			StartPath:     ai.Endpoint,
+			ConfigPaths:   mustMarshalJSON(configPaths),
+			RelatedPIDs:   mustMarshalJSON(ai.PIDs),
+			AIConfidence:  0.9, // Agent 侧直接采集，高置信度
+			AIEvidence:    mustMarshalJSON(evidence),
+			AIRawOutput:   mustMarshalJSON(ai),
+			ReviewStatus:  "auto",
+			Status:        "active",
+			Fingerprint:   fp,
+			CollectedAt:   time.Now(),
+			FirstSeenAt:   time.Now(),
+			LastSeenAt:    time.Now(),
 		}
 
 		if err := s.repo.UpsertApplicationAsset(app); err != nil {

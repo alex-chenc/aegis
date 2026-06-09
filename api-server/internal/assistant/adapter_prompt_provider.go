@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
@@ -61,6 +62,8 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 	toolList := p.formatToolList()
 	reflectionGuide := p.formatReflectionGuide()
 	hostSecurityGuide := hostSecurityAnalysisGuide()
+	contextBlock := p.formatContextRefs()
+	sequenceGuide := p.formatMandatoryToolSequenceGuide()
 
 	systemPrompt := fmt.Sprintf(`你是 Aegis 智能安全助手，专注于主机安全分析和运维操作。
 
@@ -73,6 +76,10 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 - 主机攻击研判
 
 ## 可用工具
+%s
+
+%s
+
 %s
 
 %s
@@ -96,14 +103,11 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 ⚠️ 严格要求：只输出一个JSON对象，不要输出任何其他文本、解释、问候或markdown格式。直接以 { 开头，以 } 结尾。
 
 JSON格式如下：
-{"goal":"任务目标描述","assumptions":["假设1","假设2"],"steps":[{"step_id":"step_1","title":"步骤标题","objective":"步骤目标","expected_output":"预期输出","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, hostSecurityGuide)
+{"goal":"任务目标描述","assumptions":["假设1","假设2"],"steps":[{"step_id":"step_1","title":"步骤标题","objective":"步骤目标","expected_output":"预期输出","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide)
 
 	userPrompt := p.userMessage
-	if len(p.contextRefs) > 0 {
-		userPrompt += "\n\n## 上下文信息\n"
-		for _, ref := range p.contextRefs {
-			userPrompt += fmt.Sprintf("- %s (%s): %s\n", ref.Title, ref.ObjectType, ref.Summary)
-		}
+	if contextBlock != "" {
+		userPrompt += "\n\n" + contextBlock
 	}
 
 	return agentruntime.PromptBundle{
@@ -120,10 +124,16 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 	toolList := p.formatToolListDetail()
 	reflectionGuide := p.formatReflectionGuide()
 	hostSecurityGuide := hostSecurityAnalysisGuide()
+	contextBlock := p.formatContextRefs()
+	sequenceGuide := p.formatMandatoryToolSequenceGuide()
 
 	systemPrompt := fmt.Sprintf(`你是 Aegis 智能安全助手，正在执行安全分析任务。
 
 ## 可用工具（必须严格使用以下工具名，不得发明新工具名）
+%s
+
+%s
+
 %s
 
 %s
@@ -171,7 +181,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 - 禁止输出 {"name":"...","arguments":...} 格式（这是错误格式）
 - 禁止输出 markdown 代码块（不要用三个反引号包裹）
 - 禁止在JSON前后输出多余文字
-- 必须使用 "action" 字段，不要使用 "name" 或 "type" 字段`, toolList, reflectionGuide, hostSecurityGuide)
+- 必须使用 "action" 字段，不要使用 "name" 或 "type" 字段`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide)
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
@@ -301,6 +311,95 @@ func (p *AssistantPromptProvider) formatReflectionGuide() string {
 			continue
 		}
 		buf.WriteString(fmt.Sprintf("%d. %s\n", i+1, memory))
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+type toolSequenceOccurrence struct {
+	pos  int
+	name string
+}
+
+func (p *AssistantPromptProvider) formatMandatoryToolSequenceGuide() string {
+	message := strings.TrimSpace(p.userMessage)
+	if message == "" || len(p.toolDescriptors) == 0 {
+		return ""
+	}
+
+	var occurrences []toolSequenceOccurrence
+	for _, desc := range p.toolDescriptors {
+		name := strings.TrimSpace(desc.Name)
+		if name == "" {
+			continue
+		}
+		offset := 0
+		for offset < len(message) {
+			idx := strings.Index(message[offset:], name)
+			if idx < 0 {
+				break
+			}
+			pos := offset + idx
+			occurrences = append(occurrences, toolSequenceOccurrence{pos: pos, name: name})
+			offset = pos + len(name)
+		}
+	}
+	if len(occurrences) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(occurrences, func(i, j int) bool {
+		return occurrences[i].pos < occurrences[j].pos
+	})
+
+	var buf strings.Builder
+	buf.WriteString("## 用户指定工具执行约束\n")
+	buf.WriteString("用户消息中明确列出了以下可用工具名；这些工具不是建议，而是执行约束。必须按出现顺序调用，并等待每个工具成功或明确失败记录后，才能输出 step_result 或 fail_step：\n")
+	for i, item := range occurrences {
+		buf.WriteString(fmt.Sprintf("%d. %s\n", i+1, item.name))
+	}
+	buf.WriteString("- 同一工具重复出现表示需要按上下文使用不同参数分别调用，例如 Baseline.Script.Generate(CHECK) 和 Baseline.Script.Generate(FIX) 分别使用 script_type=CHECK/FIX。\n")
+	buf.WriteString("- 如果已上传上下文或用户消息提供 template_id、rule_id、host_id，直接使用这些 ID；不得因为已有上下文而声称看不到文件。\n")
+	buf.WriteString("- 不要重复查询同一模板状态或规则列表超过一次，除非前一次调用失败或缺少必要参数。\n")
+	if strings.Contains(message, "Task.RunCheck") || strings.Contains(message, "Task.RunFix") {
+		buf.WriteString("- Task.List 只能在 Task.RunCheck/Task.RunFix 下发后用于查询进度或结果；不得用 Task.List 替代 Task.RunCheck 或 Task.RunFix。\n")
+	}
+	if strings.Contains(message, "Baseline.Script.Generate") && strings.Contains(message, "Task.RunCheck") {
+		buf.WriteString("- 基线闭环中，完成检测脚本和修复脚本生成后，下一步必须下发 Task.RunCheck；如果用户要求修复，再调用 Task.RunFix；最后再调用 Task.List 或 Task.GetDetail 查询任务状态。\n")
+	}
+	if strings.Contains(message, "Asset.Collection.Trigger") {
+		buf.WriteString("- 资产采集闭环中，如果 Asset.Collection.Trigger 的返回包含 asset_collection_sequence_complete=true 或 all_requested_tools_success=true，表示系统已经自动完成 Asset.Collection.Get、Asset.Application.List 和 Asset.Summary.Get 查询；必须立即基于 verified_result_summary 输出 step_result，不要再调用 Task.GetDetail、Tool.Search，也不要声称 Asset.Summary.Get 不存在或 task_id 缺失。\n")
+	}
+	if strings.Contains(message, "Vulnerability.Script.Execute") {
+		buf.WriteString("- 漏洞 POC/FIX 闭环中，如果 Vulnerability.Script.Status 或 Vulnerability.Script.Generate 返回 vulnerability_script_sequence_complete=true，表示系统已经按用户要求自动下发 Vulnerability.Script.Execute；必须基于 executions 中的 task_group_id 查询或输出任务状态，不要停留在脚本状态查询。\n")
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+func (p *AssistantPromptProvider) formatContextRefs() string {
+	if len(p.contextRefs) == 0 {
+		return ""
+	}
+	var buf strings.Builder
+	buf.WriteString("## 已上传/已关联上下文\n")
+	buf.WriteString("以下对象已经绑定到当前会话；涉及文件、基线模板或规则时，必须优先使用这些对象的 ID 和状态，不要声称看不到文件：\n")
+	for _, ref := range p.contextRefs {
+		buf.WriteString(fmt.Sprintf("- %s (%s, id=%s)", ref.Title, ref.ObjectType, ref.ObjectID))
+		if strings.TrimSpace(ref.Summary) != "" {
+			buf.WriteString(": ")
+			buf.WriteString(strings.TrimSpace(ref.Summary))
+		}
+		if len(ref.Data) > 0 {
+			encoded, err := json.Marshal(ref.Data)
+			if err == nil && len(encoded) > 0 {
+				data := string(encoded)
+				if len([]rune(data)) > 1600 {
+					data = string([]rune(data)[:1600]) + "..."
+				}
+				buf.WriteString("\n  data: ")
+				buf.WriteString(data)
+			}
+		}
+		buf.WriteString("\n")
 	}
 	return strings.TrimSpace(buf.String())
 }

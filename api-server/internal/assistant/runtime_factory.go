@@ -12,6 +12,7 @@ import (
 
 	"api-server/internal/llm"
 	"api-server/internal/llm/adapters"
+	"api-server/internal/model"
 	"api-server/internal/repository"
 )
 
@@ -98,12 +99,15 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 
 	// 4. 创建 ToolGateway（实现 agentruntime.ToolGateway）
 	toolGateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
-		Dispatcher: f.toolDispatcher,
-		SessionID:  req.SessionID,
-		MessageID:  req.MessageID,
-		RunID:      req.RunID,
-		Operator:   req.Operator,
-		Logger:     f.logger,
+		Dispatcher:  f.toolDispatcher,
+		SessionID:   req.SessionID,
+		MessageID:   req.MessageID,
+		RunID:       req.RunID,
+		Operator:    req.Operator,
+		Logger:      f.logger,
+		RunManager:  f.runManager,
+		UserInput:   req.UserInput,
+		ContextRefs: req.ContextRefs,
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
@@ -115,6 +119,12 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		},
 		OnApproval: func(approval interface{}) {
 			f.runManager.Publish(req.SessionID, EventApprovalRequiredPayload(req.SessionID, req.RunID, req.MessageID, approval))
+			if typed, ok := approval.(*model.AssistantApproval); ok {
+				f.runManager.Publish(req.SessionID, EventRunWaitingApprovalPayload(req.SessionID, req.RunID, typed.ApprovalID, typed.ToolName))
+			}
+		},
+		OnApprovalUpdated: func(approval interface{}) {
+			f.runManager.Publish(req.SessionID, withMessageID(NewEvent(EventApprovalUpdated, req.SessionID, req.RunID, approval), req.MessageID))
 		},
 	})
 
@@ -233,14 +243,18 @@ func (f *RuntimeFactory) BuildLLMClient(ctx context.Context) (*llm.LLMClient, er
 func (f *RuntimeFactory) buildUserContext(contextRefs []ContextRefResult) map[string]interface{} {
 	userContext := make(map[string]interface{})
 	if len(contextRefs) > 0 {
-		refsData := make([]map[string]string, 0, len(contextRefs))
+		refsData := make([]map[string]interface{}, 0, len(contextRefs))
 		for _, ref := range contextRefs {
-			refsData = append(refsData, map[string]string{
+			item := map[string]interface{}{
 				"object_type": ref.ObjectType,
 				"object_id":   ref.ObjectID,
 				"title":       ref.Title,
 				"summary":     ref.Summary,
-			})
+			}
+			if len(ref.Data) > 0 {
+				item["data"] = ref.Data
+			}
+			refsData = append(refsData, item)
 		}
 		userContext["context_refs"] = refsData
 	}
@@ -359,8 +373,9 @@ type PromptInput struct {
 
 // ContextRefResult 上下文引用结果
 type ContextRefResult struct {
-	ObjectType string `json:"object_type"`
-	ObjectID   string `json:"object_id"`
-	Title      string `json:"title"`
-	Summary    string `json:"summary"`
+	ObjectType string                 `json:"object_type"`
+	ObjectID   string                 `json:"object_id"`
+	Title      string                 `json:"title"`
+	Summary    string                 `json:"summary"`
+	Data       map[string]interface{} `json:"data,omitempty"`
 }
