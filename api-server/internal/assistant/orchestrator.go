@@ -154,15 +154,38 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"confidence": intent.Confidence,
 	}))
 
-	// 6. 工具选择
-	selection := o.toolSelector.Select(ToolSelectionInput{
-		Query:       input.UserMessage,
-		ContextRefs: intentInput.ContextRefs,
-		Intent:      intent,
-		MaxTools:    24,
-	})
+	// 6. 工具选择：复杂任务优先交给 LLM 根据短目录 + 详情目录选择工具；
+	// 规则选择仅用于短句快捷入口或 LLM 不可用时兜底。
+	var selection *ToolSelectionResult
+	llmSelectedTools := false
+	selectionMode := "rules"
+	naturalShortcut := detectNaturalOperationShortcut(input.UserMessage)
+	if naturalShortcut.Kind != naturalOperationNone {
+		selectionMode = "shortcut"
+	}
+	if shouldUseLLMToolSelection(input.UserMessage, intent) {
+		if llmSelection, err := o.selectToolsWithLLM(ctx, input.UserMessage, intent, intentInput.ContextRefs); err == nil && llmSelection != nil && len(llmSelection.SelectedTools) > 0 {
+			selection = llmSelection
+			llmSelectedTools = true
+			selectionMode = "llm"
+		} else if err != nil && o.logger != nil {
+			o.logger.Warn("llm tool selection failed, falling back to rule selector",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Error(err),
+			)
+		}
+	}
+	if selection == nil {
+		selection = o.toolSelector.Select(ToolSelectionInput{
+			Query:       input.UserMessage,
+			ContextRefs: intentInput.ContextRefs,
+			Intent:      intent,
+			MaxTools:    24,
+		})
+	}
 	useAIAnalysisFlow := o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
-	if useAIAnalysisFlow {
+	if useAIAnalysisFlow && !llmSelectedTools {
 		selection.SelectedTools = o.expandComplexTaskTools(selection.SelectedTools, input.TaskType, input.UserMessage, intent)
 	}
 
@@ -172,6 +195,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"candidate_tools": selection.CandidateTools,
 		"runtime_profile": runtimeProfileName(useAIAnalysisFlow),
 		"max_total_turns": maxRuntimeTurns(useAIAnalysisFlow),
+		"selection_mode":  selectionMode,
 	}))
 
 	// 8. 构建 agent-runtime 工具描述符
@@ -286,6 +310,19 @@ func (o *Orchestrator) expandComplexTaskTools(selected []string, taskType, userM
 		)
 	}
 
+	if shouldUseAssetCollectionAnalysisToolExpansion(userMessage, intent) {
+		extraTools = append(extraTools,
+			"Host.List",
+			"Asset.Collection.Trigger",
+			"Asset.Collection.Get",
+			"Asset.Application.List",
+			"Asset.Summary.Get",
+			"Software.Installed.Search",
+			"Vulnerability.List",
+			"Vulnerability.AffectedHosts",
+		)
+	}
+
 	if len(extraTools) == 0 {
 		return dedupeToolNames(selected)
 	}
@@ -293,6 +330,22 @@ func (o *Orchestrator) expandComplexTaskTools(selected []string, taskType, userM
 	expanded := append([]string{}, selected...)
 	expanded = append(expanded, extraTools...)
 	return dedupeToolNames(expanded)
+}
+
+func shouldUseAssetCollectionAnalysisToolExpansion(userMessage string, intent IntentResult) bool {
+	text := normalizeNaturalOperationText(userMessage)
+	if !hasAssetCollectionIntent(text) || !hasCompositeNaturalOperationIntent(text) {
+		return false
+	}
+	if strings.Contains(text, "软件") || strings.Contains(text, "漏洞") || strings.Contains(text, "cve") || strings.Contains(text, "mysql") {
+		return true
+	}
+	for _, domain := range intent.Domains {
+		if domain == "asset" || domain == "vulnerability" {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldUseBaselineToolExpansion(userMessage string, intent IntentResult) bool {
@@ -492,6 +545,13 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		"current_run_status": "running",
 		"run_started_at":     time.Now().UTC().Format(time.RFC3339),
 	})
+
+	if handled, response, err := o.runNaturalOperationShortcut(ctx, input, msgID, convertedRefs); handled {
+		if err != nil {
+			return nil, err
+		}
+		return o.finishNaturalOperationShortcutRun(input, msgID, response, useAIAnalysisFlow, maxIterations)
+	}
 
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
 	buildResult, err := o.runtimeFactory.Build(ctx, RuntimeBuildRequest{

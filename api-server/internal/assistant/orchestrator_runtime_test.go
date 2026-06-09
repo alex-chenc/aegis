@@ -47,6 +47,31 @@ func TestExpandComplexTaskToolsAddsSecurityAnalysisTools(t *testing.T) {
 	assertUniqueTools(t, expanded)
 }
 
+func TestExpandComplexTaskToolsAddsAssetSoftwareVulnerabilityWorkflowTools(t *testing.T) {
+	o := &Orchestrator{}
+	expanded := o.expandComplexTaskTools(
+		[]string{"Tool.Search"},
+		"operations",
+		"进行资产采集任务，并分析那个主机上有 MySQL 软件，并分析此 MySql 软件是否有漏洞",
+		IntentResult{Domains: []string{"asset", "vulnerability"}, Action: "analyze"},
+	)
+
+	for _, want := range []string{
+		"Host.List",
+		"Asset.Collection.Trigger",
+		"Asset.Collection.Get",
+		"Asset.Application.List",
+		"Asset.Summary.Get",
+		"Software.Installed.Search",
+		"Vulnerability.List",
+		"Vulnerability.AffectedHosts",
+		"Tool.Search",
+	} {
+		assertContainsTool(t, expanded, want)
+	}
+	assertUniqueTools(t, expanded)
+}
+
 func TestBuildAgentToolDescriptorsIncludesExpandedSecurityTools(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, name := range []string{"Detection.Alert.List", "Agent.Process.List"} {

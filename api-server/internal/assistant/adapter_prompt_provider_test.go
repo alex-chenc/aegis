@@ -138,6 +138,45 @@ func TestAssistantPromptProviderIncludesAssetCollectionSequenceCompletionGuide(t
 	}
 }
 
+func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Asset.Collection.Trigger", Description: "触发资产采集"},
+		{Name: "Asset.Collection.Get", Description: "查询采集详情"},
+		{Name: "Asset.Application.List", Description: "查询应用资产"},
+		{Name: "Asset.Summary.Get", Description: "查询资产概览"},
+		{Name: "Software.Installed.Search", Description: "查询已安装软件"},
+		{Name: "Vulnerability.List", Description: "查询漏洞"},
+		{Name: "Vulnerability.AffectedHosts", Description: "查询受影响主机"},
+	}, nil, "operations", "进行资产采集任务，并分析那个主机上有 MySQL 软件，并分析此 MySql 软件是否有漏洞")
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"自然语言工具使用推理原则",
+		"先理解业务目标",
+		"先抽取：目标对象",
+		"信息不足时先判断能否安全默认",
+		"工具选择应覆盖用户最终目标",
+		"采集只是证据来源之一",
+		"当前工具不足时使用 Tool.Search",
+	} {
+		if !strings.Contains(bundle.SystemPrompt, want) {
+			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+	for _, forbidden := range []string{
+		"package_name=\"mysql\"",
+		"必须按以下顺序执行",
+	} {
+		if strings.Contains(bundle.SystemPrompt, forbidden) {
+			t.Fatalf("react prompt should not contain fixed workflow %q\n%s", forbidden, bundle.SystemPrompt)
+		}
+	}
+}
+
 func TestAssistantPromptProviderIncludesVulnerabilityExecuteSequenceGuide(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Vulnerability.Script.Status", Description: "查询漏洞脚本状态"},

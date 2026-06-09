@@ -64,6 +64,7 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 	hostSecurityGuide := hostSecurityAnalysisGuide()
 	contextBlock := p.formatContextRefs()
 	sequenceGuide := p.formatMandatoryToolSequenceGuide()
+	naturalOperationGuide := p.formatNaturalOperationGuide()
 
 	systemPrompt := fmt.Sprintf(`你是 Aegis 智能安全助手，专注于主机安全分析和运维操作。
 
@@ -76,6 +77,8 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 - 主机攻击研判
 
 ## 可用工具
+%s
+
 %s
 
 %s
@@ -103,7 +106,7 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 ⚠️ 严格要求：只输出一个JSON对象，不要输出任何其他文本、解释、问候或markdown格式。直接以 { 开头，以 } 结尾。
 
 JSON格式如下：
-{"goal":"任务目标描述","assumptions":["假设1","假设2"],"steps":[{"step_id":"step_1","title":"步骤标题","objective":"步骤目标","expected_output":"预期输出","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide)
+{"goal":"任务目标描述","assumptions":["假设1","假设2"],"steps":[{"step_id":"step_1","title":"步骤标题","objective":"步骤目标","expected_output":"预期输出","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide, naturalOperationGuide)
 
 	userPrompt := p.userMessage
 	if contextBlock != "" {
@@ -126,10 +129,13 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 	hostSecurityGuide := hostSecurityAnalysisGuide()
 	contextBlock := p.formatContextRefs()
 	sequenceGuide := p.formatMandatoryToolSequenceGuide()
+	naturalOperationGuide := p.formatNaturalOperationGuide()
 
 	systemPrompt := fmt.Sprintf(`你是 Aegis 智能安全助手，正在执行安全分析任务。
 
 ## 可用工具（必须严格使用以下工具名，不得发明新工具名）
+%s
+
 %s
 
 %s
@@ -181,7 +187,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 - 禁止输出 {"name":"...","arguments":...} 格式（这是错误格式）
 - 禁止输出 markdown 代码块（不要用三个反引号包裹）
 - 禁止在JSON前后输出多余文字
-- 必须使用 "action" 字段，不要使用 "name" 或 "type" 字段`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide)
+- 必须使用 "action" 字段，不要使用 "name" 或 "type" 字段`, toolList, reflectionGuide, hostSecurityGuide, contextBlock, sequenceGuide, naturalOperationGuide)
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
@@ -373,6 +379,36 @@ func (p *AssistantPromptProvider) formatMandatoryToolSequenceGuide() string {
 		buf.WriteString("- 漏洞 POC/FIX 闭环中，如果 Vulnerability.Script.Status 或 Vulnerability.Script.Generate 返回 vulnerability_script_sequence_complete=true，表示系统已经按用户要求自动下发 Vulnerability.Script.Execute；必须基于 executions 中的 task_group_id 查询或输出任务状态，不要停留在脚本状态查询。\n")
 	}
 	return strings.TrimSpace(buf.String())
+}
+
+func (p *AssistantPromptProvider) formatNaturalOperationGuide() string {
+	message := normalizeNaturalOperationText(p.userMessage)
+	if message == "" || !hasAnyOperationalIntentForPrompt(message) {
+		return ""
+	}
+
+	var buf strings.Builder
+	buf.WriteString("## 自然语言工具使用推理原则\n")
+	buf.WriteString("用户通常不会写工具名。你需要先理解业务目标，再自行拆解步骤并选择合适工具，而不是机械套固定流程。\n")
+	buf.WriteString("1. 先抽取：目标对象（主机/资产/软件/漏洞/基线/告警/任务）、动作（查询/采集/扫描/分析/生成/下发/修复）、范围（全部/在线/指定）、约束和缺失信息。\n")
+	buf.WriteString("2. 信息不足时先判断能否安全默认：只读查询可用合理默认；会创建任务、扫描、采集、修复、下发的操作如果目标或动作不清，应先追问。\n")
+	buf.WriteString("3. 工具选择应覆盖用户最终目标，不要拿第一个工具结果直接收工。例如用户要求“采集并分析软件漏洞”，采集只是证据来源之一，还需要继续查询软件、漏洞和受影响范围。\n")
+	buf.WriteString("4. 优先使用最贴近业务对象的工具；当前工具不足时使用 Tool.Search 搜索候选工具，不能发明不存在的工具名。\n")
+	buf.WriteString("5. 写操作或任务型工具必须尊重审批结果；工具返回 task_id 后，如用户目标需要结果或进度，应继续用对应状态/详情工具查询。\n")
+	buf.WriteString("6. 最终回答必须说明已调用的数据源、关键证据、没有覆盖的证据缺口和下一步建议；没有数据只能说“当前数据未发现”，不能宣称绝对安全。")
+	return buf.String()
+}
+
+func hasAnyOperationalIntentForPrompt(text string) bool {
+	return hasAssetCollectionIntent(text) ||
+		hasVulnerabilityScanIntent(text) ||
+		hasBaselineScanIntent(text) ||
+		hasDetectionCheckIntent(text) ||
+		strings.Contains(text, "扫描") ||
+		strings.Contains(text, "采集") ||
+		strings.Contains(text, "修复") ||
+		strings.Contains(text, "下发") ||
+		strings.Contains(text, "生成")
 }
 
 func (p *AssistantPromptProvider) formatContextRefs() string {
