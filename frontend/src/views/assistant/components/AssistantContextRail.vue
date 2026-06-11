@@ -2,33 +2,7 @@
   <aside class="context-rail">
     <!-- 执行计划 -->
     <div v-if="plan" class="rail-section">
-      <div class="section-header">
-        <el-icon><List /></el-icon>
-        <span>执行计划</span>
-        <el-tag :type="getPlanStatusType(plan.status)" size="small">
-          {{ getPlanStatusLabel(plan.status) }}
-        </el-tag>
-      </div>
-      <div class="plan-goal">{{ plan.goal }}</div>
-      <div class="plan-steps">
-        <div
-          v-for="(step, idx) in plan.steps"
-          :key="step.step_id"
-          class="plan-step"
-          :class="step.status"
-        >
-          <div class="step-number">{{ idx + 1 }}</div>
-          <div class="step-content">
-            <div class="step-title">{{ step.title }}</div>
-            <div v-if="step.result_summary" class="step-result">
-              {{ step.result_summary }}
-            </div>
-          </div>
-          <el-tag :type="getStepStatusType(step.status)" size="small">
-            {{ getStepStatusLabel(step.status) }}
-          </el-tag>
-        </div>
-      </div>
+      <ExecutionPlan :plan="plan" />
     </div>
     <div v-else class="rail-section">
       <div class="section-header">
@@ -90,59 +64,15 @@
 
 <script setup lang="ts">
 import { List, Bell, Tools } from '@element-plus/icons-vue'
-import type { AssistantToolCall, AssistantApproval, AssistantPlan } from '@/api/assistant'
+import ExecutionPlan from '@/components/ExecutionPlan.vue'
+import type { PlanEvent } from '@/api/aiAnalysis'
+import type { AssistantToolCall, AssistantApproval } from '@/api/assistant'
 
 defineProps<{
-  plan: AssistantPlan | null
+  plan: PlanEvent | null
   approvals: AssistantApproval[]
   toolCalls: AssistantToolCall[]
 }>()
-
-function getPlanStatusType(status: string): string {
-  const map: Record<string, string> = {
-    planning: 'info',
-    running: 'warning',
-    completed: 'success',
-    failed: 'danger',
-    cancelled: 'info',
-  }
-  return map[status] || 'info'
-}
-
-function getPlanStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    planning: '规划中',
-    running: '执行中',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  }
-  return map[status] || status
-}
-
-function getStepStatusType(status: string): string {
-  const map: Record<string, string> = {
-    pending: 'info',
-    running: 'warning',
-    completed: 'success',
-    failed: 'danger',
-    skipped: 'info',
-    waiting_approval: 'warning',
-  }
-  return map[status] || 'info'
-}
-
-function getStepStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    pending: '待执行',
-    running: '执行中',
-    completed: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-    waiting_approval: '待审批',
-  }
-  return map[status] || status
-}
 
 function getRiskTag(level: string): string {
   const map: Record<string, string> = {

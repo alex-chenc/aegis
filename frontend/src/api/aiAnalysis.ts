@@ -108,7 +108,7 @@ export interface PlanStep {
   objective?: string
   tool_names?: string[]
   suggested_tools?: string[]
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'retrying' | 'replaced' | 'invalidated'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'retrying' | 'replaced' | 'invalidated' | 'waiting_approval'
   result_summary?: string
 }
 

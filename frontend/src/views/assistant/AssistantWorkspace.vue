@@ -93,7 +93,8 @@ import { ElMessage } from 'element-plus'
 import { MagicStick, VideoPause } from '@element-plus/icons-vue'
 import { useAssistantStore } from '@/store/assistant'
 import { getStoredAuth } from '@/utils/auth'
-import type { AssistantPlan } from '@/api/assistant'
+import { normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
+import type { PlanEvent } from '@/api/aiAnalysis'
 import AssistantSessionSidebar from './components/AssistantSessionSidebar.vue'
 import AssistantConversation from './components/AssistantConversation.vue'
 import AssistantComposer from './components/AssistantComposer.vue'
@@ -120,24 +121,16 @@ const pendingApprovals = computed(() =>
 )
 
 // 从消息中提取最新的执行计划
-const currentPlan = computed<AssistantPlan | null>(() => {
+const currentPlan = computed<PlanEvent | null>(() => {
   // 从最新的助手消息中查找包含 plan 的消息
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const msg = messages.value[i]
     if (msg.role === 'assistant' && msg.plan) {
-      return {
-        plan_id: `plan-${msg.id}`,
-        goal: msg.plan.goal,
-        status: (msg.plan.status as AssistantPlan['status']) || 'running',
-        steps: msg.plan.steps.map(s => ({
-          step_id: s.step_id,
-          title: s.title,
-          objective: s.title,
-          suggested_tools: [],
-          status: (s.status as AssistantPlan['steps'][0]['status']) || 'pending',
-          result_summary: s.result_summary,
-        })),
-      }
+      return normalizePlanEvent({
+        id: `plan-${msg.id || msg.message_id}`,
+        plan_id: `plan-${msg.id || msg.message_id}`,
+        ...msg.plan,
+      })
     }
   }
   return null

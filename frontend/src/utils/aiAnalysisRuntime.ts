@@ -3,7 +3,7 @@ import type { PlanEvent, PlanStep } from '@/api/aiAnalysis'
 type RuntimePlan = Record<string, any>
 
 const terminalStatuses = new Set(['completed', 'failed', 'skipped', 'replaced', 'invalidated'])
-const knownStatuses = new Set(['pending', 'running', 'retrying', ...terminalStatuses])
+const knownStatuses = new Set(['pending', 'running', 'retrying', 'waiting_approval', ...terminalStatuses])
 
 function normalizeStepStatus(raw: unknown): PlanStep['status'] {
   if (typeof raw === 'string' && knownStatuses.has(raw)) {

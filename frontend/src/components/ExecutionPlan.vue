@@ -148,6 +148,7 @@ function statusTagType(status: string): string {
   const map: Record<string, string> = {
     completed: 'success',
     running: '',
+    waiting_approval: 'warning',
     retrying: 'warning',
     failed: 'danger',
     skipped: 'info',
@@ -162,6 +163,7 @@ function statusLabel(status: string): string {
   const map: Record<string, string> = {
     completed: '完成',
     running: '执行中',
+    waiting_approval: '待审批',
     retrying: '重试中',
     failed: '失败',
     skipped: '跳过',

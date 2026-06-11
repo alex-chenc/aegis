@@ -4,25 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"api-server/internal/llm"
 )
 
 // IntentResult 意图识别结果（对齐设计文档 6.1 节）
 type IntentResult struct {
-	Domains          []string   `json:"domains"`
-	Operations       []string   `json:"operations,omitempty"`
-	ObjectTypes      []string   `json:"object_types,omitempty"`
-	ObjectIDs        []string   `json:"object_ids,omitempty"`
-	Keywords         []string   `json:"keywords,omitempty"`
-	ExplicitToolName string     `json:"explicit_tool_name,omitempty"`
-	RiskHint         ToolRisk   `json:"risk_hint,omitempty"`
-	NeedWrite        bool       `json:"need_write"`
-	NeedApproval     bool       `json:"need_approval"`
-	Confidence       float64    `json:"confidence"`
-	Reason           string     `json:"reason,omitempty"`
-	Action           string     `json:"action"`
-	Object           string     `json:"object"`
+	Domains          []string `json:"domains"`
+	Operations       []string `json:"operations,omitempty"`
+	ObjectTypes      []string `json:"object_types,omitempty"`
+	ObjectIDs        []string `json:"object_ids,omitempty"`
+	Keywords         []string `json:"keywords,omitempty"`
+	ExplicitToolName string   `json:"explicit_tool_name,omitempty"`
+	RiskHint         ToolRisk `json:"risk_hint,omitempty"`
+	NeedWrite        bool     `json:"need_write"`
+	NeedApproval     bool     `json:"need_approval"`
+	Confidence       float64  `json:"confidence"`
+	Reason           string   `json:"reason,omitempty"`
+	Action           string   `json:"action"`
+	Object           string   `json:"object"`
 }
 
 // IntentRouter 意图路由器
@@ -57,31 +58,36 @@ func (r *IntentRouter) SetLLMClientFactory(fn func(ctx context.Context) (*llm.LL
 }
 
 // Classify 意图分类
-// 混合策略：简单查询走代码匹配，复杂查询走大模型分析
+// 混合策略：简单高置信查询走规则匹配，复杂或低置信查询走大模型分析
 func (r *IntentRouter) Classify(ctx context.Context, input IntentInput) IntentResult {
-	query := strings.ToLower(input.Query)
+	ruleResult := r.classifyByRules(input)
 
-	// 计算查询复杂度（分词数量）
-	words := tokenizeQuery(query)
-	complexity := len(words)
-
-	// 简单查询（1-2个词）：走代码意图匹配
-	// 复杂查询（3个词以上）：走大模型解析意图
-	if complexity >= 3 && r.llmClientFn != nil {
-		// 复杂查询，尝试使用 LLM 分类
+	if r.llmClientFn != nil && shouldUseLLMForIntent(input.Query, ruleResult) {
 		llmResult, err := r.ClassifyWithLLM(ctx, input)
 		if err == nil && llmResult.Confidence > 0.6 {
 			return llmResult
 		}
 	}
 
-	// 简单查询或 LLM 分类失败：走代码意图匹配
-	return r.classifyByRules(input)
+	return ruleResult
 }
 
 // classifyByRules 基于规则的意图分类
 func (r *IntentRouter) classifyByRules(input IntentInput) IntentResult {
 	query := strings.ToLower(input.Query)
+
+	if isDirectAnswerQuery(query) {
+		return IntentResult{
+			Domains:    []string{},
+			Action:     "answer",
+			Object:     "",
+			Confidence: 0.9,
+			NeedWrite:  false,
+			RiskHint:   ToolRiskReadonly,
+			Operations: []string{"answer"},
+			Reason:     "简单问答，直接回复",
+		}
+	}
 
 	// Score each domain
 	scores := make(map[string]float64)
@@ -374,6 +380,8 @@ func (r *IntentRouter) inferOperations(action string) []string {
 	switch action {
 	case "query":
 		return []string{"list", "get", "search"}
+	case "answer":
+		return []string{"answer"}
 	case "analyze":
 		return []string{"get", "search", "generate"}
 	case "create":
@@ -403,9 +411,107 @@ func (r *IntentRouter) buildReason(domains []string, action string, confidence f
 	return "低置信度，可能需要 LLM 辅助分类"
 }
 
+func shouldUseLLMForIntent(query string, result IntentResult) bool {
+	if result.Action == "answer" {
+		return false
+	}
+
+	// 规则置信度低时，用 LLM 补充分域、动作和对象，避免中文长句被当作一个词后误判。
+	if result.Confidence < 0.45 {
+		return true
+	}
+
+	complexity := estimateQueryComplexity(query)
+	if complexity >= 3 {
+		return true
+	}
+
+	// 分析/调查类任务对工具链和计划拆分更敏感，即使关键词命中也让 LLM 再确认。
+	if (result.Action == "analyze" || result.Action == "investigate") && result.Confidence < 0.75 {
+		return true
+	}
+
+	return false
+}
+
+func estimateQueryComplexity(query string) int {
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	if normalized == "" {
+		return 0
+	}
+
+	words := tokenizeQuery(normalized)
+	score := len(words)
+
+	// 中文连续句子通常不会被空格分词，按字数给一个保守复杂度。
+	if score <= 1 {
+		runeCount := utf8.RuneCountInString(normalized)
+		switch {
+		case runeCount >= 36:
+			score = 4
+		case runeCount >= 20:
+			score = 3
+		case runeCount >= 12:
+			score = 2
+		}
+	}
+
+	complexMarkers := []string{
+		"并", "同时", "然后", "以及", "并且", "再", "给出", "制定",
+		"汇总", "对比", "分析", "调查", "研判", "溯源", "修复建议",
+	}
+	for _, marker := range complexMarkers {
+		if strings.Contains(normalized, marker) {
+			score++
+		}
+	}
+
+	return score
+}
+
+func isDirectAnswerQuery(query string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(query))
+	if normalized == "" {
+		return true
+	}
+
+	greetings := []string{"你好", "您好", "hi", "hello", "嗨"}
+	for _, greeting := range greetings {
+		if normalized == greeting {
+			return true
+		}
+	}
+
+	directPatterns := []string{
+		"你是谁", "你能做什么", "你可以做什么", "帮助", "使用说明",
+		"什么是", "解释一下", "介绍一下",
+	}
+	for _, pattern := range directPatterns {
+		if strings.Contains(normalized, pattern) && !containsActionVerb(normalized) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func containsActionVerb(query string) bool {
+	actionVerbs := []string{
+		"查询", "列出", "查看", "获取", "显示", "分析", "调查", "研判",
+		"执行", "运行", "创建", "生成", "更新", "修改", "删除", "修复",
+		"扫描", "阻断", "审批", "部署",
+	}
+	for _, verb := range actionVerbs {
+		if strings.Contains(query, verb) {
+			return true
+		}
+	}
+	return false
+}
+
 // IntentInput 意图输入
 type IntentInput struct {
-	Query       string             `json:"query"`
-	PageRoute   string             `json:"page_route,omitempty"`
-	ContextRefs []ContextRefInput  `json:"context_refs,omitempty"`
+	Query       string            `json:"query"`
+	PageRoute   string            `json:"page_route,omitempty"`
+	ContextRefs []ContextRefInput `json:"context_refs,omitempty"`
 }

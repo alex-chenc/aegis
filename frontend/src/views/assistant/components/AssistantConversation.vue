@@ -32,35 +32,7 @@
             </div>
 
             <!-- 计划卡片 -->
-            <div v-if="msg.plan" class="plan-card">
-              <div class="plan-header">
-                <el-icon><List /></el-icon>
-                <span>执行计划</span>
-                <el-tag :type="getPlanStatusType(msg.plan.status)" size="small">
-                  {{ getPlanStatusLabel(msg.plan.status) }}
-                </el-tag>
-              </div>
-              <div class="plan-goal">{{ msg.plan.goal }}</div>
-              <div class="plan-steps">
-                <div
-                  v-for="(step, idx) in msg.plan.steps"
-                  :key="step.step_id"
-                  class="plan-step"
-                  :class="step.status"
-                >
-                  <div class="step-number">{{ idx + 1 }}</div>
-                  <div class="step-content">
-                    <div class="step-title">{{ step.title }}</div>
-                    <div v-if="step.result_summary" class="step-result">
-                      {{ step.result_summary }}
-                    </div>
-                  </div>
-                  <el-tag :type="getStepStatusType(step.status)" size="small">
-                    {{ getStepStatusLabel(step.status) }}
-                  </el-tag>
-                </div>
-              </div>
-            </div>
+            <ExecutionPlan v-if="msg.plan" :plan="normalizeMessagePlan(msg)" />
 
             <!-- 工具调用卡片 -->
             <div v-if="getMessageToolCalls(msg).length" class="tool-calls">
@@ -126,11 +98,14 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import { User, Monitor, Loading, List, InfoFilled } from '@element-plus/icons-vue'
+import { User, Monitor, Loading, InfoFilled } from '@element-plus/icons-vue'
+import ExecutionPlan from '@/components/ExecutionPlan.vue'
+import { normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
 import AssistantToolCallCard from './AssistantToolCallCard.vue'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
 import type { AssistantMessage, AssistantToolCall, AssistantApproval, AssistantResultCard } from '@/api/assistant'
+import type { PlanEvent } from '@/api/aiAnalysis'
 
 defineEmits<{
   approve: [approvalId: string, comment?: string]
@@ -173,6 +148,15 @@ function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
   return msg.tool_calls || []
 }
 
+function normalizeMessagePlan(msg: AssistantMessage): PlanEvent | null {
+  if (!msg.plan) return null
+  return normalizePlanEvent({
+    id: `plan-${msg.id || msg.message_id}`,
+    plan_id: `plan-${msg.id || msg.message_id}`,
+    ...msg.plan,
+  })
+}
+
 function formatContent(content: string): string {
   return content
     .replace(/\n/g, '<br>')
@@ -180,51 +164,6 @@ function formatContent(content: string): string {
     .replace(/`(.*?)`/g, '<code>$1</code>')
 }
 
-function getPlanStatusType(status: string): string {
-  const map: Record<string, string> = {
-    planning: 'info',
-    running: 'warning',
-    completed: 'success',
-    failed: 'danger',
-    cancelled: 'info',
-  }
-  return map[status] || 'info'
-}
-
-function getPlanStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    planning: '规划中',
-    running: '执行中',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  }
-  return map[status] || status
-}
-
-function getStepStatusType(status: string): string {
-  const map: Record<string, string> = {
-    pending: 'info',
-    running: 'warning',
-    completed: 'success',
-    failed: 'danger',
-    skipped: 'info',
-    waiting_approval: 'warning',
-  }
-  return map[status] || 'info'
-}
-
-function getStepStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    pending: '待执行',
-    running: '执行中',
-    completed: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-    waiting_approval: '待审批',
-  }
-  return map[status] || status
-}
 </script>
 
 <style scoped>

@@ -72,6 +72,7 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 2. 高风险操作需要用户审批
 3. 所有结论必须基于数据和证据
 4. 不确定时明确说明，不编造信息
+5. 简单查询最多 1-2 个步骤；只有跨主机、跨数据源、安全研判、修复建议等复杂任务才拆成 3 个及以上步骤
 
 ## 输出要求
 ⚠️ 严格要求：只输出一个JSON对象，不要输出任何其他文本、解释、问候或markdown格式。直接以 { 开头，以 } 结尾。
@@ -109,7 +110,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 你的输出必须是一个JSON对象，包含 "action" 字段。不要输出任何非JSON内容。
 
 ### 直接回复（问候、简单问题、不需要工具的场景）：
-{"action":"step_result","summary":"直接回复","step_result":{"result":"你的回复内容","evidence":[],"confidence":"high"}
+{"action":"step_result","summary":"直接回复","step_result":{"result":"你的回复内容","evidence":[],"confidence":"high"}}
 
 示例：
 用户说"你好" → {"action":"step_result","summary":"问候回复","step_result":{"result":"你好！我是 Aegis 智能安全助手，专注于主机安全分析。有什么可以帮您的吗？","evidence":[],"confidence":"high"}}
@@ -131,9 +132,10 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 {"action":"fail_step","summary":"失败总结","failure":{"reason":"失败原因","recoverable":true}}
 
 ## 判断规则
-- 问候、闲聊、简单问题（如"你好"、"你是谁"、"你能做什么"）→ 直接回复，使用 step_result
-- 需要查询系统数据、执行操作 → 调用工具，使用 tool_call
-- 不确定时，优先直接回复而非调用工具
+- 问候、闲聊、能力说明、概念解释等简单问题 → 直接回复，使用 step_result，回答要短，不要生成计划
+- 简单数据查询 → 只调用必要工具，拿到数据后直接给结果，不要写分析报告
+- 复杂问题（安全研判、攻击溯源、跨数据源调查、修复方案）→ 按计划逐步执行，每一步都基于工具结果
+- 无数据支撑时明确说明“当前数据不足”，不要猜测具体主机、告警或结论
 
 ## 禁止事项
 - 禁止在需要调用工具时输出自然语言（如"我来帮您查询..."），必须直接输出JSON

@@ -15,15 +15,17 @@ type AssistantHookSink struct {
 	runManager *RunManager
 	sessionID  string
 	runID      string
+	messageID  string
 	logger     *zap.Logger
 }
 
 // NewAssistantHookSink 创建 HookSink
-func NewAssistantHookSink(runManager *RunManager, sessionID, runID string, logger *zap.Logger) *AssistantHookSink {
+func NewAssistantHookSink(runManager *RunManager, sessionID, runID, messageID string, logger *zap.Logger) *AssistantHookSink {
 	return &AssistantHookSink{
 		runManager: runManager,
 		sessionID:  sessionID,
 		runID:      runID,
+		messageID:  messageID,
 		logger:     logger,
 	}
 }
@@ -204,7 +206,11 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 // publish 发布事件到 RunManager
 func (s *AssistantHookSink) publish(eventType string, payload interface{}) {
-	s.runManager.Publish(s.sessionID, NewEvent(eventType, s.sessionID, s.runID, payload))
+	event := NewEvent(eventType, s.sessionID, s.runID, payload)
+	if s.messageID != "" {
+		event.MessageID = s.messageID
+	}
+	s.runManager.Publish(s.sessionID, event)
 }
 
 // toMap 将任意 payload 转换为 map[string]interface{}

@@ -446,6 +446,41 @@ export const useAssistantStore = defineStore('assistant', () => {
     streaming.value = false
   }
 
+  function findMessage(messageId: string) {
+    return messages.value.find(m => m.id === messageId || m.message_id === messageId)
+  }
+
+  function ensureAssistantMessage(messageId: string): AssistantMessage | null {
+    if (!messageId) return null
+    const existing = findMessage(messageId)
+    if (existing) return existing
+
+    const message: AssistantMessage = {
+      id: messageId,
+      session_id: currentSession.value?.session_id || '',
+      message_id: messageId,
+      role: 'assistant',
+      content: '',
+      created_at: new Date().toISOString(),
+    }
+    messages.value.push(message)
+    return message
+  }
+
+  function normalizeAssistantPlan(plan: Partial<AssistantPlan> & Record<string, any>): NonNullable<AssistantMessage['plan']> {
+    const steps = Array.isArray(plan.steps) ? plan.steps : []
+    return {
+      goal: plan.goal || '',
+      status: plan.status || 'running',
+      steps: steps.map((step: Record<string, any>, index: number) => ({
+        step_id: step.step_id || step.id || `step-${index + 1}`,
+        title: step.title || step.description || step.objective || `步骤 ${index + 1}`,
+        status: step.status || 'pending',
+        result_summary: step.result_summary,
+      })),
+    }
+  }
+
   /**
    * 处理 SSE 流式事件并更新状态
    *
@@ -467,7 +502,7 @@ export const useAssistantStore = defineStore('assistant', () => {
    * - done: 运行完成
    * - error: 错误事件
    */
-  function applyStreamEvent(event: { type: string; payload?: any; error?: string; session_id?: string }) {
+  function applyStreamEvent(event: { type: string; payload?: any; error?: string; session_id?: string; run_id?: string; message_id?: string }) {
     const payload = event.payload || {}
 
     switch (event.type) {
@@ -518,22 +553,10 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'plan': {
         // 执行计划 — 嵌入到当前助手消息的 plan 字段
         // payload: AssistantPlan
-        const plan = payload as AssistantPlan
-        const planMsgId = event.message_id
-        if (planMsgId) {
-          const planMsg = messages.value.find(m => m.id === planMsgId)
-          if (planMsg) {
-            planMsg.plan = {
-              goal: plan.goal,
-              status: plan.status,
-              steps: plan.steps.map(s => ({
-                step_id: s.step_id,
-                title: s.title,
-                status: s.status,
-                result_summary: s.result_summary,
-              })),
-            }
-          }
+        const planMsgId = event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
+        const planMsg = ensureAssistantMessage(planMsgId)
+        if (planMsg) {
+          planMsg.plan = normalizeAssistantPlan(payload as AssistantPlan)
         }
         break
       }
@@ -541,9 +564,9 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'step_started': {
         // 步骤开始 — 更新对应 plan step 状态
         // payload: { step_id, title? }
-        const stepStartedId = event.message_id
+        const stepStartedId = event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
         if (stepStartedId) {
-          const stepMsg = messages.value.find(m => m.id === stepStartedId)
+          const stepMsg = findMessage(stepStartedId)
           if (stepMsg?.plan?.steps) {
             const step = stepMsg.plan.steps.find(s => s.step_id === payload.step_id)
             if (step) {
@@ -557,9 +580,9 @@ export const useAssistantStore = defineStore('assistant', () => {
       case 'step_completed': {
         // 步骤完成 — 更新对应 plan step 状态和结果
         // payload: { step_id, result_summary?, status? }
-        const stepDoneId = event.message_id
+        const stepDoneId = event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
         if (stepDoneId) {
-          const stepDoneMsg = messages.value.find(m => m.id === stepDoneId)
+          const stepDoneMsg = findMessage(stepDoneId)
           if (stepDoneMsg?.plan?.steps) {
             const stepDone = stepDoneMsg.plan.steps.find(s => s.step_id === payload.step_id)
             if (stepDone) {
@@ -602,7 +625,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         const toolCall: AssistantToolCall = {
           id: payload.call_id,
           session_id: event.session_id || currentSession.value?.session_id || '',
-          message_id: event.message_id || '',
+          message_id: event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : ''),
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           args: payload.args || {},

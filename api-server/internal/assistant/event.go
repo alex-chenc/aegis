@@ -22,27 +22,27 @@ type EventWriter interface {
 
 // SSE Event type constants
 const (
-	EventThinking          = "thinking"
-	EventMessageDelta      = "message_delta"
-	EventIntentDetected    = "intent_detected"
-	EventToolsSelected     = "tools_selected"
-	EventToolSearch        = "tool_search"
-	EventToolExpansion     = "tool_expansion"
-	EventPlan              = "plan"
-	EventStepStarted       = "step_started"
-	EventStepCompleted     = "step_completed"
-	EventToolCall          = "tool_call"
-	EventToolResult        = "tool_result"
-	EventToolError         = "tool_error"
-	EventApprovalRequired  = "approval_required"
-	EventApprovalUpdated   = "approval_updated"
-	EventContextRefAdded   = "context_ref_added"
-	EventResultCard        = "result_card"
-	EventDone              = "done"
-	EventError             = "error"
-	EventRunStarted        = "run_started"
+	EventThinking           = "thinking"
+	EventMessageDelta       = "message_delta"
+	EventIntentDetected     = "intent_detected"
+	EventToolsSelected      = "tools_selected"
+	EventToolSearch         = "tool_search"
+	EventToolExpansion      = "tool_expansion"
+	EventPlan               = "plan"
+	EventStepStarted        = "step_started"
+	EventStepCompleted      = "step_completed"
+	EventToolCall           = "tool_call"
+	EventToolResult         = "tool_result"
+	EventToolError          = "tool_error"
+	EventApprovalRequired   = "approval_required"
+	EventApprovalUpdated    = "approval_updated"
+	EventContextRefAdded    = "context_ref_added"
+	EventResultCard         = "result_card"
+	EventDone               = "done"
+	EventError              = "error"
+	EventRunStarted         = "run_started"
 	EventRunWaitingApproval = "run_waiting_approval"
-	EventBusinessObject    = "business_object"
+	EventBusinessObject     = "business_object"
 )
 
 // NewEvent 创建新事件
@@ -56,6 +56,12 @@ func NewEvent(eventType, sessionID, runID string, payload interface{}) Assistant
 	}
 }
 
+// withMessageID 将事件归属到本次运行的助手消息，便于前端把计划、步骤和工具调用实时挂到同一条消息上。
+func withMessageID(event AssistantEvent, messageID string) AssistantEvent {
+	event.MessageID = messageID
+	return event
+}
+
 // EventThinking 创建思考事件
 func EventThinkingPayload(sessionID, runID, content string) AssistantEvent {
 	return NewEvent(EventThinking, sessionID, runID, map[string]interface{}{
@@ -65,45 +71,45 @@ func EventThinkingPayload(sessionID, runID, content string) AssistantEvent {
 
 // EventMessageDelta 创建消息增量事件
 func EventMessageDeltaPayload(sessionID, runID, messageID, delta string) AssistantEvent {
-	return NewEvent(EventMessageDelta, sessionID, runID, map[string]interface{}{
+	return withMessageID(NewEvent(EventMessageDelta, sessionID, runID, map[string]interface{}{
 		"message_id": messageID,
 		"delta":      delta,
-	})
+	}), messageID)
 }
 
 // EventPlanPayload 创建计划事件
-func EventPlanPayload(sessionID, runID string, plan interface{}) AssistantEvent {
-	return NewEvent(EventPlan, sessionID, runID, plan)
+func EventPlanPayload(sessionID, runID, messageID string, plan interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventPlan, sessionID, runID, plan), messageID)
 }
 
 // EventToolCallPayload 创建工具调用事件
-func EventToolCallPayload(sessionID, runID, callID, toolName string, args interface{}) AssistantEvent {
-	return NewEvent(EventToolCall, sessionID, runID, map[string]interface{}{
+func EventToolCallPayload(sessionID, runID, messageID, callID, toolName string, args interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventToolCall, sessionID, runID, map[string]interface{}{
 		"call_id":   callID,
 		"tool_name": toolName,
 		"args":      args,
-	})
+	}), messageID)
 }
 
 // EventToolResultPayload 创建工具结果事件
-func EventToolResultPayload(sessionID, runID, callID string, result interface{}) AssistantEvent {
-	return NewEvent(EventToolResult, sessionID, runID, map[string]interface{}{
+func EventToolResultPayload(sessionID, runID, messageID, callID string, result interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventToolResult, sessionID, runID, map[string]interface{}{
 		"call_id": callID,
 		"result":  result,
-	})
+	}), messageID)
 }
 
 // EventToolErrorPayload 创建工具错误事件
-func EventToolErrorPayload(sessionID, runID, callID, errMsg string) AssistantEvent {
-	return NewEvent(EventToolError, sessionID, runID, map[string]interface{}{
+func EventToolErrorPayload(sessionID, runID, messageID, callID, errMsg string) AssistantEvent {
+	return withMessageID(NewEvent(EventToolError, sessionID, runID, map[string]interface{}{
 		"call_id": callID,
 		"error":   errMsg,
-	})
+	}), messageID)
 }
 
 // EventApprovalRequiredPayload 创建审批请求事件
-func EventApprovalRequiredPayload(sessionID, runID string, approval interface{}) AssistantEvent {
-	return NewEvent(EventApprovalRequired, sessionID, runID, approval)
+func EventApprovalRequiredPayload(sessionID, runID, messageID string, approval interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventApprovalRequired, sessionID, runID, approval), messageID)
 }
 
 // EventResultCardPayload 创建结果卡片事件

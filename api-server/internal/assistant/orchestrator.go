@@ -245,9 +245,9 @@ func (o *Orchestrator) convertContextRefs(refs []ContextObject) []ContextRefResu
 func (o *Orchestrator) isComplexTask(taskType, userMessage string, intent IntentResult, selectedTools []string) bool {
 	// 1. 任务类型明确为复杂任务
 	complexTaskTypes := map[string]bool{
-		"investigation":            true,
+		"investigation":             true,
 		"host_attack_investigation": true,
-		"remediation":              true,
+		"remediation":               true,
 	}
 	if complexTaskTypes[taskType] {
 		return true
@@ -317,12 +317,13 @@ func containsSubstring(s, substr string) bool {
 // 使用 RuntimeFactory.Build() 集中创建 runtime（对齐设计文档 4.3 节）
 func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor) (*RunResult, error) {
 	convertedRefs := o.convertContextRefs(contextRefs)
+	msgID := "msg_" + input.RunID
 
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
 	buildResult, err := o.runtimeFactory.Build(ctx, RuntimeBuildRequest{
 		SessionID:       input.SessionID,
 		RunID:           input.RunID,
-		MessageID:       input.MessageID,
+		MessageID:       msgID,
 		Operator:        input.UserID,
 		UserInput:       input.UserMessage,
 		TaskType:        input.TaskType,
@@ -348,7 +349,6 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	})
 
 	// 处理结果
-	msgID := "msg_" + input.RunID
 	response := ""
 
 	if err != nil {
@@ -429,7 +429,8 @@ func (o *Orchestrator) PauseForApproval(ctx context.Context, sessionID, runID st
 	})
 
 	// 发送 SSE 事件
-	o.runManager.Publish(sessionID, EventApprovalRequiredPayload(sessionID, runID, map[string]interface{}{
+	msgID := "msg_" + runID
+	o.runManager.Publish(sessionID, EventApprovalRequiredPayload(sessionID, runID, msgID, map[string]interface{}{
 		"approval_id": approval.ApprovalID,
 		"tool_name":   approval.ToolName,
 		"risk_level":  approval.RiskLevel,
@@ -491,7 +492,8 @@ func (o *Orchestrator) ResumeAfterApproval(ctx context.Context, req ResumeAfterA
 	run.ClearWaitingApproval()
 
 	// 5. 发送工具结果事件
-	o.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, run.RunID, waitingState.ToolCallID, toolResult.Data))
+	msgID := "msg_" + run.RunID
+	o.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, run.RunID, msgID, waitingState.ToolCallID, toolResult.Data))
 
 	// 6. 构造恢复消息，让 agent-runtime 继续
 	// 将工具结果作为新的用户消息注入，让 agent-runtime 基于结果继续推理
@@ -499,8 +501,6 @@ func (o *Orchestrator) ResumeAfterApproval(ctx context.Context, req ResumeAfterA
 		waitingState.ToolName, marshalToString(toolResult.Data))
 
 	// 7. 重新运行 agent-runtime（使用上下文摘要）
-	msgID := "msg_" + run.RunID
-
 	// 获取会话消息历史摘要（用于 agent-runtime 上下文恢复）
 	_ = o.buildPreviousSummary(ctx, req.SessionID)
 

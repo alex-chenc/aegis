@@ -49,24 +49,24 @@ func NewRuntimeFactory(deps RuntimeFactoryDeps) *RuntimeFactory {
 
 // RuntimeBuildRequest 运行时构建请求
 type RuntimeBuildRequest struct {
-	SessionID       string          `json:"session_id"`
-	RunID           string          `json:"run_id"`
-	MessageID       string          `json:"message_id"`
-	Operator        string          `json:"operator"`
-	UserInput       string          `json:"user_input"`
-	TaskType        string          `json:"task_type"`
-	ContextRefs     []ContextRefResult `json:"context_refs,omitempty"`
-	PageRoute       string          `json:"page_route,omitempty"`
-	PreviousSummary string          `json:"previous_summary,omitempty"`
-	MaxIterations   int             `json:"max_iterations,omitempty"`
-	SelectedTools   []string        `json:"selected_tools,omitempty"`
+	SessionID       string                        `json:"session_id"`
+	RunID           string                        `json:"run_id"`
+	MessageID       string                        `json:"message_id"`
+	Operator        string                        `json:"operator"`
+	UserInput       string                        `json:"user_input"`
+	TaskType        string                        `json:"task_type"`
+	ContextRefs     []ContextRefResult            `json:"context_refs,omitempty"`
+	PageRoute       string                        `json:"page_route,omitempty"`
+	PreviousSummary string                        `json:"previous_summary,omitempty"`
+	MaxIterations   int                           `json:"max_iterations,omitempty"`
+	SelectedTools   []string                      `json:"selected_tools,omitempty"`
 	ToolDescriptors []agentruntime.ToolDescriptor `json:"-"`
 }
 
 // RuntimeBuildResult 运行时构建结果
 type RuntimeBuildResult struct {
-	Runtime       *agentruntime.Runtime `json:"-"`
-	ToolSelection *ToolSelectionResult  `json:"-"`
+	Runtime       *agentruntime.Runtime  `json:"-"`
+	ToolSelection *ToolSelectionResult   `json:"-"`
 	UserContext   map[string]interface{} `json:"user_context"`
 }
 
@@ -96,21 +96,21 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		Operator:   req.Operator,
 		Logger:     f.logger,
 		OnToolCall: func(callID, toolName string, args interface{}) {
-			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, callID, toolName, args))
+			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
 		OnToolResult: func(callID string, result interface{}) {
-			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, callID, result))
+			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, req.MessageID, callID, result))
 		},
 		OnToolError: func(callID, errMsg string) {
-			f.runManager.Publish(req.SessionID, EventToolErrorPayload(req.SessionID, req.RunID, callID, errMsg))
+			f.runManager.Publish(req.SessionID, EventToolErrorPayload(req.SessionID, req.RunID, req.MessageID, callID, errMsg))
 		},
 		OnApproval: func(approval interface{}) {
-			f.runManager.Publish(req.SessionID, EventApprovalRequiredPayload(req.SessionID, req.RunID, approval))
+			f.runManager.Publish(req.SessionID, EventApprovalRequiredPayload(req.SessionID, req.RunID, req.MessageID, approval))
 		},
 	})
 
 	// 5. 创建 HookSink
-	hookSink := NewAssistantHookSink(f.runManager, req.SessionID, req.RunID, f.logger)
+	hookSink := NewAssistantHookSink(f.runManager, req.SessionID, req.RunID, req.MessageID, f.logger)
 
 	// 6. 创建 PromptProvider
 	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput)
