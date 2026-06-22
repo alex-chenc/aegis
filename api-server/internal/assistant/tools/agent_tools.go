@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"api-server/internal/assistant"
-	"api-server/internal/grpc"
 )
 
 // AgentToolDeps Agent 工具依赖
 type AgentToolDeps struct {
-	ServerClient *grpc.ServerClient
+	ServerClient agentToolClient
 }
 
 // RegisterAgentTools 注册 Agent 域工具（对齐设计文档 14.1 节）
@@ -193,11 +192,30 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 
 // makeAgentToolHandler 创建 Agent 工具的 gRPC handler
 // timeoutSeconds 为 gRPC 调用超时时间，应与 ToolSpec.DefaultTimeout 对应
-func makeAgentToolHandler(serverClient *grpc.ServerClient, toolName string, timeoutSeconds int) assistant.ToolHandler {
+func makeAgentToolHandler(serverClient agentToolClient, toolName string, timeoutSeconds int) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		hostID, _ := args["host_id"].(string)
 		if hostID == "" {
 			return nil, fmt.Errorf("host_id is required")
+		}
+		if serverClient == nil {
+			return nil, fmt.Errorf("agent server client is not initialized")
+		}
+
+		status, err := serverClient.GetAgentStatus(ctx, hostID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get agent status for host %s: %w", hostID, err)
+		}
+		if status == nil || !status.Connected {
+			return map[string]interface{}{
+				"host_id":           hostID,
+				"tool":              toolName,
+				"agent_status":      "offline",
+				"agent_connected":   false,
+				"runtime_available": false,
+				"skipped":           true,
+				"reason":            "target agent is not connected; runtime evidence is unavailable",
+			}, nil
 		}
 
 		// 设置工具默认参数，兼容已部署的旧 Agent 对 pid 的要求。

@@ -531,7 +531,7 @@ func registerAssistantTools(
 	hostVulnerabilityScriptService *service.HostVulnerabilityScriptService,
 ) {
 	// Host tools
-	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo}); err != nil {
+	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo, ServerClient: serverClient}); err != nil {
 		logger.Warn("failed to register host tools", zap.Error(err))
 	}
 	// Detection tools

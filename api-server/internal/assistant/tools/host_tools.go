@@ -14,7 +14,8 @@ import (
 
 // HostToolDeps 主机工具依赖
 type HostToolDeps struct {
-	HostRepo *repository.HostRepository
+	HostRepo     *repository.HostRepository
+	ServerClient agentStatusClient
 }
 
 // RegisterHostTools 注册主机域工具（对齐设计文档命名规范）
@@ -47,7 +48,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 				"filters":      map[string]interface{}{"type": "array", "description": "兼容过滤条件，可包含 field=status/agent_status 与 value=online/offline"},
 			},
 		},
-		Handler: makeHostListHandler(deps.HostRepo),
+		Handler: makeHostListHandler(deps.HostRepo, deps.ServerClient),
 		ServiceBinding: assistant.ServiceBinding{
 			Component: "api-server",
 			File:      "api-server/internal/repository/host_repo.go",
@@ -80,7 +81,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 			},
 			"required": []string{"host_id"},
 		},
-		Handler: makeHostGetDetailHandler(deps.HostRepo),
+		Handler: makeHostGetDetailHandler(deps.HostRepo, deps.ServerClient),
 		ServiceBinding: assistant.ServiceBinding{
 			Component: "api-server",
 			File:      "api-server/internal/repository/host_repo.go",
@@ -113,7 +114,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
 			},
 		},
-		Handler: makeHostAgentStatusHandler(deps.HostRepo),
+		Handler: makeHostAgentStatusHandler(deps.HostRepo, deps.ServerClient),
 		ServiceBinding: assistant.ServiceBinding{
 			Component: "api-server",
 			File:      "api-server/internal/repository/host_repo.go",
@@ -126,7 +127,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 	return nil
 }
 
-func makeHostListHandler(repo *repository.HostRepository) assistant.ToolHandler {
+func makeHostListHandler(repo *repository.HostRepository, statusClient agentStatusClient) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		page := getIntArg(args, "page", 1)
 		pageSize := normalizeHostPageSize(args)
@@ -152,9 +153,10 @@ func makeHostListHandler(repo *repository.HostRepository) assistant.ToolHandler 
 			return nil, fmt.Errorf("failed to list hosts: %w", err)
 		}
 
+		statuses := loadAgentRuntimeStatuses(ctx, statusClient)
 		var total int64
 		if status != "" {
-			hosts = filterHostsByAgentStatus(hosts, status)
+			hosts = filterHostsByAgentStatusWithRuntime(hosts, status, statuses)
 			total = int64(len(hosts))
 			hosts = paginateHosts(hosts, page, pageSize)
 		} else {
@@ -169,7 +171,7 @@ func makeHostListHandler(repo *repository.HostRepository) assistant.ToolHandler 
 		}
 
 		return map[string]interface{}{
-			"data":     hosts,
+			"data":     decorateHostsWithAgentStatus(hosts, statuses),
 			"total":    total,
 			"page":     page,
 			"status":   statusOrAll(status),
@@ -178,7 +180,7 @@ func makeHostListHandler(repo *repository.HostRepository) assistant.ToolHandler 
 	}
 }
 
-func makeHostGetDetailHandler(repo *repository.HostRepository) assistant.ToolHandler {
+func makeHostGetDetailHandler(repo *repository.HostRepository, statusClient agentStatusClient) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		hostIDStr := getStringArg(args, "host_id", "")
 		if hostIDStr == "" {
@@ -202,11 +204,12 @@ func makeHostGetDetailHandler(repo *repository.HostRepository) assistant.ToolHan
 			return nil, fmt.Errorf("failed to find host: %w", err)
 		}
 
-		return host, nil
+		statuses := loadAgentRuntimeStatuses(ctx, statusClient)
+		return decorateHostWithAgentStatus(*host, statuses), nil
 	}
 }
 
-func makeHostAgentStatusHandler(repo *repository.HostRepository) assistant.ToolHandler {
+func makeHostAgentStatusHandler(repo *repository.HostRepository, statusClient agentStatusClient) assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		page := getIntArg(args, "page", 1)
 		pageSize := normalizeHostPageSize(args)
@@ -223,15 +226,16 @@ func makeHostAgentStatusHandler(repo *repository.HostRepository) assistant.ToolH
 			return nil, fmt.Errorf("failed to list hosts: %w", err)
 		}
 
-		onlineHosts := filterHostsByAgentStatus(hosts, "online")
-		offlineHosts := filterHostsByAgentStatus(hosts, "offline")
+		statuses := loadAgentRuntimeStatuses(ctx, statusClient)
+		onlineHosts := filterHostsByAgentStatusWithRuntime(hosts, "online", statuses)
+		offlineHosts := filterHostsByAgentStatusWithRuntime(hosts, "offline", statuses)
 		pagedHosts := paginateHosts(hosts, page, pageSize)
 
 		return map[string]interface{}{
-			"data":          pagedHosts,
+			"data":          decorateHostsWithAgentStatus(pagedHosts, statuses),
 			"total":         len(hosts),
-			"online_hosts":  onlineHosts,
-			"offline_hosts": offlineHosts,
+			"online_hosts":  decorateHostsWithAgentStatus(onlineHosts, statuses),
+			"offline_hosts": decorateHostsWithAgentStatus(offlineHosts, statuses),
 			"online_total":  len(onlineHosts),
 			"offline_total": len(offlineHosts),
 		}, nil
@@ -291,12 +295,16 @@ func normalizeHostStatusValue(value string) string {
 }
 
 func filterHostsByAgentStatus(hosts []model.Host, status string) []model.Host {
+	return filterHostsByAgentStatusWithRuntime(hosts, status, nil)
+}
+
+func filterHostsByAgentStatusWithRuntime(hosts []model.Host, status string, statuses map[string]agentRuntimeStatus) []model.Host {
 	if status == "" {
 		return hosts
 	}
 	filtered := make([]model.Host, 0, len(hosts))
 	for _, host := range hosts {
-		online := isHostAgentOnline(host)
+		online := isHostAgentOnlineWithRuntime(host, statuses)
 		if (status == "online" && online) || (status == "offline" && !online) {
 			filtered = append(filtered, host)
 		}
@@ -306,6 +314,87 @@ func filterHostsByAgentStatus(hosts []model.Host, status string) []model.Host {
 
 func isHostAgentOnline(host model.Host) bool {
 	return !host.LastHeartbeatAt.IsZero() && host.LastHeartbeatAt.After(time.Now().Add(-2*time.Minute))
+}
+
+func isHostAgentOnlineWithRuntime(host model.Host, statuses map[string]agentRuntimeStatus) bool {
+	if status, ok := statuses[host.ID.String()]; ok {
+		return status.Connected
+	}
+	return isHostAgentOnline(host)
+}
+
+type agentRuntimeStatus struct {
+	Connected     bool
+	LastHeartbeat int64
+}
+
+func loadAgentRuntimeStatuses(ctx context.Context, statusClient agentStatusClient) map[string]agentRuntimeStatus {
+	if statusClient == nil {
+		return nil
+	}
+
+	statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	resp, err := statusClient.ListConnectedAgents(statusCtx)
+	if err != nil || resp == nil {
+		return nil
+	}
+
+	statuses := make(map[string]agentRuntimeStatus, len(resp.Agents))
+	for _, agent := range resp.Agents {
+		if agent == nil || agent.HostId == "" {
+			continue
+		}
+		statuses[agent.HostId] = agentRuntimeStatus{
+			Connected:     agent.Connected,
+			LastHeartbeat: agent.LastHeartbeat,
+		}
+	}
+	return statuses
+}
+
+func decorateHostsWithAgentStatus(hosts []model.Host, statuses map[string]agentRuntimeStatus) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(hosts))
+	for _, host := range hosts {
+		result = append(result, decorateHostWithAgentStatus(host, statuses))
+	}
+	return result
+}
+
+func decorateHostWithAgentStatus(host model.Host, statuses map[string]agentRuntimeStatus) map[string]interface{} {
+	online := isHostAgentOnlineWithRuntime(host, statuses)
+	agentStatus := "offline"
+	if online {
+		agentStatus = "online"
+	}
+
+	item := map[string]interface{}{
+		"id":                 host.ID.String(),
+		"ip_address":         host.IPAddress,
+		"hostname":           host.Hostname,
+		"os_type":            host.OSType,
+		"agent_version":      host.AgentVersion,
+		"last_heartbeat_at":  host.LastHeartbeatAt,
+		"created_at":         host.CreatedAt,
+		"updated_at":         host.UpdatedAt,
+		"agent_status":       agentStatus,
+		"agent_connected":    online,
+		"runtime_available":  online,
+		"status_source":      "database_heartbeat",
+		"status_freshness_s": 120,
+	}
+
+	if runtimeStatus, ok := statuses[host.ID.String()]; ok {
+		item["agent_connected"] = runtimeStatus.Connected
+		item["runtime_available"] = runtimeStatus.Connected
+		item["status_source"] = "server_connection"
+		if runtimeStatus.LastHeartbeat > 0 {
+			item["agent_last_heartbeat_unix"] = runtimeStatus.LastHeartbeat
+		}
+	}
+
+	return item
 }
 
 func paginateHosts(hosts []model.Host, page, pageSize int) []model.Host {

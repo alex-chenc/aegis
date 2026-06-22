@@ -104,10 +104,8 @@
       </div>
     </div>
 
-    <!-- 右侧上下文栏 -->
     <AssistantContextRail
       :plan="currentPlan"
-      :context-refs="railContextRefs"
       :approvals="pendingApprovals"
       :tool-calls="toolCalls"
     />
@@ -160,7 +158,6 @@ const {
   sessions,
   currentSession,
   messages,
-  contextRefs,
   toolCalls,
   approvals,
   resultCards,
@@ -174,14 +171,6 @@ const {
 
 const pendingApprovals = computed(() =>
   approvals.value.filter(a => a.status === 'pending')
-)
-
-const railContextRefs = computed(() =>
-  contextRefs.value.filter(ref => ![
-    'file',
-    'baseline_template',
-    'sigma_rule_upload',
-  ].includes(ref.object_type))
 )
 
 const sessionMetadata = computed<Record<string, any>>(() => {
@@ -312,9 +301,6 @@ async function handleUploadFile(file: File, purpose: AssistantFileUploadPurpose)
   try {
     await ensureSessionForUpload(file, purpose)
     const result = await store.uploadSessionFile(file, purpose)
-    if (currentSession.value?.session_id) {
-      await store.fetchContextRefs(currentSession.value.session_id)
-    }
     const title = result.context_ref?.title || file.name
     item.name = title
     item.status = 'success'
