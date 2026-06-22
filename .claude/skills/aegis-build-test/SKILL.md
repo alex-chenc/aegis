@@ -1,7 +1,7 @@
 ---
 name: aegis-build-test
 description: Aegis 系统构建测试技能 - agent/server/dc/api-server 构建部署和 gRPC 数据流测试
-version: 1.1.0
+version: 1.2.0
 source: manual-creation
 ---
 
@@ -73,9 +73,66 @@ cd server && make build
 # DC
 cd dc && make build
 
-# Agent（包含 eBPF 编译）
-cd agent && make all
+# Agent（必须在 aegis-agent-builder-ubi8:5.8.0 容器内构建）
+# 步骤1: 检查本地是否已存在构建镜像
+docker image inspect aegis-agent-builder-ubi8:5.8.0 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "构建基础镜像 aegis-agent-builder-ubi8:5.8.0..."
+  cd agent && make docker-base-image
+fi
+
+# 步骤2: 使用容器化构建 Agent
+cd agent && make docker-build
 ```
+
+**Agent 构建说明**：
+- Agent 的 eBPF 编译依赖 `aegis-agent-builder-ubi8:5.8.0` 镜像（UBI 8 + Go + clang + llvm + libbpf headers）
+- 该镜像基于 `docker/ebpf-builder-base/Dockerfile` 构建
+- `make docker-build` 会自动先检查并构建基础镜像，然后在容器内完成 eBPF 编译和 Agent 构建
+- 构建产物镜像为 `aegis-agent-artifacts:local`
+- 如需单独构建基础镜像：`cd agent && make docker-base-image`
+
+### Agent 容器化构建详解
+
+**为什么必须用容器构建？**
+Agent 包含 eBPF 程序，编译需要特定的内核头文件、clang/llvm 工具链和 libbpf 头文件。`aegis-agent-builder-ubi8:5.8.0` 镜像提供了完整且一致的构建环境。
+
+**构建流程**：
+
+```bash
+# 1. 检查基础镜像是否存在
+docker image inspect aegis-agent-builder-ubi8:5.8.0 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "基础镜像不存在，开始构建..."
+  # 方式A: 使用 Makefile（推荐）
+  cd agent && make docker-base-image
+
+  # 方式B: 直接使用 docker build
+  # docker build -f docker/ebpf-builder-base/Dockerfile -t aegis-agent-builder-ubi8:5.8.0 .
+fi
+
+# 2. 容器内构建 Agent（eBPF + Go 二进制 + 打包）
+cd agent && make docker-build
+
+# 3. 从构建产物镜像中提取 Agent 包（可选）
+# docker create --name agent-extract aegis-agent-artifacts:local
+# docker cp agent-extract:/out/ ./dist/
+# docker rm agent-extract
+```
+
+**构建产物**：
+- `aegis-agent-artifacts:local`：包含编译好的 Agent 二进制和 eBPF 对象文件
+- 产物路径在容器内为 `/out/`，包含 `aegis-agent-linux-amd64` 和 `bpf/*.bpf.o`
+
+**常用 Makefile Target**：
+| Target | 说明 |
+|--------|------|
+| `make docker-base-image` | 构建 `aegis-agent-builder-ubi8:5.8.0` 基础镜像 |
+| `make docker-build` | 容器内完整构建 Agent（依赖基础镜像） |
+| `make bpf` | 仅编译 eBPF 程序（需在容器内执行） |
+| `make build` | 仅编译 Go 二进制（需在容器内执行） |
+| `make package` | 打包构建产物 |
+| `make upload` | 上传到 MinIO |
 
 ---
 
@@ -159,8 +216,8 @@ export MINIO_ENDPOINT=localhost:9000
 export MINIO_ACCESS_KEY=<USER_PROVIDED_ACCESS_KEY>
 export MINIO_SECRET_KEY=<USER_PROVIDED_SECRET_KEY>
 
-# 2. 构建并上传（一次性完成）
-cd agent && make all && make upload
+# 2. 在容器内构建 Agent 并上传（一次性完成）
+cd agent && make docker-build && make upload
 
 # 3. 验证上传
 # 访问 http://localhost:9001 → agent-artifacts bucket
@@ -179,7 +236,8 @@ make upload
 
 #### 开发机：构建并上传
 ```bash
-cd agent && make all && make upload
+# 容器内构建并上传
+cd agent && make docker-build && make upload
 ```
 
 #### 目标机：卸载旧 Agent

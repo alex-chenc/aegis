@@ -89,6 +89,21 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AssistantInvestigationEvidence{},
 		&model.ExternalMCPSource{},
 		&model.ExternalMCPQueryLog{},
+		// V6.1 Weak password detection tables
+		&model.WeakPasswordScanTask{},
+		&model.WeakPasswordAssetAppAnalysis{},
+		&model.WeakPasswordCandidateApplication{},
+		&model.WeakPasswordCollectionPlan{},
+		&model.WeakPasswordScanHost{},
+		&model.WeakPasswordScanApplication{},
+		&model.WeakPasswordAgentToolCall{},
+		&model.WeakPasswordDictionary{},
+		&model.WeakPasswordDictionaryEntry{},
+		&model.WeakPasswordMatchBatch{},
+		&model.WeakPasswordFinding{},
+		&model.WeakPasswordCollectionError{},
+		&model.WeakPasswordAIReport{},
+		&model.WeakPasswordRevealAudit{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

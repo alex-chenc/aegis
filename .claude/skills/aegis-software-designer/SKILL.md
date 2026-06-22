@@ -39,8 +39,8 @@ When interacting with the user, detect the user's input language and use the sam
 - `docs/aegis_system_design_v5.6/` — V5.6 版本设计文档
 - `docs/aegis_system_design_v5.7/` — V5.7 版本设计文档
 - `docs/aegis_system_design_v5.8/` — V5.8 版本设计文档
-- `docs/aegis_system_design_v6.0/` — V6.0 版本设计文档（最新）
-
+- `docs/aegis_system_design_v6.0/` — V6.0 版本设计文档
+- `docs/aegis_system_design_v6.1/` — V6.1 版本设计文档（最新）
 
 ### Bug Fix Document Directory
 - `docs/aegis_system_design_v{version}/fix/{bug_description}_fix.md`

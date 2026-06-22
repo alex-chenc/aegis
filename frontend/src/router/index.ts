@@ -20,6 +20,9 @@ import DetectionPackages from '../views/detection/DetectionPackages/index.vue'
 import PackageDetail from '../views/detection/DetectionPackages/PackageDetail.vue'
 import PackageEditor from '../views/detection/DetectionPackages/PackageEditor.vue'
 import EBPFHooks from '../views/settings/EBPFHooks/index.vue'
+import WeakPasswordIndex from '../views/detection/WeakPassword/Index.vue'
+import WeakPasswordTaskDetail from '../views/detection/WeakPassword/TaskDetail.vue'
+import WeakPasswordDictionaries from '../views/detection/WeakPassword/Dictionaries.vue'
 
 const routes = [
   {
@@ -212,6 +215,24 @@ const routes = [
     name: 'DetectionPackageEdit',
     component: PackageEditor,
     meta: { title: '编辑检测包' }
+  },
+  {
+    path: '/risk/weak-password',
+    name: 'WeakPassword',
+    component: WeakPasswordIndex,
+    meta: { title: '智能弱密码检测' }
+  },
+  {
+    path: '/risk/weak-password/tasks/:id',
+    name: 'WeakPasswordTaskDetail',
+    component: WeakPasswordTaskDetail,
+    meta: { title: '智能弱密码任务详情' }
+  },
+  {
+    path: '/risk/weak-password/dictionaries',
+    name: 'WeakPasswordDictionaries',
+    component: WeakPasswordDictionaries,
+    meta: { title: '弱密码字典' }
   },
   {
     path: '/settings/command-audit',

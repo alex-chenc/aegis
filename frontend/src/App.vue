@@ -130,6 +130,11 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <el-menu-item index="/risk/weak-password">
+          <el-icon><Lock /></el-icon>
+          <span>智能弱密码检测</span>
+        </el-menu-item>
+
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -160,7 +165,7 @@
 
       <div class="sidebar-footer">
         <span class="status-dot" />
-        <span class="version">控制面在线 · V6.0</span>
+        <span class="version">控制面在线 · V6.1</span>
       </div>
     </el-aside>
 
@@ -207,7 +212,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link, MagicStick, Cpu, Avatar } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link, MagicStick, Cpu, Avatar, Lock } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
