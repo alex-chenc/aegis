@@ -3,7 +3,7 @@
     <div class="page-toolbar">
       <div>
         <h1>弱密码字典</h1>
-        <p>默认字典、上传字典和 AI 生成字典统一管理。</p>
+        <p>内置字典和自定义字典统一管理。</p>
       </div>
       <div class="toolbar-actions">
         <el-button :icon="Back" @click="router.push('/risk/weak-password')">返回</el-button>
@@ -14,7 +14,7 @@
 
     <section class="summary-band">
       <div class="summary-item">
-        <span>默认弱密码字典</span>
+        <span>内置字典</span>
         <strong>{{ store.defaultDictionary?.entry_count || 0 }}</strong>
       </div>
       <div class="summary-item">
@@ -22,69 +22,60 @@
         <strong>{{ store.dictionaries.length }}</strong>
       </div>
       <div class="summary-item">
-        <span>启用字典</span>
-        <strong>{{ enabledCount }}</strong>
+        <span>自定义字典</span>
+        <strong>{{ customCount }}</strong>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-head">
         <h2>字典列表</h2>
-        <span class="muted">默认字典只展示摘要和分类。</span>
+        <span class="muted">点击字典可逐条查看弱密码候选。</span>
       </div>
       <el-table v-loading="store.dictionaryLoading" :data="store.dictionaries" class="dense-table">
-        <el-table-column label="字典名称" min-width="220" prop="name" />
-        <el-table-column label="类型" width="150" prop="dictionary_type" />
-        <el-table-column label="条数" width="100" prop="entry_count" />
-        <el-table-column label="分类" min-width="260">
+        <el-table-column label="字典名称" min-width="260" prop="name" />
+        <el-table-column label="类型" width="140">
           <template #default="{ row }">
-            <el-tag v-for="item in row.categories" :key="item" effect="plain">{{ item }}</el-tag>
+            <el-tag :type="row.dictionary_type === 'default_1000' ? 'success' : 'info'">{{ dictionaryTypeLabel(row.dictionary_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column label="条数" width="120" prop="entry_count" />
+        <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
-            <el-tag :type="row.status === 'enabled' ? 'success' : 'info'">{{ row.status }}</el-tag>
+            <el-button link type="primary" @click="openEntries(row)">查看条目</el-button>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="140" prop="source" />
       </el-table>
+      <div v-if="store.dictionaryTotal > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="store.dictionaryFilters.page"
+          v-model:page-size="store.dictionaryFilters.page_size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          :total="store.dictionaryTotal"
+          @size-change="store.fetchDictionaries"
+          @current-change="store.fetchDictionaries"
+        />
+      </div>
     </section>
 
     <el-drawer v-model="drawerVisible" title="AI 一键生成字典" size="620px">
       <el-form label-position="top" class="drawer-form">
-        <el-form-item label="生成目标">
-          <el-segmented v-model="aiForm.target" :options="targetOptions" />
-        </el-form-item>
-        <el-form-item label="应用类型">
-          <el-select v-model="aiForm.application_type" placeholder="应用类型">
-            <el-option label="Redis" value="redis" />
-            <el-option label="MySQL" value="mysql" />
-            <el-option label="PostgreSQL" value="postgresql" />
-            <el-option label="Nginx Basic Auth" value="nginx" />
-            <el-option label="AI Agent" value="ai_agent" />
-            <el-option label="MCP Server" value="mcp_server" />
-            <el-option label="LLM Gateway" value="llm_service" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="组织关键词">
-          <el-select v-model="aiForm.organization_keywords" multiple filterable allow-create default-first-option placeholder="输入后回车" />
-        </el-form-item>
-        <el-form-item label="账号关键词">
-          <el-select v-model="aiForm.account_keywords" multiple filterable allow-create default-first-option placeholder="输入后回车" />
+        <el-form-item label="自然语言描述">
+          <el-input
+            v-model="aiForm.natural_language"
+            type="textarea"
+            :rows="7"
+            maxlength="800"
+            show-word-limit
+            placeholder="例如：为 Redis 管理员和生产环境生成弱密码字典，包含公司名 aegis、年份、常见符号和 admin/root 等账号习惯"
+          />
         </el-form-item>
         <el-form-item label="生成数量">
           <el-input-number v-model="aiForm.count" :min="1" :max="1000" />
         </el-form-item>
-        <el-form-item label="规则">
-          <el-checkbox-group v-model="aiForm.rules">
-            <el-checkbox label="append_year">年份后缀</el-checkbox>
-            <el-checkbox label="append_special_char">特殊字符</el-checkbox>
-            <el-checkbox label="capitalize">大小写</el-checkbox>
-            <el-checkbox label="leet_replace">leet</el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
         <el-form-item>
-          <el-checkbox v-model="aiForm.deduplicate_with_default">与默认字典去重</el-checkbox>
+          <el-checkbox v-model="aiForm.deduplicate_with_default">与内置字典去重</el-checkbox>
         </el-form-item>
       </el-form>
       <div class="drawer-actions">
@@ -98,6 +89,28 @@
         :closable="false"
         :title="`已生成 ${generated.entry_count} 条候选`"
       />
+    </el-drawer>
+
+    <el-drawer v-model="entriesVisible" :title="selectedDictionary ? selectedDictionary.name : '字典条目'" size="720px">
+      <el-table v-loading="store.dictionaryLoading" :data="store.dictionaryEntries" class="dense-table">
+        <el-table-column label="#" type="index" width="70" :index="entryIndex" />
+        <el-table-column label="弱密码" min-width="260">
+          <template #default="{ row }">
+            <code class="candidate-value">{{ row.candidate }}</code>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="store.dictionaryEntryTotal > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="store.dictionaryEntryFilters.page"
+          v-model:page-size="store.dictionaryEntryFilters.page_size"
+          :page-sizes="[20, 50, 100, 500, 1000]"
+          layout="total, sizes, prev, pager, next"
+          :total="store.dictionaryEntryTotal"
+          @size-change="fetchEntries"
+          @current-change="fetchEntries"
+        />
+      </div>
     </el-drawer>
   </div>
 </template>
@@ -113,35 +126,55 @@ import type { WeakPasswordDictionary } from '@/types/weakPassword'
 const router = useRouter()
 const store = useWeakPasswordStore()
 const drawerVisible = ref(false)
+const entriesVisible = ref(false)
 const generating = ref(false)
 const generated = ref<WeakPasswordDictionary | null>(null)
-
-const targetOptions = [
-  { label: '通用', value: 'general' },
-  { label: '应用', value: 'application' },
-  { label: '账号模式', value: 'account' },
-]
+const selectedDictionary = ref<WeakPasswordDictionary | null>(null)
 
 const aiForm = reactive({
-  target: 'application',
-  application_type: 'redis',
-  organization_keywords: ['aegis'] as string[],
-  account_keywords: ['admin', 'root'] as string[],
+  natural_language: '',
   count: 200,
-  rules: ['append_year', 'append_special_char', 'capitalize'] as string[],
   deduplicate_with_default: true,
 })
 
-const enabledCount = computed(() => store.dictionaries.filter(item => item.status === 'enabled').length)
+const customCount = computed(() => store.dictionaries.filter(item => item.dictionary_type !== 'default_1000').length)
 
 async function generate() {
+  if (!aiForm.natural_language.trim()) {
+    ElMessage.warning('请输入自然语言描述')
+    return
+  }
   generating.value = true
   try {
-    generated.value = await store.generateDictionary(aiForm)
+    generated.value = await store.generateDictionary({
+      natural_language: aiForm.natural_language,
+      count: aiForm.count,
+      deduplicate_with_default: aiForm.deduplicate_with_default,
+    })
     ElMessage.success('字典已保存')
   } finally {
     generating.value = false
   }
+}
+
+async function openEntries(row: WeakPasswordDictionary) {
+  selectedDictionary.value = row
+  store.dictionaryEntryFilters.page = 1
+  entriesVisible.value = true
+  await fetchEntries()
+}
+
+async function fetchEntries() {
+  if (!selectedDictionary.value) return
+  await store.fetchDictionaryEntries(selectedDictionary.value.id)
+}
+
+function entryIndex(index: number) {
+  return (store.dictionaryEntryFilters.page - 1) * store.dictionaryEntryFilters.page_size + index + 1
+}
+
+function dictionaryTypeLabel(type: string) {
+  return type === 'default_1000' ? '内置' : '自定义'
 }
 
 onMounted(() => {
@@ -218,6 +251,17 @@ onMounted(() => {
 
 .dense-table {
   width: 100%;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.candidate-value {
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .drawer-form {

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
 import {
   analyzeAssetApplications,
+  createWeakPasswordBatchTasks,
   createWeakPasswordTask,
   deleteWeakPasswordTask,
   generateWeakPasswordDictionary,
@@ -9,8 +10,10 @@ import {
   getWeakPasswordTask,
   getWeakPasswordTaskProgress,
   listAssetApplications,
+  listWeakPasswordDictionaryEntries,
   listWeakPasswordDictionaries,
   listWeakPasswordFindings,
+  listWeakPasswordTaskErrors,
   listWeakPasswordTaskHosts,
   listWeakPasswordTasks,
   retryWeakPasswordFailed,
@@ -19,10 +22,12 @@ import type {
   AIGenerateDictionaryRequest,
   AnalyzeAssetApplicationsRequest,
   AnalyzeAssetApplicationsResponse,
+  CreateWeakPasswordBatchTasksRequest,
   CreateWeakPasswordTaskRequest,
   WeakPasswordCandidateApplication,
   WeakPasswordCollectionError,
   WeakPasswordDictionary,
+  WeakPasswordDictionaryEntry,
   WeakPasswordFinding,
   WeakPasswordScanHost,
   WeakPasswordTask,
@@ -37,9 +42,15 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
   const currentTask = ref<WeakPasswordTask | null>(null)
   const progress = ref<WeakPasswordTaskProgress | null>(null)
   const hosts = ref<WeakPasswordScanHost[]>([])
+  const hostTotal = ref(0)
   const findings = ref<WeakPasswordFinding[]>([])
+  const findingTotal = ref(0)
   const errors = ref<WeakPasswordCollectionError[]>([])
+  const errorTotal = ref(0)
   const dictionaries = ref<WeakPasswordDictionary[]>([])
+  const dictionaryTotal = ref(0)
+  const dictionaryEntries = ref<WeakPasswordDictionaryEntry[]>([])
+  const dictionaryEntryTotal = ref(0)
   const defaultDictionary = ref<WeakPasswordDictionary | null>(null)
   const analysisResult = ref<AnalyzeAssetApplicationsResponse | null>(null)
   const loading = ref(false)
@@ -60,6 +71,31 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     page: 1,
     page_size: 20,
     status: ''
+  })
+
+  const hostFilters = reactive({
+    page: 1,
+    page_size: 10
+  })
+
+  const findingFilters = reactive({
+    page: 1,
+    page_size: 10
+  })
+
+  const errorFilters = reactive({
+    page: 1,
+    page_size: 10
+  })
+
+  const dictionaryFilters = reactive({
+    page: 1,
+    page_size: 20
+  })
+
+  const dictionaryEntryFilters = reactive({
+    page: 1,
+    page_size: 20
   })
 
   async function analyze(payload: AnalyzeAssetApplicationsRequest) {
@@ -92,6 +128,19 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     try {
       const result = await createWeakPasswordTask(payload)
       await fetchTasks()
+      await fetchCandidates()
+      return result
+    } finally {
+      creatingTask.value = false
+    }
+  }
+
+  async function createBatchTasks(payload: CreateWeakPasswordBatchTasksRequest) {
+    creatingTask.value = true
+    try {
+      const result = await createWeakPasswordBatchTasks(payload)
+      await fetchTasks()
+      await fetchCandidates()
       return result
     } finally {
       creatingTask.value = false
@@ -112,17 +161,21 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
   async function fetchTaskDetail(taskId: string) {
     loading.value = true
     try {
-      const [taskDetail, taskProgress, hostResult, findingResult] = await Promise.all([
+      const [taskDetail, taskProgress, hostResult, findingResult, errorResult] = await Promise.all([
         getWeakPasswordTask(taskId),
         getWeakPasswordTaskProgress(taskId),
-        listWeakPasswordTaskHosts(taskId),
-        listWeakPasswordFindings(taskId),
+        listWeakPasswordTaskHosts(taskId, hostFilters),
+        listWeakPasswordFindings(taskId, findingFilters),
+        listWeakPasswordTaskErrors(taskId, errorFilters),
       ])
       currentTask.value = taskDetail.task
-      errors.value = taskDetail.errors || []
       progress.value = taskProgress
       hosts.value = hostResult.items
+      hostTotal.value = hostResult.total
       findings.value = findingResult.items
+      findingTotal.value = findingResult.total
+      errors.value = errorResult.items
+      errorTotal.value = errorResult.total
     } finally {
       loading.value = false
     }
@@ -139,8 +192,11 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
       currentTask.value = null
       progress.value = null
       hosts.value = []
+      hostTotal.value = 0
       findings.value = []
+      findingTotal.value = 0
       errors.value = []
+      errorTotal.value = 0
     }
     await fetchTasks()
   }
@@ -150,10 +206,22 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     try {
       const [defaultDict, dictResult] = await Promise.all([
         getDefaultWeakPasswordDictionary(),
-        listWeakPasswordDictionaries(),
+        listWeakPasswordDictionaries(dictionaryFilters),
       ])
       defaultDictionary.value = defaultDict
       dictionaries.value = dictResult.items
+      dictionaryTotal.value = dictResult.total
+    } finally {
+      dictionaryLoading.value = false
+    }
+  }
+
+  async function fetchDictionaryEntries(dictionaryId: string) {
+    dictionaryLoading.value = true
+    try {
+      const result = await listWeakPasswordDictionaryEntries(dictionaryId, dictionaryEntryFilters)
+      dictionaryEntries.value = result.items
+      dictionaryEntryTotal.value = result.total
     } finally {
       dictionaryLoading.value = false
     }
@@ -173,9 +241,15 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     currentTask,
     progress,
     hosts,
+    hostTotal,
     findings,
+    findingTotal,
     errors,
+    errorTotal,
     dictionaries,
+    dictionaryTotal,
+    dictionaryEntries,
+    dictionaryEntryTotal,
     defaultDictionary,
     analysisResult,
     loading,
@@ -184,14 +258,21 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     dictionaryLoading,
     candidateFilters,
     taskFilters,
+    hostFilters,
+    findingFilters,
+    errorFilters,
+    dictionaryFilters,
+    dictionaryEntryFilters,
     analyze,
     fetchCandidates,
     createTask,
+    createBatchTasks,
     fetchTasks,
     fetchTaskDetail,
     retryFailed,
     deleteTask,
     fetchDictionaries,
+    fetchDictionaryEntries,
     generateDictionary,
   }
 })

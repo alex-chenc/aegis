@@ -68,8 +68,14 @@ func (r *WeakPasswordRepository) CreateAnalysisWithCandidates(analysis *model.We
 			return err
 		}
 		if len(candidates) > 0 {
-			if err := tx.Create(&candidates).Error; err != nil {
-				return err
+			// Use upsert to avoid duplicate candidates based on (host_id, asset_id, application_type)
+			for i := range candidates {
+				if err := tx.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "host_id"}, {Name: "asset_id"}, {Name: "application_type"}},
+					DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "confidence", "candidate_paths_json", "extractor_plan_json", "asset_evidence_json", "ai_reason", "status"}),
+				}).Create(&candidates[i]).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -80,6 +86,15 @@ func (r *WeakPasswordRepository) ListCandidateApplications(analysisID *uuid.UUID
 	var items []model.WeakPasswordCandidateApplication
 	var total int64
 	q := r.db.Model(&model.WeakPasswordCandidateApplication{})
+
+	// If no analysis_id specified, use the latest analysis
+	if analysisID == nil {
+		var latestAnalysis model.WeakPasswordAssetAppAnalysis
+		if err := r.db.Order("created_at DESC").First(&latestAnalysis).Error; err == nil {
+			analysisID = &latestAnalysis.ID
+		}
+	}
+
 	if analysisID != nil {
 		q = q.Where("analysis_id = ?", *analysisID)
 	}
@@ -172,6 +187,18 @@ func (r *WeakPasswordRepository) GetScanApplicationByTask(taskID uuid.UUID) (*mo
 	return &app, nil
 }
 
+func (r *WeakPasswordRepository) ListScanApplicationsByCandidateIDs(candidateIDs []uuid.UUID) ([]model.WeakPasswordScanApplication, error) {
+	var apps []model.WeakPasswordScanApplication
+	if len(candidateIDs) == 0 {
+		return apps, nil
+	}
+	err := r.db.
+		Where("candidate_application_id IN ?", candidateIDs).
+		Order("updated_at DESC, created_at DESC").
+		Find(&apps).Error
+	return apps, err
+}
+
 func (r *WeakPasswordRepository) ListScanHosts(taskID uuid.UUID) ([]model.WeakPasswordScanHost, error) {
 	var hosts []model.WeakPasswordScanHost
 	err := r.db.Where("task_id = ?", taskID).Order("created_at ASC").Find(&hosts).Error
@@ -184,20 +211,56 @@ type WeakPasswordScanHostWithInfo struct {
 	IPAddress string `json:"ip_address"`
 }
 
-func (r *WeakPasswordRepository) ListScanHostsWithInfo(taskID uuid.UUID) ([]WeakPasswordScanHostWithInfo, error) {
+func (r *WeakPasswordRepository) ListScanHostsWithInfo(taskID uuid.UUID, page, pageSize int) ([]WeakPasswordScanHostWithInfo, int64, error) {
 	var hosts []WeakPasswordScanHostWithInfo
-	err := r.db.Table("weak_password_scan_hosts AS scan_hosts").
+	var total int64
+	q := r.db.Table("weak_password_scan_hosts AS scan_hosts").
 		Select("scan_hosts.*, hosts.hostname AS hostname, hosts.ip_address AS ip_address").
 		Joins("LEFT JOIN hosts ON hosts.id = scan_hosts.host_id").
-		Where("scan_hosts.task_id = ?", taskID).
+		Where("scan_hosts.task_id = ?", taskID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	err := q.
 		Order("scan_hosts.created_at ASC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
 		Scan(&hosts).Error
-	return hosts, err
+	return hosts, total, err
 }
 
-func (r *WeakPasswordRepository) ListFindings(taskID uuid.UUID) ([]model.WeakPasswordFinding, error) {
+func (r *WeakPasswordRepository) ListFindings(taskID uuid.UUID, page, pageSize int) ([]model.WeakPasswordFinding, int64, error) {
 	var findings []model.WeakPasswordFinding
-	err := r.db.Where("task_id = ?", taskID).Order("created_at DESC").Find(&findings).Error
+	var total int64
+	q := r.db.Model(&model.WeakPasswordFinding{}).Where("task_id = ?", taskID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	err := q.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&findings).Error
+	return findings, total, err
+}
+
+func (r *WeakPasswordRepository) ListFindingsByScanApplicationIDs(scanApplicationIDs []uuid.UUID) ([]model.WeakPasswordFinding, error) {
+	var findings []model.WeakPasswordFinding
+	if len(scanApplicationIDs) == 0 {
+		return findings, nil
+	}
+	err := r.db.
+		Where("scan_application_id IN ?", scanApplicationIDs).
+		Order("created_at DESC").
+		Find(&findings).Error
 	return findings, err
 }
 
@@ -209,10 +272,21 @@ func (r *WeakPasswordRepository) GetFinding(id uuid.UUID) (*model.WeakPasswordFi
 	return &finding, nil
 }
 
-func (r *WeakPasswordRepository) ListCollectionErrors(taskID uuid.UUID) ([]model.WeakPasswordCollectionError, error) {
+func (r *WeakPasswordRepository) ListCollectionErrors(taskID uuid.UUID, page, pageSize int) ([]model.WeakPasswordCollectionError, int64, error) {
 	var errors []model.WeakPasswordCollectionError
-	err := r.db.Where("task_id = ?", taskID).Order("created_at DESC").Find(&errors).Error
-	return errors, err
+	var total int64
+	q := r.db.Model(&model.WeakPasswordCollectionError{}).Where("task_id = ?", taskID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	err := q.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&errors).Error
+	return errors, total, err
 }
 
 func (r *WeakPasswordRepository) UpdateTask(task *model.WeakPasswordScanTask) error {
@@ -255,7 +329,16 @@ func (r *WeakPasswordRepository) CreateFindings(findings []model.WeakPasswordFin
 	if len(findings) == 0 {
 		return nil
 	}
-	return r.db.Create(&findings).Error
+	// Use upsert to avoid duplicate findings based on (task_id, host_id, source_path, field_path, account)
+	for i := range findings {
+		if err := r.db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}, {Name: "host_id"}, {Name: "source_path"}, {Name: "field_path"}, {Name: "account"}},
+			DoUpdates: clause.AssignmentColumns([]string{"match_status", "matched_password_mask", "matched_password_encrypted", "match_source", "match_rule", "confidence", "ai_reason", "updated_at"}),
+		}).Create(&findings[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *WeakPasswordRepository) GetDefaultDictionary() (*model.WeakPasswordDictionary, error) {
@@ -313,9 +396,49 @@ func (r *WeakPasswordRepository) ListDictionaryEntries(dictionaryIDs []uuid.UUID
 	return entries, err
 }
 
-func (r *WeakPasswordRepository) ListDictionaries() ([]model.WeakPasswordDictionary, error) {
+func (r *WeakPasswordRepository) ListDictionaryEntriesPaged(dictionaryID uuid.UUID, page, pageSize int) ([]model.WeakPasswordDictionaryEntry, int64, error) {
+	var entries []model.WeakPasswordDictionaryEntry
+	var total int64
+	q := r.db.Model(&model.WeakPasswordDictionaryEntry{}).Where("dictionary_id = ?", dictionaryID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	err := q.Order("created_at ASC, candidate ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&entries).Error
+	return entries, total, err
+}
+
+func (r *WeakPasswordRepository) ListDictionaries(page, pageSize int) ([]model.WeakPasswordDictionary, int64, error) {
 	var dictionaries []model.WeakPasswordDictionary
-	err := r.db.Order("created_at DESC").Find(&dictionaries).Error
+	var total int64
+	q := r.db.Model(&model.WeakPasswordDictionary{})
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	err := q.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&dictionaries).Error
+	return dictionaries, total, err
+}
+
+func (r *WeakPasswordRepository) ListDictionariesByTypes(types []string) ([]model.WeakPasswordDictionary, error) {
+	var dictionaries []model.WeakPasswordDictionary
+	if len(types) == 0 {
+		return dictionaries, nil
+	}
+	err := r.db.
+		Where("dictionary_type IN ? AND status = ?", types, "enabled").
+		Order("created_at DESC").
+		Find(&dictionaries).Error
 	return dictionaries, err
 }
 

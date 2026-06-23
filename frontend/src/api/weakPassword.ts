@@ -3,6 +3,8 @@ import type {
   AIGenerateDictionaryRequest,
   AnalyzeAssetApplicationsRequest,
   AnalyzeAssetApplicationsResponse,
+  CreateWeakPasswordBatchTasksRequest,
+  CreateWeakPasswordBatchTasksResponse,
   CreateWeakPasswordDictionaryRequest,
   CreateWeakPasswordTaskRequest,
   CreateWeakPasswordTaskResponse,
@@ -11,6 +13,7 @@ import type {
   WeakPasswordCandidateApplication,
   WeakPasswordCollectionError,
   WeakPasswordDictionary,
+  WeakPasswordDictionaryEntry,
   WeakPasswordFinding,
   WeakPasswordScanHost,
   WeakPasswordTask,
@@ -29,6 +32,10 @@ export function createWeakPasswordTask(payload: CreateWeakPasswordTaskRequest): 
   return request.post('/weak-password/tasks/by-application', payload)
 }
 
+export function createWeakPasswordBatchTasks(payload: CreateWeakPasswordBatchTasksRequest): Promise<CreateWeakPasswordBatchTasksResponse> {
+  return request.post('/weak-password/tasks/by-applications', payload)
+}
+
 export function listWeakPasswordTasks(params: Record<string, any>): Promise<PageResult<WeakPasswordTask>> {
   return request.get('/weak-password/tasks', { params })
 }
@@ -41,12 +48,16 @@ export function getWeakPasswordTaskProgress(id: string): Promise<WeakPasswordTas
   return request.get(`/weak-password/tasks/${id}/progress`)
 }
 
-export function listWeakPasswordTaskHosts(id: string): Promise<PageResult<WeakPasswordScanHost>> {
-  return request.get(`/weak-password/tasks/${id}/hosts`)
+export function listWeakPasswordTaskHosts(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordScanHost>> {
+  return request.get(`/weak-password/tasks/${id}/hosts`, { params })
 }
 
-export function listWeakPasswordFindings(id: string): Promise<PageResult<WeakPasswordFinding>> {
-  return request.get(`/weak-password/tasks/${id}/findings`)
+export function listWeakPasswordFindings(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordFinding>> {
+  return request.get(`/weak-password/tasks/${id}/findings`, { params })
+}
+
+export function listWeakPasswordTaskErrors(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordCollectionError>> {
+  return request.get(`/weak-password/tasks/${id}/errors`, { params })
 }
 
 export function retryWeakPasswordFailed(id: string): Promise<{ status: string }> {
@@ -61,8 +72,12 @@ export function getDefaultWeakPasswordDictionary(): Promise<WeakPasswordDictiona
   return request.get('/weak-password/dictionaries/default')
 }
 
-export function listWeakPasswordDictionaries(): Promise<PageResult<WeakPasswordDictionary>> {
-  return request.get('/weak-password/dictionaries')
+export function listWeakPasswordDictionaries(params?: Record<string, any>): Promise<PageResult<WeakPasswordDictionary>> {
+  return request.get('/weak-password/dictionaries', { params })
+}
+
+export function listWeakPasswordDictionaryEntries(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordDictionaryEntry>> {
+  return request.get(`/weak-password/dictionaries/${id}/entries`, { params })
 }
 
 export function createWeakPasswordDictionary(payload: CreateWeakPasswordDictionaryRequest): Promise<WeakPasswordDictionary> {

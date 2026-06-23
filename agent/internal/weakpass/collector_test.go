@@ -67,6 +67,22 @@ func TestCollectCredentialsParsesRedisRequirepass(t *testing.T) {
 	}
 }
 
+func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
+	candidates := credentialPathCandidates("/etc/redis/redis.conf", []int{1234, 1234, 0})
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(candidates))
+	}
+	if candidates[0].ReadPath != "/etc/redis/redis.conf" || candidates[0].ProcessPID != 0 {
+		t.Fatalf("unexpected first candidate: %#v", candidates[0])
+	}
+	if candidates[1].ReadPath != "/proc/1234/root/etc/redis/redis.conf" {
+		t.Fatalf("container candidate path = %q", candidates[1].ReadPath)
+	}
+	if candidates[1].SourcePath != "/etc/redis/redis.conf" || candidates[1].ProcessPID != 1234 {
+		t.Fatalf("unexpected container candidate: %#v", candidates[1])
+	}
+}
+
 func TestCollectCredentialsParsesMySQLIni(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "debian.cnf")

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -118,6 +121,86 @@ func TestWeakPasswordBcryptHashMatchRequiresVerifier(t *testing.T) {
 	}
 }
 
+func TestWeakPasswordMatchUsesSelectedCustomDictionary(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	if err := svc.EnsureDefaultDictionary(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	custom, err := svc.CreateDictionary(CreateWeakPasswordDictionaryRequest{
+		Name:           "自定义弱密码字典",
+		DictionaryType: model.DictTypeUploaded,
+		Entries:        []string{"OnlyCustom@123"},
+		Source:         "uploaded",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := svc.MatchCredentialRecordsWithPolicy(uuid.New(), uuid.New(), uuid.New(), []AgentCredentialRecord{{
+		Application:     "redis",
+		Account:         "default",
+		CredentialType:  model.CredTypePlaintext,
+		CredentialValue: "OnlyCustom@123",
+		SourcePath:      "/etc/redis/redis.conf",
+		FieldPath:       "requirepass",
+		Parser:          "line_key_value",
+	}}, model.WeakPasswordDictionaryPolicy{
+		DictionaryIDs: []string{custom.ID},
+	})
+	if err != nil {
+		t.Fatalf("MatchCredentialRecordsWithPolicy returned error: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+	if findings[0].MatchSource != "selected_dictionary" {
+		t.Fatalf("match source = %q, want selected_dictionary", findings[0].MatchSource)
+	}
+
+	findings, err = svc.MatchCredentialRecordsWithPolicy(uuid.New(), uuid.New(), uuid.New(), []AgentCredentialRecord{{
+		Application:     "redis",
+		Account:         "default",
+		CredentialType:  model.CredTypePlaintext,
+		CredentialValue: "Admin@123",
+		SourcePath:      "/etc/redis/redis.conf",
+		FieldPath:       "requirepass",
+		Parser:          "line_key_value",
+	}}, model.WeakPasswordDictionaryPolicy{
+		DictionaryIDs: []string{custom.ID},
+	})
+	if err != nil {
+		t.Fatalf("MatchCredentialRecordsWithPolicy returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("findings = %d, want 0 when default dictionary is not selected", len(findings))
+	}
+}
+
+func TestGenerateAIDictionaryUsesNaturalLanguageSeeds(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	summary, err := svc.GenerateAIDictionary(model.AIGenerateDictionaryRequest{
+		NaturalLanguage: "为 Redis 管理员生成弱密码字典，包含公司名 aegis 和 admin 习惯",
+		Count:           20,
+	}, nil)
+	if err != nil {
+		t.Fatalf("GenerateAIDictionary returned error: %v", err)
+	}
+	if summary.Type != model.DictTypeAIGenerated {
+		t.Fatalf("dictionary type = %q, want ai_generated", summary.Type)
+	}
+	entries, err := svc.repo.ListDictionaryEntries([]uuid.UUID{uuid.MustParse(summary.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := ""
+	for _, entry := range entries {
+		joined += entry.Candidate + "\n"
+	}
+	if !strings.Contains(strings.ToLower(joined), "aegis") {
+		t.Fatalf("generated entries do not include natural language seed, entries=%q", joined)
+	}
+}
+
 func TestWeakPasswordRevealRequiresSystemPassword(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
 	userID := uuid.New()
@@ -166,6 +249,119 @@ func TestWeakPasswordRevealRequiresSystemPassword(t *testing.T) {
 
 	if _, err := svc.RevealFinding(findingID, userID, "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("wrong password error = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+func TestCreateTasksByApplicationsSkipsOfflineHosts(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	candidateID := uuid.New()
+	if err := svc.repo.DB().Create(&model.WeakPasswordCandidateApplication{
+		ID:                 candidateID,
+		AnalysisID:         uuid.New(),
+		HostID:             hostID,
+		ApplicationName:    "redis",
+		ApplicationType:    "redis",
+		CredentialTypes:    datatypesJSON(t, []string{model.CredTypePlaintext}),
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		ExtractorPlanJSON:  datatypesJSON(t, []CredentialExtractor{{Type: "line_key_value", PasswordSelector: "requirepass", FormatHint: model.CredTypePlaintext}}),
+		Status:             model.AppStatusCandidate,
+		CreatedAt:          time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc.agentClient = &MockAgentClient{
+		GetAgentStatusFunc: func(ctx context.Context, hostID string) (*pb.GetAgentStatusResponse, error) {
+			return &pb.GetAgentStatusResponse{Connected: false}, nil
+		},
+	}
+
+	resp, err := svc.CreateTasksByApplications(t.Context(), model.CreateTasksByApplicationsRequest{
+		CandidateApplicationIDs: []string{candidateID.String()},
+		DictionaryPolicy:        model.WeakPasswordDictionaryPolicy{UseDefault1000: true},
+		AIPolicy:                model.WeakPasswordAIPolicy{RepairCollectionErrors: true, MaxAgentToolCallsPerApp: 10},
+	}, nil)
+	if err != nil {
+		t.Fatalf("CreateTasksByApplications returned error: %v", err)
+	}
+	if len(resp.Created) != 0 || len(resp.Skipped) != 1 {
+		t.Fatalf("created/skipped = %d/%d, want 0/1", len(resp.Created), len(resp.Skipped))
+	}
+	if resp.Skipped[0].Reason != "host_offline" {
+		t.Fatalf("skip reason = %q, want host_offline", resp.Skipped[0].Reason)
+	}
+}
+
+func TestListCandidateApplicationsIncludesScanStatusAndFindingSummary(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	candidateID := uuid.New()
+	hostID := uuid.New()
+	scanAppID := uuid.New()
+	taskID := uuid.New()
+	if err := svc.repo.DB().Create(&model.WeakPasswordCandidateApplication{
+		ID:                 candidateID,
+		AnalysisID:         uuid.New(),
+		HostID:             hostID,
+		ApplicationName:    "redis",
+		ApplicationType:    "redis",
+		CredentialTypes:    datatypesJSON(t, []string{model.CredTypePlaintext}),
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		ExtractorPlanJSON:  datatypesJSON(t, []CredentialExtractor{{Type: "line_key_value", PasswordSelector: "requirepass", FormatHint: model.CredTypePlaintext}}),
+		AssetEvidenceJSON:  datatypesJSON(t, map[string]interface{}{"hostname": "redis-01", "ip_address": "10.0.0.8"}),
+		Status:             model.AppStatusCandidate,
+		CreatedAt:          time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.DB().Create(&model.WeakPasswordScanApplication{
+		ID:                     scanAppID,
+		TaskID:                 taskID,
+		ScanHostID:             uuid.New(),
+		HostID:                 hostID,
+		CandidateApplicationID: &candidateID,
+		ApplicationName:        "redis",
+		ApplicationType:        "redis",
+		Status:                 model.AppStatusMatched,
+		Progress:               100,
+		MatchedFindings:        1,
+		CreatedAt:              time.Now(),
+		UpdatedAt:              time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.DB().Create(&model.WeakPasswordFinding{
+		ID:                  uuid.New(),
+		TaskID:              taskID,
+		ScanApplicationID:   &scanAppID,
+		HostID:              hostID,
+		ApplicationName:     "redis",
+		ApplicationType:     "redis",
+		Account:             "default",
+		CredentialType:      model.CredTypePlaintext,
+		MatchStatus:         model.MatchStatusConfirmed,
+		MatchedPasswordMask: "*********",
+		MatchSource:         model.DictTypeDefault1000,
+		MatchRule:           "dictionary_exact",
+		SourcePath:          "/etc/redis/redis.conf",
+		FieldPath:           "requirepass",
+		EvidenceJSON:        datatypesJSON(t, map[string]interface{}{"process_pid": 1234}),
+		CreatedAt:           time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	items, total, err := svc.ListCandidateApplications("", "", "", "", 1, 20)
+	if err != nil {
+		t.Fatalf("ListCandidateApplications returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("items/total = %d/%d, want 1/1", len(items), total)
+	}
+	if items[0].ScanStatus != "alert" || items[0].MatchedFindings != 1 {
+		t.Fatalf("status/findings = %s/%d, want alert/1", items[0].ScanStatus, items[0].MatchedFindings)
+	}
+	if len(items[0].Findings) != 1 || items[0].Findings[0].ProcessPID != 1234 {
+		t.Fatalf("finding summary = %#v, want process_pid 1234", items[0].Findings)
 	}
 }
 
@@ -337,6 +533,96 @@ func newWeakPasswordTestService(t *testing.T) *WeakPasswordService {
 			ignored_at DATETIME,
 			created_at DATETIME
 		)`,
+		`CREATE UNIQUE INDEX idx_test_wp_candidates_host_asset_type ON weak_password_candidate_applications(host_id, asset_id, application_type)`,
+		`CREATE TABLE weak_password_scan_tasks (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			trigger_source TEXT,
+			status TEXT,
+			progress INTEGER,
+			current_stage TEXT,
+			scope_json JSON,
+			dictionary_policy_json JSON,
+			ai_policy_json JSON,
+			total_hosts INTEGER,
+			total_applications INTEGER,
+			matched_findings INTEGER,
+			failed_applications INTEGER,
+			created_by TEXT,
+			started_at DATETIME,
+			finished_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE weak_password_scan_hosts (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			host_id TEXT,
+			status TEXT,
+			agent_status TEXT,
+			progress INTEGER,
+			current_stage TEXT,
+			collected_records INTEGER,
+			matched_findings INTEGER,
+			failed_applications INTEGER,
+			error_code TEXT,
+			error_message TEXT,
+			started_at DATETIME,
+			finished_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE weak_password_scan_applications (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			scan_host_id TEXT,
+			host_id TEXT,
+			asset_id TEXT,
+			candidate_application_id TEXT,
+			application_name TEXT,
+			application_type TEXT,
+			profile_id TEXT,
+			status TEXT,
+			progress INTEGER,
+			current_stage TEXT,
+			agent_tool_call_count INTEGER,
+			max_agent_tool_calls INTEGER,
+			collected_records INTEGER,
+			matched_findings INTEGER,
+			attempted_paths_json JSON,
+			error_code TEXT,
+			error_message TEXT,
+			started_at DATETIME,
+			finished_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE weak_password_collection_plans (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			host_id TEXT,
+			candidate_application_id TEXT,
+			plan_json JSON,
+			llm_analysis_json JSON,
+			status TEXT,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE weak_password_agent_tool_calls (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			scan_application_id TEXT,
+			host_id TEXT,
+			call_id TEXT,
+			tool_name TEXT,
+			arguments_summary_json JSON,
+			result_summary_json JSON,
+			status TEXT,
+			error_code TEXT,
+			error_message TEXT,
+			execution_time_ms INTEGER,
+			created_at DATETIME
+		)`,
 		`CREATE TABLE weak_password_findings (
 			id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
@@ -363,6 +649,22 @@ func newWeakPasswordTestService(t *testing.T) *WeakPasswordService {
 			risk_accepted_at DATETIME,
 			created_at DATETIME
 		)`,
+		`CREATE UNIQUE INDEX idx_test_wp_findings_dedup ON weak_password_findings(task_id, host_id, source_path, field_path, account)`,
+		`CREATE TABLE weak_password_collection_errors (
+			id TEXT PRIMARY KEY,
+			task_id TEXT,
+			scan_application_id TEXT,
+			host_id TEXT,
+			application_name TEXT,
+			source_path TEXT,
+			error_code TEXT,
+			error_message TEXT,
+			agent_tool_call_count INTEGER,
+			attempted_paths_json JSON,
+			repair_trace_json JSON,
+			final_status TEXT,
+			created_at DATETIME
+		)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -370,6 +672,15 @@ func newWeakPasswordTestService(t *testing.T) *WeakPasswordService {
 		}
 	}
 	return &WeakPasswordService{repo: repository.NewWeakPasswordRepository(db), logger: zap.NewNop()}
+}
+
+func datatypesJSON(t *testing.T, value interface{}) datatypes.JSON {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return datatypes.JSON(data)
 }
 
 // ============================================================================

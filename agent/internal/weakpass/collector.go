@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -63,7 +66,7 @@ func (c *Collector) CollectCredentials(ctx context.Context, params map[string]in
 				continue
 			}
 
-			content, statErr := readAllowedFile(path, req.CollectionPolicy.MaxFileBytes)
+			content, resolved, statErr := readAllowedCredentialFile(path, app.RelatedPIDs, req.CollectionPolicy.MaxFileBytes)
 			if statErr != nil {
 				code, retryable := fileErrorCode(statErr)
 				result.Errors = append(result.Errors, collectionError(app.Application, path, code, safeFileErrorMessage(code), retryable))
@@ -75,7 +78,7 @@ func (c *Collector) CollectCredentials(ctx context.Context, params map[string]in
 					result.Errors = append(result.Errors, collectionError(app.Application, path, ErrRecordLimitReached, "record limit reached", false))
 					return result, nil
 				}
-				records, parseErr := parseCredentialFile(app, path, content, extractor)
+				records, parseErr := parseCredentialFile(app, resolved.SourcePath, content, extractor)
 				if parseErr != nil {
 					code := ErrUnsupportedFormat
 					if errors.Is(parseErr, errFieldNotFound) {
@@ -83,6 +86,9 @@ func (c *Collector) CollectCredentials(ctx context.Context, params map[string]in
 					}
 					result.Errors = append(result.Errors, collectionError(app.Application, path, code, parseErr.Error(), true))
 					continue
+				}
+				for idx := range records {
+					records[idx].ProcessPID = resolved.ProcessPID
 				}
 				result.Records = append(result.Records, records...)
 			}
@@ -122,6 +128,51 @@ func readAllowedFile(path string, maxBytes int64) ([]byte, error) {
 		return nil, errFileTooLarge
 	}
 	return os.ReadFile(path)
+}
+
+type resolvedCredentialPath struct {
+	ReadPath   string
+	SourcePath string
+	ProcessPID int
+}
+
+func readAllowedCredentialFile(path string, relatedPIDs []int, maxBytes int64) ([]byte, resolvedCredentialPath, error) {
+	candidates := credentialPathCandidates(path, relatedPIDs)
+	var lastErr error
+	for _, candidate := range candidates {
+		content, err := readAllowedFile(candidate.ReadPath, maxBytes)
+		if err == nil {
+			return content, candidate, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = os.ErrNotExist
+	}
+	return nil, resolvedCredentialPath{ReadPath: path, SourcePath: path}, lastErr
+}
+
+func credentialPathCandidates(path string, relatedPIDs []int) []resolvedCredentialPath {
+	candidates := []resolvedCredentialPath{{ReadPath: path, SourcePath: path}}
+	clean := filepath.Clean(path)
+	relative := strings.TrimPrefix(clean, string(filepath.Separator))
+	seen := map[string]struct{}{path: {}}
+	for _, pid := range relatedPIDs {
+		if pid <= 0 {
+			continue
+		}
+		readPath := filepath.Join("/proc", strconv.Itoa(pid), "root", relative)
+		if _, ok := seen[readPath]; ok {
+			continue
+		}
+		seen[readPath] = struct{}{}
+		candidates = append(candidates, resolvedCredentialPath{
+			ReadPath:   readPath,
+			SourcePath: path,
+			ProcessPID: pid,
+		})
+	}
+	return candidates
 }
 
 var errFileTooLarge = errors.New("file too large")

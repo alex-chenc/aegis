@@ -32,15 +32,18 @@ func (h *WeakPasswordHandler) RegisterRoutes(api *gin.RouterGroup) {
 		wp.GET("/asset-applications", h.ListAssetApplications)
 		wp.POST("/tasks", h.CreateTask)
 		wp.POST("/tasks/by-application", h.CreateTaskByApplication)
+		wp.POST("/tasks/by-applications", h.CreateTasksByApplications)
 		wp.GET("/tasks", h.ListTasks)
 		wp.GET("/tasks/:id", h.GetTask)
 		wp.GET("/tasks/:id/progress", h.GetTaskProgress)
 		wp.GET("/tasks/:id/hosts", h.GetTaskHosts)
 		wp.GET("/tasks/:id/findings", h.GetTaskFindings)
+		wp.GET("/tasks/:id/errors", h.GetTaskErrors)
 		wp.POST("/tasks/:id/retry-failed", h.RetryFailedTask)
 		wp.DELETE("/tasks/:id", h.DeleteTask)
 		wp.GET("/dictionaries/default", h.GetDefaultDictionary)
 		wp.GET("/dictionaries", h.ListDictionaries)
+		wp.GET("/dictionaries/:id/entries", h.ListDictionaryEntries)
 		wp.POST("/dictionaries", h.CreateDictionary)
 		wp.POST("/dictionaries/ai-generate", h.GenerateDictionary)
 		wp.POST("/findings/:id/reveal", h.RevealFinding)
@@ -108,6 +111,21 @@ func (h *WeakPasswordHandler) CreateTaskByApplication(c *gin.Context) {
 	h.createTaskByApplication(c, req)
 }
 
+func (h *WeakPasswordHandler) CreateTasksByApplications(c *gin.Context) {
+	var req model.CreateTasksByApplicationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorJSON(c, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	resp, err := h.service.CreateTasksByApplications(c.Request.Context(), req, currentUserID(c))
+	if err != nil {
+		h.logger.Error("weak password batch task creation failed", zap.Error(err))
+		errorJSON(c, http.StatusInternalServerError, "Failed to create weak password tasks")
+		return
+	}
+	successJSON(c, resp)
+}
+
 func (h *WeakPasswordHandler) createTaskByApplication(c *gin.Context, req model.CreateTaskByApplicationRequest) {
 	resp, err := h.service.CreateTaskByApplication(c.Request.Context(), req, currentUserID(c))
 	if err != nil {
@@ -163,12 +181,13 @@ func (h *WeakPasswordHandler) GetTaskHosts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	hosts, err := h.service.ListTaskHosts(taskID)
+	page, pageSize := pageParams(c)
+	hosts, total, err := h.service.ListTaskHosts(taskID, page, pageSize)
 	if err != nil {
 		errorJSON(c, http.StatusInternalServerError, "Failed to list task hosts")
 		return
 	}
-	successJSON(c, gin.H{"items": hosts, "total": len(hosts)})
+	successJSON(c, gin.H{"items": hosts, "total": total})
 }
 
 func (h *WeakPasswordHandler) GetTaskFindings(c *gin.Context) {
@@ -176,12 +195,27 @@ func (h *WeakPasswordHandler) GetTaskFindings(c *gin.Context) {
 	if !ok {
 		return
 	}
-	findings, err := h.service.ListTaskFindings(taskID)
+	page, pageSize := pageParams(c)
+	findings, total, err := h.service.ListTaskFindings(taskID, page, pageSize)
 	if err != nil {
 		errorJSON(c, http.StatusInternalServerError, "Failed to list findings")
 		return
 	}
-	successJSON(c, gin.H{"items": findings, "total": len(findings)})
+	successJSON(c, gin.H{"items": findings, "total": total})
+}
+
+func (h *WeakPasswordHandler) GetTaskErrors(c *gin.Context) {
+	taskID, ok := pathUUID(c, "id")
+	if !ok {
+		return
+	}
+	page, pageSize := pageParams(c)
+	errors, total, err := h.service.ListTaskCollectionErrors(taskID, page, pageSize)
+	if err != nil {
+		errorJSON(c, http.StatusInternalServerError, "Failed to list task errors")
+		return
+	}
+	successJSON(c, gin.H{"items": errors, "total": total})
 }
 
 func (h *WeakPasswordHandler) RetryFailedTask(c *gin.Context) {
@@ -222,12 +256,27 @@ func (h *WeakPasswordHandler) GetDefaultDictionary(c *gin.Context) {
 }
 
 func (h *WeakPasswordHandler) ListDictionaries(c *gin.Context) {
-	items, err := h.service.ListDictionaries()
+	page, pageSize := pageParams(c)
+	items, total, err := h.service.ListDictionaries(page, pageSize)
 	if err != nil {
 		errorJSON(c, http.StatusInternalServerError, "Failed to list dictionaries")
 		return
 	}
-	successJSON(c, gin.H{"items": items, "total": len(items)})
+	successJSON(c, gin.H{"items": items, "total": total})
+}
+
+func (h *WeakPasswordHandler) ListDictionaryEntries(c *gin.Context) {
+	dictionaryID, ok := pathUUID(c, "id")
+	if !ok {
+		return
+	}
+	page, pageSize := pageParamsWithMax(c, 1000)
+	items, total, err := h.service.ListDictionaryEntries(dictionaryID, page, pageSize)
+	if err != nil {
+		errorJSON(c, http.StatusInternalServerError, "Failed to list dictionary entries")
+		return
+	}
+	successJSON(c, gin.H{"items": items, "total": total})
 }
 
 func (h *WeakPasswordHandler) CreateDictionary(c *gin.Context) {
@@ -310,6 +359,10 @@ func errorJSON(c *gin.Context, status int, message string) {
 }
 
 func pageParams(c *gin.Context) (int, int) {
+	return pageParamsWithMax(c, 200)
+}
+
+func pageParamsWithMax(c *gin.Context, maxPageSize int) (int, int) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	if page <= 0 {
@@ -318,8 +371,11 @@ func pageParams(c *gin.Context) (int, int) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
-	if pageSize > 200 {
-		pageSize = 200
+	if maxPageSize <= 0 {
+		maxPageSize = 200
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 	return page, pageSize
 }

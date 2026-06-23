@@ -13,6 +13,7 @@ type ApplicationCollectPlan struct {
 	AssetID     string                `json:"asset_id"`
 	ProfileID   string                `json:"profile_id"`
 	Paths       []string              `json:"paths"`
+	RelatedPIDs []int                 `json:"related_pids,omitempty"`
 	Extractors  []CredentialExtractor `json:"extractors"`
 }
 
@@ -46,6 +47,7 @@ type CredentialRecord struct {
 	AlgorithmHint   string  `json:"algorithm_hint"`
 	FieldPath       string  `json:"field_path"`
 	Parser          string  `json:"parser"`
+	ProcessPID      int     `json:"process_pid,omitempty"`
 	Confidence      float64 `json:"confidence"`
 }
 

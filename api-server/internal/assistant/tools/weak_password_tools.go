@@ -13,7 +13,7 @@ import (
 
 type WeakPasswordServiceForTools interface {
 	CreateTaskByApplication(ctx context.Context, req model.CreateTaskByApplicationRequest, createdBy *uuid.UUID) (*service.CreateTaskByApplicationResponse, error)
-	ListTaskFindings(taskID uuid.UUID) ([]model.WeakPasswordFinding, error)
+	ListTaskFindings(taskID uuid.UUID, page, pageSize int) ([]model.WeakPasswordFinding, int64, error)
 }
 
 type WeakPasswordToolDeps struct {
@@ -50,10 +50,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			}
 			req := model.CreateTaskByApplicationRequest{CandidateApplicationID: getStringArg(args, "candidate_application_id", "")}
 			req.DictionaryPolicy.UseDefault1000 = true
-			req.DictionaryPolicy.Hybrid = true
-			req.DictionaryPolicy.Fuzzy = true
 			req.AIPolicy.RepairCollectionErrors = true
-			req.AIPolicy.EncryptedPasswordLLMMatch = true
 			req.AIPolicy.MaxAgentToolCallsPerApp = 10
 			return deps.Service.CreateTaskByApplication(ctx, req, nil)
 		},
@@ -92,11 +89,11 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			if err != nil {
 				return nil, fmt.Errorf("invalid task_id: %w", err)
 			}
-			findings, err := deps.Service.ListTaskFindings(taskID)
+			findings, total, err := deps.Service.ListTaskFindings(taskID, 1, 20)
 			if err != nil {
 				return nil, err
 			}
-			return map[string]interface{}{"items": findings, "total": len(findings)}, nil
+			return map[string]interface{}{"items": findings, "total": total}, nil
 		},
 	}); err != nil {
 		return err

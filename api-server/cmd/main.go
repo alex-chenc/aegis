@@ -284,6 +284,7 @@ func main() {
 	logger.Info("Intelligent asset collection module initialized")
 
 	weakPasswordService := service.NewWeakPasswordService(weakPasswordRepo, serverClient, logger.Get().Named("weak_password"))
+	weakPasswordService.SetConfigRepository(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	weakPasswordHandler := handler.NewWeakPasswordHandler(weakPasswordService, logger.Get().Named("weak_password_handler"))
 	logger.Info("Weak password detection module initialized")
 

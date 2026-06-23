@@ -53,6 +53,17 @@
         <el-table-column label="命中" prop="matched_findings" width="100" />
         <el-table-column label="失败原因" prop="error_code" min-width="180" />
       </el-table>
+      <div v-if="store.hostTotal > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="store.hostFilters.page"
+          v-model:page-size="store.hostFilters.page_size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          :total="store.hostTotal"
+          @size-change="loadDetail"
+          @current-change="loadDetail"
+        />
+      </div>
     </section>
 
     <section class="panel">
@@ -85,6 +96,17 @@
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="store.findingTotal > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="store.findingFilters.page"
+          v-model:page-size="store.findingFilters.page_size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          :total="store.findingTotal"
+          @size-change="loadDetail"
+          @current-change="loadDetail"
+        />
+      </div>
     </section>
 
     <section class="panel">
@@ -97,6 +119,17 @@
         <el-table-column label="路径" prop="source_path" min-width="220" />
         <el-table-column label="失败原因" prop="error_message" min-width="260" />
       </el-table>
+      <div v-if="store.errorTotal > 0" class="pagination-bar">
+        <el-pagination
+          v-model:current-page="store.errorFilters.page"
+          v-model:page-size="store.errorFilters.page_size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          :total="store.errorTotal"
+          @size-change="loadDetail"
+          @current-change="loadDetail"
+        />
+      </div>
     </section>
 
     <el-dialog v-model="passwordDialogVisible" title="命中密码详情" width="460px" destroy-on-close>
@@ -278,6 +311,11 @@ onBeforeUnmount(() => {
 
 .dense-table {
   width: 100%;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .primary-cell {

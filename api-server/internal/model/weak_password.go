@@ -350,23 +350,39 @@ type AnalyzeAssetApplicationsRequest struct {
 
 // CreateTaskByApplicationRequest 针对单个应用创建任务请求
 type CreateTaskByApplicationRequest struct {
-	CandidateApplicationID string `json:"candidate_application_id" binding:"required"`
-	DictionaryPolicy       struct {
-		UseDefault1000 bool     `json:"use_default_1000"`
-		DictionaryIDs  []string `json:"dictionary_ids"`
-		UseAIGenerated bool     `json:"use_ai_generated"`
-		Hybrid         bool     `json:"hybrid"`
-		Fuzzy          bool     `json:"fuzzy"`
-	} `json:"dictionary_policy"`
-	AIPolicy struct {
-		RepairCollectionErrors    bool `json:"repair_collection_errors"`
-		EncryptedPasswordLLMMatch bool `json:"encrypted_password_llm_match"`
-		MaxAgentToolCallsPerApp   int  `json:"max_agent_tool_calls_per_app"`
-	} `json:"ai_policy"`
+	CandidateApplicationID string                       `json:"candidate_application_id" binding:"required"`
+	DictionaryPolicy       WeakPasswordDictionaryPolicy `json:"dictionary_policy"`
+	AIPolicy               WeakPasswordAIPolicy         `json:"ai_policy"`
+}
+
+// CreateTasksByApplicationsRequest 针对多个应用创建弱密码检查任务
+type CreateTasksByApplicationsRequest struct {
+	CandidateApplicationIDs []string                     `json:"candidate_application_ids" binding:"required"`
+	DictionaryPolicy        WeakPasswordDictionaryPolicy `json:"dictionary_policy"`
+	AIPolicy                WeakPasswordAIPolicy         `json:"ai_policy"`
+}
+
+// WeakPasswordDictionaryPolicy 字典选择策略。
+// Hybrid/Fuzzy 为历史兼容字段，当前前端不再展示，也不参与匹配扩展。
+type WeakPasswordDictionaryPolicy struct {
+	UseDefault1000 bool     `json:"use_default_1000"`
+	DictionaryIDs  []string `json:"dictionary_ids"`
+	UseAIGenerated bool     `json:"use_ai_generated"`
+	Hybrid         bool     `json:"hybrid,omitempty"`
+	Fuzzy          bool     `json:"fuzzy,omitempty"`
+}
+
+// WeakPasswordAIPolicy AI 辅助策略。
+// EncryptedPasswordLLMMatch 为历史兼容字段，密码类型由服务端/LLM 自行判断。
+type WeakPasswordAIPolicy struct {
+	RepairCollectionErrors    bool `json:"repair_collection_errors"`
+	EncryptedPasswordLLMMatch bool `json:"encrypted_password_llm_match,omitempty"`
+	MaxAgentToolCallsPerApp   int  `json:"max_agent_tool_calls_per_app"`
 }
 
 // AIGenerateDictionaryRequest AI 生成字典请求
 type AIGenerateDictionaryRequest struct {
+	NaturalLanguage        string   `json:"natural_language"`
 	Target                 string   `json:"target"`
 	ApplicationType        string   `json:"application_type"`
 	OrganizationKeywords   []string `json:"organization_keywords"`

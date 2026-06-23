@@ -24,6 +24,21 @@ export interface WeakPasswordCandidateApplication {
   credential_types: string[]
   ai_reason: string
   status: string
+  scan_status: 'unscanned' | 'safe' | 'alert'
+  last_task_id?: string
+  matched_findings: number
+  findings?: WeakPasswordCandidateFinding[]
+}
+
+export interface WeakPasswordCandidateFinding {
+  id: string
+  task_id: string
+  account: string
+  matched_password_mask: string
+  source_path: string
+  field_path: string
+  process_pid?: number
+  match_status: string
 }
 
 export interface AnalyzeAssetApplicationsResponse {
@@ -40,13 +55,13 @@ export interface WeakPasswordDictionaryPolicy {
   use_default_1000: boolean
   dictionary_ids: string[]
   use_ai_generated: boolean
-  hybrid: boolean
-  fuzzy: boolean
+  hybrid?: boolean
+  fuzzy?: boolean
 }
 
 export interface WeakPasswordAIPolicy {
   repair_collection_errors: boolean
-  encrypted_password_llm_match: boolean
+  encrypted_password_llm_match?: boolean
   max_agent_tool_calls_per_app: number
 }
 
@@ -60,6 +75,26 @@ export interface CreateWeakPasswordTaskResponse {
   task_id: string
   scan_application_id: string
   status: string
+}
+
+export interface CreateWeakPasswordBatchTasksRequest {
+  candidate_application_ids: string[]
+  dictionary_policy: WeakPasswordDictionaryPolicy
+  ai_policy: WeakPasswordAIPolicy
+}
+
+export interface CreateWeakPasswordBatchTasksResponse {
+  created: Array<{
+    candidate_application_id: string
+    task_id: string
+    scan_application_id: string
+    status: string
+  }>
+  skipped: Array<{
+    candidate_application_id: string
+    reason: string
+    message?: string
+  }>
 }
 
 export interface WeakPasswordTask {
@@ -168,6 +203,17 @@ export interface WeakPasswordDictionary {
   sample_count?: number
 }
 
+export interface WeakPasswordDictionaryEntry {
+  id: string
+  dictionary_id: string
+  candidate: string
+  candidate_hash: string
+  category: string
+  rule_source: string
+  risk_level: string
+  created_at: string
+}
+
 export interface CreateWeakPasswordDictionaryRequest {
   name: string
   dictionary_type?: string
@@ -177,12 +223,13 @@ export interface CreateWeakPasswordDictionaryRequest {
 }
 
 export interface AIGenerateDictionaryRequest {
-  target: string
-  application_type: string
-  organization_keywords: string[]
-  account_keywords: string[]
+  natural_language: string
+  target?: string
+  application_type?: string
+  organization_keywords?: string[]
+  account_keywords?: string[]
   count: number
-  rules: string[]
+  rules?: string[]
   deduplicate_with_default: boolean
 }
 
