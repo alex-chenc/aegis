@@ -91,3 +91,58 @@ func TestExtractJSONFromResponseUsesBalancedObject(t *testing.T) {
 		t.Fatalf("unexpected JSON extraction:\nwant: %s\ngot:  %s", want, jsonStr)
 	}
 }
+
+func TestDeduplicateApplicationsUsesRelatedPIDOverlap(t *testing.T) {
+	apps := deduplicateApplications([]IdentifiedApplication{
+		{Name: "redis", Category: "database", RelatedPIDs: []int{200, 100}, ListenPorts: []int{6379}, Evidence: []string{"first"}, ConfigPaths: []string{"/etc/redis/redis.conf"}},
+		{Name: "redis-server", Category: "database", RelatedPIDs: []int{100}, ListenPorts: []int{6380}, Evidence: []string{"duplicate-pid"}},
+		{Name: "redis", Category: "database", RelatedPIDs: []int{300}, ListenPorts: []int{6381}, Evidence: []string{"second-instance"}, ConfigPaths: []string{"/data/redis.conf"}},
+	})
+
+	if len(apps) != 1 {
+		t.Fatalf("applications = %d, want 1: %#v", len(apps), apps)
+	}
+	if got := apps[0].RelatedPIDs; len(got) != 3 || got[0] != 100 || got[1] != 200 || got[2] != 300 {
+		t.Fatalf("related_pids = %#v, want [100 200 300]", got)
+	}
+	if got := apps[0].ListenPorts; len(got) != 3 || got[0] != 6379 || got[1] != 6380 || got[2] != 6381 {
+		t.Fatalf("merged ports = %#v, want [6379 6380 6381]", got)
+	}
+	if got := apps[0].ConfigPaths; len(got) != 2 || got[0] != "/etc/redis/redis.conf" || got[1] != "/data/redis.conf" {
+		t.Fatalf("merged config paths = %#v", got)
+	}
+}
+
+func TestGenerateAppFingerprintDedupeByHostApplication(t *testing.T) {
+	first := generateAppFingerprint("host-1", "database", "redis", "/usr/bin/redis-server", []int{6379}, []int{1234})
+	samePIDDifferentShape := generateAppFingerprint("host-1", "web_service", "redis-alt", "/opt/redis", []int{6380}, []int{1234})
+	differentPID := generateAppFingerprint("host-1", "database", "redis", "/usr/bin/redis-server", []int{6379}, []int{4321})
+
+	if first != samePIDDifferentShape {
+		t.Fatalf("same app fingerprint mismatch: %s != %s", first, samePIDDifferentShape)
+	}
+	if first != differentPID {
+		t.Fatalf("same host application fingerprint should ignore pid: %s != %s", first, differentPID)
+	}
+}
+
+func TestDetectKnownApplicationsFromProcessesExtractsRedisConfig(t *testing.T) {
+	apps := detectKnownApplicationsFromProcesses(HostAssetSnapshot{Processes: []ProcessAsset{{
+		PID:         4321,
+		Comm:        "redis-server",
+		ExePath:     "/usr/local/bin/redis-server",
+		Cwd:         "/srv/redis",
+		Cmdline:     "redis-server /tmp/aegis-weakpass-test/redis.conf",
+		Username:    "redis",
+		ListenPorts: []int{6379},
+	}}})
+	if len(apps) != 1 {
+		t.Fatalf("applications = %#v, want one redis app", apps)
+	}
+	if apps[0].Name != "redis" || len(apps[0].RelatedPIDs) != 1 || apps[0].RelatedPIDs[0] != 4321 {
+		t.Fatalf("unexpected app: %#v", apps[0])
+	}
+	if len(apps[0].ConfigPaths) != 1 || apps[0].ConfigPaths[0] != "/tmp/aegis-weakpass-test/redis.conf" {
+		t.Fatalf("config paths = %#v, want redis cmdline config", apps[0].ConfigPaths)
+	}
+}

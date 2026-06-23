@@ -3,8 +3,10 @@ package weakpass
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -45,6 +47,8 @@ func parseCredentialFile(app ApplicationCollectPlan, path string, content []byte
 		return parseLineKeyValue(app, path, content, extractor)
 	case "htpasswd":
 		return parseHTPasswd(app, path, content, extractor)
+	case "tomcat_users_xml":
+		return parseTomcatUsersXML(app, path, content, extractor)
 	default:
 		return nil, fmt.Errorf("%s: parser %q", ErrUnsupportedFormat, parserType)
 	}
@@ -174,6 +178,42 @@ func parseHTPasswd(app ApplicationCollectPlan, path string, content []byte, extr
 		rec := newRecord(app, path, extractor, parts[0], parts[1], "htpasswd.password")
 		rec.CredentialType, rec.Salt, rec.AlgorithmHint = classifyCredential(parts[1], "hash")
 		records = append(records, rec)
+	}
+	if len(records) == 0 {
+		return nil, errFieldNotFound
+	}
+	return records, nil
+}
+
+func parseTomcatUsersXML(app ApplicationCollectPlan, path string, content []byte, extractor CredentialExtractor) ([]CredentialRecord, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(content))
+	var records []CredentialRecord
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "user" {
+			continue
+		}
+		values := map[string]string{}
+		for _, attr := range start.Attr {
+			values[strings.ToLower(attr.Name.Local)] = attr.Value
+		}
+		account := values["username"]
+		password := values["password"]
+		if password == "" {
+			continue
+		}
+		field := "tomcat-users.user.password"
+		if account != "" {
+			field = "tomcat-users.user[" + account + "].password"
+		}
+		records = append(records, newRecord(app, path, extractor, account, password, field))
 	}
 	if len(records) == 0 {
 		return nil, errFieldNotFound

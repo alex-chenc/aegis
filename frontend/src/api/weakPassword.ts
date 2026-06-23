@@ -12,6 +12,7 @@ import type {
   RevealedWeakPasswordFinding,
   WeakPasswordCandidateApplication,
   WeakPasswordCollectionError,
+  WeakPasswordCollectionProgress,
   WeakPasswordDictionary,
   WeakPasswordDictionaryEntry,
   WeakPasswordFinding,
@@ -58,6 +59,10 @@ export function listWeakPasswordFindings(id: string, params?: Record<string, any
 
 export function listWeakPasswordTaskErrors(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordCollectionError>> {
   return request.get(`/weak-password/tasks/${id}/errors`, { params })
+}
+
+export function listWeakPasswordTaskCollectionProgress(id: string, params?: Record<string, any>): Promise<PageResult<WeakPasswordCollectionProgress>> {
+  return request.get(`/weak-password/tasks/${id}/collection-progress`, { params })
 }
 
 export function retryWeakPasswordFailed(id: string): Promise<{ status: string }> {

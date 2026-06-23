@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,16 +55,33 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 		zap.Int("process_count", len(snapshot.Processes)),
 		zap.Int("batch_size", applicationAnalysisProcessBatchSize))
 
+	if len(snapshot.Processes) == 0 {
+		s.logger.Info("Application analysis skipped because process snapshot is empty",
+			zap.String("host_id", hostID.String()))
+		return 0, nil
+	}
+
 	// 获取 LLM 配置
+	if s.configRepo == nil {
+		return s.saveDeterministicApplicationAnalysisResult(hostID, snapshot, "llm_config_repository_unavailable")
+	}
 	llmConfig, err := s.configRepo.GetActive()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get LLM config: %w", err)
+		s.logger.Warn("LLM config unavailable, using deterministic application analysis fallback",
+			zap.String("task_id", taskID.String()),
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
+		return s.saveDeterministicApplicationAnalysisResult(hostID, snapshot, "llm_config_unavailable")
 	}
 
 	// 解密 API Key
 	apiKey, err := s.configRepo.DecryptAPIKey(llmConfig.APIKeyEncrypted)
 	if err != nil {
-		return 0, fmt.Errorf("failed to decrypt API key: %w", err)
+		s.logger.Warn("LLM API key unavailable, using deterministic application analysis fallback",
+			zap.String("task_id", taskID.String()),
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
+		return s.saveDeterministicApplicationAnalysisResult(hostID, snapshot, "llm_api_key_unavailable")
 	}
 
 	// 创建 LLM 客户端
@@ -74,12 +92,6 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 		60, // timeout seconds
 		3,  // max retries
 	)
-
-	if len(snapshot.Processes) == 0 {
-		s.logger.Info("Application analysis skipped because process snapshot is empty",
-			zap.String("host_id", hostID.String()))
-		return 0, nil
-	}
 
 	// 创建工具执行器
 	toolExecutor := &assetToolExecutor{
@@ -155,7 +167,19 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 	}
 
 	if failedBatches == len(batches) && firstBatchErr != nil {
+		fallbackSaved, fallbackErr := s.saveDeterministicApplicationAnalysisResult(hostID, snapshot, "llm_batches_failed")
+		if fallbackErr == nil && fallbackSaved > 0 {
+			return fallbackSaved, nil
+		}
 		return 0, fmt.Errorf("all application analysis batches failed: %w", firstBatchErr)
+	}
+	if fallbackSaved, err := s.saveDeterministicApplicationAnalysisResult(hostID, snapshot, "deterministic_known_application_merge"); err == nil && fallbackSaved > 0 {
+		totalSaved += fallbackSaved
+	} else if err != nil {
+		s.logger.Warn("deterministic application merge failed",
+			zap.String("task_id", taskID.String()),
+			zap.String("host_id", hostID.String()),
+			zap.Error(err))
 	}
 
 	s.logger.Info("Application analysis completed",
@@ -483,6 +507,194 @@ func (s *AssetAnalysisService) saveApplicationAnalysisResult(hostID uuid.UUID, s
 	return savedCount, nil
 }
 
+func (s *AssetAnalysisService) saveDeterministicApplicationAnalysisResult(hostID uuid.UUID, snapshot HostAssetSnapshot, reason string) (int, error) {
+	result := &ApplicationAnalysisResult{Applications: deduplicateApplications(detectKnownApplicationsFromProcesses(snapshot))}
+	if len(result.Applications) == 0 {
+		s.logger.Info("deterministic application analysis found no known applications",
+			zap.String("host_id", hostID.String()),
+			zap.String("reason", reason))
+		return 0, nil
+	}
+	saved, err := s.saveApplicationAnalysisResult(hostID, snapshot, result)
+	if err != nil {
+		return 0, err
+	}
+	s.logger.Info("deterministic application analysis saved known applications",
+		zap.String("host_id", hostID.String()),
+		zap.String("reason", reason),
+		zap.Int("applications", saved))
+	return saved, nil
+}
+
+func detectKnownApplicationsFromProcesses(snapshot HostAssetSnapshot) []IdentifiedApplication {
+	apps := make([]IdentifiedApplication, 0)
+	for _, proc := range snapshot.Processes {
+		app := identifyKnownApplicationProcess(proc)
+		if app.Name == "" {
+			continue
+		}
+		app.ConfigPaths = processConfigPaths(proc)
+		if len(app.ConfigPaths) == 0 {
+			app.ConfigPaths = knownApplicationDefaultConfigPaths(app.Name)
+		}
+		app.RelatedPIDs = []int{proc.PID}
+		app.ListenPorts = append([]int(nil), proc.ListenPorts...)
+		app.InstallPath = proc.ExePath
+		if len(app.ConfigPaths) > 0 {
+			app.StartPath = app.ConfigPaths[0]
+		} else {
+			app.StartPath = proc.ExePath
+		}
+		app.RunUser = proc.Username
+		app.Confidence = 0.86
+		app.Status = "active"
+		app.Evidence = []string{fmt.Sprintf("deterministic_process_match pid=%d comm=%s exe=%s", proc.PID, proc.Comm, proc.ExePath)}
+		apps = append(apps, app)
+	}
+	return apps
+}
+
+func identifyKnownApplicationProcess(proc ProcessAsset) IdentifiedApplication {
+	comm := strings.ToLower(strings.TrimSpace(proc.Comm))
+	exeBase := strings.ToLower(filepathBase(proc.ExePath))
+	cmd := strings.ToLower(strings.ReplaceAll(proc.Cmdline, "\x00", " "))
+	match := func(values ...string) bool {
+		for _, value := range values {
+			if value == "" {
+				continue
+			}
+			if comm == value || exeBase == value || strings.Contains(cmd, value) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case match("redis-server"):
+		return IdentifiedApplication{Name: "redis", DisplayName: "Redis", Category: "database"}
+	case match("mysqld", "mariadbd"):
+		return IdentifiedApplication{Name: "mysql", DisplayName: "MySQL/MariaDB", Category: "database"}
+	case match("postgres", "postmaster"):
+		return IdentifiedApplication{Name: "postgresql", DisplayName: "PostgreSQL", Category: "database"}
+	case match("nginx"):
+		return IdentifiedApplication{Name: "nginx", DisplayName: "Nginx", Category: "web_service"}
+	case match("apache2", "httpd"):
+		return IdentifiedApplication{Name: "apache", DisplayName: "Apache HTTP Server", Category: "web_service"}
+	case match("sshd") || strings.Contains(cmd, "openssh"):
+		return IdentifiedApplication{Name: "openssh", DisplayName: "OpenSSH", Category: "other"}
+	case strings.Contains(cmd, "tomcat") || strings.Contains(cmd, "catalina") || strings.Contains(exeBase, "tomcat"):
+		return IdentifiedApplication{Name: "tomcat", DisplayName: "Tomcat", Category: "web_service"}
+	case match("vsftpd", "proftpd"):
+		return IdentifiedApplication{Name: "ftp", DisplayName: "FTP Server", Category: "other"}
+	default:
+		return IdentifiedApplication{}
+	}
+}
+
+func filepathBase(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-1]
+}
+
+func processConfigPaths(proc ProcessAsset) []string {
+	values := []string{}
+	fields := strings.Fields(strings.ReplaceAll(proc.Cmdline, "\x00", " "))
+	valueFlags := map[string]struct{}{
+		"--config": {}, "--conf": {}, "--config-file": {}, "--defaults-file": {}, "--defaults-extra-file": {}, "-c": {},
+	}
+	for i := 0; i < len(fields); i++ {
+		part := strings.Trim(fields[i], `"'`)
+		if _, ok := valueFlags[part]; ok && i+1 < len(fields) {
+			values = append(values, cleanApplicationConfigPath(fields[i+1], proc.Cwd))
+			i++
+			continue
+		}
+		if key, value, ok := strings.Cut(part, "="); ok {
+			if _, allowed := valueFlags[key]; allowed {
+				values = append(values, cleanApplicationConfigPath(value, proc.Cwd))
+				continue
+			}
+		}
+		if looksLikeApplicationConfigPath(part) {
+			values = append(values, cleanApplicationConfigPath(part, proc.Cwd))
+		}
+	}
+	return uniqueApplicationPaths(values)
+}
+
+func cleanApplicationConfigPath(path, cwd string) string {
+	path = strings.TrimSpace(strings.Trim(path, `"'`))
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") && cwd != "" {
+		path = strings.TrimRight(cwd, "/") + "/" + path
+	}
+	if !strings.HasPrefix(path, "/") {
+		return ""
+	}
+	for _, token := range []string{";", "|", "&", "`", "$(", "\n", "\r", "*", "?", "["} {
+		if strings.Contains(path, token) {
+			return ""
+		}
+	}
+	return path
+}
+
+func looksLikeApplicationConfigPath(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	for _, suffix := range []string{".conf", ".cnf", ".ini", ".yaml", ".yml", ".json", ".properties", ".toml", ".env", ".xml", ".db", ".passwd", ".htpasswd"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return lower == "/etc/shadow"
+}
+
+func uniqueApplicationPaths(paths []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
+}
+
+func knownApplicationDefaultConfigPaths(name string) []string {
+	switch normalizeApplicationType(name) {
+	case "redis":
+		return []string{"/etc/redis/redis.conf", "/etc/redis.conf", "/usr/local/etc/redis/redis.conf", "/data/redis.conf"}
+	case "openssh":
+		return []string{"/etc/shadow"}
+	case "mysql", "mariadb":
+		return []string{"/etc/mysql/my.cnf", "/etc/my.cnf", "/root/.my.cnf"}
+	case "postgresql":
+		return []string{"/var/lib/postgresql/.pgpass", "/root/.pgpass"}
+	case "tomcat":
+		return []string{"/usr/local/tomcat/conf/tomcat-users.xml", "/opt/tomcat/conf/tomcat-users.xml"}
+	case "nginx":
+		return []string{"/etc/nginx/.htpasswd", "/usr/local/nginx/conf/.htpasswd"}
+	case "apache":
+		return []string{"/etc/apache2/.htpasswd", "/etc/httpd/.htpasswd"}
+	case "ftp":
+		return []string{"/etc/proftpd/passwd", "/etc/vsftpd/virtual_users.db", "/etc/shadow"}
+	default:
+		return nil
+	}
+}
+
 // filterRelatedPackages 过滤相关软件包
 func (s *AssetAnalysisService) filterRelatedPackages(snapshot HostAssetSnapshot) []PackageAsset {
 	// 提取进程路径中的关键包
@@ -608,15 +820,23 @@ func (s *AssetAnalysisService) validateAnalysisResult(result *ApplicationAnalysi
 }
 
 // deduplicateApplications 去重应用列表
-// 如果同一个 name 出现多次，合并 related_pids 和 listen_ports
+// 同一主机内同类应用合并为一条资产，PID、端口和证据作为列表保留。
 func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplication {
 	seen := make(map[string]*IdentifiedApplication)
+	pidOwner := make(map[int]string)
 	var order []string
 
 	for _, app := range apps {
-		key := strings.ToLower(strings.TrimSpace(app.Name))
+		app.RelatedPIDs = normalizePIDList(app.RelatedPIDs)
+		key := applicationDedupeKey(app)
 		if key == "" {
 			continue
+		}
+		for _, pid := range app.RelatedPIDs {
+			if ownerKey, ok := pidOwner[pid]; ok {
+				key = ownerKey
+				break
+			}
 		}
 
 		if existing, ok := seen[key]; ok {
@@ -628,6 +848,8 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 
 			// 合并 evidence
 			existing.Evidence = mergeEvidence(existing.Evidence, app.Evidence)
+			existing.ConfigPaths = mergeEvidence(existing.ConfigPaths, app.ConfigPaths)
+			existing.SitePaths = mergeEvidence(existing.SitePaths, app.SitePaths)
 
 			// 取更高的置信度
 			if app.Confidence > existing.Confidence {
@@ -643,6 +865,9 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 			seen[key] = &newApp
 			order = append(order, key)
 		}
+		for _, pid := range seen[key].RelatedPIDs {
+			pidOwner[pid] = key
+		}
 	}
 
 	result := make([]IdentifiedApplication, 0, len(seen))
@@ -655,25 +880,42 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 	return result
 }
 
+func applicationDedupeKey(app IdentifiedApplication) string {
+	appType := normalizeApplicationType(firstNonEmpty(app.Name, app.Category))
+	if appType != "" && appType != "unknown" {
+		return "app:" + appType
+	}
+	name := strings.ToLower(strings.TrimSpace(firstNonEmpty(app.DisplayName, app.Name, app.Category)))
+	if name == "" {
+		return ""
+	}
+	return "name:" + name
+}
+
 // mergePIDs 合并 PID 列表，去重
 func mergePIDs(a, b []int) []int {
 	seen := make(map[int]bool)
 	var result []int
 
 	for _, pid := range a {
-		if !seen[pid] {
+		if pid > 0 && !seen[pid] {
 			seen[pid] = true
 			result = append(result, pid)
 		}
 	}
 	for _, pid := range b {
-		if !seen[pid] {
+		if pid > 0 && !seen[pid] {
 			seen[pid] = true
 			result = append(result, pid)
 		}
 	}
+	sort.Ints(result)
 
 	return result
+}
+
+func normalizePIDList(pids []int) []int {
+	return mergePIDs(nil, pids)
 }
 
 // mergePorts 合并端口列表，去重
@@ -742,7 +984,7 @@ func (s *AssetAnalysisService) convertToApplicationAsset(hostID uuid.UUID, snaps
 		AIEvidence:    mustMarshalJSON(app.Evidence),
 		ReviewStatus:  "auto",
 		Status:        app.Status,
-		Fingerprint:   generateAppFingerprint(hostID.String(), app.Category, app.Name, app.InstallPath, app.ListenPorts),
+		Fingerprint:   generateAppFingerprint(hostID.String(), app.Category, app.Name, app.InstallPath, app.ListenPorts, app.RelatedPIDs),
 		LastSeenAt:    time.Now(),
 		CollectedAt:   time.Now(),
 	}
@@ -870,7 +1112,11 @@ func truncateForLog(value string, limit int) string {
 }
 
 // generateAppFingerprint 生成应用指纹
-func generateAppFingerprint(hostID, category, name, installPath string, listenPorts []int) string {
+func generateAppFingerprint(hostID, category, name, installPath string, listenPorts []int, relatedPIDs []int) string {
+	appType := normalizeApplicationType(firstNonEmpty(name, category))
+	if appType != "" && appType != "unknown" {
+		return fmt.Sprintf("%x", sha256Sum(fmt.Sprintf("%s:app:%s", hostID, appType)))
+	}
 	portStr := ""
 	for _, p := range listenPorts {
 		portStr += fmt.Sprintf(":%d", p)

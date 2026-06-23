@@ -29,7 +29,7 @@ vi.mock('@/api/weakPassword', () => ({
   getWeakPasswordTaskProgress: (...args: any[]) => getProgressMock(...args),
   listWeakPasswordTaskHosts: (...args: any[]) => listHostsMock(...args),
   listWeakPasswordFindings: (...args: any[]) => listFindingsMock(...args),
-  listWeakPasswordTaskErrors: (...args: any[]) => listErrorsMock(...args),
+  listWeakPasswordTaskCollectionProgress: (...args: any[]) => listErrorsMock(...args),
   retryWeakPasswordFailed: (...args: any[]) => retryMock(...args),
   deleteWeakPasswordTask: (...args: any[]) => deleteTaskMock(...args),
   getDefaultWeakPasswordDictionary: (...args: any[]) => getDefaultDictMock(...args),
@@ -123,7 +123,7 @@ describe('weak password store', () => {
     const result = await store.createBatchTasks({
       candidate_application_ids: ['cand-1', 'cand-2'],
       dictionary_policy: { use_default_1000: true, dictionary_ids: [], use_ai_generated: false },
-      ai_policy: { repair_collection_errors: true, max_agent_tool_calls_per_app: 10 },
+      ai_policy: { repair_collection_errors: true, detection_rounds: 10, max_agent_tool_calls_per_app: 10 },
     })
 
     expect(createBatchTasksMock).toHaveBeenCalled()

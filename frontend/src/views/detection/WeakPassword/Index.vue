@@ -172,6 +172,9 @@
           <el-form-item label="AI 策略">
             <el-checkbox v-model="repairCollectionErrors">读取失败时 AI 修复定位</el-checkbox>
           </el-form-item>
+          <el-form-item label="检测轮数">
+            <el-input-number v-model="detectionRounds" :min="10" :max="50" :step="1" controls-position="right" />
+          </el-form-item>
         </el-form>
         <div class="drawer-actions">
           <el-button @click="checkVisible = false">取消</el-button>
@@ -230,6 +233,7 @@ const checkMode = ref<'single' | 'batch'>('single')
 const selectedCandidate = ref<WeakPasswordCandidateApplication | null>(null)
 const selectedDictionaryIds = ref<string[]>([])
 const repairCollectionErrors = ref(true)
+const detectionRounds = ref(10)
 const revealedPasswords = reactive<Record<string, string>>({})
 
 const scope = reactive({
@@ -244,6 +248,9 @@ const applicationTypeOptions = [
   { label: 'Redis', value: 'redis' },
   { label: 'MySQL', value: 'mysql' },
   { label: 'PostgreSQL', value: 'postgresql' },
+  { label: 'OpenSSH', value: 'openssh' },
+  { label: 'Tomcat', value: 'tomcat' },
+  { label: 'FTP', value: 'ftp' },
   { label: 'Web 服务', value: 'web_service' },
   { label: 'AI Agent', value: 'ai_agent' },
   { label: 'MCP 服务', value: 'mcp_server' },
@@ -317,7 +324,8 @@ async function confirmCheck() {
   const dictionary_policy = buildDictionaryPolicy()
   const ai_policy = {
     repair_collection_errors: repairCollectionErrors.value,
-    max_agent_tool_calls_per_app: 10,
+    detection_rounds: detectionRounds.value,
+    max_agent_tool_calls_per_app: detectionRounds.value,
   }
   if (checkMode.value === 'single') {
     if (!selectedCandidate.value) return

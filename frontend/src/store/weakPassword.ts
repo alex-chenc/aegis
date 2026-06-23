@@ -13,7 +13,7 @@ import {
   listWeakPasswordDictionaryEntries,
   listWeakPasswordDictionaries,
   listWeakPasswordFindings,
-  listWeakPasswordTaskErrors,
+  listWeakPasswordTaskCollectionProgress,
   listWeakPasswordTaskHosts,
   listWeakPasswordTasks,
   retryWeakPasswordFailed,
@@ -25,7 +25,7 @@ import type {
   CreateWeakPasswordBatchTasksRequest,
   CreateWeakPasswordTaskRequest,
   WeakPasswordCandidateApplication,
-  WeakPasswordCollectionError,
+  WeakPasswordCollectionProgress,
   WeakPasswordDictionary,
   WeakPasswordDictionaryEntry,
   WeakPasswordFinding,
@@ -45,7 +45,7 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
   const hostTotal = ref(0)
   const findings = ref<WeakPasswordFinding[]>([])
   const findingTotal = ref(0)
-  const errors = ref<WeakPasswordCollectionError[]>([])
+  const errors = ref<WeakPasswordCollectionProgress[]>([])
   const errorTotal = ref(0)
   const dictionaries = ref<WeakPasswordDictionary[]>([])
   const dictionaryTotal = ref(0)
@@ -166,7 +166,7 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
         getWeakPasswordTaskProgress(taskId),
         listWeakPasswordTaskHosts(taskId, hostFilters),
         listWeakPasswordFindings(taskId, findingFilters),
-        listWeakPasswordTaskErrors(taskId, errorFilters),
+        listWeakPasswordTaskCollectionProgress(taskId, errorFilters),
       ])
       currentTask.value = taskDetail.task
       progress.value = taskProgress

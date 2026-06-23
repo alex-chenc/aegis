@@ -111,20 +111,34 @@
 
     <section class="panel">
       <div class="panel-head">
-        <h2>采集失败</h2>
+        <h2>采集进度</h2>
       </div>
       <el-table :data="store.errors" class="dense-table">
         <el-table-column label="应用" prop="application_name" min-width="140" />
-        <el-table-column label="错误码" prop="error_code" min-width="180" />
-        <el-table-column label="路径" prop="source_path" min-width="220" />
-        <el-table-column label="失败原因" prop="error_message" min-width="260" />
+        <el-table-column label="轮次" prop="round" width="90" />
+        <el-table-column label="工具" prop="tool_name" min-width="230" />
+        <el-table-column label="状态" width="130">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'completed' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="错误码" min-width="170">
+          <template #default="{ row }">{{ row.error_code || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="耗时" width="110">
+          <template #default="{ row }">{{ row.execution_time_ms || 0 }}ms</template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="240">
+          <template #default="{ row }">{{ row.error_message || '-' }}</template>
+        </el-table-column>
       </el-table>
-      <div v-if="store.errorTotal > 0" class="pagination-bar">
+      <div v-if="store.errorTotal > 10" class="pagination-bar">
         <el-pagination
           v-model:current-page="store.errorFilters.page"
           v-model:page-size="store.errorFilters.page_size"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
+          :page-sizes="[10]"
+          :pager-count="10"
+          layout="total, prev, pager, next"
           :total="store.errorTotal"
           @size-change="loadDetail"
           @current-change="loadDetail"

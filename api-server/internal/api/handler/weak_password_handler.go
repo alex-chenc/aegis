@@ -38,6 +38,7 @@ func (h *WeakPasswordHandler) RegisterRoutes(api *gin.RouterGroup) {
 		wp.GET("/tasks/:id/progress", h.GetTaskProgress)
 		wp.GET("/tasks/:id/hosts", h.GetTaskHosts)
 		wp.GET("/tasks/:id/findings", h.GetTaskFindings)
+		wp.GET("/tasks/:id/collection-progress", h.GetTaskCollectionProgress)
 		wp.GET("/tasks/:id/errors", h.GetTaskErrors)
 		wp.POST("/tasks/:id/retry-failed", h.RetryFailedTask)
 		wp.DELETE("/tasks/:id", h.DeleteTask)
@@ -216,6 +217,20 @@ func (h *WeakPasswordHandler) GetTaskErrors(c *gin.Context) {
 		return
 	}
 	successJSON(c, gin.H{"items": errors, "total": total})
+}
+
+func (h *WeakPasswordHandler) GetTaskCollectionProgress(c *gin.Context) {
+	taskID, ok := pathUUID(c, "id")
+	if !ok {
+		return
+	}
+	page, pageSize := pageParams(c)
+	items, total, err := h.service.ListTaskCollectionProgress(taskID, page, pageSize)
+	if err != nil {
+		errorJSON(c, http.StatusInternalServerError, "Failed to list task collection progress")
+		return
+	}
+	successJSON(c, gin.H{"items": items, "total": total})
 }
 
 func (h *WeakPasswordHandler) RetryFailedTask(c *gin.Context) {

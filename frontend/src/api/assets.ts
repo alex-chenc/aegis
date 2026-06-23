@@ -46,6 +46,7 @@ export interface ApplicationAsset {
   run_user: string
   start_path: string
   config_paths: string[]
+  related_pids: number[]
   confidence: number
   ai_confidence?: number
   review_status: string

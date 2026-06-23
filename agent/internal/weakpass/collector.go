@@ -153,10 +153,10 @@ func readAllowedCredentialFile(path string, relatedPIDs []int, maxBytes int64) (
 }
 
 func credentialPathCandidates(path string, relatedPIDs []int) []resolvedCredentialPath {
-	candidates := []resolvedCredentialPath{{ReadPath: path, SourcePath: path}}
+	candidates := []resolvedCredentialPath{}
 	clean := filepath.Clean(path)
 	relative := strings.TrimPrefix(clean, string(filepath.Separator))
-	seen := map[string]struct{}{path: {}}
+	seen := map[string]struct{}{}
 	for _, pid := range relatedPIDs {
 		if pid <= 0 {
 			continue
@@ -171,6 +171,9 @@ func credentialPathCandidates(path string, relatedPIDs []int) []resolvedCredenti
 			SourcePath: path,
 			ProcessPID: pid,
 		})
+	}
+	if _, ok := seen[path]; !ok {
+		candidates = append(candidates, resolvedCredentialPath{ReadPath: path, SourcePath: path})
 	}
 	return candidates
 }

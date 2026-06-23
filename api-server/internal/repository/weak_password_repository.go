@@ -68,10 +68,11 @@ func (r *WeakPasswordRepository) CreateAnalysisWithCandidates(analysis *model.We
 			return err
 		}
 		if len(candidates) > 0 {
-			// Use upsert to avoid duplicate candidates based on (host_id, asset_id, application_type)
+			// Use upsert to avoid duplicate candidates based on (host_id, application_type)
+			// This ensures only one candidate per application type per host
 			for i := range candidates {
 				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "host_id"}, {Name: "asset_id"}, {Name: "application_type"}},
+					Columns:   []clause.Column{{Name: "host_id"}, {Name: "application_type"}},
 					DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "confidence", "candidate_paths_json", "extractor_plan_json", "asset_evidence_json", "ai_reason", "status"}),
 				}).Create(&candidates[i]).Error; err != nil {
 					return err
@@ -321,6 +322,23 @@ func (r *WeakPasswordRepository) LastToolCall(taskID uuid.UUID) (*model.WeakPass
 	return &call, nil
 }
 
+func (r *WeakPasswordRepository) ListToolCalls(taskID uuid.UUID, page, pageSize int) ([]model.WeakPasswordAgentToolCall, int64, error) {
+	var calls []model.WeakPasswordAgentToolCall
+	var total int64
+	q := r.db.Model(&model.WeakPasswordAgentToolCall{}).Where("task_id = ?", taskID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	err := q.Order("created_at ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&calls).Error
+	return calls, total, err
+}
+
 func (r *WeakPasswordRepository) CreateCollectionError(errRecord *model.WeakPasswordCollectionError) error {
 	return r.db.Create(errRecord).Error
 }
@@ -333,7 +351,7 @@ func (r *WeakPasswordRepository) CreateFindings(findings []model.WeakPasswordFin
 	for i := range findings {
 		if err := r.db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "task_id"}, {Name: "host_id"}, {Name: "source_path"}, {Name: "field_path"}, {Name: "account"}},
-			DoUpdates: clause.AssignmentColumns([]string{"match_status", "matched_password_mask", "matched_password_encrypted", "match_source", "match_rule", "confidence", "ai_reason", "updated_at"}),
+			DoUpdates: clause.AssignmentColumns([]string{"match_status", "matched_password_mask", "matched_password_encrypted", "match_source", "match_rule", "confidence", "ai_reason"}),
 		}).Create(&findings[i]).Error; err != nil {
 			return err
 		}

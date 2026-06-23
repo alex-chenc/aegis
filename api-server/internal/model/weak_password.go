@@ -21,7 +21,7 @@ type WeakPasswordScanTask struct {
 	CurrentStage         string         `gorm:"type:varchar(64)" json:"current_stage"`
 	ScopeJSON            datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"scope_json"`
 	DictionaryPolicyJSON datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"dictionary_policy_json"`
-	AIPolicyJSON         datatypes.JSON `gorm:"type:jsonb;default:'{}'" json:"ai_policy_json"`
+	AIPolicyJSON         datatypes.JSON `gorm:"column:ai_policy_json;type:jsonb;default:'{}'" json:"ai_policy_json"`
 	TotalHosts           int            `gorm:"default:0" json:"total_hosts"`
 	TotalApplications    int            `gorm:"default:0" json:"total_applications"`
 	MatchedFindings      int            `gorm:"default:0" json:"matched_findings"`
@@ -377,6 +377,7 @@ type WeakPasswordDictionaryPolicy struct {
 type WeakPasswordAIPolicy struct {
 	RepairCollectionErrors    bool `json:"repair_collection_errors"`
 	EncryptedPasswordLLMMatch bool `json:"encrypted_password_llm_match,omitempty"`
+	DetectionRounds           int  `json:"detection_rounds,omitempty"`
 	MaxAgentToolCallsPerApp   int  `json:"max_agent_tool_calls_per_app"`
 }
 

@@ -115,6 +115,25 @@
           </template>
         </el-table-column>
 
+        <el-table-column prop="related_pids" label="PID" width="130">
+          <template #default="{ row }">
+            <div v-if="displayPids(row).length" class="pid-list">
+              <el-tag
+                v-for="pid in displayPids(row).slice(0, 3)"
+                :key="pid"
+                size="small"
+                class="pid-tag"
+              >
+                {{ pid }}
+              </el-tag>
+              <el-tag v-if="displayPids(row).length > 3" size="small" type="info">
+                +{{ displayPids(row).length - 3 }}
+              </el-tag>
+            </div>
+            <span v-else class="no-data">-</span>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="listen_ports" label="监听端口" width="150">
           <template #default="{ row }">
             <div v-if="row.listen_ports && row.listen_ports.length > 0">
@@ -205,6 +224,14 @@
           <el-descriptions-item label="置信度">{{ Math.round(getConfidence(selectedApp) * 100) }}%</el-descriptions-item>
           <el-descriptions-item label="主机名">{{ selectedApp.hostname }}</el-descriptions-item>
           <el-descriptions-item label="IP 地址">{{ selectedApp.ip_address }}</el-descriptions-item>
+          <el-descriptions-item label="PID">
+            <template v-if="displayPids(selectedApp).length">
+              <el-tag v-for="pid in displayPids(selectedApp)" :key="pid" class="pid-tag">
+                {{ pid }}
+              </el-tag>
+            </template>
+            <span v-else>-</span>
+          </el-descriptions-item>
           <el-descriptions-item label="启动用户">{{ selectedApp.run_user || '-' }}</el-descriptions-item>
           <el-descriptions-item label="启动路径">{{ selectedApp.start_path || '-' }}</el-descriptions-item>
           <el-descriptions-item label="监听端口" :span="2">
@@ -451,6 +478,11 @@ function getConfidence(app: ApplicationAsset) {
   return app.confidence ?? app.ai_confidence ?? 0
 }
 
+function displayPids(app: ApplicationAsset | null) {
+  if (!app?.related_pids?.length) return []
+  return [...new Set(app.related_pids.filter(pid => Number.isFinite(pid) && pid > 0))].sort((a, b) => a - b)
+}
+
 // 获取复核状态类型
 function getReviewStatusType(status: string) {
   const types: Record<string, string> = {
@@ -519,6 +551,18 @@ function getReviewStatusLabel(status: string) {
 .port-tag {
   margin-right: 4px;
   margin-bottom: 4px;
+}
+
+.pid-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pid-tag {
+  margin-right: 4px;
+  margin-bottom: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .no-data {

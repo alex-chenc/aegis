@@ -62,6 +62,7 @@ export interface WeakPasswordDictionaryPolicy {
 export interface WeakPasswordAIPolicy {
   repair_collection_errors: boolean
   encrypted_password_llm_match?: boolean
+  detection_rounds?: number
   max_agent_tool_calls_per_app: number
 }
 
@@ -190,6 +191,23 @@ export interface WeakPasswordCollectionError {
   created_at: string
 }
 
+export interface WeakPasswordCollectionProgress {
+  id: string
+  task_id: string
+  scan_application_id?: string
+  host_id: string
+  application_name: string
+  tool_name: string
+  status: string
+  round: number
+  error_code?: string
+  error_message?: string
+  execution_time_ms: number
+  agent_tool_call_count: number
+  max_agent_tool_calls: number
+  created_at: string
+}
+
 export interface WeakPasswordDictionary {
   id: string
   name: string
@@ -197,6 +215,7 @@ export interface WeakPasswordDictionary {
   status: string
   entry_count: number
   source: string
+  llm_model?: string
   categories: string[]
   created_at: string
   updated_at: string

@@ -133,16 +133,23 @@ type ServiceUnitInspectResult struct {
 
 type ProcessConfigHintsRequest struct {
 	PID                 int      `json:"pid"`
+	Application         string   `json:"application,omitempty"`
 	IncludeOpenFiles    bool     `json:"include_open_files"`
 	FileSuffixAllowlist []string `json:"file_suffix_allowlist"`
 	MaxFiles            int      `json:"max_files"`
 }
 
 type ProcessConfigHintsResult struct {
-	PID             int      `json:"pid"`
-	Cmdline         []string `json:"cmdline"`
-	CWD             string   `json:"cwd"`
-	OpenConfigFiles []string `json:"open_config_files"`
+	PID                  int      `json:"pid"`
+	Cmdline              []string `json:"cmdline"`
+	CWD                  string   `json:"cwd"`
+	Cgroup               []string `json:"cgroup,omitempty"`
+	ContainerID          string   `json:"container_id,omitempty"`
+	ContainerRuntime     string   `json:"container_runtime,omitempty"`
+	ContainerRoot        string   `json:"container_root,omitempty"`
+	OpenConfigFiles      []string `json:"open_config_files"`
+	ContainerConfigFiles []string `json:"container_config_files,omitempty"`
+	ConfigPathCandidates []string `json:"config_path_candidates,omitempty"`
 }
 
 type PurgeCredentialCacheRequest struct {

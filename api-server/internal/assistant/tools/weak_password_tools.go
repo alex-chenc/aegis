@@ -51,6 +51,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			req := model.CreateTaskByApplicationRequest{CandidateApplicationID: getStringArg(args, "candidate_application_id", "")}
 			req.DictionaryPolicy.UseDefault1000 = true
 			req.AIPolicy.RepairCollectionErrors = true
+			req.AIPolicy.DetectionRounds = 10
 			req.AIPolicy.MaxAgentToolCallsPerApp = 10
 			return deps.Service.CreateTaskByApplication(ctx, req, nil)
 		},

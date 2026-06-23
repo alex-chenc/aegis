@@ -119,6 +119,8 @@ test('weak password workflow supports dictionary selection, app status details, 
     expect(body.dictionary_policy.use_default_1000).toBe(true)
     expect(body.dictionary_policy.hybrid).toBeUndefined()
     expect(body.dictionary_policy.fuzzy).toBeUndefined()
+    expect(body.ai_policy.detection_rounds).toBe(10)
+    expect(body.ai_policy.max_agent_tool_calls_per_app).toBe(10)
     expect(body.ai_policy.encrypted_password_llm_match).toBeUndefined()
     taskCreated = true
     await route.fulfill({ json: { code: 0, data: { task_id: 'task-weak-1', scan_application_id: 'scan-app-1', status: 'pending' } } })
@@ -127,6 +129,7 @@ test('weak password workflow supports dictionary selection, app status details, 
     const body = route.request().postDataJSON() as any
     expect(body.candidate_application_ids).toEqual(['cand-redis-1'])
     expect(body.dictionary_policy.use_default_1000).toBe(true)
+    expect(body.ai_policy.detection_rounds).toBe(10)
     batchCreated = true
     await route.fulfill({
       json: {
@@ -207,8 +210,29 @@ test('weak password workflow supports dictionary selection, app status details, 
       },
     })
   )
-  await page.route('**/api/v1/weak-password/tasks/task-weak-1/errors**', route =>
-    route.fulfill({ json: { code: 0, data: { items: [], total: 0 } } })
+  await page.route('**/api/v1/weak-password/tasks/task-weak-1/collection-progress**', route =>
+    route.fulfill({
+      json: {
+        code: 0,
+        data: {
+          items: [{
+            id: 'tool-call-1',
+            task_id: 'task-weak-1',
+            scan_application_id: 'scan-app-1',
+            host_id: 'host-redis-1',
+            application_name: 'redis',
+            tool_name: 'WeakPassword.CollectCredentials',
+            status: 'completed',
+            round: 1,
+            execution_time_ms: 128,
+            agent_tool_call_count: 1,
+            max_agent_tool_calls: 10,
+            created_at: '2026-06-23T00:00:00Z',
+          }],
+          total: 1,
+        },
+      },
+    })
   )
   await page.route('**/api/v1/weak-password/tasks/task-weak-1', async route => {
     if (route.request().method() === 'DELETE') {
@@ -321,6 +345,7 @@ test('weak password workflow supports dictionary selection, app status details, 
   await expect(page.getByText('混合规则')).toHaveCount(0)
   await expect(page.getByText('模糊规则')).toHaveCount(0)
   await expect(page.getByText('加密/hash LLM 匹配')).toHaveCount(0)
+  await expect(page.getByText('检测轮数')).toBeVisible()
   await page.getByRole('button', { name: '确认检查' }).click()
   await expect(page).toHaveURL(/\/risk\/weak-password\/tasks\/task-weak-1/)
   await expect(page.getByText('redis-01')).toBeVisible()
