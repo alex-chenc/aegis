@@ -30,6 +30,26 @@ func TestParseAnalysisResultSupportsBareApplicationArray(t *testing.T) {
 	}
 }
 
+func TestParseAnalysisResultFiltersNonMarketVisibleApplications(t *testing.T) {
+	svc := NewAssetAnalysisService(nil, nil, nil, zap.NewNop())
+
+	result, err := svc.parseAnalysisResult(`{"applications":[
+		{"name":"redis-server","display_name":"Redis","category":"database","confidence":0.96,"related_pids":[101],"listen_ports":[6379]},
+		{"name":"python3","display_name":"Python Script","category":"web_framework","confidence":0.91,"related_pids":[102]},
+		{"name":"systemd","display_name":"systemd","category":"other","confidence":0.99,"related_pids":[1]},
+		{"name":"internal-order-service","display_name":"内部订单服务","category":"web_site","confidence":0.88,"related_pids":[103]}
+	]}`)
+	if err != nil {
+		t.Fatalf("parseAnalysisResult returned error: %v", err)
+	}
+	if len(result.Applications) != 1 {
+		t.Fatalf("applications = %#v, want only Redis", result.Applications)
+	}
+	if result.Applications[0].Name != "redis" || result.Applications[0].DisplayName != "Redis" {
+		t.Fatalf("unexpected kept application: %#v", result.Applications[0])
+	}
+}
+
 func TestSplitProcessBatches(t *testing.T) {
 	processes := []ProcessAsset{{PID: 1}, {PID: 2}, {PID: 3}, {PID: 4}, {PID: 5}}
 
@@ -123,6 +143,19 @@ func TestGenerateAppFingerprintDedupeByHostApplication(t *testing.T) {
 	}
 	if first != differentPID {
 		t.Fatalf("same host application fingerprint should ignore pid: %s != %s", first, differentPID)
+	}
+}
+
+func TestApplicationDedupeNamesIncludesKnownAliases(t *testing.T) {
+	names := applicationDedupeNames(IdentifiedApplication{Name: "redis", DisplayName: "Redis", Category: "database"})
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	for _, want := range []string{"redis", "redis-server"} {
+		if !seen[want] {
+			t.Fatalf("dedupe names = %#v, want alias %q", names, want)
+		}
 	}
 }
 

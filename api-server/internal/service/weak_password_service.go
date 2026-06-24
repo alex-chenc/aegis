@@ -53,6 +53,12 @@ var (
 const (
 	minWeakPasswordDetectionRounds = 10
 	maxWeakPasswordDetectionRounds = 50
+
+	weakPasswordApplicationAnalysisAttemptTimeout = 20 * time.Second
+	weakPasswordApplicationAnalysisMaxAttempts    = 1
+	weakPasswordAIDictionaryGenerationTimeout     = 90 * time.Second
+	weakPasswordAIDictionaryRealtimeMaxCount      = 50
+	weakPasswordAIDictionaryLLMMaxCount           = 50
 )
 
 // LLMClientInterface defines the interface for LLM client operations
@@ -349,6 +355,7 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 		return nil, err
 	}
 	assets = s.filterRuntimeOnlineAssets(ctx, assets)
+	assets = deduplicateApplicationAssetsByHostType(assets)
 	total = int64(len(assets))
 	if total == 0 {
 		return &AnalyzeAssetApplicationsResponse{
@@ -361,20 +368,14 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 	analysisID := uuid.New()
 	now := time.Now()
 
-	// Use AI to analyze which applications actually need password authentication
 	promptSummary := "deterministic application asset analysis; source=host_application_assets"
-	aiAnalysisResults := make(map[string]bool) // application_type -> needs_auth
-	llmClient, err := s.getLLMClient(ctx)
-	if err == nil && llmClient != nil {
-		aiResults, err := s.analyzeApplicationsWithAI(ctx, assets)
-		if err != nil {
-			s.logger.Warn("AI analysis failed, falling back to deterministic analysis", zap.Error(err))
-		} else {
-			aiAnalysisResults = aiResults
-			promptSummary = "ai_enhanced application asset analysis; source=host_application_assets+llm"
-		}
-	} else {
-		s.logger.Info("LLM client not available, using deterministic analysis", zap.Error(err))
+	aiAnalysisResults, usedAI, err := s.analyzeCandidateApplicationNeeds(ctx, assets)
+	if err != nil {
+		s.logger.Error("AI weak password application analysis failed after retries", zap.Error(err))
+		return nil, fmt.Errorf("AI 分析失败，请检查 LLM 配置后重试: %w", err)
+	}
+	if usedAI {
+		promptSummary = "ai_enhanced application asset analysis; source=host_application_assets+llm; response=needs_skip_complete"
 	}
 
 	analysis := &model.WeakPasswordAssetAppAnalysis{
@@ -390,91 +391,10 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 	}
 
 	candidates := make([]model.WeakPasswordCandidateApplication, 0, len(assets))
-	dtos := make([]WeakPasswordCandidateDTO, 0, len(assets))
-
-	// Group assets by host and deduplicate by application type within each host
-	type hostAppKey struct {
-		HostID          string
-		ApplicationType string
-	}
-	deduplicatedAssets := make(map[hostAppKey]model.HostApplicationAsset)
-	for _, asset := range assets {
-		appType := normalizeApplicationType(firstNonEmpty(asset.Name, asset.Category))
-		if appType == "unknown" {
-			continue
-		}
-		key := hostAppKey{HostID: asset.HostID.String(), ApplicationType: appType}
-		if existing, exists := deduplicatedAssets[key]; exists {
-			// Keep the one with higher AI confidence
-			if asset.AIConfidence > existing.AIConfidence {
-				deduplicatedAssets[key] = asset
-			}
-		} else {
-			deduplicatedAssets[key] = asset
-		}
-	}
-
-	// Convert deduplicated assets back to slice
-	uniqueAssets := make([]model.HostApplicationAsset, 0, len(deduplicatedAssets))
-	for _, asset := range deduplicatedAssets {
-		uniqueAssets = append(uniqueAssets, asset)
-	}
-
-	// AI analysis with retry (max 3 attempts)
-	maxRetries := 3
-	var aiAnalysisErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		s.logger.Info("AI analysis attempt", zap.Int("attempt", attempt), zap.Int("total_assets", len(uniqueAssets)))
-
-		aiResults, err := s.analyzeApplicationsWithAI(ctx, uniqueAssets)
-		if err != nil {
-			aiAnalysisErr = err
-			s.logger.Warn("AI analysis attempt failed",
-				zap.Int("attempt", attempt),
-				zap.Error(err))
-			continue
-		}
-
-		// AI analysis succeeded, process results
-		aiAnalysisResults = aiResults
-		aiAnalysisErr = nil
-
-		// Check if all application types are covered
-		missingTypes := make([]string, 0)
-		for _, asset := range uniqueAssets {
-			appType := normalizeApplicationType(firstNonEmpty(asset.Name, asset.Category))
-			if _, exists := aiAnalysisResults[appType]; !exists {
-				missingTypes = append(missingTypes, appType)
-			}
-		}
-
-		if len(missingTypes) == 0 {
-			// All types covered, break
-			break
-		}
-
-		// Some types missing, retry if not last attempt
-		if attempt < maxRetries {
-			s.logger.Warn("AI analysis incomplete, retrying",
-				zap.Int("attempt", attempt),
-				zap.Strings("missing_types", missingTypes))
-			continue
-		}
-
-		// Last attempt, still missing types - this is acceptable, we'll skip them
-		s.logger.Warn("AI analysis incomplete after max retries, skipping missing types",
-			zap.Strings("missing_types", missingTypes))
-	}
-
-	// If all retries failed, return error to frontend
-	if aiAnalysisErr != nil {
-		s.logger.Error("AI analysis failed after all retries", zap.Error(aiAnalysisErr))
-		return nil, fmt.Errorf("AI 分析失败，请检查 LLM 配置后重试: %w", aiAnalysisErr)
-	}
+	candidateAssets := make([]model.HostApplicationAsset, 0, len(assets))
 
 	// Process results and build candidates
-	for _, asset := range uniqueAssets {
+	for _, asset := range assets {
 		plan := buildCandidateFromAsset(analysisID, asset)
 		if plan.ApplicationType == "unknown" {
 			continue
@@ -483,8 +403,7 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 		// Check AI analysis result
 		needsAuth, exists := aiAnalysisResults[plan.ApplicationType]
 		if !exists {
-			// This shouldn't happen after retries, but skip if it does
-			s.logger.Warn("Application type not in AI results after retries, skipping",
+			s.logger.Warn("Application type not in weak password analysis results, skipping",
 				zap.String("application_type", plan.ApplicationType),
 				zap.String("application_name", plan.ApplicationName))
 			continue
@@ -499,11 +418,16 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 
 		plan.AIReason = "AI 分析确认该应用类型需要密码认证"
 		candidates = append(candidates, plan)
-		dtos = append(dtos, candidateDTO(plan, asset.Hostname, asset.IPAddress))
+		candidateAssets = append(candidateAssets, asset)
 	}
 	analysis.CandidateCount = len(candidates)
 	if err := s.repo.CreateAnalysisWithCandidates(analysis, candidates); err != nil {
 		return nil, err
+	}
+	dtos := make([]WeakPasswordCandidateDTO, 0, len(candidates))
+	for idx, candidate := range candidates {
+		asset := candidateAssets[idx]
+		dtos = append(dtos, candidateDTO(candidate, asset.Hostname, asset.IPAddress))
 	}
 
 	s.logger.Info("weak password asset applications analyzed",
@@ -518,6 +442,39 @@ func (s *WeakPasswordService) AnalyzeAssetApplications(ctx context.Context, req 
 		CandidateCount:        len(candidates),
 		Candidates:            dtos,
 	}, nil
+}
+
+func (s *WeakPasswordService) analyzeCandidateApplicationNeeds(ctx context.Context, assets []model.HostApplicationAsset) (map[string]bool, bool, error) {
+	if len(assets) == 0 {
+		return map[string]bool{}, false, nil
+	}
+	if _, err := s.getLLMClient(ctx); err != nil {
+		s.logger.Info("LLM client not available, using deterministic weak password application filter", zap.Error(err))
+		return deterministicWeakPasswordNeedsAuth(assets), false, nil
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= weakPasswordApplicationAnalysisMaxAttempts; attempt++ {
+		s.logger.Info("AI weak password application analysis attempt",
+			zap.Int("attempt", attempt),
+			zap.Int("total_assets", len(assets)),
+			zap.Duration("timeout", weakPasswordApplicationAnalysisAttemptTimeout))
+
+		attemptCtx, cancel := context.WithTimeout(ctx, weakPasswordApplicationAnalysisAttemptTimeout)
+		results, err := s.analyzeApplicationsWithAI(attemptCtx, assets)
+		cancel()
+		if err == nil {
+			return results, true, nil
+		}
+		lastErr = err
+		s.logger.Warn("AI weak password application analysis attempt failed",
+			zap.Int("attempt", attempt),
+			zap.Error(err))
+	}
+	s.logger.Warn("AI weak password application analysis unavailable, using deterministic application filter",
+		zap.Int("total_assets", len(assets)),
+		zap.Error(lastErr))
+	return deterministicWeakPasswordNeedsAuth(assets), false, nil
 }
 
 // analyzeApplicationsWithAI uses LLM to analyze which applications need password authentication
@@ -604,9 +561,11 @@ AI服务: Ollama, LocalAI, vLLM
 {"needs":{"app_type1":"原因","app_type2":"原因"},"skip":{"app_type3":"原因"}}
 
 重要：
+- 必须覆盖输入中的每一个 app_type
 - needs中只放需要检测的应用类型
 - skip中放不需要检测的应用类型
 - 每个应用类型只能出现在needs或skip中的一个
+- key 必须使用输入中的标准 app_type，不要翻译、不要新增不存在的类型
 - reason必须简短！`
 
 	// Deduplicate app types for prompt
@@ -654,12 +613,39 @@ AI服务: Ollama, LocalAI, vLLM
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	// Convert to simple map
+	inputTypes := make(map[string]struct{}, len(uniqueTypes))
+	for _, appType := range uniqueTypes {
+		normalized := normalizeApplicationType(appType)
+		if normalized != "" && normalized != "unknown" {
+			inputTypes[normalized] = struct{}{}
+		}
+	}
+
 	needsAuthMap := make(map[string]bool)
+	addResult := func(rawType string, needsAuth bool, reason string) error {
+		appType := normalizeApplicationType(rawType)
+		if appType == "" || appType == "unknown" {
+			return nil
+		}
+		if _, expected := inputTypes[appType]; !expected {
+			s.logger.Warn("AI analysis returned unexpected application type",
+				zap.String("raw_type", rawType),
+				zap.String("normalized_type", appType),
+				zap.String("reason", reason))
+			return nil
+		}
+		if existing, exists := needsAuthMap[appType]; exists && existing != needsAuth {
+			return fmt.Errorf("AI response has conflicting decisions for application type %s", appType)
+		}
+		needsAuthMap[appType] = needsAuth
+		return nil
+	}
 
 	// Process needs (needs_auth = true)
 	for appType, reason := range result.Needs {
-		needsAuthMap[appType] = true
+		if err := addResult(appType, true, reason); err != nil {
+			return nil, err
+		}
 		s.logger.Info("AI analysis: needs auth",
 			zap.String("app_type", appType),
 			zap.String("reason", reason))
@@ -667,10 +653,23 @@ AI服务: Ollama, LocalAI, vLLM
 
 	// Process skip (needs_auth = false)
 	for appType, reason := range result.Skip {
-		needsAuthMap[appType] = false
+		if err := addResult(appType, false, reason); err != nil {
+			return nil, err
+		}
 		s.logger.Info("AI analysis: skip",
 			zap.String("app_type", appType),
 			zap.String("reason", reason))
+	}
+
+	missingTypes := make([]string, 0)
+	for appType := range inputTypes {
+		if _, ok := needsAuthMap[appType]; !ok {
+			missingTypes = append(missingTypes, appType)
+		}
+	}
+	if len(missingTypes) > 0 {
+		sort.Strings(missingTypes)
+		return nil, fmt.Errorf("AI response missing application types: %s", strings.Join(missingTypes, ","))
 	}
 
 	return needsAuthMap, nil
@@ -816,6 +815,71 @@ func (s *WeakPasswordService) filterRuntimeOnlineAssets(ctx context.Context, ass
 		}
 	}
 	return filtered
+}
+
+type weakPasswordHostAppKey struct {
+	hostID          uuid.UUID
+	applicationType string
+}
+
+func deduplicateApplicationAssetsByHostType(assets []model.HostApplicationAsset) []model.HostApplicationAsset {
+	byKey := make(map[weakPasswordHostAppKey]model.HostApplicationAsset)
+	order := make([]weakPasswordHostAppKey, 0, len(assets))
+	for _, asset := range assets {
+		appType := normalizeApplicationType(firstNonEmpty(asset.Name, asset.Category))
+		if appType == "" || appType == "unknown" {
+			continue
+		}
+		key := weakPasswordHostAppKey{hostID: asset.HostID, applicationType: appType}
+		if existing, ok := byKey[key]; ok {
+			if weakPasswordAssetRank(asset) > weakPasswordAssetRank(existing) {
+				byKey[key] = asset
+			}
+			continue
+		}
+		byKey[key] = asset
+		order = append(order, key)
+	}
+	out := make([]model.HostApplicationAsset, 0, len(order))
+	for _, key := range order {
+		out = append(out, byKey[key])
+	}
+	return out
+}
+
+func weakPasswordAssetRank(asset model.HostApplicationAsset) float64 {
+	rank := asset.AIConfidence * 1000
+	rank += float64(len(weakJSONStrings(asset.ConfigPaths))) * 20
+	rank += float64(len(weakJSONStrings(asset.ListenPorts))) * 5
+	rank += float64(len(weakJSONInts(asset.RelatedPIDs))) * 2
+	if !asset.CollectedAt.IsZero() {
+		rank += float64(asset.CollectedAt.Unix()) / 1_000_000_000
+	}
+	return rank
+}
+
+func deterministicWeakPasswordNeedsAuth(assets []model.HostApplicationAsset) map[string]bool {
+	results := make(map[string]bool)
+	for _, asset := range assets {
+		appType := normalizeApplicationType(firstNonEmpty(asset.Name, asset.Category))
+		if appType == "" || appType == "unknown" {
+			continue
+		}
+		results[appType] = isPublicPasswordAuthApplication(appType)
+	}
+	return results
+}
+
+func isPublicPasswordAuthApplication(appType string) bool {
+	switch normalizeApplicationType(appType) {
+	case "redis", "mysql", "mariadb", "postgresql", "mongodb", "elasticsearch", "oracle", "sqlserver",
+		"tomcat", "weblogic", "jboss", "wildfly", "rabbitmq", "kafka", "zookeeper",
+		"nginx", "apache", "iis", "phpmyadmin", "grafana", "kibana", "jenkins", "gitlab", "harbor", "sonarqube", "nexus",
+		"openldap", "active_directory", "openssh", "ftp", "ollama", "localai", "vllm", "llm_service", "ai_agent", "mcp_server":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *WeakPasswordService) ensureHostRuntimeOnline(ctx context.Context, hostID uuid.UUID) error {
@@ -1081,7 +1145,7 @@ func (s *WeakPasswordService) attemptProcessBasedRepair(ctx context.Context, tas
 }
 
 // attemptCollectionRepair uses LLM to analyze collection errors and suggest auxiliary tool calls
-// to locate the correct config file paths. Implements the 10-round repair loop as per design.
+// to locate credential config paths and repair account/password field extractors.
 func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task *model.WeakPasswordScanTask, host *model.WeakPasswordScanHost, app *model.WeakPasswordScanApplication, originalPlan CredentialCollectionPlan, errors []AgentCollectionError) (*CredentialCollectionPlan, error) {
 	llmClient, err := s.getLLMClient(ctx)
 	if err != nil {
@@ -1110,8 +1174,15 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 		"WeakPassword.ProcessConfigHints",
 	}
 
+	currentPlanSummary, _ := json.Marshal(map[string]interface{}{
+		"application": originalPlan.Applications[0].Application,
+		"profile_id":  originalPlan.Applications[0].ProfileID,
+		"paths":       originalPlan.Applications[0].Paths,
+		"extractors":  originalPlan.Applications[0].Extractors,
+	})
+
 	// Build system prompt for repair
-	systemPrompt := `你是弱密码采集修复专家。当采集文件失败时，你需要分析错误并选择合适的辅助工具来定位正确的配置文件路径。
+	systemPrompt := `你是弱密码模块的配置定位专家。你的任务不是项目自测，而是根据应用资产、采集错误和受控 Agent 工具，修复 CredentialCollectionPlan 中的配置文件路径和账号/密码字段提取器。
 
 ## 重要提示
 
@@ -1140,6 +1211,18 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
    - 用途: 从运行进程中发现配置文件路径
    - **推荐**: 对于容器化应用，优先使用此工具
 
+## 提取器格式
+
+new_extractors 必须使用以下字段：
+- type: line_key_value / ini / properties / yaml / json / shadow / htpasswd / tomcat_users_xml
+- section: 可选，仅 ini 等格式需要
+- account_selector: 可选账号字段
+- password_selector: 密码、token 或 hash 字段
+- format_hint: plaintext / auth_string / hash / salted_hash / unknown
+- source_kind: 可选来源类型，如 system_account
+
+当错误是 field_not_found 或 unsupported_credential_format 时，优先判断是否需要新增 new_extractors。不要把端口、日志、bind、datadir、调优参数当成密码字段。
+
 ## 输出格式
 
 严格按JSON格式返回：
@@ -1147,16 +1230,23 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
   "tool": "工具名",
   "arguments": {参数},
   "reason": "选择原因",
-  "new_paths": [发现的新路径列表]
+  "new_paths": [发现的新路径列表],
+  "new_extractors": [
+    {"type":"line_key_value","password_selector":"requirepass","format_hint":"plaintext"}
+  ]
 }
 
 注意：
 - 只能选择一个工具
-- new_paths 是从工具结果推断出的可能配置路径
+- new_paths 是从证据或工具结果推断出的明确绝对路径，禁止递归搜索、通配符、shell 元字符
+- new_extractors 是从错误和应用类型推断出的账号/密码字段，最多5个
 - 如果无法修复，返回 {"tool": "none", "reason": "无法修复原因"}`
 
 	// Build user prompt with error context
-	userPrompt := fmt.Sprintf(`## 采集失败信息
+	userPrompt := fmt.Sprintf(`## 当前采集计划
+%s
+
+## 采集失败信息
 
 应用类型: %s
 任务ID: %s
@@ -1166,7 +1256,7 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 ## 可用辅助工具
 %s
 
-请选择一个辅助工具来定位正确的配置文件路径。`, application, task.ID.String(), formatErrorDetails(errorDetails), strings.Join(allowedTools, ", "))
+请选择一个辅助工具，并返回需要合并到采集计划里的 new_paths 和/或 new_extractors。`, string(currentPlanSummary), application, task.ID.String(), formatErrorDetails(errorDetails), strings.Join(allowedTools, ", "))
 
 	// Call LLM
 	response, err := llmClient.ChatCompletion(ctx, systemPrompt, userPrompt, 0.3)
@@ -1176,10 +1266,11 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 
 	// Parse LLM response
 	var repairResult struct {
-		Tool      string                 `json:"tool"`
-		Arguments map[string]interface{} `json:"arguments"`
-		Reason    string                 `json:"reason"`
-		NewPaths  []string               `json:"new_paths"`
+		Tool          string                 `json:"tool"`
+		Arguments     map[string]interface{} `json:"arguments"`
+		Reason        string                 `json:"reason"`
+		NewPaths      []string               `json:"new_paths"`
+		NewExtractors []CredentialExtractor  `json:"new_extractors"`
 	}
 
 	jsonStr := response
@@ -1193,8 +1284,14 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 		return nil, fmt.Errorf("failed to parse LLM repair response: %w", err)
 	}
 
-	// If LLM says no tool can help, return error
+	hasPlanPatch := len(repairResult.NewPaths) > 0 || len(repairResult.NewExtractors) > 0
 	if repairResult.Tool == "none" || repairResult.Tool == "" {
+		if hasPlanPatch {
+			newPlan := originalPlan
+			newPlan.Applications[0].Paths = mergeCredentialPaths(originalPlan.Applications[0].Paths, repairResult.NewPaths)
+			newPlan.Applications[0].Extractors = mergeCredentialExtractors(originalPlan.Applications[0].Extractors, repairResult.NewExtractors)
+			return &newPlan, nil
+		}
 		return nil, fmt.Errorf("LLM determined repair is not possible: %s", repairResult.Reason)
 	}
 
@@ -1284,10 +1381,12 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 	// Create new plan with updated paths
 	newPlan := originalPlan
 	newPlan.Applications[0].Paths = newPaths
+	newPlan.Applications[0].Extractors = mergeCredentialExtractors(originalPlan.Applications[0].Extractors, repairResult.NewExtractors)
 
 	s.logger.Info("repair completed, new paths discovered",
 		zap.String("task_id", task.ID.String()),
 		zap.Strings("new_paths", newPaths),
+		zap.Int("extractor_count", len(newPlan.Applications[0].Extractors)),
 		zap.Int("total_paths", len(newPaths)))
 
 	return &newPlan, nil
@@ -1496,15 +1595,18 @@ func (s *WeakPasswordService) executeApplicationTask(ctx context.Context, taskID
 			return
 		}
 
-		// Check if repair discovered new paths
+		// Check if repair discovered new paths or credential field extractors
 		oldPathCount := len(plan.Applications[0].Paths)
+		oldExtractorCount := len(plan.Applications[0].Extractors)
 		newPathCount := len(repairedPlan.Applications[0].Paths)
-		if newPathCount <= oldPathCount {
-			s.logger.Info("AI repair did not discover new paths, continuing with next attempt",
+		newExtractorCount := len(repairedPlan.Applications[0].Extractors)
+		if newPathCount <= oldPathCount && newExtractorCount <= oldExtractorCount {
+			s.logger.Info("AI repair did not discover new paths or extractors, continuing with next attempt",
 				zap.String("task_id", taskID.String()),
 				zap.Int("old_paths", oldPathCount),
-				zap.Int("new_paths", newPathCount))
-			// Continue to next attempt even without new paths
+				zap.Int("new_paths", newPathCount),
+				zap.Int("old_extractors", oldExtractorCount),
+				zap.Int("new_extractors", newExtractorCount))
 			continue
 		}
 
@@ -1513,7 +1615,8 @@ func (s *WeakPasswordService) executeApplicationTask(ctx context.Context, taskID
 		s.logger.Info("AI repair successful, retrying collection",
 			zap.String("task_id", taskID.String()),
 			zap.Int("next_attempt", attempt+2),
-			zap.Int("total_paths", newPathCount))
+			zap.Int("total_paths", newPathCount),
+			zap.Int("total_extractors", newExtractorCount))
 	}
 
 	// If we still have no records after all attempts
@@ -1918,32 +2021,88 @@ func (s *WeakPasswordService) ListTaskCollectionErrors(taskID uuid.UUID, page, p
 }
 
 func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page, pageSize int) ([]WeakPasswordCollectionProgressDTO, int64, error) {
+	if page <= 0 {
+		page = 1
+	}
 	if pageSize <= 0 {
 		pageSize = 10
-	}
-	calls, total, err := s.repo.ListToolCalls(taskID, page, pageSize)
-	if err != nil {
-		return nil, 0, err
 	}
 	app, _ := s.repo.GetScanApplicationByTask(taskID)
 	appName := ""
 	appToolCalls := 0
 	maxToolCalls := 0
+	var failedSummary *WeakPasswordCollectionProgressDTO
 	if app != nil {
 		appName = app.ApplicationName
 		appToolCalls = app.AgentToolCallCount
 		maxToolCalls = app.MaxAgentToolCalls
+		if app.Status == model.AppStatusFailed {
+			errorCode := app.ErrorCode
+			errorMessage := app.ErrorMessage
+			if errorCode == "" || errorMessage == "" {
+				if errors, _, err := s.repo.ListCollectionErrors(taskID, 1, 1); err == nil && len(errors) > 0 {
+					if errorCode == "" {
+						errorCode = errors[0].ErrorCode
+					}
+					if errorMessage == "" {
+						errorMessage = errors[0].ErrorMessage
+					}
+				}
+			}
+			if errorCode != "" || errorMessage != "" {
+				failedSummary = &WeakPasswordCollectionProgressDTO{
+					ID:                 "final-diagnosis-" + app.ID.String(),
+					TaskID:             taskID.String(),
+					ScanApplicationID:  app.ID.String(),
+					HostID:             app.HostID.String(),
+					ApplicationName:    appName,
+					ToolName:           "WeakPassword.FinalDiagnosis",
+					Status:             model.AppStatusFailed,
+					Round:              0,
+					ErrorCode:          errorCode,
+					ErrorMessage:       errorMessage,
+					ExecutionTimeMs:    0,
+					AgentToolCallCount: appToolCalls,
+					MaxAgentToolCalls:  maxToolCalls,
+					CreatedAt:          app.UpdatedAt.Format(time.RFC3339),
+				}
+			}
+		}
 	}
-	items := make([]WeakPasswordCollectionProgressDTO, 0, len(calls))
-	offset := 0
-	if page > 1 {
-		offset = (page - 1) * pageSize
+
+	totalOffset := (page - 1) * pageSize
+	callOffset := totalOffset
+	callLimit := pageSize
+	items := make([]WeakPasswordCollectionProgressDTO, 0, pageSize)
+	if failedSummary != nil {
+		if totalOffset == 0 {
+			items = append(items, *failedSummary)
+			callLimit--
+			callOffset = 0
+		} else {
+			callOffset = totalOffset - 1
+		}
+	}
+	calls := []model.WeakPasswordAgentToolCall{}
+	var callTotal int64
+	var err error
+	if callLimit > 0 {
+		calls, callTotal, err = s.repo.ListToolCallsByOffset(taskID, callOffset, callLimit)
+		if err != nil {
+			return nil, 0, err
+		}
+	} else {
+		_, callTotal, err = s.repo.ListToolCallsByOffset(taskID, 0, 1)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	for idx, call := range calls {
 		scanAppID := ""
 		if call.ScanApplicationID != nil {
 			scanAppID = call.ScanApplicationID.String()
 		}
+		round := callOffset + idx + 1
 		items = append(items, WeakPasswordCollectionProgressDTO{
 			ID:                 call.ID.String(),
 			TaskID:             call.TaskID.String(),
@@ -1952,7 +2111,7 @@ func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page,
 			ApplicationName:    appName,
 			ToolName:           call.ToolName,
 			Status:             call.Status,
-			Round:              offset + idx + 1,
+			Round:              round,
 			ErrorCode:          call.ErrorCode,
 			ErrorMessage:       call.ErrorMessage,
 			ExecutionTimeMs:    call.ExecutionTimeMs,
@@ -1960,6 +2119,10 @@ func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page,
 			MaxAgentToolCalls:  maxToolCalls,
 			CreatedAt:          call.CreatedAt.Format(time.RFC3339),
 		})
+	}
+	total := callTotal
+	if failedSummary != nil {
+		total++
 	}
 	return items, total, nil
 }
@@ -2097,12 +2260,22 @@ func (s *WeakPasswordService) CreateDictionary(req CreateWeakPasswordDictionaryR
 	return dictionarySummary(*dict), nil
 }
 
-func (s *WeakPasswordService) GenerateAIDictionary(req model.AIGenerateDictionaryRequest, createdBy *uuid.UUID) (*DictionarySummary, error) {
-	if req.Count <= 0 {
-		req.Count = 200
+func (s *WeakPasswordService) GenerateAIDictionary(ctx context.Context, req model.AIGenerateDictionaryRequest, createdBy *uuid.UUID) (*DictionarySummary, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if req.Count > 1000 {
-		req.Count = 1000
+	requestedCount := req.Count
+	if req.Count <= 0 {
+		req.Count = 20
+	}
+	if req.Count > weakPasswordAIDictionaryRealtimeMaxCount {
+		req.Count = weakPasswordAIDictionaryRealtimeMaxCount
+	}
+	if requestedCount > weakPasswordAIDictionaryRealtimeMaxCount {
+		s.logger.Info("AI weak password dictionary count capped for realtime generation",
+			zap.Int("requested_count", requestedCount),
+			zap.Int("effective_count", req.Count),
+			zap.Int("max_count", weakPasswordAIDictionaryRealtimeMaxCount))
 	}
 	seedWords := extractDictionarySeeds(req.NaturalLanguage)
 	seedWords = append(seedWords, req.OrganizationKeywords...)
@@ -2114,37 +2287,29 @@ func (s *WeakPasswordService) GenerateAIDictionary(req model.AIGenerateDictionar
 		seedWords = []string{"admin", "root", "service", "aegis"}
 	}
 
-	// Try to use AI to generate dictionary if LLM client is available
-	llmModel := "deterministic-fallback"
-	var candidates []string
-	llmClient, err := s.getLLMClient(context.Background())
-	if err == nil && llmClient != nil {
-		llmModel = s.activeLLMModelName("configured-llm")
-		aiCandidates, err := s.generateDictionaryWithAI(context.Background(), req, seedWords)
-		if err != nil {
-			s.logger.Warn("AI dictionary generation failed, falling back to deterministic", zap.Error(err))
-			llmModel = "deterministic-fallback"
-			candidates = nil
-		} else {
-			candidates = aiCandidates
+	llmModel := s.activeLLMModelName("configured-llm")
+	aiReq := req
+	if req.DeduplicateWithDefault && req.Count < weakPasswordAIDictionaryLLMMaxCount {
+		aiReq.Count = req.Count * 2
+		if aiReq.Count > weakPasswordAIDictionaryLLMMaxCount {
+			aiReq.Count = weakPasswordAIDictionaryLLMMaxCount
 		}
-	} else {
-		s.logger.Info("LLM client not available, using deterministic dictionary generation", zap.Error(err))
 	}
-
-	// Fallback to deterministic generation if AI failed or not available
-	if len(candidates) == 0 {
-		candidateLimit := req.Count
-		if req.DeduplicateWithDefault {
-			candidateLimit = req.Count * 2
-		}
-		candidates = generateDictionaryFromSeeds(seedWords, req.Rules, candidateLimit)
+	generationCtx, cancel := context.WithTimeout(ctx, weakPasswordAIDictionaryGenerationTimeout)
+	defer cancel()
+	candidates, err := s.generateDictionaryWithAI(generationCtx, aiReq, seedWords)
+	if err != nil {
+		s.logger.Warn("AI dictionary generation failed", zap.Error(err))
+		return nil, fmt.Errorf("AI生成密码失败，未保存字典: %w", err)
 	}
 
 	if req.DeduplicateWithDefault {
 		candidates = s.deduplicateWithDefaultDictionary(candidates, req.Count)
 	}
 	candidates = uniqueStrings(candidates, req.Count)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("AI生成密码失败，未返回可用密码候选")
+	}
 	dict := &model.WeakPasswordDictionary{
 		ID:                   uuid.New(),
 		Name:                 "AI 生成弱密码字典 - " + time.Now().Format("20060102150405"),
@@ -2426,23 +2591,79 @@ func normalizeApplicationType(value string) string {
 		return "mysql"
 	case strings.Contains(lower, "postgres"):
 		return "postgresql"
+	case strings.Contains(lower, "mongo"):
+		return "mongodb"
+	case strings.Contains(lower, "elastic"):
+		return "elasticsearch"
+	case strings.Contains(lower, "sql server") || strings.Contains(lower, "mssql"):
+		return "sqlserver"
+	case strings.Contains(lower, "oracle"):
+		return "oracle"
 	case strings.Contains(lower, "openssh") || lower == "ssh" || lower == "sshd":
 		return "openssh"
 	case strings.Contains(lower, "tomcat") || strings.Contains(lower, "catalina"):
 		return "tomcat"
+	case strings.Contains(lower, "spring boot") || strings.Contains(lower, "spring-boot") || strings.Contains(lower, "springboot"):
+		return "spring_boot"
+	case strings.Contains(lower, "django"):
+		return "django"
+	case strings.Contains(lower, "flask"):
+		return "flask"
+	case strings.Contains(lower, "laravel"):
+		return "laravel"
+	case strings.Contains(lower, "express"):
+		return "express"
+	case strings.Contains(lower, "weblogic"):
+		return "weblogic"
+	case strings.Contains(lower, "wildfly"):
+		return "wildfly"
+	case strings.Contains(lower, "jboss"):
+		return "jboss"
+	case strings.Contains(lower, "rabbitmq"):
+		return "rabbitmq"
+	case strings.Contains(lower, "zookeeper") || strings.Contains(lower, "zoo keeper"):
+		return "zookeeper"
+	case strings.Contains(lower, "kafka"):
+		return "kafka"
 	case strings.Contains(lower, "vsftpd") || strings.Contains(lower, "proftpd") || lower == "ftp":
 		return "ftp"
 	case strings.Contains(lower, "nginx"):
 		return "nginx"
 	case strings.Contains(lower, "apache") || strings.Contains(lower, "httpd"):
 		return "apache"
+	case strings.Contains(lower, "phpmyadmin"):
+		return "phpmyadmin"
+	case strings.Contains(lower, "grafana"):
+		return "grafana"
+	case strings.Contains(lower, "kibana"):
+		return "kibana"
+	case strings.Contains(lower, "jenkins"):
+		return "jenkins"
+	case strings.Contains(lower, "gitlab"):
+		return "gitlab"
+	case strings.Contains(lower, "harbor"):
+		return "harbor"
+	case strings.Contains(lower, "sonarqube") || strings.Contains(lower, "sonar"):
+		return "sonarqube"
+	case strings.Contains(lower, "nexus"):
+		return "nexus"
+	case strings.Contains(lower, "openldap"):
+		return "openldap"
+	case strings.Contains(lower, "active directory"):
+		return "active_directory"
+	case strings.Contains(lower, "ollama"):
+		return "ollama"
+	case strings.Contains(lower, "localai") || strings.Contains(lower, "local ai"):
+		return "localai"
+	case strings.Contains(lower, "vllm"):
+		return "vllm"
 	case lower == "database":
 		return "mysql"
-	case lower == "ai_agent":
+	case lower == "ai_agent" || lower == "ai-agent":
 		return "ai_agent"
-	case lower == "mcp_server":
+	case lower == "mcp_server" || lower == "mcp-server":
 		return "mcp_server"
-	case lower == "llm_service":
+	case lower == "llm_service" || lower == "llm-service":
 		return "llm_service"
 	case lower == "web_service":
 		return "web_service"
@@ -2597,6 +2818,58 @@ func mergeCredentialPaths(existing []string, discovered []string) []string {
 		add(path)
 	}
 	return out
+}
+
+func mergeCredentialExtractors(existing []CredentialExtractor, discovered []CredentialExtractor) []CredentialExtractor {
+	seen := map[string]struct{}{}
+	out := make([]CredentialExtractor, 0, len(existing)+len(discovered))
+	add := func(extractor CredentialExtractor) {
+		extractor.Type = strings.TrimSpace(extractor.Type)
+		extractor.Section = strings.TrimSpace(extractor.Section)
+		extractor.AccountSelector = strings.TrimSpace(extractor.AccountSelector)
+		extractor.PasswordSelector = strings.TrimSpace(extractor.PasswordSelector)
+		extractor.FormatHint = strings.TrimSpace(extractor.FormatHint)
+		extractor.SourceKind = strings.TrimSpace(extractor.SourceKind)
+		if !isUsableCredentialExtractor(extractor) {
+			return
+		}
+		key := credentialExtractorKey(extractor)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, extractor)
+	}
+	for _, extractor := range existing {
+		add(extractor)
+	}
+	for _, extractor := range discovered {
+		add(extractor)
+	}
+	return out
+}
+
+func isUsableCredentialExtractor(extractor CredentialExtractor) bool {
+	switch extractor.Type {
+	case "line_key_value", "ini", "properties", "yaml", "json", "shadow", "htpasswd", "tomcat_users_xml":
+	default:
+		return false
+	}
+	if extractor.Type == "shadow" || extractor.Type == "htpasswd" {
+		return true
+	}
+	return extractor.PasswordSelector != ""
+}
+
+func credentialExtractorKey(extractor CredentialExtractor) string {
+	return strings.Join([]string{
+		extractor.Type,
+		extractor.Section,
+		extractor.AccountSelector,
+		extractor.PasswordSelector,
+		extractor.FormatHint,
+		extractor.SourceKind,
+	}, "\x00")
 }
 
 func isSafeCredentialPath(path string) bool {
@@ -3058,7 +3331,7 @@ func extractDictionarySeeds(naturalLanguage string) []string {
 func promptSummaryFromNaturalLanguage(naturalLanguage string) string {
 	naturalLanguage = strings.TrimSpace(naturalLanguage)
 	if naturalLanguage == "" {
-		return "generate_weak_password_dictionary; deterministic fallback from default seeds"
+		return "generate_weak_password_dictionary; llm_only"
 	}
 	runes := []rune(naturalLanguage)
 	if len(runes) > 120 {

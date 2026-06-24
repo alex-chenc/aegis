@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -314,9 +315,17 @@ func (h *WeakPasswordHandler) GenerateDictionary(c *gin.Context) {
 		errorJSON(c, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	summary, err := h.service.GenerateAIDictionary(req, currentUserID(c))
+	summary, err := h.service.GenerateAIDictionary(c.Request.Context(), req, currentUserID(c))
 	if err != nil {
-		errorJSON(c, http.StatusInternalServerError, "Failed to generate dictionary")
+		if errors.Is(err, context.DeadlineExceeded) {
+			errorJSON(c, http.StatusGatewayTimeout, "AI生成密码超时，请减少生成数量或稍后重试")
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			errorJSON(c, http.StatusRequestTimeout, "AI生成密码请求已取消")
+			return
+		}
+		errorJSON(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	successJSON(c, summary)

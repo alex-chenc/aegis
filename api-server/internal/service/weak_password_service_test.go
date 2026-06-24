@@ -42,6 +42,30 @@ func (m *MockAgentClient) ExecuteTool(ctx context.Context, callID, hostID, tool,
 	return &pb.ToolExecuteResponse{Success: true}, nil
 }
 
+type MockWeakPasswordLLMClient struct {
+	Response string
+	Err      error
+	Calls    int
+}
+
+func (m *MockWeakPasswordLLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt string, temperature float64) (string, error) {
+	m.Calls++
+	if m.Err != nil {
+		return "", m.Err
+	}
+	return m.Response, nil
+}
+
+type cancelAwareWeakPasswordLLMClient struct {
+	Calls int
+}
+
+func (m *cancelAwareWeakPasswordLLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt string, temperature float64) (string, error) {
+	m.Calls++
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
 func TestWeakPasswordDefaultDictionarySeeds1000Entries(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
 
@@ -187,6 +211,72 @@ func TestWeakPasswordSkillRegistryAddsFixedPaths(t *testing.T) {
 	}
 }
 
+func TestWeakPasswordAnalysisUpsertReturnsPersistedCandidateID(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	assetID := uuid.New()
+	firstID := uuid.New()
+	firstAnalysisID := uuid.New()
+	firstCandidates := []model.WeakPasswordCandidateApplication{{
+		ID:                 firstID,
+		AnalysisID:         firstAnalysisID,
+		HostID:             hostID,
+		AssetID:            &assetID,
+		ApplicationName:    "Redis",
+		ApplicationType:    "redis",
+		ProfileID:          "redis_config_v1",
+		Confidence:         0.86,
+		CredentialTypes:    datatypesJSON(t, []string{"plaintext"}),
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		ExtractorPlanJSON:  datatypesJSON(t, []CredentialExtractor{{Type: "line_key_value", PasswordSelector: "requirepass", FormatHint: "plaintext"}}),
+		AssetEvidenceJSON:  datatypesJSON(t, map[string]string{"source_table": "host_application_assets"}),
+		Status:             model.AppStatusCandidate,
+	}}
+	if err := svc.repo.CreateAnalysisWithCandidates(&model.WeakPasswordAssetAppAnalysis{
+		ID: firstAnalysisID, Status: "completed", ApplicationAssetCount: 1, CandidateCount: 1,
+	}, firstCandidates); err != nil {
+		t.Fatalf("first CreateAnalysisWithCandidates returned error: %v", err)
+	}
+
+	secondAnalysisID := uuid.New()
+	secondCandidates := []model.WeakPasswordCandidateApplication{{
+		ID:                 uuid.New(),
+		AnalysisID:         secondAnalysisID,
+		HostID:             hostID,
+		AssetID:            &assetID,
+		ApplicationName:    "Redis",
+		ApplicationType:    "redis",
+		ProfileID:          "redis_config_v1",
+		Confidence:         0.92,
+		CredentialTypes:    datatypesJSON(t, []string{"plaintext"}),
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		ExtractorPlanJSON:  datatypesJSON(t, []CredentialExtractor{{Type: "line_key_value", PasswordSelector: "requirepass", FormatHint: "plaintext"}}),
+		AssetEvidenceJSON:  datatypesJSON(t, map[string]string{"source_table": "host_application_assets"}),
+		Status:             model.AppStatusCandidate,
+	}}
+	if err := svc.repo.CreateAnalysisWithCandidates(&model.WeakPasswordAssetAppAnalysis{
+		ID: secondAnalysisID, Status: "completed", ApplicationAssetCount: 1, CandidateCount: 1,
+	}, secondCandidates); err != nil {
+		t.Fatalf("second CreateAnalysisWithCandidates returned error: %v", err)
+	}
+	if secondCandidates[0].ID != firstID {
+		t.Fatalf("upserted candidate ID = %s, want persisted ID %s", secondCandidates[0].ID, firstID)
+	}
+	if secondCandidates[0].AnalysisID != secondAnalysisID {
+		t.Fatalf("upserted candidate analysis_id = %s, want %s", secondCandidates[0].AnalysisID, secondAnalysisID)
+	}
+
+	_, err := svc.CreateTaskByApplication(t.Context(), model.CreateTaskByApplicationRequest{
+		CandidateApplicationID: secondCandidates[0].ID.String(),
+	}, nil)
+	if !errors.Is(err, ErrWeakPasswordHostOffline) {
+		t.Fatalf("expected persisted candidate lookup to pass and stop at offline runtime check, got %v", err)
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("candidate lookup used a stale upsert ID: %v", err)
+	}
+}
+
 func TestWeakPasswordMatchUsesSelectedCustomDictionary(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
 	if err := svc.EnsureDefaultDictionary(t.Context()); err != nil {
@@ -244,7 +334,9 @@ func TestWeakPasswordMatchUsesSelectedCustomDictionary(t *testing.T) {
 
 func TestGenerateAIDictionaryUsesNaturalLanguageSeeds(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
-	summary, err := svc.GenerateAIDictionary(model.AIGenerateDictionaryRequest{
+	llmClient := &MockWeakPasswordLLMClient{Response: `{"passwords":["Aegis@123","Redis@123","admin123","Aegis@123"]}`}
+	svc.SetLLMClient(llmClient)
+	summary, err := svc.GenerateAIDictionary(t.Context(), model.AIGenerateDictionaryRequest{
 		NaturalLanguage: "为 Redis 管理员生成弱密码字典，包含公司名 aegis 和 admin 习惯",
 		Count:           20,
 	}, nil)
@@ -253,6 +345,9 @@ func TestGenerateAIDictionaryUsesNaturalLanguageSeeds(t *testing.T) {
 	}
 	if summary.Type != model.DictTypeAIGenerated {
 		t.Fatalf("dictionary type = %q, want ai_generated", summary.Type)
+	}
+	if llmClient.Calls != 1 {
+		t.Fatalf("LLM calls = %d, want 1", llmClient.Calls)
 	}
 	entries, err := svc.repo.ListDictionaryEntries([]uuid.UUID{uuid.MustParse(summary.ID)})
 	if err != nil {
@@ -264,6 +359,74 @@ func TestGenerateAIDictionaryUsesNaturalLanguageSeeds(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(joined), "aegis") {
 		t.Fatalf("generated entries do not include natural language seed, entries=%q", joined)
+	}
+	if strings.Contains(summary.LLMModel, "deterministic") {
+		t.Fatalf("LLM model = %q, should not use deterministic fallback", summary.LLMModel)
+	}
+}
+
+func TestGenerateAIDictionaryRequiresLLM(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+
+	_, err := svc.GenerateAIDictionary(t.Context(), model.AIGenerateDictionaryRequest{
+		NaturalLanguage: "为 Redis 生成弱密码字典",
+		Count:           10,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected GenerateAIDictionary to fail when LLM is unavailable")
+	}
+	if !strings.Contains(err.Error(), "AI生成密码失败") {
+		t.Fatalf("error = %v, want AI generation failure", err)
+	}
+}
+
+func TestGenerateAIDictionaryDoesNotFallbackWhenLLMFails(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	svc.SetLLMClient(&MockWeakPasswordLLMClient{Err: errors.New("model unavailable")})
+
+	_, err := svc.GenerateAIDictionary(t.Context(), model.AIGenerateDictionaryRequest{
+		NaturalLanguage: "为 Redis 生成弱密码字典",
+		Count:           10,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected GenerateAIDictionary to fail when LLM call fails")
+	}
+
+	var total int64
+	if countErr := svc.repo.DB().Model(&model.WeakPasswordDictionary{}).Where("dictionary_type = ?", model.DictTypeAIGenerated).Count(&total).Error; countErr != nil {
+		t.Fatal(countErr)
+	}
+	if total != 0 {
+		t.Fatalf("ai_generated dictionaries = %d, want 0 after LLM failure", total)
+	}
+}
+
+func TestGenerateAIDictionaryHonorsContextCancellation(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	llmClient := &cancelAwareWeakPasswordLLMClient{}
+	svc.SetLLMClient(llmClient)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := svc.GenerateAIDictionary(ctx, model.AIGenerateDictionaryRequest{
+		NaturalLanguage: "为 Redis 生成弱密码字典",
+		Count:           200,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected GenerateAIDictionary to fail when request context is canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if llmClient.Calls != 1 {
+		t.Fatalf("LLM calls = %d, want 1", llmClient.Calls)
+	}
+	var total int64
+	if countErr := svc.repo.DB().Model(&model.WeakPasswordDictionary{}).Where("dictionary_type = ?", model.DictTypeAIGenerated).Count(&total).Error; countErr != nil {
+		t.Fatal(countErr)
+	}
+	if total != 0 {
+		t.Fatalf("ai_generated dictionaries = %d, want 0 after context cancellation", total)
 	}
 }
 
@@ -464,6 +627,118 @@ func TestListTaskCollectionProgressPaginatesToolCalls(t *testing.T) {
 	}
 }
 
+func TestListTaskCollectionProgressIncludesFinalFailureSummary(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	taskID := uuid.New()
+	scanAppID := uuid.New()
+	hostID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Create(&model.WeakPasswordScanApplication{
+		ID:                 scanAppID,
+		TaskID:             taskID,
+		ScanHostID:         uuid.New(),
+		HostID:             hostID,
+		ApplicationName:    "PostgreSQL",
+		ApplicationType:    "postgresql",
+		Status:             model.AppStatusFailed,
+		ErrorCode:          model.ErrCodeConfigDiscoveryFailed,
+		ErrorMessage:       "AI 已尝试 10 次受控 Agent 工具调用，仍未定位到有效配置文件",
+		AgentToolCallCount: 10,
+		MaxAgentToolCalls:  10,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.CreateToolCall(&model.WeakPasswordAgentToolCall{
+		ID:                uuid.New(),
+		TaskID:            taskID,
+		ScanApplicationID: &scanAppID,
+		HostID:            hostID,
+		CallID:            "call-collect",
+		ToolName:          "WeakPassword.CollectCredentials",
+		Status:            "completed",
+		ExecutionTimeMs:   20,
+		CreatedAt:         now.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, total, err := svc.ListTaskCollectionProgress(taskID, 1, 10)
+	if err != nil {
+		t.Fatalf("ListTaskCollectionProgress returned error: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("total/len = %d/%d, want 2/2", total, len(items))
+	}
+	if items[0].ToolName != "WeakPassword.FinalDiagnosis" ||
+		items[0].Status != model.AppStatusFailed ||
+		items[0].ErrorCode != model.ErrCodeConfigDiscoveryFailed ||
+		!strings.Contains(items[0].ErrorMessage, "仍未定位") {
+		t.Fatalf("unexpected final summary: %#v", items[0])
+	}
+	if items[1].Round != 1 || items[1].ToolName != "WeakPassword.CollectCredentials" {
+		t.Fatalf("unexpected tool call row: %#v", items[1])
+	}
+}
+
+func TestAttemptCollectionRepairMergesAIExtractors(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	svc.SetLLMClient(&MockWeakPasswordLLMClient{Response: `{
+		"tool":"none",
+		"reason":"配置文件可读但字段未命中，补充 Redis masterauth 字段",
+		"new_paths":[],
+		"new_extractors":[
+			{"type":"line_key_value","password_selector":"masterauth","format_hint":"plaintext"},
+			{"type":"line_key_value","password_selector":"","format_hint":"plaintext"}
+		]
+	}`})
+
+	taskID := uuid.New()
+	hostID := uuid.New()
+	scanHostID := uuid.New()
+	scanAppID := uuid.New()
+	plan := CredentialCollectionPlan{
+		TaskID: taskID.String(),
+		PlanID: uuid.New().String(),
+		HostID: hostID.String(),
+		Applications: []CredentialApplication{{
+			Application: "redis",
+			ProfileID:   "redis_config_v1",
+			Paths:       []string{"/etc/redis/redis.conf"},
+			Extractors: []CredentialExtractor{
+				{Type: "line_key_value", PasswordSelector: "requirepass", FormatHint: model.CredTypePlaintext},
+			},
+		}},
+	}
+
+	repaired, err := svc.attemptCollectionRepair(t.Context(),
+		&model.WeakPasswordScanTask{ID: taskID, Name: "weakpass"},
+		&model.WeakPasswordScanHost{ID: scanHostID, TaskID: taskID, HostID: hostID},
+		&model.WeakPasswordScanApplication{ID: scanAppID, TaskID: taskID, ScanHostID: scanHostID, HostID: hostID, ApplicationName: "redis", ApplicationType: "redis"},
+		plan,
+		[]AgentCollectionError{{
+			Application: "redis",
+			SourcePath:  "/etc/redis/redis.conf",
+			ErrorCode:   model.ErrCodeFieldNotFound,
+			Message:     "password selector requirepass not found",
+			Retryable:   true,
+		}})
+	if err != nil {
+		t.Fatalf("attemptCollectionRepair returned error: %v", err)
+	}
+	if len(repaired.Applications) != 1 {
+		t.Fatalf("applications = %d, want 1", len(repaired.Applications))
+	}
+	extractors := repaired.Applications[0].Extractors
+	if len(extractors) != 2 {
+		t.Fatalf("extractors = %#v, want original plus valid AI extractor", extractors)
+	}
+	if extractors[1].PasswordSelector != "masterauth" || extractors[1].Type != "line_key_value" {
+		t.Fatalf("unexpected repaired extractors: %#v", extractors)
+	}
+}
+
 func TestListCandidateApplicationsIncludesScanStatusAndFindingSummary(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
 	candidateID := uuid.New()
@@ -576,6 +851,105 @@ func TestWeakPasswordAnalysisFiltersOfflineHosts(t *testing.T) {
 	}
 	if resp.Candidates[0].Hostname != "online-host" {
 		t.Fatalf("candidate hostname = %q, want online-host", resp.Candidates[0].Hostname)
+	}
+}
+
+func TestWeakPasswordAnalysisDeduplicatesApplicationsPerHost(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Exec(
+		`INSERT INTO hosts (id, ip_address, hostname, os_type, agent_version, last_heartbeat_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hostID.String(), "10.0.0.12", "redis-host", "linux", "test", now, now, now,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range []struct {
+		name       string
+		confidence float64
+		configJSON string
+		pidJSON    string
+	}{
+		{"redis-server", 0.80, `[]`, `[100]`},
+		{"redis", 0.96, `["/etc/redis/redis.conf"]`, `[200]`},
+	} {
+		if err := svc.repo.DB().Exec(
+			`INSERT INTO host_application_assets (id, host_id, hostname, ip_address, category, name, display_name, version, config_paths, listen_ports, related_pids, ai_confidence, status, collected_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			uuid.New().String(), hostID.String(), "redis-host", "10.0.0.12", "database", asset.name, asset.name, "7.2", asset.configJSON, `[6379]`, asset.pidJSON, asset.confidence, "active", now, now, now,
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp, err := svc.AnalyzeAssetApplications(t.Context(), model.AnalyzeAssetApplicationsRequest{}, nil)
+	if err != nil {
+		t.Fatalf("AnalyzeAssetApplications returned error: %v", err)
+	}
+	if resp.ApplicationAssetCount != 1 || resp.CandidateCount != 1 {
+		t.Fatalf("counts = assets:%d candidates:%d, want 1/1", resp.ApplicationAssetCount, resp.CandidateCount)
+	}
+	if len(resp.Candidates[0].CandidatePaths) == 0 || resp.Candidates[0].CandidatePaths[0] != "/etc/redis/redis.conf" {
+		t.Fatalf("candidate paths = %#v, want preferred config path", resp.Candidates[0].CandidatePaths)
+	}
+}
+
+func TestWeakPasswordAnalysisFallsBackWhenLLMFails(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	svc.SetLLMClient(&MockWeakPasswordLLMClient{Err: errors.New("model timeout")})
+	hostID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Exec(
+		`INSERT INTO hosts (id, ip_address, hostname, os_type, agent_version, last_heartbeat_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hostID.String(), "10.0.0.13", "redis-host", "linux", "test", now, now, now,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.DB().Exec(
+		`INSERT INTO host_application_assets (id, host_id, hostname, ip_address, category, name, display_name, version, config_paths, listen_ports, ai_confidence, status, collected_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uuid.New().String(), hostID.String(), "redis-host", "10.0.0.13", "database", "redis", "Redis", "7.2", `["/etc/redis/redis.conf"]`, `[6379]`, 0.96, "active", now, now, now,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := svc.AnalyzeAssetApplications(t.Context(), model.AnalyzeAssetApplicationsRequest{}, nil)
+	if err != nil {
+		t.Fatalf("AnalyzeAssetApplications returned error: %v", err)
+	}
+	if resp.CandidateCount != 1 || resp.Candidates[0].ApplicationType != "redis" {
+		t.Fatalf("unexpected fallback candidates: %#v", resp.Candidates)
+	}
+}
+
+func TestAnalyzeApplicationBatchRequiresCompleteCoverage(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	svc.SetLLMClient(&MockWeakPasswordLLMClient{Response: `{"needs":{"redis":"需要"},"skip":{}}`})
+
+	_, err := svc.analyzeApplicationBatch(t.Context(), []string{"redis", "mysql"})
+	if err == nil {
+		t.Fatal("expected incomplete AI response to fail")
+	}
+	if !strings.Contains(err.Error(), "missing application types") {
+		t.Fatalf("error = %v, want missing application types", err)
+	}
+}
+
+func TestAnalyzeApplicationBatchNormalizesReturnedTypes(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	svc.SetLLMClient(&MockWeakPasswordLLMClient{Response: `{"needs":{"Redis":"需要"},"skip":{"MySQL":"不需要"}}`})
+
+	results, err := svc.analyzeApplicationBatch(t.Context(), []string{"redis", "mysql"})
+	if err != nil {
+		t.Fatalf("analyzeApplicationBatch returned error: %v", err)
+	}
+	if !results["redis"] {
+		t.Fatalf("redis result = %v, want true", results["redis"])
+	}
+	if results["mysql"] {
+		t.Fatalf("mysql result = %v, want false", results["mysql"])
 	}
 }
 
@@ -854,7 +1228,7 @@ func newWeakPasswordTestService(t *testing.T) *WeakPasswordService {
 			ignored_at DATETIME,
 			created_at DATETIME
 		)`,
-		`CREATE UNIQUE INDEX idx_test_wp_candidates_host_type ON weak_password_candidate_applications(host_id, application_type)`,
+		`CREATE UNIQUE INDEX idx_test_wp_candidates_host_asset_type ON weak_password_candidate_applications(host_id, asset_id, application_type)`,
 		`CREATE TABLE weak_password_scan_tasks (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,

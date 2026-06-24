@@ -3,7 +3,7 @@
     <div class="page-toolbar">
       <div>
         <h1>{{ store.currentTask?.name || '弱密码任务详情' }}</h1>
-        <p>{{ store.currentTask?.status || '加载中' }}</p>
+        <p>{{ store.currentTask ? weakPasswordStatusLabel(store.currentTask.status) : '加载中' }}</p>
       </div>
       <div class="toolbar-actions">
         <el-button :icon="Back" @click="router.push('/risk/weak-password')">返回</el-button>
@@ -43,15 +43,22 @@
             <div class="primary-cell">{{ row.hostname || row.host_id }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="Agent" prop="agent_status" width="120" />
+        <el-table-column label="Agent 状态" width="120">
+          <template #default="{ row }">{{ weakPasswordStatusLabel(row.agent_status) }}</template>
+        </el-table-column>
         <el-table-column label="状态" width="150">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="采集记录" prop="collected_records" width="120" />
         <el-table-column label="命中" prop="matched_findings" width="100" />
-        <el-table-column label="失败原因" prop="error_code" min-width="180" />
+        <el-table-column label="失败原因" min-width="240">
+          <template #default="{ row }">
+            <div>{{ weakPasswordErrorCodeLabel(row.error_code) }}</div>
+            <div v-if="row.error_message" class="secondary-cell">{{ row.error_message }}</div>
+          </template>
+        </el-table-column>
       </el-table>
       <div v-if="store.hostTotal > 0" class="pagination-bar">
         <el-pagination
@@ -73,7 +80,9 @@
       <el-table :data="store.findings" class="dense-table">
         <el-table-column label="应用" prop="application_name" min-width="140" />
         <el-table-column label="账号" prop="account" min-width="120" />
-        <el-table-column label="凭据类型" prop="credential_type" width="150" />
+        <el-table-column label="凭据类型" width="150">
+          <template #default="{ row }">{{ weakPasswordCredentialTypeLabel(row.credential_type) }}</template>
+        </el-table-column>
         <el-table-column label="命中密码" width="150">
           <template #default="{ row }">
             <span class="password-mask">{{ row.matched_password_mask }}</span>
@@ -81,7 +90,7 @@
         </el-table-column>
         <el-table-column label="状态" width="180">
           <template #default="{ row }">
-            <el-tag :type="row.match_status === 'confirmed' ? 'success' : 'warning'">{{ row.match_status }}</el-tag>
+            <el-tag :type="row.match_status === 'confirmed' ? 'success' : 'warning'">{{ weakPasswordMatchStatusLabel(row.match_status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="配置来源" min-width="220">
@@ -116,20 +125,22 @@
       <el-table :data="store.errors" class="dense-table">
         <el-table-column label="应用" prop="application_name" min-width="140" />
         <el-table-column label="轮次" prop="round" width="90" />
-        <el-table-column label="工具" prop="tool_name" min-width="230" />
+        <el-table-column label="工具" min-width="230">
+          <template #default="{ row }">{{ weakPasswordToolNameLabel(row.tool_name) }}</template>
+        </el-table-column>
         <el-table-column label="状态" width="130">
           <template #default="{ row }">
-            <el-tag :type="row.status === 'completed' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="错误码" min-width="170">
-          <template #default="{ row }">{{ row.error_code || '-' }}</template>
+          <template #default="{ row }">{{ weakPasswordErrorCodeLabel(row.error_code) }}</template>
         </el-table-column>
         <el-table-column label="耗时" width="110">
           <template #default="{ row }">{{ row.execution_time_ms || 0 }}ms</template>
         </el-table-column>
         <el-table-column label="说明" min-width="240">
-          <template #default="{ row }">{{ row.error_message || '-' }}</template>
+          <template #default="{ row }">{{ weakPasswordErrorMessageLabel(row.error_message, row.error_code) }}</template>
         </el-table-column>
       </el-table>
       <div v-if="store.errorTotal > 10" class="pagination-bar">
@@ -150,7 +161,7 @@
       <div v-if="revealedFinding" class="password-detail">
         <div class="fact-row"><span>应用</span><strong>{{ revealedFinding.application_name }}</strong></div>
         <div class="fact-row"><span>账号</span><strong>{{ revealedFinding.account || '-' }}</strong></div>
-        <div class="fact-row"><span>凭据类型</span><strong>{{ revealedFinding.credential_type }}</strong></div>
+        <div class="fact-row"><span>凭据类型</span><strong>{{ weakPasswordCredentialTypeLabel(revealedFinding.credential_type) }}</strong></div>
         <div class="fact-row password-row"><span>完整密码</span><code>{{ revealedFinding.matched_password }}</code></div>
         <div class="fact-row"><span>配置来源</span><strong>{{ revealedFinding.source_path || '-' }}</strong></div>
       </div>
@@ -169,6 +180,14 @@ import { Back, Refresh } from '@element-plus/icons-vue'
 import { revealWeakPasswordFinding } from '@/api/weakPassword'
 import { useWeakPasswordStore } from '@/store/weakPassword'
 import type { RevealedWeakPasswordFinding } from '@/types/weakPassword'
+import {
+  weakPasswordCredentialTypeLabel,
+  weakPasswordErrorCodeLabel,
+  weakPasswordErrorMessageLabel,
+  weakPasswordMatchStatusLabel,
+  weakPasswordStatusLabel,
+  weakPasswordToolNameLabel,
+} from '@/utils/weakPasswordLabels'
 
 const route = useRoute()
 const router = useRouter()
@@ -229,8 +248,8 @@ function canDeleteTask(status: string) {
 
 function statusType(status: string) {
   if (status === 'completed') return 'success'
-  if (status === 'failed' || status === 'partial_failed') return 'danger'
-  if (status === 'matching' || status === 'collecting') return 'warning'
+  if (['failed', 'partial_failed'].includes(status)) return 'danger'
+  if (['matching', 'collecting', 'collecting_credentials', 'repairing', 'repairing_collection', 'analyzing_assets', 'pending', 'executing'].includes(status)) return 'warning'
   return 'info'
 }
 

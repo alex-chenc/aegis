@@ -27,6 +27,11 @@ request.interceptors.response.use(
     return data !== undefined ? data : response.data
   },
   error => {
+    if (error.code === 'ECONNABORTED' || String(error.message || '').toLowerCase().includes('timeout')) {
+      const timeoutMsg = '请求超时，请减少生成数量或稍后重试'
+      ElMessage.error(timeoutMsg)
+      return Promise.reject(new Error(timeoutMsg))
+    }
     // 处理 HTTP 错误
     if (error.response) {
       // 服务器返回错误状态码

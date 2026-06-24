@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS weak_password_candidate_applications (
 CREATE INDEX IF NOT EXISTS idx_wp_candidates_analysis ON weak_password_candidate_applications(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_wp_candidates_host ON weak_password_candidate_applications(host_id);
 CREATE INDEX IF NOT EXISTS idx_wp_candidates_asset ON weak_password_candidate_applications(asset_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wp_candidates_host_asset_type ON weak_password_candidate_applications(host_id, asset_id, application_type);
 
 -- 4. Weak Password Collection Plans (采集计划)
 CREATE TABLE IF NOT EXISTS weak_password_collection_plans (

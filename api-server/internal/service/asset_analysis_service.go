@@ -16,7 +16,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const applicationAnalysisProcessBatchSize = 50
+const (
+	applicationAnalysisProcessBatchSize = 50
+	applicationAnalysisBatchTimeout     = 90 * time.Second
+)
 
 // AssetAnalysisService 资产分析服务
 type AssetAnalysisService struct {
@@ -110,7 +113,9 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 		chunkSnapshot.Processes = batch
 
 		prompt := s.buildAnalysisPrompt(chunkSnapshot, i+1, len(batches))
-		response, err := s.analyzeWithReAct(ctx, llmClient, toolExecutor, prompt)
+		batchCtx, cancel := context.WithTimeout(ctx, applicationAnalysisBatchTimeout)
+		response, err := s.analyzeWithReAct(batchCtx, llmClient, toolExecutor, prompt)
+		cancel()
 		if err != nil {
 			failedBatches++
 			if firstBatchErr == nil {
@@ -121,6 +126,7 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 				zap.String("host_id", hostID.String()),
 				zap.Int("batch", i+1),
 				zap.Int("total_batches", len(batches)),
+				zap.Duration("timeout", applicationAnalysisBatchTimeout),
 				zap.Error(err))
 			continue
 		}
@@ -498,6 +504,17 @@ func (s *AssetAnalysisService) saveApplicationAnalysisResult(hostID uuid.UUID, s
 				zap.String("app_name", app.Name),
 				zap.Error(err))
 		} else {
+			if removed, err := s.repo.DeactivateDuplicateApplicationAssets(hostID, applicationDedupeNames(app), asset.Fingerprint); err != nil {
+				s.logger.Warn("failed to deactivate duplicate application assets",
+					zap.String("host_id", hostID.String()),
+					zap.String("app_name", app.Name),
+					zap.Error(err))
+			} else if removed > 0 {
+				s.logger.Info("duplicate application assets deactivated",
+					zap.String("host_id", hostID.String()),
+					zap.String("app_name", app.Name),
+					zap.Int64("count", removed))
+			}
 			savedCount++
 		}
 	}
@@ -792,29 +809,44 @@ func (s *AssetAnalysisService) validateAnalysisResult(result *ApplicationAnalysi
 		"unknown":       true,
 	}
 
+	filtered := make([]IdentifiedApplication, 0, len(result.Applications))
 	for i, app := range result.Applications {
+		app = normalizeIdentifiedApplication(app)
 		if strings.TrimSpace(app.Status) == "" {
-			result.Applications[i].Status = "active"
+			app.Status = "active"
 		}
 
 		// 校验分类
 		if !validCategories[app.Category] {
-			result.Applications[i].Category = "unknown"
+			app.Category = "unknown"
 		}
 
 		// 校验置信度
 		if app.Confidence < 0 || app.Confidence > 1 {
-			result.Applications[i].Confidence = 0.5
+			app.Confidence = 0.5
 		}
 
 		// 校验置信度阈值
 		if app.Confidence < 0.3 {
-			result.Applications[i].Status = "needs_review"
+			app.Status = "needs_review"
 		}
+
+		if !isMarketVisibleApplication(app) {
+			if s.logger != nil {
+				s.logger.Debug("filtered non-market-visible application asset",
+					zap.String("name", app.Name),
+					zap.String("display_name", app.DisplayName),
+					zap.String("category", app.Category))
+			}
+			continue
+		}
+
+		filtered = append(filtered, app)
+		result.Applications[i] = app
 	}
 
 	// 去重处理
-	result.Applications = deduplicateApplications(result.Applications)
+	result.Applications = deduplicateApplications(filtered)
 
 	return nil
 }
@@ -881,7 +913,10 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 }
 
 func applicationDedupeKey(app IdentifiedApplication) string {
-	appType := normalizeApplicationType(firstNonEmpty(app.Name, app.Category))
+	appType := publicApplicationType(firstNonEmpty(app.Name, app.Category))
+	if appType == "" {
+		appType = publicApplicationType(app.DisplayName)
+	}
 	if appType != "" && appType != "unknown" {
 		return "app:" + appType
 	}
@@ -890,6 +925,41 @@ func applicationDedupeKey(app IdentifiedApplication) string {
 		return ""
 	}
 	return "name:" + name
+}
+
+func applicationDedupeNames(app IdentifiedApplication) []string {
+	appType := normalizeApplicationType(firstNonEmpty(app.Name, app.Category, app.DisplayName))
+	aliases := map[string][]string{
+		"redis":      {"redis", "redis-server"},
+		"postgresql": {"postgresql", "postgres", "postmaster"},
+		"mysql":      {"mysql", "mysqld"},
+		"mariadb":    {"mariadb", "mariadbd"},
+		"nginx":      {"nginx"},
+		"apache":     {"apache", "apache2", "httpd"},
+		"openssh":    {"openssh", "ssh", "sshd", "sshd-session"},
+		"tomcat":     {"tomcat", "catalina"},
+		"ftp":        {"ftp", "vsftpd", "proftpd"},
+	}
+
+	values := []string{app.Name, app.DisplayName, app.Category, appType}
+	if names, ok := aliases[appType]; ok {
+		values = append(values, names...)
+	}
+
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
 }
 
 // mergePIDs 合并 PID 列表，去重
@@ -988,6 +1058,137 @@ func (s *AssetAnalysisService) convertToApplicationAsset(hostID uuid.UUID, snaps
 		LastSeenAt:    time.Now(),
 		CollectedAt:   time.Now(),
 	}
+}
+
+type marketApplicationMeta struct {
+	DisplayName string
+	Category    string
+}
+
+var marketVisibleApplicationCatalog = map[string]marketApplicationMeta{
+	"redis":            {DisplayName: "Redis", Category: "database"},
+	"mysql":            {DisplayName: "MySQL", Category: "database"},
+	"mariadb":          {DisplayName: "MariaDB", Category: "database"},
+	"postgresql":       {DisplayName: "PostgreSQL", Category: "database"},
+	"mongodb":          {DisplayName: "MongoDB", Category: "database"},
+	"elasticsearch":    {DisplayName: "Elasticsearch", Category: "database"},
+	"oracle":           {DisplayName: "Oracle Database", Category: "database"},
+	"sqlserver":        {DisplayName: "SQL Server", Category: "database"},
+	"nginx":            {DisplayName: "Nginx", Category: "web_service"},
+	"apache":           {DisplayName: "Apache HTTP Server", Category: "web_service"},
+	"tomcat":           {DisplayName: "Tomcat", Category: "web_service"},
+	"jetty":            {DisplayName: "Jetty", Category: "web_service"},
+	"spring_boot":      {DisplayName: "Spring Boot", Category: "web_framework"},
+	"django":           {DisplayName: "Django", Category: "web_framework"},
+	"flask":            {DisplayName: "Flask", Category: "web_framework"},
+	"laravel":          {DisplayName: "Laravel", Category: "web_framework"},
+	"express":          {DisplayName: "Express", Category: "web_framework"},
+	"weblogic":         {DisplayName: "WebLogic", Category: "web_service"},
+	"jboss":            {DisplayName: "JBoss", Category: "web_service"},
+	"wildfly":          {DisplayName: "WildFly", Category: "web_service"},
+	"iis":              {DisplayName: "IIS", Category: "web_service"},
+	"phpmyadmin":       {DisplayName: "phpMyAdmin", Category: "web_service"},
+	"grafana":          {DisplayName: "Grafana", Category: "web_service"},
+	"kibana":           {DisplayName: "Kibana", Category: "web_service"},
+	"jenkins":          {DisplayName: "Jenkins", Category: "web_service"},
+	"gitlab":           {DisplayName: "GitLab", Category: "web_service"},
+	"harbor":           {DisplayName: "Harbor", Category: "web_service"},
+	"sonarqube":        {DisplayName: "SonarQube", Category: "web_service"},
+	"nexus":            {DisplayName: "Nexus Repository", Category: "web_service"},
+	"rabbitmq":         {DisplayName: "RabbitMQ", Category: "web_service"},
+	"kafka":            {DisplayName: "Kafka", Category: "web_service"},
+	"zookeeper":        {DisplayName: "ZooKeeper", Category: "web_service"},
+	"openldap":         {DisplayName: "OpenLDAP", Category: "other"},
+	"active_directory": {DisplayName: "Active Directory", Category: "other"},
+	"openssh":          {DisplayName: "OpenSSH", Category: "other"},
+	"ftp":              {DisplayName: "FTP Server", Category: "other"},
+	"ollama":           {DisplayName: "Ollama", Category: "llm_service"},
+	"localai":          {DisplayName: "LocalAI", Category: "llm_service"},
+	"vllm":             {DisplayName: "vLLM", Category: "llm_service"},
+	"llm_service":      {DisplayName: "LLM Service", Category: "llm_service"},
+	"ai_agent":         {DisplayName: "AI Agent", Category: "ai_agent"},
+	"mcp_server":       {DisplayName: "MCP Server", Category: "mcp_server"},
+}
+
+var nonApplicationProcessNames = map[string]struct{}{
+	"bash": {}, "sh": {}, "zsh": {}, "dash": {}, "fish": {},
+	"python": {}, "python2": {}, "python3": {}, "node": {}, "java": {}, "go": {}, "ruby": {}, "php": {},
+	"systemd": {}, "cron": {}, "crond": {}, "ss": {}, "ps": {}, "top": {}, "sleep": {},
+	"dockerd": {}, "docker": {}, "containerd": {}, "containerd-shim": {}, "kubelet": {},
+	"node_exporter": {}, "prometheus": {}, "telegraf": {}, "collectd": {}, "zabbix_agent": {},
+	"rsyslog": {}, "fluentd": {}, "filebeat": {}, "logstash": {},
+}
+
+func normalizeIdentifiedApplication(app IdentifiedApplication) IdentifiedApplication {
+	app.Name = strings.TrimSpace(app.Name)
+	app.DisplayName = strings.TrimSpace(app.DisplayName)
+	app.Category = strings.TrimSpace(app.Category)
+	app.Version = strings.TrimSpace(app.Version)
+	app.InstallPath = strings.TrimSpace(app.InstallPath)
+	app.StartPath = strings.TrimSpace(app.StartPath)
+	app.RunUser = strings.TrimSpace(app.RunUser)
+	app.Status = strings.TrimSpace(app.Status)
+
+	if appType := publicApplicationType(firstNonEmpty(app.Name, app.DisplayName, app.Category)); appType != "" {
+		if meta, ok := marketVisibleApplicationCatalog[appType]; ok {
+			app.Name = appType
+			if app.DisplayName == "" || isGenericApplicationLabel(app.DisplayName) {
+				app.DisplayName = meta.DisplayName
+			}
+			if app.Category == "" || app.Category == "unknown" || app.Category == "other" {
+				app.Category = meta.Category
+			}
+		}
+	}
+	return app
+}
+
+func isMarketVisibleApplication(app IdentifiedApplication) bool {
+	appType := publicApplicationType(firstNonEmpty(app.Name, app.DisplayName, app.Category))
+	if appType == "" {
+		return false
+	}
+	if _, excluded := nonApplicationProcessNames[appType]; excluded {
+		return false
+	}
+	if looksLikeInternalApplicationName(app.Name) || looksLikeInternalApplicationName(app.DisplayName) {
+		return false
+	}
+	_, known := marketVisibleApplicationCatalog[appType]
+	return known
+}
+
+func publicApplicationType(value string) string {
+	normalized := normalizeApplicationType(value)
+	if normalized == "" || normalized == "unknown" {
+		return ""
+	}
+	if _, ok := marketVisibleApplicationCatalog[normalized]; ok {
+		return normalized
+	}
+	return ""
+}
+
+func isGenericApplicationLabel(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "app", "application", "service", "server", "web", "web_service", "database", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeInternalApplicationName(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	if lower == "" {
+		return false
+	}
+	for _, token := range []string{"internal", "自研", "内部", "custom", "script", "业务", "myapp", "demo"} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return strings.HasSuffix(lower, ".sh") || strings.HasSuffix(lower, ".py") || strings.HasSuffix(lower, ".jar")
 }
 
 // ApplicationAnalysisResult 应用分析结果
@@ -1133,6 +1334,16 @@ const applicationAnalysisSystemPrompt = `你是主机应用识别专家。根据
 3. 评估识别置信度（0-1）
 4. 提供识别证据
 
+## 公开应用约束（必须遵守）
+只返回市面、开源社区或公开厂商资料中可检索到的标准应用/服务，例如 Redis、MySQL、PostgreSQL、Nginx、Apache、Tomcat、Jenkins、Grafana、Ollama 等。
+
+禁止返回：
+- 自研业务系统、内部工具、自定义脚本、临时命令
+- bash/sh/python/node/java/go/php 等语言运行时本身
+- systemd/cron/docker/containerd/kubelet 等系统基础服务或容器运行时
+- node_exporter/prometheus/filebeat/rsyslog 等监控或日志 Agent
+- 无法确认公开产品身份的进程
+
 ## 可用工具
 当无法从进程快照确定版本或需要更多信息时，可以调用以下工具：
 
@@ -1184,6 +1395,7 @@ Action Input: [JSON 格式参数]
 - 同一个 name 只能出现一次
 - related_pids 不能重复出现在不同应用中
 - 相同 install_path 的进程必须合并
+- 同一个主机上的同一标准应用只能返回一条，多个实例的端口、PID、配置路径合并到同一条
 
 ## 最终输出格式
 当收集到足够信息后，输出 Final Answer：
@@ -1211,5 +1423,7 @@ Final Answer: {"applications": [...]}
 - 不要编造不存在的应用
 - 版本号优先来自工具调用结果，其次来自进程快照证据
 - 置信度低于 0.3 的标记为 needs_review
+- name 必须使用公开应用的标准小写标识，如 redis/mysql/postgresql/nginx/apache/tomcat/jenkins/grafana/ollama
+- 不能确定为公开应用时不要返回，而不是返回 unknown
 - 如果本分片没有可识别应用，输出 Final Answer: {"applications":[]}
 - **必须合并相关进程，避免重复应用**`

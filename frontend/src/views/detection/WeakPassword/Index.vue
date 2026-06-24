@@ -119,12 +119,15 @@
             <el-table-column label="任务" min-width="220" prop="name" />
             <el-table-column label="状态" width="150">
               <template #default="{ row }">
-                <el-tag :type="taskStatusType(row.status)">{{ row.status }}</el-tag>
+                <el-tag :type="taskStatusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="进度" min-width="180">
               <template #default="{ row }">
-                <el-progress :percentage="row.progress || 0" :stroke-width="10" />
+                <div class="progress-cell">
+                  <el-progress :percentage="row.progress || 0" :stroke-width="10" />
+                  <span v-if="row.current_stage" class="secondary-cell">{{ weakPasswordStatusLabel(row.current_stage) }}</span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="命中" width="90" prop="matched_findings" />
@@ -215,13 +218,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Collection, Cpu, Key, Refresh, Search } from '@element-plus/icons-vue'
 import { revealWeakPasswordFinding } from '@/api/weakPassword'
 import { useWeakPasswordStore } from '@/store/weakPassword'
 import type { WeakPasswordCandidateApplication, WeakPasswordDictionary } from '@/types/weakPassword'
+import { weakPasswordStatusLabel } from '@/utils/weakPasswordLabels'
 
 const router = useRouter()
 const store = useWeakPasswordStore()
@@ -235,6 +239,7 @@ const selectedDictionaryIds = ref<string[]>([])
 const repairCollectionErrors = ref(true)
 const detectionRounds = ref(10)
 const revealedPasswords = reactive<Record<string, string>>({})
+let taskRefreshTimer: number | undefined
 
 const scope = reactive({
   host_ids: [] as string[],
@@ -272,6 +277,8 @@ const availableDictionaries = computed(() => {
   }
   return items
 })
+
+const hasRunningTasks = computed(() => store.tasks.some(task => isRunningTaskStatus(task.status)))
 
 async function runAnalysis() {
   scope.online_agents_only = true
@@ -344,6 +351,7 @@ async function confirmCheck() {
     dictionary_policy,
     ai_policy,
   })
+  await store.fetchTasks()
   checkVisible.value = false
   activeTab.value = 'tasks'
   ElMessage.success(`已创建 ${result.created.length} 个检测任务，跳过 ${result.skipped.length} 个离线或不可检测应用`)
@@ -396,7 +404,32 @@ async function deleteTask(taskId: string) {
 }
 
 function canDeleteTask(status: string) {
-  return !['pending', 'analyzing_assets', 'collecting_credentials', 'repairing_collection', 'matching'].includes(status)
+  return !isRunningTaskStatus(status)
+}
+
+function isRunningTaskStatus(status: string) {
+  return ['pending', 'analyzing_assets', 'collecting_credentials', 'repairing_collection', 'matching'].includes(status)
+}
+
+function startTaskAutoRefresh() {
+  if (taskRefreshTimer !== undefined) return
+  taskRefreshTimer = window.setInterval(() => {
+    store.fetchTasks()
+  }, 5000)
+}
+
+function stopTaskAutoRefresh() {
+  if (taskRefreshTimer === undefined) return
+  window.clearInterval(taskRefreshTimer)
+  taskRefreshTimer = undefined
+}
+
+function syncTaskAutoRefresh() {
+  if (activeTab.value === 'tasks' && hasRunningTasks.value) {
+    startTaskAutoRefresh()
+    return
+  }
+  stopTaskAutoRefresh()
 }
 
 function confidenceLabel(value: number) {
@@ -426,12 +459,19 @@ function scanStatusType(status: string) {
 function taskStatusType(status: string) {
   if (status === 'completed') return 'success'
   if (status === 'failed' || status === 'partial_failed') return 'danger'
-  if (status === 'matching' || status === 'collecting_credentials') return 'warning'
+  if (['matching', 'collecting_credentials', 'repairing_collection', 'analyzing_assets', 'pending'].includes(status)) return 'warning'
   return 'info'
 }
 
-onMounted(() => {
-  refreshAll()
+watch([activeTab, hasRunningTasks], syncTaskAutoRefresh)
+
+onMounted(async () => {
+  await refreshAll()
+  syncTaskAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopTaskAutoRefresh()
 })
 </script>
 
@@ -509,10 +549,15 @@ onMounted(() => {
 }
 
 .path-list,
-.dictionary-list {
+.dictionary-list,
+.progress-cell {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.progress-cell {
+  flex-direction: column;
 }
 
 .dictionary-list {

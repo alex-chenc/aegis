@@ -378,8 +378,7 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname
 				identity = command
 			}
 		}
-		fpInput := fmt.Sprintf("%s:%s:%s:%s", hostID.String(), ai.Category, ai.Name, identity)
-		fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fpInput)))
+		fp := generateAppFingerprint(hostID.String(), ai.Category, ai.Name, identity, ai.ListenPorts, ai.PIDs)
 
 		listenPortsJSON := mustMarshalJSON(ai.ListenPorts)
 		configPaths := []string{}

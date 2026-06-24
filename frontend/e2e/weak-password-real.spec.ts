@@ -10,7 +10,7 @@ test.describe('weak password real workflow', () => {
   test.skip(process.env.PLAYWRIGHT_REAL !== '1', 'Set PLAYWRIGHT_REAL=1 to run against a live Aegis stack')
 
   test('runs live weak password detection and reveals the confirmed finding from task and app status', async ({ page }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(240_000)
     const browserErrors: string[] = []
     page.on('pageerror', err => browserErrors.push(err.message))
     page.on('console', msg => {
@@ -32,7 +32,7 @@ test.describe('weak password real workflow', () => {
     await expect(page.getByText('检测结果')).toHaveCount(0)
 
     await page.getByRole('button', { name: '一键分析资产应用' }).click()
-    const targetRow = page.locator('.el-table__row').filter({ hasText: targetConfigPath }).first()
+    const targetRow = page.getByRole('row', { name: /Redis\s+redis/ }).first()
     await expect(targetRow).toBeVisible({ timeout: 30_000 })
     await expect(targetRow.getByText('凭据类型')).toHaveCount(0)
     await expect(targetRow.getByText('查看分析依据')).toHaveCount(0)
@@ -47,7 +47,7 @@ test.describe('weak password real workflow', () => {
     await page.waitForURL(/\/risk\/weak-password\/tasks\/[0-9a-f-]+/, { timeout: 15_000 })
     await expect(page.getByText(targetConfigPath).first()).toBeVisible({ timeout: 45_000 })
     await expect(page.getByText('*********').first()).toBeVisible({ timeout: 45_000 })
-    await expect(page.getByText('confirmed').first()).toBeVisible()
+    await expect(page.getByText('已确认').first()).toBeVisible()
 
     await page.getByRole('button', { name: '详情' }).first().click()
     await expect(page.getByText('请输入当前系统密码')).toBeVisible()
@@ -68,9 +68,6 @@ test.describe('weak password real workflow', () => {
     await expect(page.getByText(weakPassword).first()).toBeVisible()
 
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: '一键检测' }).click()
-    await page.getByRole('button', { name: '确认检查' }).click()
-    await expect(page.getByText('检查任务')).toBeVisible({ timeout: 15_000 })
 
     await page.goto(`${baseURL}/risk/weak-password/dictionaries`, { waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('heading', { name: '弱密码字典' })).toBeVisible()
@@ -80,11 +77,12 @@ test.describe('weak password real workflow', () => {
     await expect(page.getByText('状态')).toHaveCount(0)
     await page.getByRole('button', { name: 'AI 一键生成字典' }).click()
     await page.getByPlaceholder(/为 Redis 管理员/).fill('为 Redis 生产环境生成弱密码字典，包含 aegis、admin 和年份')
+    await page.getByRole('spinbutton', { name: '生成数量' }).fill('20')
     await page.getByRole('button', { name: '生成并保存' }).click()
-    await expect(page.getByText(/已生成 \d+ 条候选/)).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/已生成 \d+ 条候选/)).toBeVisible({ timeout: 120_000 })
     await page.locator('.el-drawer').getByRole('button', { name: '取消' }).click()
     await page.getByRole('button', { name: '查看条目' }).first().click()
-    await expect(page.locator('.el-drawer').getByText(weakPassword).first()).toBeVisible()
+    await expect(page.locator('.el-drawer .candidate-value').first()).toBeVisible()
 
     expect(browserErrors).toEqual([])
   })

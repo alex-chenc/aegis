@@ -126,6 +126,23 @@ func (r *AssetCollectionRepository) UpsertApplicationAsset(asset *model.HostAppl
 	}).Create(asset).Error
 }
 
+// DeactivateDuplicateApplicationAssets marks older same-host application records as deleted.
+func (r *AssetCollectionRepository) DeactivateDuplicateApplicationAssets(hostID uuid.UUID, names []string, keepFingerprint string) (int64, error) {
+	if len(names) == 0 || keepFingerprint == "" {
+		return 0, nil
+	}
+	result := r.db.Model(&model.HostApplicationAsset{}).
+		Where("host_id = ?", hostID).
+		Where("status IN ?", []string{"active", "needs_review"}).
+		Where("fingerprint <> ?", keepFingerprint).
+		Where("LOWER(name) IN ?", names).
+		Updates(map[string]interface{}{
+			"status":     "deleted",
+			"updated_at": time.Now(),
+		})
+	return result.RowsAffected, result.Error
+}
+
 // CreateProcessSnapshot 创建进程快照
 func (r *AssetCollectionRepository) CreateProcessSnapshot(snapshot *model.HostProcessSnapshot) error {
 	return r.db.Create(snapshot).Error
@@ -312,18 +329,18 @@ func (r *AssetCollectionRepository) GetLatestSoftwareByHost(hostID uuid.UUID) (*
 
 // ApplicationAssetWithHost 带主机信息的应用资产
 type ApplicationAssetWithHost struct {
-	ID          uuid.UUID  `json:"id"`
-	HostID      uuid.UUID  `json:"host_id"`
-	Hostname    string     `json:"hostname"`
-	IPAddress   string     `json:"ip_address"`
-	OsType      string     `json:"os_type"`
-	Name        string     `json:"name"`
-	DisplayName string     `json:"display_name"`
-	Version     string     `json:"version"`
-	Category    string     `json:"category"`
-	ListenPorts string     `json:"listen_ports"`
-	RunUser     string     `json:"run_user"`
-	CollectedAt time.Time  `json:"collected_at"`
+	ID          uuid.UUID `json:"id"`
+	HostID      uuid.UUID `json:"host_id"`
+	Hostname    string    `json:"hostname"`
+	IPAddress   string    `json:"ip_address"`
+	OsType      string    `json:"os_type"`
+	Name        string    `json:"name"`
+	DisplayName string    `json:"display_name"`
+	Version     string    `json:"version"`
+	Category    string    `json:"category"`
+	ListenPorts string    `json:"listen_ports"`
+	RunUser     string    `json:"run_user"`
+	CollectedAt time.Time `json:"collected_at"`
 }
 
 // SearchApplicationAssets 按应用名搜索哪些主机安装了该应用（JOIN hosts 表）

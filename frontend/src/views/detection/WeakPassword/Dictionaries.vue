@@ -72,7 +72,8 @@
           />
         </el-form-item>
         <el-form-item label="生成数量">
-          <el-input-number v-model="aiForm.count" :min="1" :max="1000" />
+          <el-input-number v-model="aiForm.count" :min="1" :max="50" />
+          <span class="form-tip">单次最多 50 条，生成过程会等待 AI 实际返回。</span>
         </el-form-item>
         <el-form-item>
           <el-checkbox v-model="aiForm.deduplicate_with_default">与内置字典去重</el-checkbox>
@@ -133,7 +134,7 @@ const selectedDictionary = ref<WeakPasswordDictionary | null>(null)
 
 const aiForm = reactive({
   natural_language: '',
-  count: 200,
+  count: 20,
   deduplicate_with_default: true,
 })
 
@@ -262,6 +263,12 @@ onMounted(() => {
 .candidate-value {
   color: #0f172a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.form-tip {
+  margin-left: 12px;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .drawer-form {

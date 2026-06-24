@@ -63,10 +63,10 @@ func (WeakPasswordAssetAppAnalysis) TableName() string {
 type WeakPasswordCandidateApplication struct {
 	ID                 uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	AnalysisID         uuid.UUID      `gorm:"type:uuid;not null" json:"analysis_id"`
-	HostID             uuid.UUID      `gorm:"type:uuid;not null" json:"host_id"`
-	AssetID            *uuid.UUID     `gorm:"type:uuid" json:"asset_id"`
+	HostID             uuid.UUID      `gorm:"type:uuid;not null;uniqueIndex:idx_wp_candidates_host_asset_type" json:"host_id"`
+	AssetID            *uuid.UUID     `gorm:"type:uuid;uniqueIndex:idx_wp_candidates_host_asset_type" json:"asset_id"`
 	ApplicationName    string         `gorm:"type:varchar(255);not null" json:"application_name"`
-	ApplicationType    string         `gorm:"type:varchar(64);not null" json:"application_type"`
+	ApplicationType    string         `gorm:"type:varchar(64);not null;uniqueIndex:idx_wp_candidates_host_asset_type" json:"application_type"`
 	ApplicationVersion string         `gorm:"type:varchar(128)" json:"application_version"`
 	ProfileID          string         `gorm:"type:varchar(128)" json:"profile_id"`
 	Confidence         float64        `gorm:"default:0" json:"confidence"`

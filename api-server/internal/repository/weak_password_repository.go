@@ -68,15 +68,26 @@ func (r *WeakPasswordRepository) CreateAnalysisWithCandidates(analysis *model.We
 			return err
 		}
 		if len(candidates) > 0 {
-			// Use upsert to avoid duplicate candidates based on (host_id, application_type)
-			// This ensures only one candidate per application type per host
+			// Use the same conflict target as the database constraint so repeated
+			// analyses refresh the latest candidate row for the same collected asset.
 			for i := range candidates {
 				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "host_id"}, {Name: "application_type"}},
+					Columns:   []clause.Column{{Name: "host_id"}, {Name: "asset_id"}, {Name: "application_type"}},
 					DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "confidence", "candidate_paths_json", "extractor_plan_json", "asset_evidence_json", "ai_reason", "status"}),
 				}).Create(&candidates[i]).Error; err != nil {
 					return err
 				}
+				q := tx.Where("host_id = ? AND application_type = ?", candidates[i].HostID, candidates[i].ApplicationType)
+				if candidates[i].AssetID == nil {
+					q = q.Where("asset_id IS NULL")
+				} else {
+					q = q.Where("asset_id = ?", *candidates[i].AssetID)
+				}
+				var persisted model.WeakPasswordCandidateApplication
+				if err := q.First(&persisted).Error; err != nil {
+					return err
+				}
+				candidates[i] = persisted
 			}
 		}
 		return nil
@@ -323,19 +334,29 @@ func (r *WeakPasswordRepository) LastToolCall(taskID uuid.UUID) (*model.WeakPass
 }
 
 func (r *WeakPasswordRepository) ListToolCalls(taskID uuid.UUID, page, pageSize int) ([]model.WeakPasswordAgentToolCall, int64, error) {
-	var calls []model.WeakPasswordAgentToolCall
-	var total int64
-	q := r.db.Model(&model.WeakPasswordAgentToolCall{}).Where("task_id = ?", taskID)
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
 	if page <= 0 {
 		page = 1
 	}
 	if pageSize <= 0 {
 		pageSize = 10
 	}
-	err := q.Order("created_at ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&calls).Error
+	return r.ListToolCallsByOffset(taskID, (page-1)*pageSize, pageSize)
+}
+
+func (r *WeakPasswordRepository) ListToolCallsByOffset(taskID uuid.UUID, offset, limit int) ([]model.WeakPasswordAgentToolCall, int64, error) {
+	var calls []model.WeakPasswordAgentToolCall
+	var total int64
+	q := r.db.Model(&model.WeakPasswordAgentToolCall{}).Where("task_id = ?", taskID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	err := q.Order("created_at ASC").Offset(offset).Limit(limit).Find(&calls).Error
 	return calls, total, err
 }
 
