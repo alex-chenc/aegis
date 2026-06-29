@@ -120,9 +120,21 @@ func (r *AssetCollectionRepository) UpsertSoftwareAsset(asset *model.HostSoftwar
 
 // UpsertApplicationAsset Upsert 应用资产
 func (r *AssetCollectionRepository) UpsertApplicationAsset(asset *model.HostApplicationAsset) error {
+	updates := clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "review_status", "status", "last_seen_at", "collected_at", "updated_at"})
+	updates = append(updates,
+		clause.Assignment{
+			Column: clause.Column{Name: "version"},
+			Value:  gorm.Expr("CASE WHEN excluded.version IS NOT NULL AND excluded.version <> '' THEN excluded.version ELSE host_application_assets.version END"),
+		},
+		clause.Assignment{
+			Column: clause.Column{Name: "version_source"},
+			Value:  gorm.Expr("CASE WHEN excluded.version IS NOT NULL AND excluded.version <> '' THEN excluded.version_source ELSE host_application_assets.version_source END"),
+		},
+	)
+
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "host_id"}, {Name: "fingerprint"}},
-		DoUpdates: clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "version", "version_source", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "last_seen_at", "collected_at", "updated_at"}),
+		DoUpdates: updates,
 	}).Create(asset).Error
 }
 
@@ -203,7 +215,7 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 	var assets []model.HostApplicationAsset
 	var total int64
 
-	q := r.db.Model(&model.HostApplicationAsset{}).Where("status != ?", "deleted")
+	q := r.applicationAssetsBaseQuery().Where("status != ?", "deleted")
 
 	if query.Category != "" {
 		q = q.Where("category = ?", query.Category)
@@ -225,7 +237,8 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 		q = q.Where("status = ?", query.Status)
 	}
 
-	if err := q.Count(&total).Error; err != nil {
+	deduped := dedupedApplicationAssetsQuery(r.db, q)
+	if err := deduped.Where("asset_rank = ?", 1).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -238,12 +251,36 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 		pageSize = 20
 	}
 
-	err := q.Order("collected_at DESC").
+	err := deduped.Where("asset_rank = ?", 1).
+		Order("collected_at DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&assets).Error
 
 	return assets, total, err
+}
+
+func (r *AssetCollectionRepository) applicationAssetsBaseQuery() *gorm.DB {
+	return r.db.Model(&model.HostApplicationAsset{})
+}
+
+func dedupedApplicationAssetsQuery(db *gorm.DB, base *gorm.DB) *gorm.DB {
+	ranked := base.Select(`host_application_assets.*,
+		ROW_NUMBER() OVER (
+			PARTITION BY host_id, LOWER(name)
+			ORDER BY
+				CASE status
+					WHEN 'active' THEN 0
+					WHEN 'needs_review' THEN 1
+					WHEN 'inactive' THEN 2
+					ELSE 3
+				END,
+				ai_confidence DESC,
+				last_seen_at DESC,
+				collected_at DESC,
+				updated_at DESC
+		) AS asset_rank`)
+	return db.Table("(?) AS ranked_application_assets", ranked)
 }
 
 // GetApplicationAsset 获取应用资产详情
@@ -271,14 +308,21 @@ func (r *AssetCollectionRepository) GetToolCallsByApplication(appID uuid.UUID) (
 // GetSoftwareAssetsByHost 获取主机的软件资产
 func (r *AssetCollectionRepository) GetSoftwareAssetsByHost(hostID uuid.UUID) ([]model.HostSoftwareAsset, error) {
 	var assets []model.HostSoftwareAsset
-	err := r.db.Where("host_id = ? AND status = ?", hostID, "active").Find(&assets).Error
+	err := r.db.Where("host_id = ? AND status = ?", hostID, "active").
+		Order("last_seen_at DESC, collected_at DESC").
+		Find(&assets).Error
 	return assets, err
 }
 
 // GetApplicationAssetsByHost 获取主机的应用资产
 func (r *AssetCollectionRepository) GetApplicationAssetsByHost(hostID uuid.UUID) ([]model.HostApplicationAsset, error) {
 	var assets []model.HostApplicationAsset
-	err := r.db.Where("host_id = ? AND status IN ?", hostID, []string{"active", "needs_review"}).Find(&assets).Error
+	base := r.applicationAssetsBaseQuery().
+		Where("host_id = ? AND status IN ?", hostID, []string{"active", "needs_review"})
+	err := dedupedApplicationAssetsQuery(r.db, base).
+		Where("asset_rank = ?", 1).
+		Order("collected_at DESC").
+		Find(&assets).Error
 	return assets, err
 }
 
@@ -290,21 +334,39 @@ func (r *AssetCollectionRepository) GetSummary() (*model.AssetSummary, error) {
 	r.db.Model(&model.HostSoftwareAsset{}).Where("status = ?", "active").Count(&summary.SoftwareCount)
 
 	// 应用资产数量
-	r.db.Model(&model.HostApplicationAsset{}).Where("status IN ?", []string{"active", "needs_review"}).Count(&summary.ApplicationCount)
+	summary.ApplicationCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("status IN ?", []string{"active", "needs_review"}),
+	)
 
 	// 各分类数量
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "database", "deleted").Count(&summary.DatabaseCount)
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_service", "deleted").Count(&summary.WebServiceCount)
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_framework", "deleted").Count(&summary.WebFrameworkCount)
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_site", "deleted").Count(&summary.WebSiteCount)
+	summary.DatabaseCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "database", "deleted"),
+	)
+	summary.WebServiceCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_service", "deleted"),
+	)
+	summary.WebFrameworkCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_framework", "deleted"),
+	)
+	summary.WebSiteCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_site", "deleted"),
+	)
 
 	// AI 资产分类数量
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "llm_service", "deleted").Count(&summary.LLMServiceCount)
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "ai_agent", "deleted").Count(&summary.AIAgentCount)
-	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "mcp_server", "deleted").Count(&summary.MCPServerCount)
+	summary.LLMServiceCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "llm_service", "deleted"),
+	)
+	summary.AIAgentCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "ai_agent", "deleted"),
+	)
+	summary.MCPServerCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "mcp_server", "deleted"),
+	)
 
 	// 待复核数量
-	r.db.Model(&model.HostApplicationAsset{}).Where("review_status = ?", "pending").Count(&summary.NeedsReviewCount)
+	summary.NeedsReviewCount = r.countDistinctApplications(
+		r.applicationAssetsBaseQuery().Where("review_status = ?", "pending"),
+	)
 
 	// 最近采集时间
 	var lastTask model.AssetCollectionTask
@@ -313,6 +375,14 @@ func (r *AssetCollectionRepository) GetSummary() (*model.AssetSummary, error) {
 	}
 
 	return summary, nil
+}
+
+func (r *AssetCollectionRepository) countDistinctApplications(base *gorm.DB) int64 {
+	var count int64
+	deduped := base.Select("host_id, LOWER(name) AS normalized_name").
+		Group("host_id, LOWER(name)")
+	_ = r.db.Table("(?) AS distinct_applications", deduped).Count(&count).Error
+	return count
 }
 
 // GetLatestSoftwareByHost 获取主机最新的软件资产时间

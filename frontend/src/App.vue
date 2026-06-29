@@ -39,34 +39,6 @@
             <el-icon><Grid /></el-icon>
             <span>应用资产</span>
           </el-menu-item>
-          <el-menu-item index="/hosts/assets/databases">
-            <el-icon><Coin /></el-icon>
-            <span>数据库</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/web-services">
-            <el-icon><Monitor /></el-icon>
-            <span>Web 服务</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/web-frameworks">
-            <el-icon><Connection /></el-icon>
-            <span>Web 框架</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/web-sites">
-            <el-icon><Link /></el-icon>
-            <span>Web 站点</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/llm-services">
-            <el-icon><Cpu /></el-icon>
-            <span>AI LLM</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/ai-agents">
-            <el-icon><Avatar /></el-icon>
-            <span>AI Agent</span>
-          </el-menu-item>
-          <el-menu-item index="/hosts/assets/mcp-servers">
-            <el-icon><Connection /></el-icon>
-            <span>MCP</span>
-          </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="baseline">
@@ -212,7 +184,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, Coin, Link, MagicStick, Cpu, Avatar, Lock } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, MagicStick, Lock } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'

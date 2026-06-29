@@ -262,6 +262,26 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.Error(err))
 	}
 
+	softwareCount := 0
+	if hasCollectType(types, "software") {
+		if err := s.updateTaskStage(taskID, assetCollectionStatusCollecting, "software_inventory"); err != nil {
+			s.logger.Warn("Failed to update task to software inventory",
+				zap.String("task_id", taskID.String()),
+				zap.Error(err))
+		}
+		count, err := s.collectAndSaveSoftwareAssets(ctx, hostUUID, hostID, snapshot)
+		if err != nil {
+			s.logger.Warn("Software asset collection failed",
+				zap.String("host_id", hostID),
+				zap.Error(err))
+		} else {
+			softwareCount = count
+			s.logger.Info("Software assets saved",
+				zap.String("host_id", hostID),
+				zap.Int("count", count))
+		}
+	}
+
 	// 采集 AI 资产（LLM 服务 / AI Agent / MCP Server）
 	aiAssetCount := 0
 	aiAssets, err := s.collectAIAssets(ctx, hostID)
@@ -312,7 +332,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 	taskHost.Hostname = snapshot.Hostname
 	taskHost.IPAddress = snapshot.IPAddress
 	taskHost.Status = assetCollectionStatusCompleted
-	taskHost.SoftwareCount = 0
+	taskHost.SoftwareCount = softwareCount
 	taskHost.ProcessCount = len(snapshot.Processes)
 	taskHost.ApplicationCount = applicationCount + aiAssetCount
 	taskHost.RawSnapshotID = &processSnapshot.ID
@@ -366,6 +386,30 @@ func (s *AssetCollectionService) collectAIAssets(ctx context.Context, hostID str
 func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname, ipAddress, osType string, aiAssets []AIAsset) (int, error) {
 	count := 0
 	for _, ai := range aiAssets {
+		identified := normalizeIdentifiedApplication(IdentifiedApplication{
+			Name:        ai.Name,
+			DisplayName: ai.DisplayName,
+			Category:    ai.Category,
+			Version:     ai.Version,
+			Confidence:  0.9,
+			RelatedPIDs: ai.PIDs,
+			ConfigPaths: []string{},
+			ListenPorts: ai.ListenPorts,
+			Status:      "active",
+		})
+		if identified.Name == "" || !isMarketVisibleApplication(identified) {
+			s.logger.Debug("Skipping non-public AI asset",
+				zap.String("name", ai.Name),
+				zap.String("category", ai.Category))
+			continue
+		}
+		if ai.ConfigPath != "" {
+			identified.ConfigPaths = append(identified.ConfigPaths, ai.ConfigPath)
+		}
+		ai.Name = identified.Name
+		ai.DisplayName = identified.DisplayName
+		ai.Category = identified.Category
+
 		// 构建 fingerprint 用于去重
 		identity := ai.Endpoint
 		if identity == "" {
@@ -427,6 +471,17 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname
 				zap.String("category", ai.Category),
 				zap.Error(err))
 			continue
+		}
+		if removed, err := s.repo.DeactivateDuplicateApplicationAssets(hostID, applicationDedupeNames(identified), app.Fingerprint); err != nil {
+			s.logger.Warn("failed to deactivate duplicate AI application assets",
+				zap.String("host_id", hostID.String()),
+				zap.String("app_name", ai.Name),
+				zap.Error(err))
+		} else if removed > 0 {
+			s.logger.Info("duplicate AI application assets deactivated",
+				zap.String("host_id", hostID.String()),
+				zap.String("app_name", ai.Name),
+				zap.Int64("count", removed))
 		}
 		count++
 	}
@@ -501,6 +556,70 @@ func (s *AssetCollectionService) collectProcessSnapshot(ctx context.Context, hos
 	})
 
 	return snapshot, nil
+}
+
+func (s *AssetCollectionService) collectAndSaveSoftwareAssets(ctx context.Context, hostUUID uuid.UUID, hostID string, baseSnapshot HostAssetSnapshot) (int, error) {
+	args := map[string]interface{}{
+		"host_id":               hostID,
+		"collect_types":         []string{"software"},
+		"include_package_files": false,
+		"include_listen_ports":  false,
+		"max_process_count":     1,
+	}
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal software collection args: %w", err)
+	}
+
+	softwareCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	resp, err := s.serverClient.ExecuteTool(softwareCtx, uuid.New().String(), hostID, "AssetCollectHostAssets", string(argsJSON), 90)
+	if err != nil {
+		return 0, fmt.Errorf("software asset collection call failed: %w", err)
+	}
+	if resp == nil || !resp.Success {
+		errMsg := "software asset collection failed"
+		if resp != nil && resp.Error != "" {
+			errMsg = resp.Error
+		}
+		return 0, fmt.Errorf("%s", errMsg)
+	}
+
+	var snapshot HostAssetSnapshot
+	if err := json.Unmarshal([]byte(resp.Result), &snapshot); err != nil {
+		return 0, fmt.Errorf("failed to parse software asset snapshot: %w", err)
+	}
+	if snapshot.Hostname == "" {
+		snapshot.Hostname = baseSnapshot.Hostname
+	}
+	if snapshot.IPAddress == "" {
+		snapshot.IPAddress = baseSnapshot.IPAddress
+	}
+	if snapshot.OSType == "" {
+		snapshot.OSType = baseSnapshot.OSType
+	}
+	if snapshot.OSVersion == "" {
+		snapshot.OSVersion = baseSnapshot.OSVersion
+	}
+	if snapshot.Arch == "" {
+		snapshot.Arch = baseSnapshot.Arch
+	}
+
+	count := 0
+	for _, pkg := range snapshot.Packages {
+		asset := s.convertPackageToAsset(hostUUID, snapshot, pkg)
+		if err := s.repo.UpsertSoftwareAsset(asset); err != nil {
+			s.logger.Warn("failed to upsert software asset",
+				zap.String("host_id", hostID),
+				zap.String("package", pkg.Name),
+				zap.Error(err))
+			continue
+		}
+		count++
+	}
+
+	return count, nil
 }
 
 func (s *AssetCollectionService) updateTaskStage(taskID uuid.UUID, status, stage string) error {
@@ -673,14 +792,37 @@ func hasCollectType(types []string, target string) bool {
 }
 
 func normalizeCollectTypes(types []string) []string {
+	includeSoftware := false
+	includeProcess := false
 	includeAnalysis := false
 	for _, t := range types {
-		if t == "application_analysis" || t == "full" {
+		switch t {
+		case "software":
+			includeSoftware = true
+		case "process":
+			includeProcess = true
+		case "application_analysis":
 			includeAnalysis = true
-			break
+		case "full":
+			includeSoftware = true
+			includeProcess = true
+			includeAnalysis = true
 		}
 	}
-	normalized := []string{"process"}
+	if includeAnalysis {
+		includeProcess = true
+	}
+	if !includeSoftware && !includeProcess && !includeAnalysis {
+		includeProcess = true
+	}
+
+	normalized := make([]string, 0, 3)
+	if includeSoftware {
+		normalized = append(normalized, "software")
+	}
+	if includeProcess {
+		normalized = append(normalized, "process")
+	}
 	if includeAnalysis {
 		normalized = append(normalized, "application_analysis")
 	}

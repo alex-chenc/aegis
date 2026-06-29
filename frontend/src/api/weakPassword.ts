@@ -5,6 +5,7 @@ import type {
   AnalyzeAssetApplicationsResponse,
   CreateWeakPasswordBatchTasksRequest,
   CreateWeakPasswordBatchTasksResponse,
+  DeleteWeakPasswordTasksResponse,
   CreateWeakPasswordDictionaryRequest,
   CreateWeakPasswordTaskRequest,
   CreateWeakPasswordTaskResponse,
@@ -71,6 +72,10 @@ export function retryWeakPasswordFailed(id: string): Promise<{ status: string }>
 
 export function deleteWeakPasswordTask(id: string): Promise<{ deleted: number }> {
   return request.delete(`/weak-password/tasks/${id}`)
+}
+
+export function deleteWeakPasswordTasks(taskIds: string[]): Promise<DeleteWeakPasswordTasksResponse> {
+  return request.post('/weak-password/tasks/batch-delete', { task_ids: taskIds })
 }
 
 export function getDefaultWeakPasswordDictionary(): Promise<WeakPasswordDictionary> {

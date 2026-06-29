@@ -1,5 +1,16 @@
 <template>
   <div class="applications-page">
+    <el-card class="category-tabs-card">
+      <el-tabs :model-value="activeTab" @tab-change="handleCategoryTabChange">
+        <el-tab-pane
+          v-for="tab in categoryTabs"
+          :key="tab.value"
+          :label="tab.label"
+          :name="tab.value"
+        />
+      </el-tabs>
+    </el-card>
+
     <!-- 筛选区 -->
     <el-card class="filter-card">
       <div class="filter-row">
@@ -14,22 +25,6 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-
-        <el-select
-          v-model="filters.category"
-          placeholder="应用分类"
-          clearable
-          style="width: 150px"
-        >
-          <el-option label="数据库" value="database" />
-          <el-option label="Web 服务" value="web_service" />
-          <el-option label="Web 框架" value="web_framework" />
-          <el-option label="Web 站点" value="web_site" />
-          <el-option label="AI LLM" value="llm_service" />
-          <el-option label="AI Agent" value="ai_agent" />
-          <el-option label="MCP" value="mcp_server" />
-          <el-option label="其他" value="other" />
-        </el-select>
 
         <el-select
           v-model="filters.review_status"
@@ -310,6 +305,7 @@
 
 <script setup lang="ts">
 import { computed, ref, reactive, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Search, RefreshRight, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAssetStore } from '@/store/assets'
@@ -317,6 +313,7 @@ import { storeToRefs } from 'pinia'
 import { getApplicationDetail, reviewApplication, type ApplicationAsset } from '@/api/assets'
 
 const assetStore = useAssetStore()
+const router = useRouter()
 const props = defineProps<{
   defaultCategory?: string
 }>()
@@ -334,6 +331,18 @@ const submitting = ref(false)
 const selectedApp = ref<ApplicationAsset | null>(null)
 const appDetail = ref<any>(null)
 
+const categoryTabs = [
+  { label: '全部应用', value: '', path: '/hosts/assets/applications' },
+  { label: '数据库', value: 'database', path: '/hosts/assets/databases' },
+  { label: 'Web 服务', value: 'web_service', path: '/hosts/assets/web-services' },
+  { label: 'Web 框架', value: 'web_framework', path: '/hosts/assets/web-frameworks' },
+  { label: 'Web 站点', value: 'web_site', path: '/hosts/assets/web-sites' },
+  { label: 'AI LLM', value: 'llm_service', path: '/hosts/assets/llm-services' },
+  { label: 'AI Agent', value: 'ai_agent', path: '/hosts/assets/ai-agents' },
+  { label: 'MCP', value: 'mcp_server', path: '/hosts/assets/mcp-servers' },
+  { label: '其他', value: 'other', path: '/hosts/assets/other-applications' },
+]
+
 const categoryTitles: Record<string, string> = {
   database: '数据库资产',
   web_service: 'Web 服务资产',
@@ -342,7 +351,10 @@ const categoryTitles: Record<string, string> = {
   llm_service: 'AI LLM 资产',
   ai_agent: 'AI Agent 资产',
   mcp_server: 'MCP 资产',
+  other: '其他应用资产',
 }
+
+const activeTab = computed(() => props.defaultCategory || filters.value.category || '')
 
 const pageTitle = computed(() => {
   return categoryTitles[props.defaultCategory || ''] || '应用资产'
@@ -362,6 +374,13 @@ watch(() => props.defaultCategory, (category) => {
   filters.value.page = 1
   assetStore.fetchApplicationAssets()
 }, { immediate: true })
+
+function handleCategoryTabChange(name: string | number) {
+  const category = String(name)
+  const tab = categoryTabs.find(item => item.value === category)
+  if (!tab) return
+  router.push(tab.path)
+}
 
 // 搜索
 function handleSearch() {
@@ -509,6 +528,18 @@ function getReviewStatusLabel(status: string) {
 <style scoped>
 .applications-page {
   padding: 20px;
+}
+
+.category-tabs-card {
+  margin-bottom: 12px;
+}
+
+.category-tabs-card :deep(.el-card__body) {
+  padding: 0 16px;
+}
+
+.category-tabs-card :deep(.el-tabs__header) {
+  margin-bottom: 0;
 }
 
 .filter-card {

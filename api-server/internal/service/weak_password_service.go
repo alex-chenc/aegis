@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	_ "github.com/GehirnInc/crypt/sha256_crypt"
 	_ "github.com/GehirnInc/crypt/sha512_crypt"
 	"github.com/google/uuid"
+	yescrypt "github.com/openwall/yescrypt-go"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
@@ -187,6 +189,16 @@ type CreateTasksByApplicationsResponse struct {
 	Skipped []BatchTaskSkippedItem `json:"skipped"`
 }
 
+type DeleteWeakPasswordTasksRequest struct {
+	TaskIDs []string `json:"task_ids"`
+}
+
+type DeleteWeakPasswordTasksResponse struct {
+	Deleted []string               `json:"deleted"`
+	Skipped []BatchTaskSkippedItem `json:"skipped"`
+	Count   int                    `json:"count"`
+}
+
 type BatchTaskCreatedItem struct {
 	CandidateApplicationID string `json:"candidate_application_id"`
 	TaskID                 string `json:"task_id"`
@@ -196,6 +208,7 @@ type BatchTaskCreatedItem struct {
 
 type BatchTaskSkippedItem struct {
 	CandidateApplicationID string `json:"candidate_application_id"`
+	TaskID                 string `json:"task_id,omitempty"`
 	Reason                 string `json:"reason"`
 	Message                string `json:"message,omitempty"`
 }
@@ -230,6 +243,8 @@ type WeakPasswordCollectionProgressDTO struct {
 	ToolName           string `json:"tool_name"`
 	Status             string `json:"status"`
 	Round              int    `json:"round"`
+	SourcePath         string `json:"source_path"`
+	FieldName          string `json:"field_name"`
 	ErrorCode          string `json:"error_code,omitempty"`
 	ErrorMessage       string `json:"error_message,omitempty"`
 	ExecutionTimeMs    int64  `json:"execution_time_ms"`
@@ -832,9 +847,7 @@ func deduplicateApplicationAssetsByHostType(assets []model.HostApplicationAsset)
 		}
 		key := weakPasswordHostAppKey{hostID: asset.HostID, applicationType: appType}
 		if existing, ok := byKey[key]; ok {
-			if weakPasswordAssetRank(asset) > weakPasswordAssetRank(existing) {
-				byKey[key] = asset
-			}
+			byKey[key] = mergeWeakPasswordApplicationAsset(existing, asset)
 			continue
 		}
 		byKey[key] = asset
@@ -845,6 +858,28 @@ func deduplicateApplicationAssetsByHostType(assets []model.HostApplicationAsset)
 		out = append(out, byKey[key])
 	}
 	return out
+}
+
+func mergeWeakPasswordApplicationAsset(existing, incoming model.HostApplicationAsset) model.HostApplicationAsset {
+	winner := existing
+	other := incoming
+	if weakPasswordAssetRank(incoming) > weakPasswordAssetRank(existing) {
+		winner = incoming
+		other = existing
+	}
+	winner.ConfigPaths = mustJSON(mergeStringLists(weakJSONStrings(winner.ConfigPaths), weakJSONStrings(other.ConfigPaths)))
+	winner.ListenPorts = mustJSON(mergeStringLists(weakJSONStrings(winner.ListenPorts), weakJSONStrings(other.ListenPorts)))
+	winner.RelatedPIDs = mustJSON(uniquePositiveInts(append(weakJSONInts(winner.RelatedPIDs), weakJSONInts(other.RelatedPIDs)...)))
+	if strings.TrimSpace(winner.StartPath) == "" {
+		winner.StartPath = other.StartPath
+	}
+	if strings.TrimSpace(winner.RunUser) == "" {
+		winner.RunUser = other.RunUser
+	}
+	if strings.TrimSpace(winner.Version) == "" {
+		winner.Version = other.Version
+	}
+	return winner
 }
 
 func weakPasswordAssetRank(asset model.HostApplicationAsset) float64 {
@@ -896,6 +931,36 @@ func (s *WeakPasswordService) ensureHostRuntimeOnline(ctx context.Context, hostI
 	return nil
 }
 
+func (s *WeakPasswordService) hydrateCandidateRuntimeEvidence(candidate *model.WeakPasswordCandidateApplication) {
+	if s == nil || s.repo == nil || candidate == nil || candidate.AssetID == nil {
+		return
+	}
+	var asset model.HostApplicationAsset
+	if err := s.repo.DB().Where("id = ?", *candidate.AssetID).First(&asset).Error; err != nil {
+		return
+	}
+	relatedPIDs := uniquePositiveInts(append(candidateRelatedPIDs(*candidate), weakJSONInts(asset.RelatedPIDs)...))
+	if len(relatedPIDs) == 0 {
+		return
+	}
+	var evidence map[string]interface{}
+	if len(candidate.AssetEvidenceJSON) == 0 || json.Unmarshal(candidate.AssetEvidenceJSON, &evidence) != nil {
+		evidence = map[string]interface{}{}
+	}
+	evidence["related_pids"] = relatedPIDs
+	if _, ok := evidence["source_table"]; !ok {
+		evidence["source_table"] = "host_application_assets"
+	}
+	if _, ok := evidence["asset_id"]; !ok {
+		evidence["asset_id"] = asset.ID.String()
+	}
+	candidate.AssetEvidenceJSON = mustJSON(evidence)
+	assetPaths := weakJSONStrings(asset.ConfigPaths)
+	if len(assetPaths) > 0 {
+		candidate.CandidatePathsJSON = mustJSON(mergeCredentialPaths(weakJSONStrings(candidate.CandidatePathsJSON), assetPaths))
+	}
+}
+
 func (s *WeakPasswordService) CreateTaskByApplication(ctx context.Context, req model.CreateTaskByApplicationRequest, createdBy *uuid.UUID) (*CreateTaskByApplicationResponse, error) {
 	candidateID, err := uuid.Parse(req.CandidateApplicationID)
 	if err != nil {
@@ -905,6 +970,7 @@ func (s *WeakPasswordService) CreateTaskByApplication(ctx context.Context, req m
 	if err != nil {
 		return nil, err
 	}
+	s.hydrateCandidateRuntimeEvidence(candidate)
 	if err := s.ensureHostRuntimeOnline(ctx, candidate.HostID); err != nil {
 		s.logger.Warn("weak password task rejected because host is offline",
 			zap.String("candidate_application_id", candidate.ID.String()),
@@ -1175,10 +1241,11 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 	}
 
 	currentPlanSummary, _ := json.Marshal(map[string]interface{}{
-		"application": originalPlan.Applications[0].Application,
-		"profile_id":  originalPlan.Applications[0].ProfileID,
-		"paths":       originalPlan.Applications[0].Paths,
-		"extractors":  originalPlan.Applications[0].Extractors,
+		"application":  originalPlan.Applications[0].Application,
+		"profile_id":   originalPlan.Applications[0].ProfileID,
+		"paths":        originalPlan.Applications[0].Paths,
+		"extractors":   originalPlan.Applications[0].Extractors,
+		"related_pids": originalPlan.Applications[0].RelatedPIDs,
 	})
 
 	// Build system prompt for repair
@@ -1191,6 +1258,12 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 - **优先使用** WeakPassword.ProcessConfigHints（从进程获取配置路径）
 - **或者使用** WeakPassword.ProbePath（检查路径是否存在）
 
+容器/非容器路径规则：
+- 当前计划里的 related_pids 是唯一可信 PID 列表；不要使用 pid=1，除非它明确出现在 related_pids。
+- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
+- new_paths 必须填写应用视角的绝对路径，例如 /etc/redis/redis.conf；不要返回 /proc/<pid>/root/...。
+- Redis 若通过 redis-server --requirepass/--masterauth 启动，凭据由受控采集工具从进程参数提取，不要为了这种情况递归搜索宿主机 /etc。
+
 ## 可用辅助工具
 
 1. **WeakPassword.ProbePath** - 检查指定路径是否存在、类型、大小、权限
@@ -1198,7 +1271,7 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
    - 用途: 验证文件是否存在
 
 2. **WeakPassword.ListConfigDir** - 非递归列出指定目录下的文件
-   - 参数: {"dir": "/path/to/dir", "max_depth": 2}
+   - 参数: {"dir": "/path/to/dir", "pid": 1234, "max_entries": 50, "recursive": false}
    - 用途: 发现配置目录中的其他文件
 
 3. **WeakPassword.ServiceUnitInspect** - 读取 systemd service 的 ExecStart、EnvironmentFile
@@ -1308,6 +1381,11 @@ new_extractors 必须使用以下字段：
 	}
 
 	// Execute auxiliary tool on Agent
+	normalizedArgs, err := normalizeRepairToolArguments(repairResult.Tool, repairResult.Arguments, originalPlan.Applications[0])
+	if err != nil {
+		return nil, err
+	}
+	repairResult.Arguments = normalizedArgs
 	s.logger.Info("executing auxiliary tool for repair",
 		zap.String("tool", repairResult.Tool),
 		zap.String("reason", repairResult.Reason))
@@ -1366,16 +1444,7 @@ new_extractors 必须使用以下字段：
 	// Build new plan with discovered paths
 	newPaths := originalPlan.Applications[0].Paths
 	if len(repairResult.NewPaths) > 0 {
-		// Merge new paths with existing, avoiding duplicates
-		existingPaths := make(map[string]bool)
-		for _, p := range newPaths {
-			existingPaths[p] = true
-		}
-		for _, p := range repairResult.NewPaths {
-			if !existingPaths[p] {
-				newPaths = append(newPaths, p)
-			}
-		}
+		newPaths = mergeCredentialPaths(newPaths, repairResult.NewPaths)
 	}
 
 	// Create new plan with updated paths
@@ -1513,10 +1582,7 @@ func (s *WeakPasswordService) executeApplicationTask(ctx context.Context, taskID
 			return
 		}
 		call.Status = "completed"
-		call.ResultSummaryJSON = mustJSON(map[string]interface{}{
-			"record_count": len(result.Records),
-			"error_count":  len(result.Errors),
-		})
+		call.ResultSummaryJSON = mustJSON(collectionResultSummary(plan, result))
 		_ = s.repo.UpdateToolCall(call)
 
 		if attempt+1 > app.AgentToolCallCount {
@@ -2020,6 +2086,110 @@ func (s *WeakPasswordService) ListTaskCollectionErrors(taskID uuid.UUID, page, p
 	return s.repo.ListCollectionErrors(taskID, page, pageSize)
 }
 
+func collectionResultSummary(plan CredentialCollectionPlan, result AgentCredentialCollectionResult) map[string]interface{} {
+	sourcePaths := []string{}
+	fieldNames := []string{}
+	recordSources := []map[string]interface{}{}
+	for _, record := range result.Records {
+		sourcePath := weakPasswordDisplayValue(record.SourcePath, "未记录路径")
+		fieldName := weakPasswordDisplayValue(record.FieldPath, "未记录字段")
+		sourcePaths = mergeStringLists(sourcePaths, []string{sourcePath})
+		fieldNames = mergeStringLists(fieldNames, []string{fieldName})
+		recordSources = append(recordSources, map[string]interface{}{
+			"source_path": sourcePath,
+			"field_name":  fieldName,
+			"source_kind": weakPasswordDisplayValue(record.SourceKind, "unknown"),
+			"parser":      weakPasswordDisplayValue(record.Parser, "unknown"),
+			"account":     record.Account,
+			"process_pid": record.ProcessPID,
+		})
+	}
+	for _, item := range result.Errors {
+		sourcePaths = mergeStringLists(sourcePaths, []string{item.SourcePath})
+	}
+	if len(fieldNames) == 0 {
+		fieldNames = planExtractorFieldNames(plan)
+	}
+	if len(sourcePaths) == 0 {
+		for _, app := range plan.Applications {
+			sourcePaths = mergeStringLists(sourcePaths, app.Paths)
+		}
+	}
+	if len(sourcePaths) == 0 {
+		sourcePaths = []string{"未记录路径"}
+	}
+	if len(fieldNames) == 0 {
+		fieldNames = []string{"未记录字段"}
+	}
+	return map[string]interface{}{
+		"record_count":   len(result.Records),
+		"error_count":    len(result.Errors),
+		"source_path":    strings.Join(sourcePaths, "\n"),
+		"field_name":     strings.Join(fieldNames, "\n"),
+		"source_paths":   sourcePaths,
+		"field_names":    fieldNames,
+		"record_sources": recordSources,
+	}
+}
+
+func planExtractorFieldNames(plan CredentialCollectionPlan) []string {
+	fields := []string{}
+	for _, app := range plan.Applications {
+		for _, extractor := range app.Extractors {
+			field := strings.TrimSpace(extractor.PasswordSelector)
+			if field == "" {
+				field = strings.TrimSpace(extractor.Type)
+			}
+			if field != "" {
+				fields = mergeStringLists(fields, []string{field})
+			}
+		}
+	}
+	return fields
+}
+
+func collectionProgressSourceAndField(summary datatypes.JSON, fallbackPath, fallbackField string) (string, string) {
+	var data map[string]interface{}
+	if len(summary) > 0 {
+		_ = json.Unmarshal(summary, &data)
+	}
+	sourcePath := summaryDisplayString(data, "source_path", "source_paths")
+	fieldName := summaryDisplayString(data, "field_name", "field_names")
+	return weakPasswordDisplayValue(sourcePath, weakPasswordDisplayValue(fallbackPath, "未记录路径")),
+		weakPasswordDisplayValue(fieldName, weakPasswordDisplayValue(fallbackField, "未记录字段"))
+}
+
+func summaryDisplayString(data map[string]interface{}, scalarKey, listKey string) string {
+	if len(data) == 0 {
+		return ""
+	}
+	if value := strings.TrimSpace(fmt.Sprint(data[scalarKey])); value != "" && value != "<nil>" {
+		return value
+	}
+	values := []string{}
+	if raw, ok := data[listKey]; ok {
+		switch typed := raw.(type) {
+		case []interface{}:
+			for _, item := range typed {
+				if value := strings.TrimSpace(fmt.Sprint(item)); value != "" && value != "<nil>" {
+					values = mergeStringLists(values, []string{value})
+				}
+			}
+		case []string:
+			values = mergeStringLists(values, typed)
+		}
+	}
+	return strings.Join(values, "\n")
+}
+
+func weakPasswordDisplayValue(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page, pageSize int) ([]WeakPasswordCollectionProgressDTO, int64, error) {
 	if page <= 0 {
 		page = 1
@@ -2059,6 +2229,8 @@ func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page,
 					ToolName:           "WeakPassword.FinalDiagnosis",
 					Status:             model.AppStatusFailed,
 					Round:              0,
+					SourcePath:         weakPasswordDisplayValue(errorMessage, "最终诊断"),
+					FieldName:          weakPasswordDisplayValue(errorCode, "失败原因"),
 					ErrorCode:          errorCode,
 					ErrorMessage:       errorMessage,
 					ExecutionTimeMs:    0,
@@ -2103,6 +2275,7 @@ func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page,
 			scanAppID = call.ScanApplicationID.String()
 		}
 		round := callOffset + idx + 1
+		sourcePath, fieldName := collectionProgressSourceAndField(call.ResultSummaryJSON, call.ErrorMessage, call.ErrorCode)
 		items = append(items, WeakPasswordCollectionProgressDTO{
 			ID:                 call.ID.String(),
 			TaskID:             call.TaskID.String(),
@@ -2112,6 +2285,8 @@ func (s *WeakPasswordService) ListTaskCollectionProgress(taskID uuid.UUID, page,
 			ToolName:           call.ToolName,
 			Status:             call.Status,
 			Round:              round,
+			SourcePath:         sourcePath,
+			FieldName:          fieldName,
 			ErrorCode:          call.ErrorCode,
 			ErrorMessage:       call.ErrorMessage,
 			ExecutionTimeMs:    call.ExecutionTimeMs,
@@ -2162,6 +2337,45 @@ func (s *WeakPasswordService) DeleteTask(taskID uuid.UUID) error {
 		return ErrWeakPasswordTaskRunning
 	}
 	return s.repo.DeleteTask(taskID)
+}
+
+func (s *WeakPasswordService) DeleteTasks(req DeleteWeakPasswordTasksRequest) (*DeleteWeakPasswordTasksResponse, error) {
+	resp := &DeleteWeakPasswordTasksResponse{
+		Deleted: []string{},
+		Skipped: []BatchTaskSkippedItem{},
+	}
+	seen := map[string]struct{}{}
+	for _, rawID := range req.TaskIDs {
+		rawID = strings.TrimSpace(rawID)
+		if rawID == "" {
+			continue
+		}
+		if _, ok := seen[rawID]; ok {
+			continue
+		}
+		seen[rawID] = struct{}{}
+		taskID, err := uuid.Parse(rawID)
+		if err != nil {
+			resp.Skipped = append(resp.Skipped, BatchTaskSkippedItem{TaskID: rawID, Reason: "invalid_task_id", Message: "任务 ID 格式不正确"})
+			continue
+		}
+		if err := s.DeleteTask(taskID); err != nil {
+			reason := "delete_failed"
+			message := err.Error()
+			if errors.Is(err, ErrWeakPasswordTaskRunning) {
+				reason = "task_running"
+				message = "运行中的弱密码任务不能删除"
+			} else if errors.Is(err, gorm.ErrRecordNotFound) {
+				reason = "task_not_found"
+				message = "任务不存在"
+			}
+			resp.Skipped = append(resp.Skipped, BatchTaskSkippedItem{TaskID: rawID, Reason: reason, Message: message})
+			continue
+		}
+		resp.Deleted = append(resp.Deleted, rawID)
+	}
+	resp.Count = len(resp.Deleted)
+	return resp, nil
 }
 
 func (s *WeakPasswordService) EnsureDefaultDictionary(ctx context.Context) error {
@@ -2797,6 +3011,79 @@ func hintConfigCandidates(hints AgentProcessConfigHintsResult) []string {
 	return mergeCredentialPaths(nil, paths)
 }
 
+func normalizeRepairToolArguments(tool string, args map[string]interface{}, app CredentialApplication) (map[string]interface{}, error) {
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	normalized := make(map[string]interface{}, len(args)+4)
+	for key, value := range args {
+		normalized[key] = value
+	}
+	relatedPIDs := uniquePositiveInts(app.RelatedPIDs)
+	switch tool {
+	case "WeakPassword.ProcessConfigHints":
+		pid := repairToolPID(normalized["pid"], relatedPIDs)
+		if pid <= 0 {
+			return nil, fmt.Errorf("WeakPassword.ProcessConfigHints requires a related pid")
+		}
+		normalized["pid"] = pid
+		if _, ok := normalized["application"]; !ok || strings.TrimSpace(fmt.Sprint(normalized["application"])) == "" {
+			normalized["application"] = app.Application
+		}
+		if _, ok := normalized["include_open_files"]; !ok {
+			normalized["include_open_files"] = true
+		}
+		if _, ok := normalized["file_suffix_allowlist"]; !ok {
+			normalized["file_suffix_allowlist"] = credentialConfigSuffixAllowlist(app.Application)
+		}
+		if _, ok := normalized["max_files"]; !ok {
+			normalized["max_files"] = 20
+		}
+	case "WeakPassword.ProbePath", "WeakPassword.ListConfigDir", "WeakPassword.ReadConfigSlice":
+		if len(relatedPIDs) > 0 {
+			normalized["pid"] = repairToolPID(normalized["pid"], relatedPIDs)
+		}
+		if tool == "WeakPassword.ListConfigDir" {
+			if _, ok := normalized["suffix_allowlist"]; !ok {
+				normalized["suffix_allowlist"] = credentialConfigSuffixAllowlist(app.Application)
+			}
+			if _, ok := normalized["max_entries"]; !ok {
+				normalized["max_entries"] = 50
+			}
+			delete(normalized, "max_depth")
+			normalized["recursive"] = false
+		}
+	case "WeakPassword.ServiceUnitInspect":
+		if _, ok := normalized["service"]; !ok {
+			if serviceName, ok := normalized["service_name"]; ok {
+				normalized["service"] = serviceName
+				delete(normalized, "service_name")
+			}
+		}
+	}
+	return normalized, nil
+}
+
+func repairToolPID(value interface{}, relatedPIDs []int) int {
+	values := intSliceFromInterface(value)
+	if len(relatedPIDs) == 0 {
+		if len(values) > 0 {
+			return values[0]
+		}
+		return 0
+	}
+	allowed := make(map[int]struct{}, len(relatedPIDs))
+	for _, pid := range relatedPIDs {
+		allowed[pid] = struct{}{}
+	}
+	for _, pid := range values {
+		if _, ok := allowed[pid]; ok {
+			return pid
+		}
+	}
+	return relatedPIDs[0]
+}
+
 func mergeCredentialPaths(existing []string, discovered []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(existing)+len(discovered))
@@ -2816,6 +3103,29 @@ func mergeCredentialPaths(existing []string, discovered []string) []string {
 	}
 	for _, path := range discovered {
 		add(path)
+	}
+	return out
+}
+
+func mergeStringLists(existing []string, discovered []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(existing)+len(discovered))
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	for _, value := range existing {
+		add(value)
+	}
+	for _, value := range discovered {
+		add(value)
 	}
 	return out
 }
@@ -3082,6 +3392,11 @@ func weakPasswordCipherKey() []byte {
 }
 
 func verifyHashAgainstCandidates(hash string, candidates []string) string {
+	if strings.HasPrefix(hash, "$y$") {
+		if matched := verifyYescryptHashAgainstCandidates(hash, candidates); matched != "" {
+			return matched
+		}
+	}
 	if crypt.IsHashSupported(hash) {
 		crypter := crypt.NewFromHash(hash)
 		for _, candidate := range candidates {
@@ -3126,6 +3441,20 @@ func verifyHashAgainstCandidates(hash string, candidates []string) string {
 					return candidate
 				}
 			}
+		}
+	}
+	return ""
+}
+
+func verifyYescryptHashAgainstCandidates(hash string, candidates []string) string {
+	hashBytes := []byte(hash)
+	for _, candidate := range candidates {
+		encoded, err := yescrypt.Hash([]byte(candidate), hashBytes)
+		if err != nil {
+			continue
+		}
+		if subtle.ConstantTimeCompare(encoded, hashBytes) == 1 {
+			return candidate
 		}
 	}
 	return ""

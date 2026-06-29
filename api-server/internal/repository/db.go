@@ -54,7 +54,6 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	if err := db.AutoMigrate(
 		&model.AIConfig{},
 		&model.LLMConfig{},
-		&model.ImageModelConfig{},
 		&model.Notification{},
 		&model.AuthUser{},
 		&model.AuthSession{},
@@ -624,11 +623,100 @@ func assetCollectionSchemaStatements() []string {
 			END IF;
 		END $$`,
 		`DO $$ BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fingerprint_key') THEN
-				ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fingerprint_key
-					UNIQUE(host_id, fingerprint);
-			END IF;
-		END $$`,
+				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fingerprint_key') THEN
+					ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fingerprint_key
+						UNIQUE(host_id, fingerprint);
+				END IF;
+			END $$`,
+		`UPDATE host_application_assets AS app
+				SET
+					name = normalized.canonical_name,
+					display_name = normalized.display_name,
+					category = normalized.category,
+					status = 'active',
+					updated_at = NOW()
+				FROM (VALUES
+					('redis', 'redis', 'Redis', 'database'),
+					('redis-server', 'redis', 'Redis', 'database'),
+					('postgres', 'postgresql', 'PostgreSQL', 'database'),
+					('postgresql', 'postgresql', 'PostgreSQL', 'database'),
+					('nginx', 'nginx', 'Nginx', 'web_service'),
+					('openssh', 'openssh', 'OpenSSH', 'other'),
+					('openssh-server', 'openssh', 'OpenSSH', 'other'),
+					('kafka', 'kafka', 'Kafka', 'other'),
+					('zookeeper', 'zookeeper', 'ZooKeeper', 'other'),
+					('minio', 'minio', 'MinIO', 'other'),
+					('cups', 'cups', 'CUPS', 'other'),
+					('cupsd', 'cups', 'CUPS', 'other'),
+					('docker', 'docker', 'Docker Engine', 'other'),
+					('dockerd', 'docker', 'Docker Engine', 'other'),
+					('docker-proxy', 'docker', 'Docker Engine', 'other'),
+					('containerd', 'docker', 'Docker Engine', 'other'),
+					('tailscale', 'tailscale', 'Tailscale', 'other'),
+					('tailscaled', 'tailscale', 'Tailscale', 'other'),
+					('clash-verge', 'clash_verge', 'Clash Verge', 'other'),
+					('clash-verge-mihomo', 'clash_verge', 'Clash Verge', 'other'),
+					('verge-mihomo', 'clash_verge', 'Clash Verge', 'other'),
+					('vscode-server', 'vscode_server', 'VS Code Server', 'other'),
+					('aegis-agent', 'aegis_agent', 'Aegis Agent', 'other'),
+					('aegis-api-server', 'aegis_api_server', 'Aegis API Server', 'web_service'),
+					('api-server', 'aegis_api_server', 'Aegis API Server', 'web_service'),
+					('aegis-server', 'aegis_server', 'Aegis Server', 'other'),
+					('aegis-dc', 'aegis_dc', 'Aegis Data Consumer', 'other'),
+					('aegis-builder', 'aegis_builder', 'Aegis Builder', 'other'),
+					('claude-code', 'claude_code', 'Claude Code', 'ai_agent'),
+					('claude_code', 'claude_code', 'Claude Code', 'ai_agent'),
+					('codex', 'codex', 'OpenAI Codex', 'ai_agent')
+				) AS normalized(raw_name, canonical_name, display_name, category)
+				WHERE LOWER(app.name) = normalized.raw_name`,
+		`UPDATE host_application_assets
+			SET status = 'deleted', updated_at = NOW()
+			WHERE status <> 'deleted'
+				AND (
+					LOWER(name) IN (
+						'bash','sh','python','python2','python3','node','java','go','ruby','php','sleep',
+						'systemd','systemd-logind','cron','crond','dbus','networkmanager','wpa-supplicant',
+						'accounts-daemon','power-profiles-daemon','switcheroo-control','colord','rtkit',
+						'upower','udisks2','ibus','modemmanager','policykit','polkit','avahi','avahi-daemon',
+						'chrony','snapd','rsyslog','containerd-shim','kubelet','gnome-shell','gnome-desktop',
+						'ptyxis','ptyxis-agent','playwright','playwright-chromium','chromium-headless',
+						'webkit-browser','webkit2gtk','webkit2gtk-4.1','chatgpt-extension',
+						'openai-chatgpt-extension',
+						'cc-switch','postgresql-client','server','dc','builder','custom-server',
+							'aegis-api-server'
+						)
+					)`,
+		`WITH ranked_duplicate_applications AS (
+				SELECT id,
+					ROW_NUMBER() OVER (
+						PARTITION BY host_id, LOWER(name)
+						ORDER BY
+							CASE review_status
+								WHEN 'confirmed' THEN 0
+								WHEN 'auto' THEN 1
+								WHEN 'pending' THEN 2
+								WHEN 'rejected' THEN 3
+								ELSE 4
+							END,
+							CASE status
+								WHEN 'active' THEN 0
+								WHEN 'needs_review' THEN 1
+								WHEN 'inactive' THEN 2
+								ELSE 3
+							END,
+							ai_confidence DESC,
+							last_seen_at DESC,
+							collected_at DESC,
+							updated_at DESC
+					) AS duplicate_rank
+				FROM host_application_assets
+				WHERE status <> 'deleted'
+			)
+			UPDATE host_application_assets
+			SET status = 'deleted', updated_at = NOW()
+			WHERE id IN (
+				SELECT id FROM ranked_duplicate_applications WHERE duplicate_rank > 1
+			)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_host ON host_application_assets(host_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_category ON host_application_assets(category)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_name ON host_application_assets(name)`,

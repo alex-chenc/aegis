@@ -79,7 +79,7 @@ export interface RAGContextResponse {
 // SSE Event types for streaming
 export type SSEEventType =
   | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
-  | 'content' | 'flowchart_image' | 'done' | 'error'
+  | 'content' | 'done' | 'error'
   // agent-runtime new event types
   | 'plan' | 'step_started' | 'step_completed' | 'step_failed' | 'audit'
   | 'reflection' | 'correction' | 'step_retrying' | 'step_skipped'

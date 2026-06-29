@@ -139,8 +139,15 @@
         <el-table-column label="耗时" width="110">
           <template #default="{ row }">{{ row.execution_time_ms || 0 }}ms</template>
         </el-table-column>
-        <el-table-column label="说明" min-width="240">
-          <template #default="{ row }">{{ weakPasswordErrorMessageLabel(row.error_message, row.error_code) }}</template>
+        <el-table-column label="采集路径" min-width="260">
+          <template #default="{ row }">
+            <div class="secondary-cell multiline-cell">{{ row.source_path || '未记录路径' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="采集字段" min-width="220">
+          <template #default="{ row }">
+            <div class="secondary-cell multiline-cell">{{ row.field_name || '未记录字段' }}</div>
+          </template>
         </el-table-column>
       </el-table>
       <div v-if="store.errorTotal > 10" class="pagination-bar">
@@ -183,7 +190,6 @@ import type { RevealedWeakPasswordFinding } from '@/types/weakPassword'
 import {
   weakPasswordCredentialTypeLabel,
   weakPasswordErrorCodeLabel,
-  weakPasswordErrorMessageLabel,
   weakPasswordMatchStatusLabel,
   weakPasswordStatusLabel,
   weakPasswordToolNameLabel,
@@ -354,6 +360,11 @@ onBeforeUnmount(() => {
 .primary-cell {
   font-weight: 700;
   color: #0f172a;
+}
+
+.multiline-cell {
+  white-space: pre-line;
+  word-break: break-word;
 }
 
 .password-mask {

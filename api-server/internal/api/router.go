@@ -132,10 +132,6 @@ func (r *Router) Setup() {
 			config.POST("/llm", r.configHandler.SaveLLMConfig)
 			config.POST("/llm/test", r.configHandler.TestLLMConnection)
 			config.GET("/llm/full-key", r.configHandler.GetFullAPIKey)
-			config.GET("/image-model", r.configHandler.GetImageModelConfig)
-			config.POST("/image-model", r.configHandler.SaveImageModelConfig)
-			config.POST("/image-model/test", r.configHandler.TestImageModelConnection)
-			config.GET("/image-model/full-key", r.configHandler.GetFullImageModelAPIKey)
 		}
 
 		// 主机接口

@@ -34,6 +34,7 @@ func (h *WeakPasswordHandler) RegisterRoutes(api *gin.RouterGroup) {
 		wp.POST("/tasks", h.CreateTask)
 		wp.POST("/tasks/by-application", h.CreateTaskByApplication)
 		wp.POST("/tasks/by-applications", h.CreateTasksByApplications)
+		wp.POST("/tasks/batch-delete", h.DeleteTasks)
 		wp.GET("/tasks", h.ListTasks)
 		wp.GET("/tasks/:id", h.GetTask)
 		wp.GET("/tasks/:id/progress", h.GetTaskProgress)
@@ -260,6 +261,20 @@ func (h *WeakPasswordHandler) DeleteTask(c *gin.Context) {
 		return
 	}
 	successJSON(c, gin.H{"deleted": 1})
+}
+
+func (h *WeakPasswordHandler) DeleteTasks(c *gin.Context) {
+	var req service.DeleteWeakPasswordTasksRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorJSON(c, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	resp, err := h.service.DeleteTasks(req)
+	if err != nil {
+		errorJSON(c, http.StatusInternalServerError, "Failed to delete tasks")
+		return
+	}
+	successJSON(c, resp)
 }
 
 func (h *WeakPasswordHandler) GetDefaultDictionary(c *gin.Context) {

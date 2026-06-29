@@ -98,6 +98,16 @@ export interface CreateWeakPasswordBatchTasksResponse {
   }>
 }
 
+export interface DeleteWeakPasswordTasksResponse {
+  deleted: string[]
+  skipped: Array<{
+    task_id?: string
+    reason: string
+    message?: string
+  }>
+  count: number
+}
+
 export interface WeakPasswordTask {
   id: string
   name: string
@@ -200,6 +210,8 @@ export interface WeakPasswordCollectionProgress {
   tool_name: string
   status: string
   round: number
+  source_path: string
+  field_name: string
   error_code?: string
   error_message?: string
   execution_time_ms: number

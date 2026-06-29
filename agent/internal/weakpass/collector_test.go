@@ -91,7 +91,12 @@ func TestCollectCredentialsParsesTomcatUsersXML(t *testing.T) {
 }
 
 func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
-	candidates := credentialPathCandidates("/etc/redis/redis.conf", []int{1234, 1234, 0})
+	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234, 1234, 0}, func(pid int) (string, bool) {
+		if pid == 1234 {
+			return "/proc/1234/root", true
+		}
+		return "", false
+	})
 	if len(candidates) != 2 {
 		t.Fatalf("candidates = %d, want 2", len(candidates))
 	}
@@ -103,6 +108,113 @@ func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
 	}
 	if candidates[1].ReadPath != "/etc/redis/redis.conf" || candidates[1].ProcessPID != 0 {
 		t.Fatalf("unexpected host fallback candidate: %#v", candidates[1])
+	}
+}
+
+func TestCredentialPathCandidatesDoNotUseProcRootForNonContainerPID(t *testing.T) {
+	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234}, func(pid int) (string, bool) {
+		return "", false
+	})
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want host fallback only", len(candidates))
+	}
+	if candidates[0].ReadPath != "/etc/redis/redis.conf" || candidates[0].ProcessPID != 0 {
+		t.Fatalf("unexpected candidates: %#v", candidates)
+	}
+}
+
+func TestRedisCredentialRecordsFromCmdline(t *testing.T) {
+	app := ApplicationCollectPlan{Application: "redis", AssetID: "asset-1"}
+	records := redisCredentialRecordsFromCmdline(app, 4321, []string{
+		"redis-server",
+		"--requirepass",
+		"Redis@123",
+		"--masterauth=Master@123",
+	})
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
+	}
+	if records[0].CredentialValue != "Redis@123" || records[0].FieldPath != "cmdline.requirepass" || records[0].ProcessPID != 4321 {
+		t.Fatalf("unexpected requirepass record: %#v", records[0])
+	}
+	if records[1].CredentialValue != "Master@123" || records[1].FieldPath != "cmdline.masterauth" {
+		t.Fatalf("unexpected masterauth record: %#v", records[1])
+	}
+}
+
+func TestParseDockerContainerCommandParts(t *testing.T) {
+	parts, err := parseDockerContainerCommandParts([]byte(`{
+		"Path": "docker-entrypoint.sh",
+		"Args": ["redis-server", "--requirepass", "Redis@123"],
+		"Config": {
+			"Entrypoint": ["ignored-entrypoint"],
+			"Cmd": ["ignored-cmd"]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseDockerContainerCommandParts returned error: %v", err)
+	}
+	if len(parts) != 3 || parts[0] != "redis-server" || parts[2] != "Redis@123" {
+		t.Fatalf("parts = %#v, want Args command", parts)
+	}
+
+	parts, err = parseDockerContainerCommandParts([]byte(`{
+		"Config": {
+			"Entrypoint": ["docker-entrypoint.sh"],
+			"Cmd": ["redis-server", "--masterauth=Master@123"]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseDockerContainerCommandParts returned error: %v", err)
+	}
+	if len(parts) != 3 || parts[0] != "docker-entrypoint.sh" || parts[2] != "--masterauth=Master@123" {
+		t.Fatalf("parts = %#v, want Entrypoint + Cmd command", parts)
+	}
+}
+
+func TestDockerContainerEnvCredentialRecords(t *testing.T) {
+	app := ApplicationCollectPlan{Application: "redis", AssetID: "asset-1"}
+	env, err := parseDockerContainerEnv([]byte(`{
+		"Config": {
+			"Env": [
+				"PATH=/usr/local/bin:/usr/bin",
+				"REDIS_PASSWORD=EnvRedis@123",
+				"REDISCLI_AUTH=CliAuth@123"
+			]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseDockerContainerEnv returned error: %v", err)
+	}
+	records := credentialRecordsFromEnv(app, 4321, env, "/var/lib/docker/containers/container-id/config.v2.json")
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
+	}
+	if records[0].CredentialValue != "EnvRedis@123" || records[0].FieldPath != "Env.REDIS_PASSWORD" || records[0].SourceKind != "container_env" {
+		t.Fatalf("unexpected env record: %#v", records[0])
+	}
+	if records[1].CredentialValue != "CliAuth@123" || records[1].FieldPath != "Env.REDISCLI_AUTH" {
+		t.Fatalf("unexpected env auth record: %#v", records[1])
+	}
+}
+
+func TestRedisCredentialRecordsFromDockerConfigArgs(t *testing.T) {
+	app := ApplicationCollectPlan{Application: "redis", AssetID: "asset-1"}
+	records := redisCredentialRecordsFromArgs(app, 4321, []string{
+		"redis-server",
+		"--requirepass",
+		"Redis@123",
+	}, "/var/lib/docker/containers/container-id/config.v2.json", "container_runtime_config", "docker_config_cmd", "docker_config", 0.9)
+
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.CredentialValue != "Redis@123" || record.SourceKind != "container_runtime_config" || record.Parser != "docker_config_cmd" {
+		t.Fatalf("unexpected docker config record: %#v", record)
+	}
+	if record.FieldPath != "docker_config.requirepass" || record.ProcessPID != 4321 {
+		t.Fatalf("unexpected docker config location: %#v", record)
 	}
 }
 
@@ -242,6 +354,17 @@ func TestConfigPathsFromCmdlineExtractsConfigFlags(t *testing.T) {
 	paths = configPathsFromCmdline([]string{"redis-server", "redis.conf"}, "/srv/redis", []string{".conf"})
 	if len(paths) != 1 || paths[0] != "/srv/redis/redis.conf" {
 		t.Fatalf("relative paths = %#v, want /srv/redis/redis.conf", paths)
+	}
+}
+
+func TestRedactCmdlinePartsRedactsSeparatedRedisPassword(t *testing.T) {
+	parts := redactCmdlineParts([]string{"redis-server", "--requirepass", "Redis@123", "--masterauth=Master@123"})
+	joined := strings.Join(parts, " ")
+	if strings.Contains(joined, "Redis@123") || strings.Contains(joined, "Master@123") {
+		t.Fatalf("cmdline leaked secret: %q", joined)
+	}
+	if parts[2] != "******" || parts[3] != "--masterauth=******" {
+		t.Fatalf("unexpected redacted parts: %#v", parts)
 	}
 }
 

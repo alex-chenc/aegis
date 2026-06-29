@@ -52,6 +52,14 @@ func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
 		"'llm_service'",
 		"'ai_agent'",
 		"'mcp_server'",
+		"normalized(raw_name, canonical_name, display_name, category)",
+		"status = 'active'",
+		"'docker-proxy'",
+		"'tailscaled'",
+		"'postgresql-client'",
+		"'aegis-api-server'",
+		"ranked_duplicate_applications",
+		"PARTITION BY host_id, LOWER(name)",
 	}
 
 	for _, fragment := range requiredFragments {

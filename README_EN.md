@@ -117,12 +117,12 @@ control.
 - Uses a ReAct agent for execution planning, tool calls, reflection, auditing, correction, and summarization
 - Streams reasoning, tool calls, observations, execution plans, and final conclusions through SSE
 - Historical sessions can restore analysis process, conclusions, disposal suggestions, and execution results
-- Supports attack trace graphs, attack flowchart images, and structured disposal suggestions
+- Supports attack trace graphs rendered from the text model's structured `attack_graph` output, plus structured disposal suggestions
 - Supports context compression, batch event analysis, and observability for large-context analysis
 
 ### System Configuration and Observability
 
-- Model configuration supports separate text model and image model settings, connection tests, and secure saving
+- Model configuration supports text model settings, connection tests, and secure saving; the primary attack trace graph is generated from the text model's structured result
 - When no model has been configured for the first time, the page shows an editable empty state instead of reporting it as a system error
 - Supports OpenAI-compatible models, DashScope, and other LLM services
 - Audit log page displays total audit count, pass rate, failure count, retry distribution, and detail drawer

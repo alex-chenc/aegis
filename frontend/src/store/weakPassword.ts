@@ -5,6 +5,7 @@ import {
   createWeakPasswordBatchTasks,
   createWeakPasswordTask,
   deleteWeakPasswordTask,
+  deleteWeakPasswordTasks,
   generateWeakPasswordDictionary,
   getDefaultWeakPasswordDictionary,
   getWeakPasswordTask,
@@ -201,6 +202,22 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     await fetchTasks()
   }
 
+  async function deleteTasks(taskIds: string[]) {
+    const result = await deleteWeakPasswordTasks(taskIds)
+    if (currentTask.value && result.deleted.includes(currentTask.value.id)) {
+      currentTask.value = null
+      progress.value = null
+      hosts.value = []
+      hostTotal.value = 0
+      findings.value = []
+      findingTotal.value = 0
+      errors.value = []
+      errorTotal.value = 0
+    }
+    await fetchTasks()
+    return result
+  }
+
   async function fetchDictionaries() {
     dictionaryLoading.value = true
     try {
@@ -271,6 +288,7 @@ export const useWeakPasswordStore = defineStore('weakPassword', () => {
     fetchTaskDetail,
     retryFailed,
     deleteTask,
+    deleteTasks,
     fetchDictionaries,
     fetchDictionaryEntries,
     generateDictionary,

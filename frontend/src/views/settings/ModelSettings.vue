@@ -4,7 +4,7 @@
       <div>
         <span class="hero-kicker">Model Control Plane</span>
         <h1>模型配置</h1>
-        <p>集中配置文本推理与图片生成。文本模型负责安全分析判断，图片模型负责报告图和攻击溯源图输出。</p>
+        <p>集中配置文本推理模型。文本模型负责安全分析判断、规则生成和结构化溯源图。</p>
       </div>
     </section>
 
@@ -67,62 +67,6 @@
         </el-form>
       </el-card>
 
-      <el-card class="aegis-card settings-card">
-        <template #header>
-          <div class="card-header">
-            <span>图片模型配置</span>
-            <el-tag type="success" size="small">流程图与报告图</el-tag>
-          </div>
-        </template>
-
-        <el-alert
-          title="图片模型说明"
-          type="success"
-          show-icon
-          :closable="false"
-          class="settings-alert"
-        >
-          <p>图片模型配置独立于文本 LLM，用于流程图、报告图和后续图片生成能力。</p>
-        </el-alert>
-
-        <el-form :model="imageForm" label-width="120px">
-          <el-form-item label="图片厂商">
-            <el-radio-group v-model="imageForm.provider" class="provider-selector" @change="handleImageProviderChange">
-              <el-radio-button
-                v-for="provider in imageProviderOptions"
-                :key="provider.value"
-                :label="provider.value"
-              >
-                {{ provider.label }}
-              </el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item label="API Key">
-            <el-input
-              v-model="imageForm.api_key"
-              :type="imageApiKeyVisible ? 'text' : 'password'"
-              placeholder="请输入图片模型 API Key"
-            >
-              <template #suffix>
-                <el-icon class="cursor-pointer" @click="toggleImageApiKeyVisibility">
-                  <View v-if="imageApiKeyVisible" />
-                  <Hide v-else />
-                </el-icon>
-              </template>
-            </el-input>
-          </el-form-item>
-          <el-form-item label="Base URL">
-            <el-input v-model="imageForm.base_url" :placeholder="selectedImageProvider?.baseURL || 'https://api.minimax.io/v1'" />
-          </el-form-item>
-          <el-form-item label="图片模型">
-            <el-input v-model="imageForm.model_name" :placeholder="selectedImageProvider?.modelName || 'image-01'" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="imageSaving" @click="saveImageConfig">保存图片配置</el-button>
-            <el-button :loading="imageTesting" @click="testImageConnection">测试图片连接</el-button>
-          </el-form-item>
-        </el-form>
-      </el-card>
     </div>
   </div>
 </template>
@@ -131,7 +75,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Hide, View } from '@element-plus/icons-vue'
-import { getFullAPIKey, getFullImageModelAPIKey } from '@/api/config'
+import { getFullAPIKey } from '@/api/config'
 import { useConfigStore } from '@/store/config'
 
 const configStore = useConfigStore()
@@ -169,55 +113,17 @@ const providerOptions = [
   }
 ]
 
-const imageProviderOptions = [
-  {
-    value: 'minimax',
-    label: 'MiniMax',
-    baseURL: 'https://api.minimax.io/v1',
-    modelName: 'image-01'
-  },
-  {
-    value: 'zhipu',
-    label: '智谱',
-    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-    modelName: 'cogview-3-flash'
-  },
-  {
-    value: 'openai',
-    label: 'OpenAI',
-    baseURL: 'https://api.openai.com/v1',
-    modelName: 'dall-e-3'
-  },
-  {
-    value: 'custom',
-    label: '自定义',
-    baseURL: '',
-    modelName: ''
-  }
-]
-
 const form = ref({
   api_key: '',
   provider: 'deepseek',
   base_url: 'https://api.deepseek.com/v1',
   model_name: 'deepseek-chat'
 })
-const imageForm = ref({
-  api_key: '',
-  provider: 'zhipu',
-  base_url: 'https://open.bigmodel.cn/api/paas/v4',
-  model_name: 'cogview-3-flash'
-})
 const selectedProvider = computed(() => providerOptions.find((item) => item.value === form.value.provider))
-const selectedImageProvider = computed(() => imageProviderOptions.find((item) => item.value === imageForm.value.provider))
 const saving = ref(false)
 const testing = ref(false)
-const imageSaving = ref(false)
-const imageTesting = ref(false)
 const apiKeyVisible = ref(false)
-const imageApiKeyVisible = ref(false)
 const originalApiKey = ref('')
-const originalImageApiKey = ref('')
 
 const inferProvider = (baseURL: string) => {
   const url = baseURL.toLowerCase()
@@ -228,28 +134,12 @@ const inferProvider = (baseURL: string) => {
   return 'custom'
 }
 
-const inferImageProvider = (baseURL: string) => {
-  const url = baseURL.toLowerCase()
-  if (url.includes('minimaxi') || url.includes('minimax')) return 'minimax'
-  if (url.includes('bigmodel') || url.includes('zhipu')) return 'zhipu'
-  if (url.includes('openai')) return 'openai'
-  return 'custom'
-}
-
 const handleProviderChange = () => {
   const provider = selectedProvider.value
   if (!provider || provider.value === 'custom') return
 
   form.value.base_url = provider.baseURL
   form.value.model_name = provider.modelName
-}
-
-const handleImageProviderChange = () => {
-  const provider = selectedImageProvider.value
-  if (!provider || provider.value === 'custom') return
-
-  imageForm.value.base_url = provider.baseURL
-  imageForm.value.model_name = provider.modelName
 }
 
 const saveConfig = async () => {
@@ -299,63 +189,6 @@ const testConnection = async () => {
   }
 }
 
-const saveImageConfig = async () => {
-  if (imageForm.value.api_key.includes('****')) {
-    ElMessage.warning('请输入完整的图片模型 API Key')
-    return
-  }
-
-  if (!imageForm.value.api_key) {
-    ElMessage.warning('请输入图片模型 API Key')
-    return
-  }
-
-  imageSaving.value = true
-  try {
-    await configStore.saveImageModelConfig(
-      imageForm.value.api_key,
-      imageForm.value.provider,
-      imageForm.value.base_url,
-      imageForm.value.model_name
-    )
-    originalImageApiKey.value = imageForm.value.api_key
-    ElMessage.success('图片模型配置保存成功')
-  } catch (e: any) {
-    ElMessage.error(e.message || '保存失败')
-  } finally {
-    imageSaving.value = false
-  }
-}
-
-const testImageConnection = async () => {
-  if (!imageForm.value.api_key) {
-    ElMessage.warning('请输入图片模型 API Key')
-    return
-  }
-
-  imageTesting.value = true
-  try {
-    let apiKeyToUse = imageForm.value.api_key
-    if (apiKeyToUse.includes('****')) {
-      const data = await getFullImageModelAPIKey()
-      apiKeyToUse = data.api_key
-      originalImageApiKey.value = apiKeyToUse
-    }
-
-    await configStore.testImageModelConnection(
-      apiKeyToUse,
-      imageForm.value.provider,
-      imageForm.value.base_url,
-      imageForm.value.model_name
-    )
-    ElMessage.success('图片模型连接测试成功')
-  } catch (e: any) {
-    ElMessage.error(e.message || '图片模型连接测试失败')
-  } finally {
-    imageTesting.value = false
-  }
-}
-
 const toggleApiKeyVisibility = async () => {
   if (!apiKeyVisible.value && !originalApiKey.value) {
     try {
@@ -374,24 +207,6 @@ const toggleApiKeyVisibility = async () => {
   apiKeyVisible.value = !apiKeyVisible.value
 }
 
-const toggleImageApiKeyVisibility = async () => {
-  if (!imageApiKeyVisible.value && !originalImageApiKey.value) {
-    try {
-      const data = await getFullImageModelAPIKey()
-      originalImageApiKey.value = data.api_key
-      imageForm.value.api_key = originalImageApiKey.value
-    } catch {
-      ElMessage.error('获取图片模型 API Key 失败')
-      return
-    }
-  } else if (!imageApiKeyVisible.value) {
-    imageForm.value.api_key = originalImageApiKey.value
-  } else {
-    imageForm.value.api_key = configStore.imageModelConfig?.api_key_masked || ''
-  }
-  imageApiKeyVisible.value = !imageApiKeyVisible.value
-}
-
 onMounted(async () => {
   try {
     await configStore.fetchLLMConfig()
@@ -403,18 +218,6 @@ onMounted(async () => {
     }
   } catch {
     // Keep page usable when configuration has not been initialized.
-  }
-
-  try {
-    await configStore.fetchImageModelConfig()
-    if (configStore.imageModelConfig) {
-      imageForm.value.provider = configStore.imageModelConfig.provider || inferImageProvider(configStore.imageModelConfig.base_url)
-      imageForm.value.base_url = configStore.imageModelConfig.base_url
-      imageForm.value.model_name = configStore.imageModelConfig.model_name
-      imageForm.value.api_key = configStore.imageModelConfig.api_key_masked || ''
-    }
-  } catch {
-    // Keep text model configuration usable even if image model config is absent.
   }
 })
 </script>

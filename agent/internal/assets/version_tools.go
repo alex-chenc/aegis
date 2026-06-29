@@ -33,12 +33,27 @@ var versionCommandTemplate = map[string][]string{
 	"httpd":          {"/usr/sbin/httpd", "-v"},
 	"apache2":        {"/usr/sbin/apache2", "-v"},
 	"postgres":       {"/usr/bin/postgres", "--version"},
+	"postgresql":     {"/usr/bin/postgres", "--version"},
 	"mysql":          {"/usr/bin/mysql", "--version"},
 	"mariadb":        {"/usr/bin/mariadb", "--version"},
 	"mysqld":         {"/usr/bin/mysqld", "--version"},
 	"redis-server":   {"/usr/bin/redis-server", "--version"},
 	"redis-sentinel": {"/usr/bin/redis-sentinel", "--version"},
 	"mongod":         {"/usr/bin/mongod", "--version"},
+	"docker":         {"/usr/bin/docker", "--version"},
+	"dockerd":        {"/usr/bin/dockerd", "--version"},
+	"docker-proxy":   {"/usr/bin/docker", "--version"},
+	"containerd":     {"/usr/bin/containerd", "--version"},
+	"tailscale":      {"/usr/sbin/tailscaled", "--version"},
+	"tailscaled":     {"/usr/sbin/tailscaled", "--version"},
+	"openssh":        {"/usr/sbin/sshd", "-V"},
+	"sshd":           {"/usr/sbin/sshd", "-V"},
+	"codex":          {"/usr/bin/codex", "--version"},
+	"minio":          {"/usr/bin/minio", "--version"},
+	"clash-verge":    {"/usr/bin/verge-mihomo", "-v"},
+	"clash_verge":    {"/usr/bin/verge-mihomo", "-v"},
+	"verge-mihomo":   {"/usr/bin/verge-mihomo", "-v"},
+	"mihomo":         {"/usr/bin/verge-mihomo", "-v"},
 	"java":           {"/usr/bin/java", "-version"},
 	"node":           {"/usr/bin/node", "--version"},
 	"python3":        {"/usr/bin/python3", "--version"},
@@ -46,7 +61,7 @@ var versionCommandTemplate = map[string][]string{
 	"dotnet":         {"/usr/bin/dotnet", "--version"},
 }
 
-var versionPattern = regexp.MustCompile(`(?i)\bv?(\d+(?:\.\d+)+(?:[-_+~][0-9A-Za-z.]+)?)\b`)
+var versionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9A-Za-z])v?(\d+(?:\.\d+)+(?:[._~+\-]?[0-9A-Za-z]+)*)`)
 
 // AssetGetProcessResult 进程版本获取结果
 type AssetGetProcessResult struct {
@@ -143,8 +158,8 @@ func (v *VersionTool) extractVersion(output string) string {
 			continue
 		}
 
-		if match := versionPattern.FindString(line); match != "" {
-			return strings.TrimPrefix(strings.TrimPrefix(match, "v"), "V")
+		if match := versionPattern.FindStringSubmatch(line); len(match) > 1 {
+			return strings.TrimPrefix(strings.TrimPrefix(match[1], "v"), "V")
 		}
 	}
 

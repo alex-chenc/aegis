@@ -15,6 +15,7 @@ import (
 
 	"github.com/GehirnInc/crypt/sha512_crypt"
 	"github.com/google/uuid"
+	yescrypt "github.com/openwall/yescrypt-go"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/datatypes"
@@ -179,6 +180,38 @@ func TestWeakPasswordShadowSHA512CryptMatchRequiresVerifier(t *testing.T) {
 	}
 }
 
+func TestWeakPasswordShadowYescryptMatchRequiresVerifier(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	if err := svc.EnsureDefaultDictionary(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := yescrypt.Hash([]byte("Admin@123"), []byte("$y$j9T$testsalt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := svc.MatchCredentialRecords(uuid.New(), uuid.New(), uuid.New(), []AgentCredentialRecord{{
+		Application:     "openssh",
+		Account:         "test",
+		CredentialType:  model.CredTypeSaltedHash,
+		CredentialValue: string(hash),
+		Salt:            "testsalt",
+		AlgorithmHint:   "yescrypt",
+		SourcePath:      "/etc/shadow",
+		FieldPath:       "shadow.password",
+		Parser:          "shadow",
+	}})
+	if err != nil {
+		t.Fatalf("MatchCredentialRecords returned error: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+	if findings[0].ApplicationType != "openssh" || findings[0].Account != "test" || findings[0].MatchRule != "server_verifier" {
+		t.Fatalf("unexpected finding: %#v", findings[0])
+	}
+}
+
 func TestWeakPasswordSkillRegistryAddsFixedPaths(t *testing.T) {
 	hostID := uuid.New()
 	analysisID := uuid.New()
@@ -208,6 +241,130 @@ func TestWeakPasswordSkillRegistryAddsFixedPaths(t *testing.T) {
 	})
 	if sshCandidate.ApplicationType != "openssh" || !testContainsString(weakJSONStrings(sshCandidate.CandidatePathsJSON), "/etc/shadow") {
 		t.Fatalf("openssh candidate = %#v paths=%#v", sshCandidate, weakJSONStrings(sshCandidate.CandidatePathsJSON))
+	}
+}
+
+func TestDeduplicateApplicationAssetsMergesPathsAndPIDs(t *testing.T) {
+	hostID := uuid.New()
+	assets := []model.HostApplicationAsset{
+		{
+			ID:           uuid.New(),
+			HostID:       hostID,
+			Name:         "redis",
+			Category:     "database",
+			ConfigPaths:  datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+			RelatedPIDs:  datatypesJSON(t, []int{3580}),
+			AIConfidence: 0.80,
+			CollectedAt:  time.Now().Add(-time.Minute),
+		},
+		{
+			ID:           uuid.New(),
+			HostID:       hostID,
+			Name:         "redis-server",
+			Category:     "database",
+			ConfigPaths:  datatypesJSON(t, []string{"/data/redis.conf"}),
+			RelatedPIDs:  datatypesJSON(t, []int{3581}),
+			AIConfidence: 0.95,
+			CollectedAt:  time.Now(),
+		},
+	}
+
+	deduped := deduplicateApplicationAssetsByHostType(assets)
+	if len(deduped) != 1 {
+		t.Fatalf("deduped assets = %d, want 1", len(deduped))
+	}
+	if got := weakJSONInts(deduped[0].RelatedPIDs); len(got) != 2 || got[0] != 3580 || got[1] != 3581 {
+		t.Fatalf("related_pids = %#v, want merged pids", got)
+	}
+	paths := weakJSONStrings(deduped[0].ConfigPaths)
+	if !testContainsString(paths, "/etc/redis/redis.conf") || !testContainsString(paths, "/data/redis.conf") {
+		t.Fatalf("config paths = %#v, want merged paths", paths)
+	}
+}
+
+func TestHydrateCandidateRuntimeEvidenceBackfillsAssetPIDs(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	assetID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Create(&model.HostApplicationAsset{
+		ID:           assetID,
+		HostID:       hostID,
+		Name:         "redis",
+		DisplayName:  "Redis",
+		Category:     "database",
+		ConfigPaths:  datatypesJSON(t, []string{"/data/redis.conf"}),
+		RelatedPIDs:  datatypesJSON(t, []int{3580}),
+		Status:       "active",
+		CollectedAt:  now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		AIConfidence: 0.9,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := &model.WeakPasswordCandidateApplication{
+		ID:                 uuid.New(),
+		AnalysisID:         uuid.New(),
+		HostID:             hostID,
+		AssetID:            &assetID,
+		ApplicationName:    "Redis",
+		ApplicationType:    "redis",
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		AssetEvidenceJSON:  datatypesJSON(t, map[string]interface{}{}),
+	}
+	svc.hydrateCandidateRuntimeEvidence(candidate)
+	if got := candidateRelatedPIDs(*candidate); len(got) != 1 || got[0] != 3580 {
+		t.Fatalf("candidate pids = %#v, want asset pid", got)
+	}
+	paths := weakJSONStrings(candidate.CandidatePathsJSON)
+	if !testContainsString(paths, "/etc/redis/redis.conf") || !testContainsString(paths, "/data/redis.conf") {
+		t.Fatalf("candidate paths = %#v, want merged asset path", paths)
+	}
+}
+
+func TestHydrateCandidateRuntimeEvidenceMergesStalePIDs(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	assetID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Create(&model.HostApplicationAsset{
+		ID:           assetID,
+		HostID:       hostID,
+		Name:         "redis",
+		DisplayName:  "Redis",
+		Category:     "database",
+		ConfigPaths:  datatypesJSON(t, []string{"/data/redis.conf"}),
+		RelatedPIDs:  datatypesJSON(t, []int{3580, 1152558}),
+		Status:       "active",
+		CollectedAt:  now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		AIConfidence: 0.9,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := &model.WeakPasswordCandidateApplication{
+		ID:                 uuid.New(),
+		AnalysisID:         uuid.New(),
+		HostID:             hostID,
+		AssetID:            &assetID,
+		ApplicationName:    "Redis",
+		ApplicationType:    "redis",
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/redis/redis.conf"}),
+		AssetEvidenceJSON: datatypesJSON(t, map[string]interface{}{
+			"related_pids": []int{3580},
+		}),
+	}
+	svc.hydrateCandidateRuntimeEvidence(candidate)
+	if got := candidateRelatedPIDs(*candidate); len(got) != 2 || got[0] != 3580 || got[1] != 1152558 {
+		t.Fatalf("candidate pids = %#v, want merged stale and asset pids", got)
+	}
+	paths := weakJSONStrings(candidate.CandidatePathsJSON)
+	if !testContainsString(paths, "/etc/redis/redis.conf") || !testContainsString(paths, "/data/redis.conf") {
+		t.Fatalf("candidate paths = %#v, want merged asset path", paths)
 	}
 }
 
@@ -627,6 +784,59 @@ func TestListTaskCollectionProgressPaginatesToolCalls(t *testing.T) {
 	}
 }
 
+func TestListTaskCollectionProgressIncludesSourcePathAndFieldName(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	taskID := uuid.New()
+	scanAppID := uuid.New()
+	hostID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Create(&model.WeakPasswordScanApplication{
+		ID:                 scanAppID,
+		TaskID:             taskID,
+		ScanHostID:         uuid.New(),
+		HostID:             hostID,
+		ApplicationName:    "Redis",
+		ApplicationType:    "redis",
+		Status:             model.AppStatusMatched,
+		AgentToolCallCount: 1,
+		MaxAgentToolCalls:  10,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.CreateToolCall(&model.WeakPasswordAgentToolCall{
+		ID:                uuid.New(),
+		TaskID:            taskID,
+		ScanApplicationID: &scanAppID,
+		HostID:            hostID,
+		CallID:            "call-collect",
+		ToolName:          "WeakPassword.CollectCredentials",
+		ResultSummaryJSON: mustJSON(map[string]interface{}{
+			"record_count": 1,
+			"error_count":  0,
+			"source_paths": []string{"/var/lib/docker/containers/container-id/config.v2.json"},
+			"field_names":  []string{"Env.REDIS_PASSWORD"},
+		}),
+		Status:          "completed",
+		ExecutionTimeMs: 2,
+		CreatedAt:       now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, total, err := svc.ListTaskCollectionProgress(taskID, 1, 10)
+	if err != nil {
+		t.Fatalf("ListTaskCollectionProgress returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("total/len = %d/%d, want 1/1", total, len(items))
+	}
+	if items[0].SourcePath != "/var/lib/docker/containers/container-id/config.v2.json" || items[0].FieldName != "Env.REDIS_PASSWORD" {
+		t.Fatalf("unexpected collection source fields: %#v", items[0])
+	}
+}
+
 func TestListTaskCollectionProgressIncludesFinalFailureSummary(t *testing.T) {
 	svc := newWeakPasswordTestService(t)
 	taskID := uuid.New()
@@ -679,6 +889,50 @@ func TestListTaskCollectionProgressIncludesFinalFailureSummary(t *testing.T) {
 	}
 	if items[1].Round != 1 || items[1].ToolName != "WeakPassword.CollectCredentials" {
 		t.Fatalf("unexpected tool call row: %#v", items[1])
+	}
+}
+
+func TestDeleteTasksDeletesCompletedAndSkipsRunning(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	completedID := uuid.New()
+	runningID := uuid.New()
+	now := time.Now()
+	for _, task := range []model.WeakPasswordScanTask{
+		{
+			ID:        completedID,
+			Name:      "completed",
+			Status:    model.TaskStatusCompleted,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			ID:        runningID,
+			Name:      "running",
+			Status:    model.TaskStatusMatching,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	} {
+		if err := svc.repo.DB().Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp, err := svc.DeleteTasks(DeleteWeakPasswordTasksRequest{TaskIDs: []string{completedID.String(), runningID.String(), "not-a-uuid"}})
+	if err != nil {
+		t.Fatalf("DeleteTasks returned error: %v", err)
+	}
+	if resp.Count != 1 || len(resp.Deleted) != 1 || resp.Deleted[0] != completedID.String() {
+		t.Fatalf("deleted response = %#v, want completed task deleted", resp)
+	}
+	if len(resp.Skipped) != 2 {
+		t.Fatalf("skipped = %#v, want running and invalid skipped", resp.Skipped)
+	}
+	if _, err := svc.repo.GetTask(completedID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("completed task still exists or unexpected err: %v", err)
+	}
+	if _, err := svc.repo.GetTask(runningID); err != nil {
+		t.Fatalf("running task should remain: %v", err)
 	}
 }
 
@@ -1094,6 +1348,40 @@ func TestWeakPasswordTaskUsesProcessHintsAfterFirstConfigMiss(t *testing.T) {
 	}
 	if findings[0].SourcePath != "/etc/redis/redis.conf" || processPIDFromEvidence(findings[0].EvidenceJSON) != 4321 {
 		t.Fatalf("unexpected finding source/evidence: %#v", findings[0])
+	}
+}
+
+func TestNormalizeRepairToolArgumentsUsesRelatedPID(t *testing.T) {
+	app := CredentialApplication{
+		Application: "redis",
+		RelatedPIDs: []int{3580},
+	}
+
+	args, err := normalizeRepairToolArguments("WeakPassword.ListConfigDir", map[string]interface{}{
+		"dir":       "/etc/redis",
+		"max_depth": float64(2),
+	}, app)
+	if err != nil {
+		t.Fatalf("normalizeRepairToolArguments returned error: %v", err)
+	}
+	if args["pid"] != 3580 {
+		t.Fatalf("pid = %#v, want related pid", args["pid"])
+	}
+	if _, ok := args["max_depth"]; ok {
+		t.Fatalf("max_depth should be removed for non-recursive tool args: %#v", args)
+	}
+	if args["recursive"] != false {
+		t.Fatalf("recursive = %#v, want false", args["recursive"])
+	}
+
+	args, err = normalizeRepairToolArguments("WeakPassword.ProcessConfigHints", map[string]interface{}{
+		"pid": float64(1),
+	}, app)
+	if err != nil {
+		t.Fatalf("normalizeRepairToolArguments returned error: %v", err)
+	}
+	if args["pid"] != 3580 || args["application"] != "redis" || args["include_open_files"] != true {
+		t.Fatalf("unexpected process hint args: %#v", args)
 	}
 }
 

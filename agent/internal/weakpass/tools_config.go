@@ -26,7 +26,8 @@ func (c *Collector) ProbePath(ctx context.Context, params map[string]interface{}
 	if err := validatePath(req.Path); err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(req.Path)
+	resolved := resolvePathForProcess(req.Path, req.PID)
+	info, err := os.Stat(resolved.ReadPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &PathProbeResult{Path: req.Path, Exists: false}, nil
@@ -62,10 +63,11 @@ func (c *Collector) ListConfigDir(ctx context.Context, params map[string]interfa
 	if err := validatePath(req.Dir); err != nil {
 		return nil, err
 	}
+	resolved := resolvePathForProcess(req.Dir, req.PID)
 	if req.MaxEntries <= 0 || req.MaxEntries > 200 {
 		req.MaxEntries = 200
 	}
-	entries, err := os.ReadDir(req.Dir)
+	entries, err := os.ReadDir(resolved.ReadPath)
 	if err != nil {
 		return nil, err
 	}
@@ -74,11 +76,12 @@ func (c *Collector) ListConfigDir(ctx context.Context, params map[string]interfa
 		if len(result.Entries) >= req.MaxEntries {
 			break
 		}
-		fullPath := filepath.Join(req.Dir, entry.Name())
+		fullPath := filepath.Join(resolved.SourcePath, entry.Name())
+		readPath := filepath.Join(resolved.ReadPath, entry.Name())
 		if entry.IsDir() || !hasAllowedSuffix(fullPath, req.SuffixAllowlist) {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := os.Stat(readPath)
 		if err != nil {
 			continue
 		}
@@ -104,13 +107,14 @@ func (c *Collector) ReadConfigSlice(ctx context.Context, params map[string]inter
 	if err := validatePath(req.Path); err != nil {
 		return nil, err
 	}
+	resolved := resolvePathForProcess(req.Path, req.PID)
 	if req.MaxBytes <= 0 || req.MaxBytes > maxConfigSliceBytes {
 		req.MaxBytes = maxConfigSliceBytes
 	}
-	content, err := readAllowedFile(req.Path, req.MaxBytes)
+	content, err := readAllowedFile(resolved.ReadPath, req.MaxBytes)
 	if err != nil {
 		if errorsCode, _ := fileErrorCode(err); errorsCode == ErrFileTooLarge {
-			content, err = readPrefix(req.Path, req.MaxBytes)
+			content, err = readPrefix(resolved.ReadPath, req.MaxBytes)
 		}
 		if err != nil {
 			return nil, err
@@ -135,7 +139,7 @@ func (c *Collector) ReadConfigSlice(ctx context.Context, params map[string]inter
 		lines = append(lines, line)
 	}
 	return &ConfigSliceResult{
-		Path:      req.Path,
+		Path:      resolved.SourcePath,
 		StartLine: req.StartLine,
 		EndLine:   req.EndLine,
 		Lines:     lines,
@@ -202,9 +206,9 @@ func (c *Collector) ProcessConfigHints(ctx context.Context, params map[string]in
 		for _, part := range strings.Split(string(content), "\x00") {
 			if part != "" {
 				rawCmdline = append(rawCmdline, part)
-				result.Cmdline = append(result.Cmdline, redactCmdlinePart(part))
 			}
 		}
+		result.Cmdline = redactCmdlineParts(rawCmdline)
 	}
 	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", req.PID)); err == nil {
 		result.CWD = cwd
@@ -250,6 +254,42 @@ func (c *Collector) ProcessConfigHints(ctx context.Context, params map[string]in
 		result.ConfigPathCandidates = uniqueConfigPaths(append(cmdlineCandidates, result.OpenConfigFiles...), req.MaxFiles)
 	}
 	return result, nil
+}
+
+type processResolvedPath struct {
+	ReadPath   string
+	SourcePath string
+	ProcessPID int
+}
+
+func resolvePathForProcess(path string, pid int) processResolvedPath {
+	resolved := processResolvedPath{ReadPath: path, SourcePath: path}
+	if pid <= 0 {
+		return resolved
+	}
+	root, ok := detectContainerRootForPID(pid)
+	if !ok {
+		return resolved
+	}
+	resolved.ReadPath = processRootPath(root, path)
+	resolved.ProcessPID = pid
+	return resolved
+}
+
+func detectContainerRootForPID(pid int) (string, bool) {
+	if pid <= 0 {
+		return "", false
+	}
+	if content, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid)); err == nil {
+		if identity := parseContainerIdentityFromCgroup(string(content)); identity.ID != "" {
+			return fmt.Sprintf("/proc/%d/root", pid), true
+		}
+	}
+	procRoot := fmt.Sprintf("/proc/%d/root", pid)
+	if _, err := os.Stat(filepath.Join(procRoot, ".dockerenv")); err == nil {
+		return procRoot, true
+	}
+	return "", false
 }
 
 func (c *Collector) PurgeCredentialCache(ctx context.Context, params map[string]interface{}) (*PurgeResult, error) {
@@ -357,7 +397,7 @@ func normalizeConfigSuffixAllowlist(suffixes []string) []string {
 
 func redactCmdlinePart(value string) string {
 	lower := strings.ToLower(value)
-	for _, key := range []string{"password", "passwd", "pwd", "token", "secret", "api_key", "apikey"} {
+	for _, key := range []string{"password", "passwd", "pwd", "token", "secret", "api_key", "apikey", "requirepass", "masterauth"} {
 		if strings.Contains(lower, key+"=") || strings.Contains(lower, key+":") {
 			if idx := strings.IndexAny(value, "=:"); idx >= 0 {
 				return value[:idx+1] + "******"
@@ -365,6 +405,25 @@ func redactCmdlinePart(value string) string {
 		}
 	}
 	return value
+}
+
+func redactCmdlineParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	redactNext := false
+	for _, part := range parts {
+		if redactNext {
+			out = append(out, "******")
+			redactNext = false
+			continue
+		}
+		out = append(out, redactCmdlinePart(part))
+		lower := strings.ToLower(strings.TrimLeft(strings.TrimSpace(part), "-"))
+		switch lower {
+		case "requirepass", "masterauth", "password", "passwd", "pwd", "token", "secret", "api_key", "apikey":
+			redactNext = true
+		}
+	}
+	return out
 }
 
 func configPathsFromCmdline(parts []string, cwd string, suffixes []string) []string {

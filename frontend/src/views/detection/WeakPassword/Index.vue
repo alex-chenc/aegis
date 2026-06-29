@@ -113,9 +113,26 @@
         <section class="panel">
           <div class="panel-head">
             <h2>检查任务</h2>
-            <el-button :icon="Refresh" @click="store.fetchTasks">刷新</el-button>
+            <div class="toolbar-actions">
+              <el-button
+                type="danger"
+                plain
+                :disabled="selectedTaskRows.length === 0"
+                @click="deleteSelectedTasks"
+              >
+                批量删除
+              </el-button>
+              <el-button :icon="Refresh" @click="store.fetchTasks">刷新</el-button>
+            </div>
           </div>
-          <el-table v-loading="store.loading" :data="store.tasks" class="dense-table">
+          <el-table
+            v-loading="store.loading"
+            :data="store.tasks"
+            class="dense-table"
+            row-key="id"
+            @selection-change="handleTaskSelectionChange"
+          >
+            <el-table-column type="selection" width="48" :selectable="isTaskSelectable" />
             <el-table-column label="任务" min-width="220" prop="name" />
             <el-table-column label="状态" width="150">
               <template #default="{ row }">
@@ -224,7 +241,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Collection, Cpu, Key, Refresh, Search } from '@element-plus/icons-vue'
 import { revealWeakPasswordFinding } from '@/api/weakPassword'
 import { useWeakPasswordStore } from '@/store/weakPassword'
-import type { WeakPasswordCandidateApplication, WeakPasswordDictionary } from '@/types/weakPassword'
+import type { WeakPasswordCandidateApplication, WeakPasswordDictionary, WeakPasswordTask } from '@/types/weakPassword'
 import { weakPasswordStatusLabel } from '@/utils/weakPasswordLabels'
 
 const router = useRouter()
@@ -236,6 +253,7 @@ const findingVisible = ref(false)
 const checkMode = ref<'single' | 'batch'>('single')
 const selectedCandidate = ref<WeakPasswordCandidateApplication | null>(null)
 const selectedDictionaryIds = ref<string[]>([])
+const selectedTaskRows = ref<WeakPasswordTask[]>([])
 const repairCollectionErrors = ref(true)
 const detectionRounds = ref(10)
 const revealedPasswords = reactive<Record<string, string>>({})
@@ -398,6 +416,39 @@ async function deleteTask(taskId: string) {
     })
     await store.deleteTask(taskId)
     ElMessage.success('已删除任务')
+  } catch {
+    // user cancelled
+  }
+}
+
+function handleTaskSelectionChange(rows: WeakPasswordTask[]) {
+  selectedTaskRows.value = rows
+}
+
+function isTaskSelectable(row: WeakPasswordTask) {
+  return canDeleteTask(row.status)
+}
+
+async function deleteSelectedTasks() {
+  const taskIds = selectedTaskRows.value.filter(row => canDeleteTask(row.status)).map(row => row.id)
+  if (taskIds.length === 0) {
+    ElMessage.warning('请选择可删除的任务')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${taskIds.length} 个弱密码检测任务吗？`, '批量删除任务', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    const result = await store.deleteTasks(taskIds)
+    selectedTaskRows.value = []
+    const skipped = result.skipped?.length || 0
+    if (skipped > 0) {
+      ElMessage.warning(`已删除 ${result.count} 个任务，跳过 ${skipped} 个任务`)
+      return
+    }
+    ElMessage.success(`已删除 ${result.count} 个任务`)
   } catch {
     // user cancelled
   }

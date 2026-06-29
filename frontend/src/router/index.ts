@@ -116,6 +116,13 @@ const routes = [
     props: { defaultCategory: 'mcp_server' }
   },
   {
+    path: '/hosts/assets/other-applications',
+    name: 'AssetsOtherApplications',
+    component: () => import('../views/hosts/Assets/Applications.vue'),
+    meta: { title: '其他应用资产' },
+    props: { defaultCategory: 'other' }
+  },
+  {
     path: '/hosts/assets/collections',
     name: 'AssetsCollections',
     redirect: '/hosts/assets',

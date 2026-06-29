@@ -70,6 +70,7 @@ type CredentialCollectionResult struct {
 
 type PathProbeRequest struct {
 	Path string `json:"path"`
+	PID  int    `json:"pid,omitempty"`
 }
 
 type PathProbeResult struct {
@@ -83,6 +84,7 @@ type PathProbeResult struct {
 
 type ConfigDirListRequest struct {
 	Dir             string   `json:"dir"`
+	PID             int      `json:"pid,omitempty"`
 	SuffixAllowlist []string `json:"suffix_allowlist"`
 	MaxEntries      int      `json:"max_entries"`
 	Recursive       bool     `json:"recursive"`
@@ -102,6 +104,7 @@ type ConfigDirListResult struct {
 
 type ConfigSliceRequest struct {
 	Path         string `json:"path"`
+	PID          int    `json:"pid,omitempty"`
 	StartLine    int    `json:"start_line"`
 	EndLine      int    `json:"end_line"`
 	MaxBytes     int64  `json:"max_bytes"`

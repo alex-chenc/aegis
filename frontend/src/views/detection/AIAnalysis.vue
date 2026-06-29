@@ -533,7 +533,6 @@ const messages = ref<Message[]>([])
 const inputMessage = ref('')
 const attackGraph = ref<AttackGraphData | null>(null)
 const finalAnswerContent = ref<string>('')
-const generatedFlowchartImageUrl = ref('')
 const isLoading = ref(false)
 const maxIterations = ref(500)
 const executionPlan = ref<PlanEvent | null>(null)
@@ -583,7 +582,6 @@ function saveConversation() {
         attackGraph: attackGraph.value,
         analysisAlertSnapshot: analysisAlertSnapshot.value,
         finalAnswerContent: finalAnswerContent.value,
-        generatedFlowchartImageUrl: generatedFlowchartImageUrl.value,
         executionPlan: executionPlan.value,
         auditResults: auditResults.value,
         reflectionResults: reflectionResults.value,
@@ -612,7 +610,6 @@ function loadConversation(): boolean {
       attackGraph.value = data.attackGraph || null
       analysisAlertSnapshot.value = data.analysisAlertSnapshot || []
       finalAnswerContent.value = data.finalAnswerContent || ''
-      generatedFlowchartImageUrl.value = data.generatedFlowchartImageUrl || ''
       executionPlan.value = data.executionPlan || null
       auditResults.value = data.auditResults || []
       reflectionResults.value = data.reflectionResults || []
@@ -996,7 +993,6 @@ async function loadSession(session: SessionListItem) {
   messages.value = []
   finalAnswerContent.value = ''
   attackGraph.value = null
-  generatedFlowchartImageUrl.value = ''
   executionResult.value = null
   aiAutoBlockResult.value = null
   executionPlan.value = null
@@ -1242,7 +1238,6 @@ async function startAnalysis() {
     messages.value = []
     finalAnswerContent.value = ''
     attackGraph.value = null
-    generatedFlowchartImageUrl.value = ''
     executionPlan.value = null
     auditResults.value = []
     reflectionResults.value = []
@@ -1440,15 +1435,6 @@ function createSSEHandler(message: string) {
           upsertFinalAssistantMessage(event.content || '', true)
         }
         // Don't set isLoading=false here; wait for 'done' event
-        scrollToBottom()
-        break
-
-      case 'flowchart_image':
-        if (event.result?.url) {
-          generatedFlowchartImageUrl.value = event.result.url
-        } else if (event.error) {
-          ElMessage.warning(event.error)
-        }
         scrollToBottom()
         break
 
@@ -1660,7 +1646,6 @@ function sendInitialMessage(message: string) {
   })
   finalAnswerContent.value = ''
   attackGraph.value = null
-  generatedFlowchartImageUrl.value = ''
   executionResult.value = null
 
   scrollToBottom()
@@ -1686,7 +1671,6 @@ function sendMessage() {
   })
   finalAnswerContent.value = ''
   attackGraph.value = null
-  generatedFlowchartImageUrl.value = ''
   executionResult.value = null
 
   scrollToBottom()
@@ -1751,7 +1735,6 @@ function downloadFlowchartImage() {
 
 function closeFlowchart() {
   attackGraph.value = null
-  generatedFlowchartImageUrl.value = ''
 }
 
 function severityTagType(severity: string) {
