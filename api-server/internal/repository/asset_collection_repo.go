@@ -120,7 +120,7 @@ func (r *AssetCollectionRepository) UpsertSoftwareAsset(asset *model.HostSoftwar
 
 // UpsertApplicationAsset Upsert 应用资产
 func (r *AssetCollectionRepository) UpsertApplicationAsset(asset *model.HostApplicationAsset) error {
-	updates := clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "review_status", "status", "last_seen_at", "collected_at", "updated_at"})
+	updates := clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "is_container", "container_id", "container_runtime", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "review_status", "status", "last_seen_at", "collected_at", "updated_at"})
 	updates = append(updates,
 		clause.Assignment{
 			Column: clause.Column{Name: "version"},
@@ -275,10 +275,11 @@ func dedupedApplicationAssetsQuery(db *gorm.DB, base *gorm.DB) *gorm.DB {
 					WHEN 'inactive' THEN 2
 					ELSE 3
 				END,
-				ai_confidence DESC,
-				last_seen_at DESC,
 				collected_at DESC,
-				updated_at DESC
+				last_seen_at DESC,
+				updated_at DESC,
+				is_container DESC,
+				ai_confidence DESC
 		) AS asset_rank`)
 	return db.Table("(?) AS ranked_application_assets", ranked)
 }

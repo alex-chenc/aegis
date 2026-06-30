@@ -104,6 +104,14 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="标签" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.is_container ? 'success' : 'info'" size="small" effect="plain">
+              {{ applicationRuntimeLabel(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="version" label="安装版本" width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.version || 'unknown' }}</span>
@@ -216,6 +224,11 @@
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="版本">{{ selectedApp.version || 'unknown' }}</el-descriptions-item>
+          <el-descriptions-item label="标签">
+            <el-tag :type="selectedApp.is_container ? 'success' : 'info'" size="small" effect="plain">
+              {{ applicationRuntimeLabel(selectedApp) }}
+            </el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="置信度">{{ Math.round(getConfidence(selectedApp) * 100) }}%</el-descriptions-item>
           <el-descriptions-item label="主机名">{{ selectedApp.hostname }}</el-descriptions-item>
           <el-descriptions-item label="IP 地址">{{ selectedApp.ip_address }}</el-descriptions-item>
@@ -500,6 +513,11 @@ function getConfidence(app: ApplicationAsset) {
 function displayPids(app: ApplicationAsset | null) {
   if (!app?.related_pids?.length) return []
   return [...new Set(app.related_pids.filter(pid => Number.isFinite(pid) && pid > 0))].sort((a, b) => a - b)
+}
+
+function applicationRuntimeLabel(app: ApplicationAsset | null) {
+  if (!app?.is_container) return '主机应用'
+  return '容器应用'
 }
 
 // 获取复核状态类型

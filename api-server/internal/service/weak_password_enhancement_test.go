@@ -13,7 +13,7 @@ func TestSkillRegistryContainsAllApplications(t *testing.T) {
 	expectedTypes := []string{
 		"redis", "openssh", "mysql", "mariadb", "postgresql", "postgres",
 		"tomcat", "ftp", "vsftpd", "proftpd", "nginx", "apache", "httpd",
-		"web_service", "llm_service", "ai_agent", "mcp_server",
+		"web_service", "kafka", "llm_service", "ai_agent", "mcp_server",
 	}
 
 	for _, appType := range expectedTypes {
@@ -70,6 +70,28 @@ func TestOpenSHDSkillUsesShadowFile(t *testing.T) {
 
 	if len(skill.Extractors) == 0 || skill.Extractors[0].Type != "shadow" {
 		t.Errorf("OpenSSH skill should use shadow extractor")
+	}
+}
+
+func TestKafkaSkillHasSpecificPathsAndExtractors(t *testing.T) {
+	skill := weakPasswordSkillForApplication("kafka")
+	if skill.ApplicationType != "kafka" || skill.ProfileID != "kafka_config_v1" {
+		t.Fatalf("Kafka skill = %#v, want kafka_config_v1", skill)
+	}
+	for _, expected := range []string{"/etc/kafka/kafka.properties", "/etc/kafka/server.properties", "/etc/kafka/kafka_server_jaas.conf"} {
+		if !testContainsString(skill.CandidatePaths, expected) {
+			t.Fatalf("Kafka skill paths = %#v, missing %s", skill.CandidatePaths, expected)
+		}
+	}
+	var hasJAAS bool
+	for _, extractor := range skill.Extractors {
+		if extractor.PasswordSelector == "sasl.jaas.config" {
+			hasJAAS = true
+			break
+		}
+	}
+	if !hasJAAS {
+		t.Fatalf("Kafka extractors = %#v, want sasl.jaas.config", skill.Extractors)
 	}
 }
 

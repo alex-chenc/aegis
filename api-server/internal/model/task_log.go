@@ -16,6 +16,8 @@ type TaskLog struct {
 	Status          string     `gorm:"type:varchar(20);not null;index" json:"status"`
 	ScriptContent   *string    `gorm:"type:text" json:"script_content"`
 	ScriptVersion   *int       `json:"script_version"`
+	AttemptNo       int        `gorm:"not null;default:1" json:"attempt_no"`
+	MaxRounds       int        `gorm:"not null;default:1" json:"max_rounds"`
 	Stdout          *string    `gorm:"type:text" json:"stdout"`
 	Stderr          *string    `gorm:"type:text" json:"stderr"`
 	ExitCode        *int       `json:"exit_code"`

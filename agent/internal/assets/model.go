@@ -76,7 +76,9 @@ type ProcessAsset struct {
 	Username    string    `json:"username"`
 	ListenPorts []int     `json:"listen_ports"`
 	StartTime   time.Time `json:"start_time,omitempty"`
+	Cgroup      []string  `json:"cgroup,omitempty"`
 	ContainerID string    `json:"container_id,omitempty"`
+	Runtime     string    `json:"container_runtime,omitempty"`
 	PackageName string    `json:"package_name,omitempty"`
 }
 

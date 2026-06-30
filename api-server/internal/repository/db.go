@@ -579,12 +579,15 @@ func assetCollectionSchemaStatements() []string {
 			listen_ports       JSONB NOT NULL DEFAULT '[]',
 			run_user           VARCHAR(255),
 			runtime_name       VARCHAR(100),
-			runtime_version    VARCHAR(100),
-			framework_name     VARCHAR(100),
-			framework_version  VARCHAR(100),
-			related_pids       JSONB NOT NULL DEFAULT '[]',
-			related_packages   JSONB NOT NULL DEFAULT '[]',
-			ai_confidence      NUMERIC(4,3) NOT NULL DEFAULT 0,
+				runtime_version    VARCHAR(100),
+				framework_name     VARCHAR(100),
+				framework_version  VARCHAR(100),
+				related_pids       JSONB NOT NULL DEFAULT '[]',
+				is_container       BOOLEAN NOT NULL DEFAULT FALSE,
+				container_id       VARCHAR(128),
+				container_runtime  VARCHAR(64),
+				related_packages   JSONB NOT NULL DEFAULT '[]',
+				ai_confidence      NUMERIC(4,3) NOT NULL DEFAULT 0,
 			ai_evidence        JSONB NOT NULL DEFAULT '[]',
 			ai_raw_output      JSONB NOT NULL DEFAULT '{}',
 			manual_overrides   JSONB NOT NULL DEFAULT '{}',
@@ -596,10 +599,13 @@ func assetCollectionSchemaStatements() []string {
 			collected_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
+			)`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS is_container BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_id VARCHAR(128)`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_runtime VARCHAR(64)`,
 		`DO $$ BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fkey') THEN
-				ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fkey
+				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fkey') THEN
+					ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fkey
 					FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE;
 			END IF;
 		END $$`,
@@ -633,7 +639,6 @@ func assetCollectionSchemaStatements() []string {
 					name = normalized.canonical_name,
 					display_name = normalized.display_name,
 					category = normalized.category,
-					status = 'active',
 					updated_at = NOW()
 				FROM (VALUES
 					('redis', 'redis', 'Redis', 'database'),
@@ -668,7 +673,8 @@ func assetCollectionSchemaStatements() []string {
 					('claude_code', 'claude_code', 'Claude Code', 'ai_agent'),
 					('codex', 'codex', 'OpenAI Codex', 'ai_agent')
 				) AS normalized(raw_name, canonical_name, display_name, category)
-				WHERE LOWER(app.name) = normalized.raw_name`,
+				WHERE LOWER(app.name) = normalized.raw_name
+					AND app.status <> 'deleted'`,
 		`UPDATE host_application_assets
 			SET status = 'deleted', updated_at = NOW()
 			WHERE status <> 'deleted'
@@ -704,10 +710,11 @@ func assetCollectionSchemaStatements() []string {
 								WHEN 'inactive' THEN 2
 								ELSE 3
 							END,
-							ai_confidence DESC,
-							last_seen_at DESC,
 							collected_at DESC,
-							updated_at DESC
+							last_seen_at DESC,
+							updated_at DESC,
+							is_container DESC,
+							ai_confidence DESC
 					) AS duplicate_rank
 				FROM host_application_assets
 				WHERE status <> 'deleted'
@@ -721,6 +728,7 @@ func assetCollectionSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_category ON host_application_assets(category)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_name ON host_application_assets(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_version ON host_application_assets(version)`,
+		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_container ON host_application_assets(is_container, container_runtime)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_ports ON host_application_assets USING GIN(listen_ports)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_review ON host_application_assets(review_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_seen ON host_application_assets(last_seen_at DESC)`,

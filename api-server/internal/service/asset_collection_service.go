@@ -290,7 +290,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.String("host_id", hostID),
 			zap.Error(err))
 	} else if len(aiAssets) > 0 {
-		count, err := s.saveAIAssetsFromList(hostUUID, snapshot.Hostname, snapshot.IPAddress, snapshot.OSType, aiAssets)
+		count, err := s.saveAIAssetsFromList(hostUUID, snapshot, aiAssets)
 		if err != nil {
 			s.logger.Error("Failed to save AI assets",
 				zap.String("host_id", hostID),
@@ -383,7 +383,7 @@ func (s *AssetCollectionService) collectAIAssets(ctx context.Context, hostID str
 }
 
 // saveAIAssetsFromList 将 AI 资产列表保存到数据库
-func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname, ipAddress, osType string, aiAssets []AIAsset) (int, error) {
+func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, snapshot HostAssetSnapshot, aiAssets []AIAsset) (int, error) {
 	count := 0
 	for _, ai := range aiAssets {
 		identified := normalizeIdentifiedApplication(IdentifiedApplication{
@@ -429,6 +429,7 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname
 		if ai.ConfigPath != "" {
 			configPaths = append(configPaths, ai.ConfigPath)
 		}
+		containerInfo := containerInfoForPIDs(snapshot.Processes, ai.PIDs)
 		evidence := []map[string]string{
 			{
 				"source":      ai.Source,
@@ -437,32 +438,42 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname
 				"endpoint":    ai.Endpoint,
 			},
 		}
+		if containerInfo.IsContainer {
+			evidence = append(evidence, map[string]string{
+				"source":            "process_cgroup",
+				"container_runtime": containerInfo.Runtime,
+				"container_id":      containerInfo.ID,
+			})
+		}
 
 		app := &model.HostApplicationAsset{
-			ID:            uuid.New(),
-			HostID:        hostID,
-			Hostname:      hostname,
-			IPAddress:     ipAddress,
-			OSType:        osType,
-			Category:      ai.Category,
-			Name:          ai.Name,
-			DisplayName:   ai.DisplayName,
-			Version:       ai.Version,
-			VersionSource: ai.Source,
-			ListenPorts:   listenPortsJSON,
-			InstallPath:   ai.ConfigPath,
-			StartPath:     ai.Endpoint,
-			ConfigPaths:   mustMarshalJSON(configPaths),
-			RelatedPIDs:   mustMarshalJSON(ai.PIDs),
-			AIConfidence:  0.9, // Agent 侧直接采集，高置信度
-			AIEvidence:    mustMarshalJSON(evidence),
-			AIRawOutput:   mustMarshalJSON(ai),
-			ReviewStatus:  "auto",
-			Status:        "active",
-			Fingerprint:   fp,
-			CollectedAt:   time.Now(),
-			FirstSeenAt:   time.Now(),
-			LastSeenAt:    time.Now(),
+			ID:               uuid.New(),
+			HostID:           hostID,
+			Hostname:         snapshot.Hostname,
+			IPAddress:        snapshot.IPAddress,
+			OSType:           snapshot.OSType,
+			Category:         ai.Category,
+			Name:             ai.Name,
+			DisplayName:      ai.DisplayName,
+			Version:          ai.Version,
+			VersionSource:    ai.Source,
+			ListenPorts:      listenPortsJSON,
+			InstallPath:      ai.ConfigPath,
+			StartPath:        ai.Endpoint,
+			ConfigPaths:      mustMarshalJSON(configPaths),
+			RelatedPIDs:      mustMarshalJSON(ai.PIDs),
+			IsContainer:      containerInfo.IsContainer,
+			ContainerID:      containerInfo.ID,
+			ContainerRuntime: containerInfo.Runtime,
+			AIConfidence:     0.9, // Agent 侧直接采集，高置信度
+			AIEvidence:       mustMarshalJSON(evidence),
+			AIRawOutput:      mustMarshalJSON(ai),
+			ReviewStatus:     "auto",
+			Status:           "active",
+			Fingerprint:      fp,
+			CollectedAt:      time.Now(),
+			FirstSeenAt:      time.Now(),
+			LastSeenAt:       time.Now(),
 		}
 
 		if err := s.repo.UpsertApplicationAsset(app); err != nil {
@@ -910,5 +921,7 @@ type ProcessAsset struct {
 	Username    string    `json:"username"`
 	ListenPorts []int     `json:"listen_ports"`
 	StartTime   time.Time `json:"start_time,omitempty"`
+	Cgroup      []string  `json:"cgroup,omitempty"`
 	ContainerID string    `json:"container_id,omitempty"`
+	Runtime     string    `json:"container_runtime,omitempty"`
 }

@@ -122,7 +122,7 @@
       <div class="panel-head">
         <h2>采集进度</h2>
       </div>
-      <el-table :data="store.errors" class="dense-table">
+      <el-table :data="store.errors" class="dense-table collection-progress-table" height="420">
         <el-table-column label="应用" prop="application_name" min-width="140" />
         <el-table-column label="轮次" prop="round" width="90" />
         <el-table-column label="工具" min-width="230">
@@ -141,12 +141,16 @@
         </el-table-column>
         <el-table-column label="采集路径" min-width="260">
           <template #default="{ row }">
-            <div class="secondary-cell multiline-cell">{{ row.source_path || '未记录路径' }}</div>
+            <el-tooltip :content="collectionCellValue(row.source_path, '未记录路径')" placement="top" :show-after="250">
+              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.source_path, '未记录路径') }}</div>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="采集字段" min-width="220">
           <template #default="{ row }">
-            <div class="secondary-cell multiline-cell">{{ row.field_name || '未记录字段' }}</div>
+            <el-tooltip :content="collectionCellValue(row.field_name, '未记录字段')" placement="top" :show-after="250">
+              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.field_name, '未记录字段') }}</div>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -259,6 +263,10 @@ function statusType(status: string) {
   return 'info'
 }
 
+function collectionCellValue(value: string | undefined, fallback: string) {
+  return value?.trim() || fallback
+}
+
 onMounted(() => {
   loadDetail()
   timer = window.setInterval(loadDetail, 5000)
@@ -365,6 +373,18 @@ onBeforeUnmount(() => {
 .multiline-cell {
   white-space: pre-line;
   word-break: break-word;
+}
+
+.clipped-multiline-cell {
+  display: -webkit-box;
+  max-height: 96px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+
+.collection-progress-table {
+  min-height: 420px;
 }
 
 .password-mask {

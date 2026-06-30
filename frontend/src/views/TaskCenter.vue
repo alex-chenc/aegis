@@ -1,10 +1,51 @@
 <template>
   <div class="task-center">
+    <div class="overview-grid">
+      <div class="overview-card">
+        <span>任务组</span>
+        <strong>{{ taskOverview.total }}</strong>
+      </div>
+      <div class="overview-card">
+        <span>执行中</span>
+        <strong>{{ taskOverview.active }}</strong>
+      </div>
+      <div class="overview-card">
+        <span>成功</span>
+        <strong>{{ taskOverview.success }}</strong>
+      </div>
+      <div class="overview-card">
+        <span>失败/超时</span>
+        <strong>{{ taskOverview.failed }}</strong>
+      </div>
+      <div class="overview-card">
+        <span>平均通过率</span>
+        <strong>{{ taskOverview.passRate }}%</strong>
+      </div>
+    </div>
+
     <el-card>
       <template #header>
         <div class="card-header">
           <span>{{ taskCenterTitle }}</span>
           <div class="header-actions">
+            <span class="live-indicator" :class="{ active: hasLiveTasks }">
+              <i />
+              {{ hasLiveTasks ? '实时刷新中' : '实时空闲' }}
+            </span>
+            <span class="refresh-time">最后刷新 {{ lastRefreshText }}</span>
+            <el-dropdown @command="handleReportCommand">
+              <el-button>
+                合规报告
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="pdf">导出 PDF</el-dropdown-item>
+                  <el-dropdown-item command="excel">导出 Excel</el-dropdown-item>
+                  <el-dropdown-item command="weekly">每周报告</el-dropdown-item>
+                  <el-dropdown-item command="monthly">每月报告</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               type="danger"
               :disabled="selectedTaskIds.length === 0"
@@ -50,6 +91,7 @@
         :data="taskGroups"
         style="width: 100%; margin-top: 15px"
         v-loading="loading"
+        :row-class-name="getRowClassName"
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
@@ -71,6 +113,15 @@
           </template>
         </el-table-column>
         <el-table-column prop="task_count" label="任务数" width="80" />
+        <el-table-column label="通过率" width="150">
+          <template #default="{ row }">
+            <el-progress
+              :percentage="getPassRate(row)"
+              :stroke-width="10"
+              :status="getPassRate(row) >= 100 ? 'success' : normalizeStatus(row.status) === 'failed' ? 'exception' : undefined"
+            />
+          </template>
+        </el-table-column>
         <el-table-column label="进度" min-width="220">
           <template #default="{ row }">
             <div class="progress-info">
@@ -128,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
@@ -137,6 +188,7 @@ import {
   deleteTaskGroup,
   batchDeleteTasks,
   normalizeType,
+  normalizeStatus,
   type TaskGroupSummary
 } from '@/api/tasks'
 
@@ -153,6 +205,9 @@ const defaultTypeScope = computed(() =>
 const loading = ref(false)
 const taskGroups = ref<TaskGroupSummary[]>([])
 const selectedTaskIds = ref<string[]>([])
+const lastRefreshAt = ref<Date | null>(null)
+const changedTaskIds = ref<Set<string>>(new Set())
+let autoRefreshTimer: number | null = null
 
 const filters = reactive({
   status: '',
@@ -166,6 +221,24 @@ const pagination = reactive({
   total: 0
 })
 
+const hasLiveTasks = computed(() => taskGroups.value.some(task => ['pending', 'running'].includes(normalizeStatus(task.status))))
+
+const taskOverview = computed(() => {
+  const total = pagination.total
+  const active = taskGroups.value.filter(task => ['pending', 'running'].includes(normalizeStatus(task.status))).length
+  const success = taskGroups.value.filter(task => normalizeStatus(task.status) === 'success').length
+  const failed = taskGroups.value.filter(task => ['failed', 'timeout'].includes(normalizeStatus(task.status))).length
+  const passRate = total
+    ? Math.round(taskGroups.value.reduce((sum, task) => sum + getPassRate(task), 0) / total)
+    : 0
+  return { total, active, success, failed, passRate }
+})
+
+const lastRefreshText = computed(() => {
+  if (!lastRefreshAt.value) return '-'
+  return lastRefreshAt.value.toLocaleTimeString('zh-CN', { hour12: false })
+})
+
 const fetchTasks = async () => {
   loading.value = true
   try {
@@ -176,9 +249,23 @@ const fetchTasks = async () => {
       task_type: filters.task_type || defaultTypeScope.value,
       search: filters.search || undefined
     })
+    const previousStatus = new Map(taskGroups.value.map(item => [item.task_group_id, item.status]))
     taskGroups.value = result.items
+    const changed = new Set<string>()
+    taskGroups.value.forEach(item => {
+      if (previousStatus.has(item.task_group_id) && previousStatus.get(item.task_group_id) !== item.status) {
+        changed.add(item.task_group_id)
+      }
+    })
+    changedTaskIds.value = changed
+    if (changed.size > 0) {
+      window.setTimeout(() => {
+        changedTaskIds.value = new Set()
+      }, 900)
+    }
     pagination.total = result.total
     selectedTaskIds.value = []
+    lastRefreshAt.value = new Date()
   } catch (e: any) {
     ElMessage.error(e.message || '获取任务列表失败')
   } finally {
@@ -208,6 +295,10 @@ const handleSelectionChange = (selection: TaskGroupSummary[]) => {
   selectedTaskIds.value = selection.map(item => item.task_group_id)
 }
 
+const getRowClassName = ({ row }: { row: TaskGroupSummary }) => {
+  return changedTaskIds.value.has(row.task_group_id) ? 'task-row-changed' : ''
+}
+
 const getStatusType = (status: string) => {
   switch (status) {
     case 'pending': return 'info'
@@ -230,6 +321,12 @@ const getStatusText = (status: string) => {
   }
 }
 
+const getPassRate = (row: TaskGroupSummary) => {
+  if (typeof row.pass_rate === 'number') return Math.round(row.pass_rate)
+  if (!row.task_count) return 0
+  return Math.round(((row.success_count || 0) / row.task_count) * 100)
+}
+
 const formatTime = (time: string) => {
   if (!time) return '-'
   return time.replace('T', ' ').substring(0, 19)
@@ -237,6 +334,58 @@ const formatTime = (time: string) => {
 
 const goToDetail = (taskGroupId: string) => {
   router.push(`${detailBasePath.value}/${taskGroupId}`)
+}
+
+const handleReportCommand = (command: string) => {
+  if (command === 'pdf') {
+    window.print()
+    return
+  }
+  if (command === 'excel') {
+    exportExcelReport()
+    return
+  }
+  const label = command === 'weekly' ? '每周' : '每月'
+  localStorage.setItem('baseline_report_schedule', command)
+  ElMessage.success(`${label}合规报告已启用`)
+}
+
+const exportExcelReport = () => {
+  const rows = [
+    ['任务组ID', '类型', '任务数', '通过率', '成功', '失败', '超时', '待执行', '执行中', '状态', '创建时间'],
+    ...taskGroups.value.map(row => [
+      row.task_group_id,
+      row.task_type,
+      row.task_count,
+      `${getPassRate(row)}%`,
+      row.success_count,
+      row.failed_count,
+      row.timeout_count || 0,
+      row.pending_count,
+      row.running_count,
+      getStatusText(normalizeStatus(row.status)),
+      formatTime(row.created_at)
+    ])
+  ]
+  const table = rows
+    .map(cols => `<tr>${cols.map(col => `<td>${String(col).replace(/[<&>]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s] || s))}</td>`).join('')}</tr>`)
+    .join('')
+  const blob = new Blob([`<table>${table}</table>`], { type: 'application/vnd.ms-excel;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${isVulnerabilityTask.value ? 'vulnerability' : 'baseline'}-compliance-report.xls`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const startAutoRefresh = () => {
+  if (autoRefreshTimer) window.clearInterval(autoRefreshTimer)
+  autoRefreshTimer = window.setInterval(() => {
+    if (hasLiveTasks.value) {
+      fetchTasks()
+    }
+  }, 5000)
 }
 
 const handleDeleteTaskGroup = async (row: TaskGroupSummary) => {
@@ -307,6 +456,11 @@ const handleBatchDelete = async () => {
 
 onMounted(() => {
   fetchTasks()
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  if (autoRefreshTimer) window.clearInterval(autoRefreshTimer)
 })
 </script>
 
@@ -319,7 +473,61 @@ onMounted(() => {
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.overview-card {
+  padding: 16px;
+  border: 1px solid var(--aegis-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.07);
+}
+
+.overview-card span {
+  display: block;
+  color: var(--aegis-text-muted);
+  font-size: 12px;
+}
+
+.overview-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--aegis-text);
+  font-size: 26px;
+}
+
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.live-indicator i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+.live-indicator.active i {
+  background: #22c55e;
+  box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.14);
+}
+
+.refresh-time {
+  color: var(--aegis-text-muted);
+  font-size: 12px;
 }
 
 .filter-bar {
@@ -359,5 +567,19 @@ onMounted(() => {
 .progress-info .timeout {
   color: #f56c6c;
   font-weight: bold;
+}
+
+:deep(.el-table__row) {
+  transition: background 220ms ease;
+}
+
+:deep(.task-row-changed) {
+  background: rgba(34, 197, 94, 0.08);
+}
+
+@media (max-width: 1000px) {
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

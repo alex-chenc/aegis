@@ -47,6 +47,9 @@ export interface ApplicationAsset {
   start_path: string
   config_paths: string[]
   related_pids: number[]
+  is_container: boolean
+  container_id?: string
+  container_runtime?: string
   confidence: number
   ai_confidence?: number
   review_status: string

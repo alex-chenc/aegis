@@ -9,12 +9,15 @@ type CredentialCollectionRequest struct {
 }
 
 type ApplicationCollectPlan struct {
-	Application string                `json:"application"`
-	AssetID     string                `json:"asset_id"`
-	ProfileID   string                `json:"profile_id"`
-	Paths       []string              `json:"paths"`
-	RelatedPIDs []int                 `json:"related_pids,omitempty"`
-	Extractors  []CredentialExtractor `json:"extractors"`
+	Application      string                `json:"application"`
+	AssetID          string                `json:"asset_id"`
+	ProfileID        string                `json:"profile_id"`
+	Paths            []string              `json:"paths"`
+	RelatedPIDs      []int                 `json:"related_pids,omitempty"`
+	IsContainer      bool                  `json:"is_container,omitempty"`
+	ContainerID      string                `json:"container_id,omitempty"`
+	ContainerRuntime string                `json:"container_runtime,omitempty"`
+	Extractors       []CredentialExtractor `json:"extractors"`
 }
 
 type CredentialExtractor struct {

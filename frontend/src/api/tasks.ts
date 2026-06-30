@@ -29,29 +29,40 @@ export function normalizeStatus(status: string | undefined): string {
 export interface RunCheckRequest {
   rule_ids: string[]
   host_ids: string[]
+  max_rounds?: number
 }
 
 export interface RunFixRequest {
   rule_ids: string[]
   host_ids: string[]
   task_group_id?: string
+  max_rounds?: number
 }
 
 export interface RunFixInGroupRequest {
   rule_ids: string[]
   host_ids: string[]
   task_group_id: string
+  max_rounds?: number
 }
 
 export interface HealingStatus {
   task_id: string
-  status: 'healing' | 'healed' | 'failed' | 'timeout'
+  status: 'queued' | 'healing' | 'healed' | 'failed' | 'timeout'
   started_at?: string
   total_attempts: number
   max_attempts: number
   last_error?: string
   user_suggestion?: string
   script_type?: string
+  queue_position?: number
+  concurrency_limit?: number
+  steps?: Array<{
+    phase: string
+    status: string
+    summary: string
+    timestamp?: string
+  }>
 }
 
 export interface TriggerHealingRequest {
@@ -91,6 +102,8 @@ export interface TaskLog {
   task_type: TaskType | LegacyTaskType | string
   status: TaskStatus | LegacyTaskStatus | string
   script_content?: string
+  attempt_no?: number
+  max_rounds?: number
   stdout?: string
   stderr?: string
   exit_code?: number
@@ -117,6 +130,7 @@ export interface TaskGroupSummary {
   pending_count: number
   running_count: number
   timeout_count?: number
+  pass_rate?: number
   created_at: string
   finished_at?: string
 }

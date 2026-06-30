@@ -90,6 +90,71 @@ func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
 	return &log, nil
 }
 
+func (r *TaskLogRepository) ExistsRound(task model.TaskLog, attemptNo int) (bool, error) {
+	query := r.db.Model(&model.TaskLog{}).
+		Where("task_group_id = ? AND host_id = ? AND task_type = ? AND attempt_no = ?",
+			task.TaskGroupID, task.HostID, task.TaskType, attemptNo)
+
+	if task.RuleID == nil {
+		query = query.Where("rule_id IS NULL")
+	} else {
+		query = query.Where("rule_id = ?", *task.RuleID)
+	}
+
+	if task.VulnerabilityID == nil {
+		query = query.Where("vulnerability_id IS NULL")
+	} else {
+		query = query.Where("vulnerability_id = ?", *task.VulnerabilityID)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *TaskLogRepository) FindRoundRetryCandidates(limit int) ([]model.TaskLog, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var tasks []model.TaskLog
+	query := r.db.Table("task_logs AS current").
+		Select("current.*").
+		Where("current.attempt_no < current.max_rounds").
+		Where(`
+			(
+				UPPER(current.task_type) IN ('VULNERABILITY_FIX', 'POC_VERIFY')
+				AND current.status IN ('FAILED', 'TIMEOUT', 'AUDIT_BLOCKED')
+			)
+			OR (
+				UPPER(current.task_type) = 'FIX'
+				AND current.vulnerability_id IS NOT NULL
+				AND current.status IN ('FAILED', 'TIMEOUT', 'AUDIT_BLOCKED')
+			)
+		`).
+		Where(`
+			NOT EXISTS (
+				SELECT 1 FROM task_logs AS next
+				WHERE next.task_group_id = current.task_group_id
+					AND next.host_id = current.host_id
+					AND next.task_type = current.task_type
+					AND next.attempt_no = current.attempt_no + 1
+					AND (next.rule_id = current.rule_id OR (next.rule_id IS NULL AND current.rule_id IS NULL))
+					AND (next.vulnerability_id = current.vulnerability_id OR (next.vulnerability_id IS NULL AND current.vulnerability_id IS NULL))
+			)
+		`).
+		Order("current.finished_at ASC NULLS LAST, current.created_at ASC").
+		Limit(limit)
+
+	if err := query.Scan(&tasks).Error; err != nil {
+		logger.Error("failed to find round retry candidates", zap.Error(err))
+		return nil, err
+	}
+	return tasks, nil
+}
+
 func (r *TaskLogRepository) UpdateForRedispatch(id uuid.UUID, scriptContent string, scriptVersion int) error {
 	now := time.Now()
 	result := r.db.Model(&model.TaskLog{}).
@@ -157,6 +222,7 @@ type TaskGroupSummary struct {
 	PendingCount int        `gorm:"column:pending_count" json:"pending_count"`
 	RunningCount int        `gorm:"column:running_count" json:"running_count"`
 	TimeoutCount int        `gorm:"column:timeout_count" json:"timeout_count"`
+	PassRate     float64    `gorm:"column:pass_rate" json:"pass_rate"`
 	CreatedAt    time.Time  `gorm:"column:created_at" json:"created_at"`
 	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at"`
 }
@@ -196,6 +262,13 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
 			SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) as running_count,
 			SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) as timeout_count,
+			ROUND(
+				100.0 * SUM(CASE
+					WHEN status = 'SUCCESS' AND NOT (UPPER(task_type) = 'CHECK' AND COALESCE(exit_code, 0) <> 0) THEN 1
+					ELSE 0
+				END) / NULLIF(COUNT(*), 0),
+				1
+			) as pass_rate,
 			MIN(created_at) as created_at,
 			MAX(finished_at) as finished_at
 		`).

@@ -65,6 +65,13 @@
                 <div class="secondary-cell">{{ row.application_version || row.application_type }}</div>
               </template>
             </el-table-column>
+            <el-table-column label="标签" width="120">
+              <template #default="{ row }">
+                <el-tag :type="row.is_container ? 'success' : 'info'" size="small" effect="plain">
+                  {{ row.is_container ? '容器应用' : '主机应用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="可能密码位置" min-width="260">
               <template #default="{ row }">
                 <div class="path-list">

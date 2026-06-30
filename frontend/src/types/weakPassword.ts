@@ -19,6 +19,9 @@ export interface WeakPasswordCandidateApplication {
   application_type: string
   application_version?: string
   profile_id?: string
+  is_container: boolean
+  container_id?: string
+  container_runtime?: string
   confidence: number
   candidate_paths: string[]
   credential_types: string[]

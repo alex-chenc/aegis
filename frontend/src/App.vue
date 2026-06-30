@@ -1,8 +1,8 @@
 <template>
   <router-view v-if="isAuthLayout" />
-  <el-container v-else class="app-container" :class="{ 'assistant-mode': isAssistantMode }">
+  <el-container v-else class="app-container" :class="{ 'assistant-mode': isAssistantMode, 'sidebar-collapsed': isSidebarCollapsed }">
     <!-- 普通模式才显示侧边栏 -->
-    <el-aside v-if="!isAssistantMode" width="220px" class="sidebar">
+    <el-aside v-if="!isAssistantMode" :width="isSidebarCollapsed ? '64px' : '220px'" class="sidebar" :class="{ collapsed: isSidebarCollapsed }">
       <div class="logo">
         <span class="logo-mark" aria-hidden="true">
           <span class="brand-shield"></span>
@@ -15,6 +15,8 @@
       <el-menu
         :default-active="activeMenu"
         :router="true"
+        :collapse="isSidebarCollapsed"
+        :collapse-transition="false"
         class="sidebar-menu"
       >
         <el-menu-item index="/hosts">
@@ -48,7 +50,7 @@
           </template>
           <el-menu-item index="/baseline/workbench">
             <el-icon><SetUp /></el-icon>
-            <span>基线工作台</span>
+            <span>规则管理</span>
           </el-menu-item>
           <el-menu-item index="/baseline/tasks">
             <el-icon><List /></el-icon>
@@ -136,8 +138,19 @@
       </el-menu>
 
       <div class="sidebar-footer">
-        <span class="status-dot" />
-        <span class="version">控制面在线 · V6.1</span>
+        <template v-if="!isSidebarCollapsed">
+          <span class="status-dot" />
+          <span class="version">控制面在线 · V6.1</span>
+        </template>
+        <el-tooltip :content="isSidebarCollapsed ? '展开导航' : '收起导航'" placement="right">
+          <el-button
+            class="collapse-button"
+            :icon="isSidebarCollapsed ? Expand : Fold"
+            circle
+            size="small"
+            @click="isSidebarCollapsed = !isSidebarCollapsed"
+          />
+        </el-tooltip>
       </div>
     </el-aside>
 
@@ -184,7 +197,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, MagicStick, Lock } from '@element-plus/icons-vue'
+import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, MagicStick, Lock, Fold, Expand } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
@@ -192,6 +205,7 @@ import { createIdleLogout } from '@/utils/sessionTimeout'
 
 const route = useRoute()
 const router = useRouter()
+const isSidebarCollapsed = ref(false)
 
 // 模式切换
 const currentMode = ref<'normal' | 'assistant'>('normal')
@@ -301,6 +315,13 @@ watch(() => route.fullPath, () => {
     linear-gradient(135deg, #edf5ff, #f8fafc);
 }
 
+.app-container.sidebar-collapsed {
+  background:
+    linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 64px, transparent 64px),
+    radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
+    linear-gradient(135deg, #edf5ff, #f8fafc);
+}
+
 .sidebar {
   position: relative;
   background:
@@ -310,6 +331,7 @@ watch(() => route.fullPath, () => {
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid rgba(148, 163, 184, 0.14);
+  transition: width var(--aegis-transition);
 }
 
 .sidebar::after {
@@ -333,6 +355,15 @@ watch(() => route.fullPath, () => {
   gap: 12px;
   padding: 0 18px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.sidebar.collapsed .logo {
+  justify-content: center;
+  padding: 0 12px;
+}
+
+.sidebar.collapsed .logo-copy {
+  display: none;
 }
 
 .logo-mark {
@@ -391,15 +422,30 @@ watch(() => route.fullPath, () => {
   width: 220px;
 }
 
+.sidebar-menu.el-menu--collapse {
+  width: 64px;
+}
+
 .sidebar-footer {
   position: relative;
   z-index: 1;
   height: 48px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 8px;
+  padding: 0 10px;
   border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+}
+
+.collapse-button {
+  color: rgba(226, 232, 240, 0.86);
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.34);
 }
 
 .version {
@@ -509,6 +555,13 @@ watch(() => route.fullPath, () => {
   border-radius: 12px;
   color: rgba(226, 232, 240, 0.78);
   transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.sidebar.collapsed :deep(.el-menu-item),
+.sidebar.collapsed :deep(.el-sub-menu__title) {
+  margin: 4px 8px;
+  padding: 0 14px !important;
+  justify-content: center;
 }
 
 :deep(.el-menu-item:hover),

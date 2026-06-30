@@ -73,10 +73,10 @@ func (c *Collector) CollectCredentials(ctx context.Context, params map[string]in
 				continue
 			}
 
-			content, resolved, statErr := readAllowedCredentialFile(path, app.RelatedPIDs, req.CollectionPolicy.MaxFileBytes)
+			content, resolved, statErr := readAllowedCredentialFile(path, app.RelatedPIDs, app.IsContainer, req.CollectionPolicy.MaxFileBytes)
 			if statErr != nil {
 				code, retryable := fileErrorCode(statErr)
-				result.Errors = append(result.Errors, collectionError(app.Application, path, code, safeFileErrorMessage(code), retryable))
+				result.Errors = append(result.Errors, collectionError(app.Application, resolved.SourcePath, code, safeFileErrorMessage(code), retryable))
 				continue
 			}
 
@@ -91,7 +91,7 @@ func (c *Collector) CollectCredentials(ctx context.Context, params map[string]in
 					if errors.Is(parseErr, errFieldNotFound) {
 						code = ErrFieldNotFound
 					}
-					result.Errors = append(result.Errors, collectionError(app.Application, path, code, parseErr.Error(), true))
+					result.Errors = append(result.Errors, collectionError(app.Application, resolved.SourcePath, code, parseErr.Error(), true))
 					continue
 				}
 				for idx := range records {
@@ -147,27 +147,29 @@ type resolvedCredentialPath struct {
 	ProcessPID int
 }
 
-func readAllowedCredentialFile(path string, relatedPIDs []int, maxBytes int64) ([]byte, resolvedCredentialPath, error) {
-	candidates := credentialPathCandidates(path, relatedPIDs)
+func readAllowedCredentialFile(path string, relatedPIDs []int, containerOnly bool, maxBytes int64) ([]byte, resolvedCredentialPath, error) {
+	candidates := credentialPathCandidates(path, relatedPIDs, containerOnly)
 	var lastErr error
+	lastCandidate := resolvedCredentialPath{ReadPath: path, SourcePath: path}
 	for _, candidate := range candidates {
 		content, err := readAllowedFile(candidate.ReadPath, maxBytes)
 		if err == nil {
 			return content, candidate, nil
 		}
 		lastErr = err
+		lastCandidate = candidate
 	}
 	if lastErr == nil {
 		lastErr = os.ErrNotExist
 	}
-	return nil, resolvedCredentialPath{ReadPath: path, SourcePath: path}, lastErr
+	return nil, lastCandidate, lastErr
 }
 
-func credentialPathCandidates(path string, relatedPIDs []int) []resolvedCredentialPath {
-	return credentialPathCandidatesWithResolver(path, relatedPIDs, detectContainerRootForPID)
+func credentialPathCandidates(path string, relatedPIDs []int, containerOnly bool) []resolvedCredentialPath {
+	return credentialPathCandidatesWithResolver(path, relatedPIDs, containerOnly, detectContainerRootForPID)
 }
 
-func credentialPathCandidatesWithResolver(path string, relatedPIDs []int, rootForPID func(int) (string, bool)) []resolvedCredentialPath {
+func credentialPathCandidatesWithResolver(path string, relatedPIDs []int, containerOnly bool, rootForPID func(int) (string, bool)) []resolvedCredentialPath {
 	candidates := []resolvedCredentialPath{}
 	clean := filepath.Clean(path)
 	relative := strings.TrimPrefix(clean, string(filepath.Separator))
@@ -187,11 +189,14 @@ func credentialPathCandidatesWithResolver(path string, relatedPIDs []int, rootFo
 		seen[readPath] = struct{}{}
 		candidates = append(candidates, resolvedCredentialPath{
 			ReadPath:   readPath,
-			SourcePath: path,
+			SourcePath: readPath,
 			ProcessPID: pid,
 		})
 	}
-	if _, ok := seen[path]; !ok {
+	if !containerOnly {
+		if _, ok := seen[path]; ok {
+			return candidates
+		}
 		candidates = append(candidates, resolvedCredentialPath{ReadPath: path, SourcePath: path})
 	}
 	return candidates
@@ -217,6 +222,18 @@ func collectProcessCredentialRecords(app ApplicationCollectPlan, maxRecords int)
 		}
 		if len(records) == pidRecordStart && len(records) < maxRecords {
 			for _, record := range redisCredentialRecordsFromDockerConfig(app, pid) {
+				records = append(records, record)
+				if len(records) >= maxRecords {
+					break
+				}
+			}
+		}
+	}
+	runtime := strings.TrimSpace(app.ContainerRuntime)
+	if len(records) == 0 && (runtime == "" || strings.EqualFold(runtime, "docker")) && strings.TrimSpace(app.ContainerID) != "" {
+		env, sourcePath, err := readDockerContainerEnvForID(app.ContainerID)
+		if err == nil && len(env) > 0 {
+			for _, record := range credentialRecordsFromEnv(app, 0, env, sourcePath) {
 				records = append(records, record)
 				if len(records) >= maxRecords {
 					break
@@ -354,6 +371,18 @@ func readDockerContainerEnvForPID(pid int) ([]string, string, error) {
 	return env, configPath, nil
 }
 
+func readDockerContainerEnvForID(containerID string) ([]string, string, error) {
+	configContent, configPath, err := readDockerContainerConfigForID(containerID)
+	if err != nil {
+		return nil, "", err
+	}
+	env, err := parseDockerContainerEnv(configContent)
+	if err != nil {
+		return nil, "", err
+	}
+	return env, configPath, nil
+}
+
 func readDockerContainerConfigForPID(pid int) ([]byte, string, error) {
 	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
@@ -364,6 +393,18 @@ func readDockerContainerConfigForPID(pid int) ([]byte, string, error) {
 		return nil, "", os.ErrNotExist
 	}
 	configPath, ok := dockerContainerConfigPath(identity.ID)
+	if !ok {
+		return nil, "", os.ErrNotExist
+	}
+	configContent, err := readAllowedFile(configPath, dockerContainerConfigMaxBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	return configContent, configPath, nil
+}
+
+func readDockerContainerConfigForID(containerID string) ([]byte, string, error) {
+	configPath, ok := dockerContainerConfigPath(containerID)
 	if !ok {
 		return nil, "", os.ErrNotExist
 	}

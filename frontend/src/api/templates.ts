@@ -3,7 +3,7 @@ import type { Template, BaselineRule, ParseStatus } from '@/types'
 
 export { type Template, type BaselineRule, type ParseStatus }
 
-export function uploadTemplate(file: File, md5?: string) {
+export function uploadTemplate(file: File, md5?: string, onUploadProgress?: (progressEvent: any) => void) {
   const formData = new FormData()
   formData.append('file', file)
   if (md5) {
@@ -13,7 +13,8 @@ export function uploadTemplate(file: File, md5?: string) {
     url: '/templates/upload',
     method: 'post',
     data: formData,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress
   })
 }
 

@@ -11,22 +11,25 @@
       </template>
 
       <el-row :gutter="20" v-if="status">
-        <el-col :span="4">
+        <el-col :span="3">
           <el-statistic title="总任务数" :value="status.total" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <el-statistic title="待执行" :value="status.pending" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <el-statistic title="执行中" :value="status.running" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <el-statistic title="已完成" :value="status.success + status.failed" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <el-statistic title="超时" :value="status.timeout || 0" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
+          <el-statistic title="通过率" :value="groupPassRate" suffix="%" />
+        </el-col>
+        <el-col :span="6">
           <el-progress
             :percentage="progressPercent"
             :status="progressStatus"
@@ -95,6 +98,15 @@
             <el-tag v-else :type="getStateTagType(row.displayState)" size="small">
               {{ row.displayState }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="通过率" width="130">
+          <template #default="{ row }">
+            <el-progress
+              :percentage="getTaskPassRate(row)"
+              :stroke-width="10"
+              :status="getTaskPassRate(row) >= 100 ? 'success' : row.displayState === '未通过' ? undefined : isTaskTerminal(row) ? 'exception' : undefined"
+            />
           </template>
         </el-table-column>
         <el-table-column label="脚本" width="100">
@@ -177,6 +189,38 @@
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
+
+    <el-card v-if="healingProcessTasks.length" style="margin-top: 20px">
+      <template #header>
+        <span>ReAct 修复过程</span>
+      </template>
+      <div class="healing-process-list">
+        <section v-for="task in healingProcessTasks" :key="task.id" class="healing-process-item">
+          <div class="healing-process-header">
+            <div>
+              <strong>{{ getRuleTitle(task) }}</strong>
+              <span>{{ getHostname(task.host_id) }} · {{ getTaskTypeLabel(task.task_type) }}</span>
+            </div>
+            <el-tag :type="task.healingStatus?.status === 'healed' ? 'success' : task.healingStatus?.status === 'failed' || task.healingStatus?.status === 'timeout' ? 'danger' : 'warning'">
+              {{ healingStatusText(task.healingStatus?.status) }}
+            </el-tag>
+          </div>
+          <div class="healing-process-meta">
+            <span>当前轮次 {{ task.healingStatus?.total_attempts || 0 }} / {{ task.healingStatus?.max_attempts || 0 }}</span>
+            <span v-if="task.healingStatus?.concurrency_limit">并发上限 {{ task.healingStatus.concurrency_limit }}</span>
+            <span v-if="task.healingStatus?.queue_position">排队 {{ task.healingStatus.queue_position }}</span>
+          </div>
+          <ol v-if="task.healingStatus?.steps?.length" class="healing-steps">
+            <li v-for="(step, index) in task.healingStatus.steps" :key="index">
+              <strong>{{ step.phase }}</strong>
+              <span>{{ step.summary }}</span>
+              <em>{{ step.status }}</em>
+            </li>
+          </ol>
+          <p v-if="task.healingStatus?.last_error" class="healing-error">{{ task.healingStatus.last_error }}</p>
+        </section>
+      </div>
     </el-card>
 
     <el-card v-if="tasksWithState.some(t => t.audit_info)" style="margin-top: 20px">
@@ -296,6 +340,18 @@ const tasksWithState = computed(() => {
     })
 })
 
+const groupPassRate = computed(() => {
+  if (!tasks.value.length) return 0
+  const terminalTasks = tasks.value.filter(task => isTaskTerminal(task))
+  if (!terminalTasks.length) return 0
+  const passed = terminalTasks.filter(task => isTaskPassed(task)).length
+  return Math.round((passed / terminalTasks.length) * 100)
+})
+
+const healingProcessTasks = computed(() =>
+  tasksWithState.value.filter(task => task.healingStatus)
+)
+
 function getTaskTypeTag(type: string): string {
   const normalized = normalizeType(type)
   switch (normalized) {
@@ -337,7 +393,7 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
   }
   if (taskStatus === 'success') {
     if (isPoc) return exitCode === 0 ? 'POC验证成功' : 'POC验证失败'
-    if (isFix) return '修复成功'
+    if (isFix) return (exitCode ?? 0) === 0 ? '修复成功' : '修复失败'
     if (exitCode === 0) return '通过'
     return '未通过'
   }
@@ -348,6 +404,7 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
       return '检测失败'
     }
     if (healingStatus.status === 'healing') return '脚本修复中'
+    if (healingStatus.status === 'queued') return '脚本修复中'
     if (healingStatus.status === 'healed') return '脚本修复成功'
     if (healingStatus.status === 'failed') return '脚本修复失败'
     if (healingStatus.status === 'timeout') return '脚本修复超时'
@@ -413,6 +470,35 @@ function canShowSuggestion(row: any): boolean {
          row.displayState === 'POC验证失败' ||
          row.displayState === '漏洞修复失败' ||
          row.displayState === '脚本修复失败'
+}
+
+function isTaskTerminal(task: TaskLog) {
+  const status = normalizeStatus(task.status)
+  return status === 'success' || status === 'failed' || status === 'timeout' || status === 'audit_blocked'
+}
+
+function isTaskPassed(task: TaskLog) {
+  const status = normalizeStatus(task.status)
+  const type = normalizeType(task.task_type)
+  if (status !== 'success') return false
+  if (type === 'CHECK' || type === 'POC_VERIFY') return (task.exit_code ?? 1) === 0
+  return (task.exit_code ?? 0) === 0
+}
+
+function getTaskPassRate(task: TaskLog) {
+  if (!isTaskTerminal(task)) return 0
+  return isTaskPassed(task) ? 100 : 0
+}
+
+function healingStatusText(status?: string) {
+  switch (status) {
+    case 'healed': return '已修复'
+    case 'failed': return '修复失败'
+    case 'timeout': return '修复超时'
+    case 'queued': return '排队中'
+    case 'healing': return '修复中'
+    default: return '未知'
+  }
 }
 
 const progressPercent = computed(() => {
@@ -581,7 +667,7 @@ const goBack = () => router.push(taskCenterPath.value)
 const startPolling = () => {
   pollTimer = window.setInterval(async () => {
     const hasRunning = status.value && (status.value.pending > 0 || status.value.running > 0)
-    const hasHealing = Object.values(healingStatusMap.value).some(h => h.status === 'healing')
+    const hasHealing = Object.values(healingStatusMap.value).some(h => h.status === 'healing' || h.status === 'queued')
     if (hasRunning || hasHealing) await refresh()
   }, 3000)
 }
@@ -604,4 +690,16 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .script-viewer { background: #1e1e1e; border-radius: 4px; padding: 12px; max-height: 500px; overflow: auto; }
 .script-content { color: #d4d4d4; font-family: 'Fira Code', monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.healing-process-list { display: flex; flex-direction: column; gap: 12px; }
+.healing-process-item { padding: 14px; border: 1px solid var(--aegis-border); border-radius: 8px; background: #fff; }
+.healing-process-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.healing-process-header strong { display: block; margin-bottom: 4px; }
+.healing-process-header span,
+.healing-process-meta { color: var(--aegis-text-muted); font-size: 12px; }
+.healing-process-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.healing-steps { margin: 12px 0 0; padding-left: 20px; }
+.healing-steps li { margin-bottom: 8px; color: #475569; }
+.healing-steps strong { margin-right: 8px; color: var(--aegis-text); }
+.healing-steps em { margin-left: 8px; color: var(--aegis-text-muted); font-style: normal; }
+.healing-error { margin: 10px 0 0; color: #b91c1c; font-size: 13px; }
 </style>

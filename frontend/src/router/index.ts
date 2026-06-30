@@ -137,7 +137,7 @@ const routes = [
     path: '/baseline/workbench',
     name: 'BaselineWorkbench',
     component: Workbench,
-    meta: { title: '基线工作台' }
+    meta: { title: '规则管理' }
   },
   {
     path: '/baseline/tasks',

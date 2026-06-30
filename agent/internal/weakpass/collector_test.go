@@ -91,7 +91,7 @@ func TestCollectCredentialsParsesTomcatUsersXML(t *testing.T) {
 }
 
 func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
-	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234, 1234, 0}, func(pid int) (string, bool) {
+	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234, 1234, 0}, false, func(pid int) (string, bool) {
 		if pid == 1234 {
 			return "/proc/1234/root", true
 		}
@@ -103,7 +103,7 @@ func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
 	if candidates[0].ReadPath != "/proc/1234/root/etc/redis/redis.conf" {
 		t.Fatalf("first candidate path = %q, want proc root", candidates[0].ReadPath)
 	}
-	if candidates[0].SourcePath != "/etc/redis/redis.conf" || candidates[0].ProcessPID != 1234 {
+	if candidates[0].SourcePath != "/proc/1234/root/etc/redis/redis.conf" || candidates[0].ProcessPID != 1234 {
 		t.Fatalf("unexpected container candidate: %#v", candidates[0])
 	}
 	if candidates[1].ReadPath != "/etc/redis/redis.conf" || candidates[1].ProcessPID != 0 {
@@ -112,7 +112,7 @@ func TestCredentialPathCandidatesIncludeProcRootForRelatedPIDs(t *testing.T) {
 }
 
 func TestCredentialPathCandidatesDoNotUseProcRootForNonContainerPID(t *testing.T) {
-	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234}, func(pid int) (string, bool) {
+	candidates := credentialPathCandidatesWithResolver("/etc/redis/redis.conf", []int{1234}, false, func(pid int) (string, bool) {
 		return "", false
 	})
 	if len(candidates) != 1 {
@@ -120,6 +120,21 @@ func TestCredentialPathCandidatesDoNotUseProcRootForNonContainerPID(t *testing.T
 	}
 	if candidates[0].ReadPath != "/etc/redis/redis.conf" || candidates[0].ProcessPID != 0 {
 		t.Fatalf("unexpected candidates: %#v", candidates)
+	}
+}
+
+func TestCredentialPathCandidatesContainerOnlySkipsHostFallback(t *testing.T) {
+	candidates := credentialPathCandidatesWithResolver("/etc/kafka/server.properties", []int{6937}, true, func(pid int) (string, bool) {
+		if pid == 6937 {
+			return "/proc/6937/root", true
+		}
+		return "", false
+	})
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want only container path", len(candidates))
+	}
+	if candidates[0].ReadPath != "/proc/6937/root/etc/kafka/server.properties" || candidates[0].SourcePath != candidates[0].ReadPath {
+		t.Fatalf("unexpected container-only candidate: %#v", candidates[0])
 	}
 }
 
@@ -355,6 +370,20 @@ func TestConfigPathsFromCmdlineExtractsConfigFlags(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "/srv/redis/redis.conf" {
 		t.Fatalf("relative paths = %#v, want /srv/redis/redis.conf", paths)
 	}
+
+	paths = configPathsFromCmdline([]string{
+		"java",
+		"-Dlog4j.configuration=file:/etc/kafka/log4j.properties",
+		"-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf",
+	}, "/home/appuser", []string{".conf", ".properties"})
+	if !testContainsString(paths, "/etc/kafka/log4j.properties") || !testContainsString(paths, "/etc/kafka/kafka_server_jaas.conf") {
+		t.Fatalf("jvm paths = %#v, want kafka file URI and JAAS config", paths)
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "-D") || strings.HasPrefix(path, "/home/appuser/-D") {
+			t.Fatalf("jvm option was treated as a relative path: %#v", paths)
+		}
+	}
 }
 
 func TestRedactCmdlinePartsRedactsSeparatedRedisPassword(t *testing.T) {
@@ -400,6 +429,29 @@ func TestDiscoverContainerConfigPathsIncludesShadowWithoutSuffix(t *testing.T) {
 	}
 }
 
+func TestDiscoverContainerConfigPathsUsesKafkaDirsOnly(t *testing.T) {
+	root := t.TempDir()
+	kafkaPath := filepath.Join(root, "etc", "kafka", "server.properties")
+	genericPath := filepath.Join(root, "etc", "yum.conf")
+	if err := os.MkdirAll(filepath.Dir(kafkaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kafkaPath, []byte("broker.id=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(genericPath, []byte("metadata_expire=48h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := discoverContainerConfigPaths(root, "kafka", []string{".conf", ".properties"}, 20, nil, nil)
+	if !testContainsString(paths, "/etc/kafka/server.properties") {
+		t.Fatalf("paths = %#v, want kafka server.properties", paths)
+	}
+	if testContainsString(paths, "/etc/yum.conf") {
+		t.Fatalf("paths = %#v, should not include generic /etc files for kafka", paths)
+	}
+}
+
 func baseCollectParams(path, app, parser, accountSelector, passwordSelector string) map[string]interface{} {
 	return map[string]interface{}{
 		"task_id": "task",
@@ -422,4 +474,13 @@ func baseCollectParams(path, app, parser, accountSelector, passwordSelector stri
 			"forbid_recursive_search": true,
 		},
 	}
+}
+
+func testContainsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

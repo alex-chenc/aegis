@@ -20,7 +20,7 @@ import (
 func setupTaskHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
@@ -35,6 +35,8 @@ func setupTaskHandlerTestDB(t *testing.T) *gorm.DB {
 			task_type TEXT NOT NULL,
 			status TEXT NOT NULL,
 			script_content TEXT NULL,
+			attempt_no INTEGER NOT NULL DEFAULT 1,
+			max_rounds INTEGER NOT NULL DEFAULT 1,
 			stdout TEXT NULL,
 			stderr TEXT NULL,
 			exit_code INTEGER NULL,

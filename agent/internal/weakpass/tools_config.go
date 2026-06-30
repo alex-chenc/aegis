@@ -448,6 +448,10 @@ func configPathsFromCmdline(parts []string, cwd string, suffixes []string) []str
 				candidates = append(candidates, splitConfigPathValue(value)...)
 				continue
 			}
+			if isConfigPathAssignment(key, value, suffixes) {
+				candidates = append(candidates, splitConfigPathValue(value)...)
+				continue
+			}
 		}
 		if hasAllowedSuffix(part, suffixes) {
 			candidates = append(candidates, part)
@@ -468,6 +472,21 @@ func configPathsFromCmdline(parts []string, cwd string, suffixes []string) []str
 		}
 	}
 	return uniqueConfigPaths(resolved, 20)
+}
+
+func isConfigPathAssignment(key, value string, suffixes []string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.TrimPrefix(key, "-D")
+	key = strings.TrimLeft(key, "-")
+	if key == "" || !hasAllowedSuffix(value, suffixes) {
+		return false
+	}
+	for _, marker := range []string{"config", "conf", "properties", "jaas", "log4j"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitConfigPathValue(value string) []string {
@@ -580,6 +599,15 @@ func defaultConfigPathsForApplication(application string) []string {
 			"/var/lib/postgresql/data/pg_hba.conf",
 			"/etc/postgresql/postgresql.conf",
 		}
+	case "kafka":
+		return []string{
+			"/etc/kafka/kafka.properties",
+			"/etc/kafka/server.properties",
+			"/etc/kafka/kafka_server_jaas.conf",
+			"/etc/kafka/kraft/server.properties",
+			"/etc/kafka/kraft/broker.properties",
+			"/etc/kafka/secrets/kafka_server_jaas.conf",
+		}
 	default:
 		return nil
 	}
@@ -604,6 +632,8 @@ func listContainerConfigDirs(root, application string, suffixes []string, maxFil
 		dirs = []string{"/etc/apache2", "/etc/httpd/conf"}
 	case "postgres", "postgresql":
 		dirs = []string{"/var/lib/postgresql/data", "/etc/postgresql"}
+	case "kafka":
+		dirs = []string{"/etc/kafka", "/etc/kafka/kraft", "/etc/kafka/secrets", "/etc/confluent/docker"}
 	default:
 		dirs = []string{"/etc", "/usr/local/etc", "/app/config", "/config"}
 	}

@@ -1,13 +1,17 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"api-server/internal/model"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+const testDockerContainerID = "f3e1ce081b167859bacb51b22443f0f9ceaf9aafee0feb9b9e369eb670e506ce"
 
 func TestParseAnalysisResultSupportsMarkdownJSON(t *testing.T) {
 	svc := NewAssetAnalysisService(nil, nil, nil, zap.NewNop())
@@ -111,6 +115,20 @@ func TestSplitProcessBatches(t *testing.T) {
 	}
 	if len(batches[0]) != 2 || len(batches[1]) != 2 || len(batches[2]) != 1 {
 		t.Fatalf("unexpected batch sizes: %d %d %d", len(batches[0]), len(batches[1]), len(batches[2]))
+	}
+}
+
+func TestBuildAnalysisPromptIncludesCgroupAndContainerHint(t *testing.T) {
+	svc := NewAssetAnalysisService(nil, nil, nil, zap.NewNop())
+	prompt := svc.buildAnalysisPrompt(HostAssetSnapshot{Processes: []ProcessAsset{{
+		PID:     6937,
+		Comm:    "java",
+		ExePath: "/usr/bin/java",
+		Cgroup:  []string{"0::/system.slice/docker-" + testDockerContainerID + ".scope"},
+	}}}, 1, 1)
+
+	if !strings.Contains(prompt, "Cgroup:") || !strings.Contains(prompt, "Container: true") || !strings.Contains(prompt, testDockerContainerID) {
+		t.Fatalf("prompt does not include cgroup container evidence:\n%s", prompt)
 	}
 }
 
@@ -315,6 +333,31 @@ func TestDetectKnownApplicationsFromProcessesExtractsRedisConfig(t *testing.T) {
 	}
 	if len(apps[0].ConfigPaths) != 1 || apps[0].ConfigPaths[0] != "/tmp/aegis-weakpass-test/redis.conf" {
 		t.Fatalf("config paths = %#v, want redis cmdline config", apps[0].ConfigPaths)
+	}
+}
+
+func TestConvertToApplicationAssetPersistsContainerMetadata(t *testing.T) {
+	svc := NewAssetAnalysisService(nil, nil, nil, zap.NewNop())
+	asset := svc.convertToApplicationAsset(uuid.MustParse("11111111-1111-1111-1111-111111111111"), HostAssetSnapshot{
+		Hostname:  "kafka-host",
+		IPAddress: "127.0.0.1",
+		OSType:    "linux",
+		Processes: []ProcessAsset{{
+			PID:     6937,
+			Comm:    "java",
+			Cgroup:  []string{"0::/system.slice/docker-" + testDockerContainerID + ".scope"},
+			Cmdline: "kafka.Kafka /etc/kafka/server.properties",
+		}},
+	}, IdentifiedApplication{
+		Name:        "kafka",
+		DisplayName: "Kafka",
+		Category:    "other",
+		Confidence:  0.9,
+		RelatedPIDs: []int{6937},
+	})
+
+	if !asset.IsContainer || asset.ContainerRuntime != "docker" || asset.ContainerID != testDockerContainerID {
+		t.Fatalf("container metadata not persisted: %#v", asset)
 	}
 }
 

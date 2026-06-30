@@ -106,6 +106,96 @@ func TestGetApplicationAssetsDeduplicatesSameHostName(t *testing.T) {
 	}
 }
 
+func TestGetApplicationAssetsDeduplicatesByFreshCollectionBeforeConfidence(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:asset_repo_fresh_container_dedupe?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	if err := createHostApplicationAssetsTestTable(db); err != nil {
+		t.Fatalf("failed to create host application assets table: %v", err)
+	}
+
+	repo := NewAssetCollectionRepository(db)
+	hostID := uuid.New()
+	now := time.Now()
+	oldID := uuid.New()
+	freshID := uuid.New()
+
+	assets := []model.HostApplicationAsset{
+		{
+			ID:              oldID,
+			HostID:          hostID,
+			Hostname:        "asset-host",
+			OSType:          "linux",
+			Category:        "other",
+			Name:            "kafka",
+			DisplayName:     "Kafka",
+			AIConfidence:    0.95,
+			Status:          "active",
+			ReviewStatus:    "auto",
+			Fingerprint:     "old-kafka-host",
+			LastSeenAt:      now.Add(-7 * 24 * time.Hour),
+			CollectedAt:     now.Add(-7 * 24 * time.Hour),
+			FirstSeenAt:     now.Add(-7 * 24 * time.Hour),
+			CreatedAt:       now.Add(-7 * 24 * time.Hour),
+			UpdatedAt:       now.Add(-7 * 24 * time.Hour),
+			ConfigPaths:     []byte(`["/etc/kafka/kafka.properties"]`),
+			SitePaths:       []byte(`[]`),
+			Domains:         []byte(`[]`),
+			ListenPorts:     []byte(`[9092]`),
+			RelatedPIDs:     []byte(`[997991]`),
+			RelatedPackages: []byte(`[]`),
+			AIEvidence:      []byte(`[]`),
+			AIRawOutput:     []byte(`{}`),
+			ManualOverrides: []byte(`{}`),
+		},
+		{
+			ID:               freshID,
+			HostID:           hostID,
+			Hostname:         "asset-host",
+			OSType:           "linux",
+			Category:         "other",
+			Name:             "kafka",
+			DisplayName:      "Kafka",
+			AIConfidence:     0.86,
+			Status:           "active",
+			ReviewStatus:     "auto",
+			Fingerprint:      "fresh-kafka-container",
+			IsContainer:      true,
+			ContainerID:      "f3e1ce081b167859bacb51b22443f0f9ceaf9aafee0feb9b9e369eb670e506ce",
+			ContainerRuntime: "docker",
+			LastSeenAt:       now,
+			CollectedAt:      now,
+			FirstSeenAt:      now,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+			ConfigPaths:      []byte(`["/etc/kafka/server.properties"]`),
+			SitePaths:        []byte(`[]`),
+			Domains:          []byte(`[]`),
+			ListenPorts:      []byte(`[]`),
+			RelatedPIDs:      []byte(`[6937]`),
+			RelatedPackages:  []byte(`[]`),
+			AIEvidence:       []byte(`[]`),
+			AIRawOutput:      []byte(`{}`),
+			ManualOverrides:  []byte(`{}`),
+		},
+	}
+	if err := db.Create(&assets).Error; err != nil {
+		t.Fatalf("failed to create application assets: %v", err)
+	}
+
+	items, total, err := repo.GetApplicationAssets(model.ApplicationAssetQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("GetApplicationAssets returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("deduped items = %d total = %d, want 1/1: %#v", len(items), total, items)
+	}
+	if items[0].ID != freshID || !items[0].IsContainer {
+		t.Fatalf("kept asset = %#v, want fresh container asset %s", items[0], freshID)
+	}
+}
+
 func TestUpsertApplicationAssetReactivatesDeletedFingerprint(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:asset_repo_reactivate?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -245,10 +335,13 @@ func createHostApplicationAssetsTestTable(db *gorm.DB) error {
 		run_user TEXT,
 		runtime_name TEXT,
 		runtime_version TEXT,
-		framework_name TEXT,
-		framework_version TEXT,
-		related_pids BLOB,
-		related_packages BLOB,
+			framework_name TEXT,
+			framework_version TEXT,
+			related_pids BLOB,
+			is_container BOOLEAN,
+			container_id TEXT,
+			container_runtime TEXT,
+			related_packages BLOB,
 		ai_confidence REAL,
 		ai_evidence BLOB,
 		ai_raw_output BLOB,

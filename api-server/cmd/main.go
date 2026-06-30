@@ -25,6 +25,7 @@ import (
 	"api-server/internal/storage"
 	"api-server/pkg/logger"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -157,6 +158,11 @@ func main() {
 	taskService.SetAuditService(scriptAuditService)
 	taskService.SetScriptGenService(scriptGenService)
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3, scriptAuditService)
+	taskService.SetSelfHealingService(selfHealingService)
+	selfHealingService.SetHealedScriptHandler(func(ctx context.Context, healingTask service.HealingTask, healingID uuid.UUID, fixedScript string, _ int) error {
+		_, err := taskService.CreateAndDispatchLoopTask(ctx, healingTask.TaskGroupID, healingTask.HostID, healingTask.RuleID, "FIX", fixedScript, healingTask.AttemptNo, healingTask.MaxRounds, &healingID)
+		return err
+	})
 	// V5.8: Asset repository for vulnerability scanning
 	assetCollectionRepo := repository.NewAssetCollectionRepository(db)
 	weakPasswordRepo := repository.NewWeakPasswordRepository(db)
@@ -490,6 +496,7 @@ func main() {
 
 	// Start task timeout checker
 	taskService.StartTimeoutChecker()
+	taskService.StartRoundRetryChecker()
 
 	logger.Info("api-server started successfully",
 		zap.String("http_addr", fmt.Sprintf("http://localhost:%d", cfg.Server.HTTPPort)),

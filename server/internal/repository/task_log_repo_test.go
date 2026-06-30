@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"server/pkg/logger"
 	"testing"
 	"time"
 
@@ -18,12 +19,39 @@ func uuidPtr(id uuid.UUID) *uuid.UUID {
 func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
+	if logger.Logger == nil {
+		if err := logger.Init(&logger.Config{Level: "error"}); err != nil {
+			t.Fatalf("failed to init logger: %v", err)
+		}
+	}
+
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
 
-	if err := db.AutoMigrate(&model.TaskLog{}); err != nil {
+	if err := db.Exec(`
+		CREATE TABLE task_logs (
+			id TEXT PRIMARY KEY,
+			task_group_id TEXT NOT NULL,
+			rule_id TEXT NULL,
+			host_id TEXT NOT NULL,
+			vulnerability_id TEXT NULL,
+			task_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			script_content TEXT NULL,
+			script_version INTEGER NULL,
+			attempt_no INTEGER NOT NULL DEFAULT 1,
+			max_rounds INTEGER NOT NULL DEFAULT 1,
+			stdout TEXT NULL,
+			stderr TEXT NULL,
+			exit_code INTEGER NULL,
+			healing_id TEXT NULL,
+			started_at DATETIME NULL,
+			finished_at DATETIME NULL,
+			created_at DATETIME NOT NULL
+		)
+	`).Error; err != nil {
 		t.Fatalf("failed to migrate task_logs: %v", err)
 	}
 
@@ -72,8 +100,8 @@ func TestTaskLogRepository_UpdateForRedispatch(t *testing.T) {
 		t.Fatalf("failed to reload updated task: %v", err)
 	}
 
-	if updated.Status != "pending" {
-		t.Fatalf("expected status pending, got %s", updated.Status)
+	if updated.Status != "PENDING" {
+		t.Fatalf("expected status PENDING, got %s", updated.Status)
 	}
 
 	if updated.ScriptContent == nil || *updated.ScriptContent != "echo healed" {

@@ -244,6 +244,37 @@ func TestWeakPasswordSkillRegistryAddsFixedPaths(t *testing.T) {
 	}
 }
 
+func TestWeakPasswordCandidateAndPlanIncludeContainerMetadata(t *testing.T) {
+	analysisID := uuid.New()
+	asset := model.HostApplicationAsset{
+		ID:               uuid.New(),
+		HostID:           uuid.New(),
+		Name:             "kafka",
+		DisplayName:      "Kafka",
+		Category:         "other",
+		ConfigPaths:      datatypesJSON(t, []string{"/etc/kafka/server.properties"}),
+		RelatedPIDs:      datatypesJSON(t, []int{6937}),
+		IsContainer:      true,
+		ContainerID:      testDockerContainerID,
+		ContainerRuntime: "docker",
+		AIConfidence:     0.9,
+	}
+
+	candidate := buildCandidateFromAsset(analysisID, asset)
+	dto := candidateDTO(candidate, asset.Hostname, asset.IPAddress)
+	if !dto.IsContainer || dto.ContainerID != testDockerContainerID || dto.ContainerRuntime != "docker" {
+		t.Fatalf("candidate dto container metadata = %#v", dto)
+	}
+
+	plan := buildCollectionPlan(uuid.New(), uuid.New(), candidate, 10)
+	if len(plan.Applications) != 1 || !plan.Applications[0].IsContainer {
+		t.Fatalf("plan did not inherit container flag: %#v", plan.Applications)
+	}
+	if plan.Applications[0].ContainerID != testDockerContainerID || plan.Applications[0].ContainerRuntime != "docker" {
+		t.Fatalf("plan container metadata = %#v", plan.Applications[0])
+	}
+}
+
 func TestDeduplicateApplicationAssetsMergesPathsAndPIDs(t *testing.T) {
 	hostID := uuid.New()
 	assets := []model.HostApplicationAsset{
@@ -279,6 +310,47 @@ func TestDeduplicateApplicationAssetsMergesPathsAndPIDs(t *testing.T) {
 	paths := weakJSONStrings(deduped[0].ConfigPaths)
 	if !testContainsString(paths, "/etc/redis/redis.conf") || !testContainsString(paths, "/data/redis.conf") {
 		t.Fatalf("config paths = %#v, want merged paths", paths)
+	}
+}
+
+func TestDeduplicateApplicationAssetsPrefersFreshContainerAsset(t *testing.T) {
+	hostID := uuid.New()
+	now := time.Now()
+	freshID := uuid.New()
+	assets := []model.HostApplicationAsset{
+		{
+			ID:           uuid.New(),
+			HostID:       hostID,
+			Name:         "kafka",
+			Category:     "other",
+			ConfigPaths:  datatypesJSON(t, []string{"/etc/kafka/kafka.properties"}),
+			RelatedPIDs:  datatypesJSON(t, []int{997991}),
+			AIConfidence: 0.95,
+			CollectedAt:  now.Add(-7 * 24 * time.Hour),
+			LastSeenAt:   now.Add(-7 * 24 * time.Hour),
+		},
+		{
+			ID:               freshID,
+			HostID:           hostID,
+			Name:             "kafka",
+			Category:         "other",
+			ConfigPaths:      datatypesJSON(t, []string{"/etc/kafka/server.properties"}),
+			RelatedPIDs:      datatypesJSON(t, []int{6937}),
+			IsContainer:      true,
+			ContainerID:      testDockerContainerID,
+			ContainerRuntime: "docker",
+			AIConfidence:     0.86,
+			CollectedAt:      now,
+			LastSeenAt:       now,
+		},
+	}
+
+	deduped := deduplicateApplicationAssetsByHostType(assets)
+	if len(deduped) != 1 {
+		t.Fatalf("deduped assets = %d, want 1", len(deduped))
+	}
+	if deduped[0].ID != freshID || !deduped[0].IsContainer {
+		t.Fatalf("kept asset = %#v, want fresh container asset %s", deduped[0], freshID)
 	}
 }
 
@@ -365,6 +437,70 @@ func TestHydrateCandidateRuntimeEvidenceMergesStalePIDs(t *testing.T) {
 	paths := weakJSONStrings(candidate.CandidatePathsJSON)
 	if !testContainsString(paths, "/etc/redis/redis.conf") || !testContainsString(paths, "/data/redis.conf") {
 		t.Fatalf("candidate paths = %#v, want merged asset path", paths)
+	}
+}
+
+func TestHydrateCandidateRuntimeEvidenceIgnoresDeletedAssetPIDs(t *testing.T) {
+	svc := newWeakPasswordTestService(t)
+	hostID := uuid.New()
+	activeAssetID := uuid.New()
+	deletedAssetID := uuid.New()
+	now := time.Now()
+	if err := svc.repo.DB().Create(&[]model.HostApplicationAsset{
+		{
+			ID:           activeAssetID,
+			HostID:       hostID,
+			Name:         "kafka",
+			DisplayName:  "Kafka",
+			Category:     "other",
+			ConfigPaths:  datatypesJSON(t, []string{"/etc/kafka/server.properties"}),
+			RelatedPIDs:  datatypesJSON(t, []int{6937}),
+			Status:       "active",
+			CollectedAt:  now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			AIConfidence: 0.9,
+		},
+		{
+			ID:           deletedAssetID,
+			HostID:       hostID,
+			Name:         "kafka",
+			DisplayName:  "Kafka",
+			Category:     "other",
+			ConfigPaths:  datatypesJSON(t, []string{"/etc/kafka/deleted.properties"}),
+			RelatedPIDs:  datatypesJSON(t, []int{997991, 998021}),
+			Status:       "deleted",
+			CollectedAt:  now.Add(time.Minute),
+			CreatedAt:    now.Add(time.Minute),
+			UpdatedAt:    now.Add(time.Minute),
+			AIConfidence: 0.9,
+		},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := &model.WeakPasswordCandidateApplication{
+		ID:                 uuid.New(),
+		AnalysisID:         uuid.New(),
+		HostID:             hostID,
+		AssetID:            &activeAssetID,
+		ApplicationName:    "Kafka",
+		ApplicationType:    "kafka",
+		CandidatePathsJSON: datatypesJSON(t, []string{"/etc/kafka/kafka.properties"}),
+		AssetEvidenceJSON: datatypesJSON(t, map[string]interface{}{
+			"related_pids": []int{997991},
+		}),
+	}
+	svc.hydrateCandidateRuntimeEvidence(candidate)
+	if got := candidateRelatedPIDs(*candidate); len(got) != 1 || got[0] != 6937 {
+		t.Fatalf("candidate pids = %#v, want only active asset pid", got)
+	}
+	paths := weakJSONStrings(candidate.CandidatePathsJSON)
+	if !testContainsString(paths, "/etc/kafka/kafka.properties") || !testContainsString(paths, "/etc/kafka/server.properties") {
+		t.Fatalf("candidate paths = %#v, want active kafka paths", paths)
+	}
+	if testContainsString(paths, "/etc/kafka/deleted.properties") {
+		t.Fatalf("candidate paths = %#v, should ignore deleted asset path", paths)
 	}
 }
 
@@ -834,6 +970,39 @@ func TestListTaskCollectionProgressIncludesSourcePathAndFieldName(t *testing.T) 
 	}
 	if items[0].SourcePath != "/var/lib/docker/containers/container-id/config.v2.json" || items[0].FieldName != "Env.REDIS_PASSWORD" {
 		t.Fatalf("unexpected collection source fields: %#v", items[0])
+	}
+}
+
+func TestProcessConfigHintsSummaryIncludesContainerSourceAndField(t *testing.T) {
+	summary := processConfigHintsSummary(6937, AgentProcessConfigHintsResult{
+		PID:              6937,
+		ContainerID:      "f3e1ce081b167859bacb51b22443f0f9ceaf9aafee0feb9b9e369eb670e506ce",
+		ContainerRuntime: "docker",
+		ContainerRoot:    "/proc/6937/root",
+	}, []string{"/etc/kafka/kafka.properties"})
+
+	sourcePath, fieldName := collectionProgressSourceAndField(mustJSON(summary), "", "")
+	if !strings.Contains(sourcePath, "/proc/6937/root/etc/kafka/kafka.properties") || strings.Contains(sourcePath, "/proc/6937/root\n/etc/kafka") {
+		t.Fatalf("sourcePath = %q, want joined container root candidate path", sourcePath)
+	}
+	if !strings.Contains(fieldName, "pid=6937") || !strings.Contains(fieldName, "container_app=true") || !strings.Contains(fieldName, "container_runtime=docker") {
+		t.Fatalf("fieldName = %q, want pid and docker runtime", fieldName)
+	}
+}
+
+func TestMergeCredentialPathsCleansJVMConfigFileURI(t *testing.T) {
+	paths := mergeCredentialPaths(nil, []string{
+		"/home/appuser/-Dlog4j.configuration=file:/etc/kafka/log4j.properties",
+		"-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf",
+		"/proc/6937/root/etc/kafka/consumer.properties",
+	})
+	if !testContainsString(paths, "/etc/kafka/log4j.properties") || !testContainsString(paths, "/etc/kafka/kafka_server_jaas.conf") || !testContainsString(paths, "/etc/kafka/consumer.properties") {
+		t.Fatalf("paths = %#v, want cleaned kafka paths", paths)
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "-D") || strings.Contains(path, "file:") || strings.HasPrefix(path, "/proc/") {
+			t.Fatalf("path was not cleaned: %#v", paths)
+		}
 	}
 }
 
@@ -1463,10 +1632,13 @@ func newWeakPasswordTestService(t *testing.T) *WeakPasswordService {
 			run_user TEXT,
 			runtime_name TEXT,
 			runtime_version TEXT,
-			framework_name TEXT,
-			framework_version TEXT,
-			related_pids JSON,
-			related_packages JSON,
+				framework_name TEXT,
+				framework_version TEXT,
+				related_pids JSON,
+				is_container BOOLEAN,
+				container_id TEXT,
+				container_runtime TEXT,
+				related_packages JSON,
 			ai_confidence REAL,
 			ai_evidence JSON,
 			ai_raw_output JSON,

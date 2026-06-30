@@ -214,10 +214,18 @@ func (s *AssetAnalysisService) buildAnalysisPrompt(snapshot HostAssetSnapshot, b
 
 	sb.WriteString("\n## 进程列表\n")
 	for _, proc := range snapshot.Processes {
-		sb.WriteString(fmt.Sprintf("- PID: %d, Comm: %s, Exe: %s, Cwd: %s, User: %s, Ports: %v\n",
-			proc.PID, proc.Comm, truncateForPrompt(proc.ExePath, 200), truncateForPrompt(proc.Cwd, 200), proc.Username, proc.ListenPorts))
+		containerInfo := containerInfoFromProcess(proc)
+		sb.WriteString(fmt.Sprintf("- PID: %d, Comm: %s, Exe: %s, Cwd: %s, User: %s, Ports: %v, Container: %t",
+			proc.PID, proc.Comm, truncateForPrompt(proc.ExePath, 200), truncateForPrompt(proc.Cwd, 200), proc.Username, proc.ListenPorts, containerInfo.IsContainer))
+		if containerInfo.Runtime != "" || containerInfo.ID != "" {
+			sb.WriteString(fmt.Sprintf(" runtime=%s id=%s", containerInfo.Runtime, containerInfo.ID))
+		}
+		sb.WriteString("\n")
 		if proc.Cmdline != "" {
 			sb.WriteString(fmt.Sprintf("  Cmdline: %s\n", truncateForPrompt(proc.Cmdline, 300)))
+		}
+		if len(proc.Cgroup) > 0 {
+			sb.WriteString(fmt.Sprintf("  Cgroup: %s\n", truncateForPrompt(strings.Join(proc.Cgroup, " | "), 500)))
 		}
 	}
 
@@ -559,6 +567,10 @@ func detectKnownApplicationsFromProcesses(snapshot HostAssetSnapshot) []Identifi
 		if app.Name == "" {
 			continue
 		}
+		info := containerInfoFromProcess(proc)
+		app.IsContainer = info.IsContainer
+		app.ContainerID = info.ID
+		app.ContainerRuntime = info.Runtime
 		app.ConfigPaths = processConfigPaths(proc)
 		if len(app.ConfigPaths) == 0 {
 			app.ConfigPaths = knownApplicationDefaultConfigPaths(app.Name)
@@ -575,6 +587,9 @@ func detectKnownApplicationsFromProcesses(snapshot HostAssetSnapshot) []Identifi
 		app.Confidence = 0.86
 		app.Status = "active"
 		app.Evidence = []string{fmt.Sprintf("deterministic_process_match pid=%d comm=%s exe=%s", proc.PID, proc.Comm, proc.ExePath)}
+		if app.IsContainer {
+			app.Evidence = append(app.Evidence, fmt.Sprintf("container_runtime=%s container_id=%s pid=%d", app.ContainerRuntime, app.ContainerID, proc.PID))
+		}
 		apps = append(apps, app)
 	}
 	return apps
@@ -973,6 +988,15 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 			existing.Evidence = mergeEvidence(existing.Evidence, app.Evidence)
 			existing.ConfigPaths = mergeEvidence(existing.ConfigPaths, app.ConfigPaths)
 			existing.SitePaths = mergeEvidence(existing.SitePaths, app.SitePaths)
+			if app.IsContainer {
+				existing.IsContainer = true
+				if existing.ContainerID == "" {
+					existing.ContainerID = app.ContainerID
+				}
+				if existing.ContainerRuntime == "" {
+					existing.ContainerRuntime = app.ContainerRuntime
+				}
+			}
 
 			// 取更高的置信度
 			if app.Confidence > existing.Confidence {
@@ -1005,10 +1029,84 @@ func deduplicateApplications(apps []IdentifiedApplication) []IdentifiedApplicati
 }
 
 var (
-	applicationVersionTextPattern = regexp.MustCompile(`(?i)(?:^|[^0-9A-Za-z])v?(\d+(?:\.\d+)+(?:[._~+\-]?[0-9A-Za-z]+)*)`)
-	postgresPathVersionPattern    = regexp.MustCompile(`(?i)/postgresql/(\d+(?:\.\d+)?)(?:/|$)`)
-	vscodeServerCommitPattern     = regexp.MustCompile(`(?i)(?:stable-|commit[:=/\s-]*)([0-9a-f]{40})`)
+	applicationVersionTextPattern  = regexp.MustCompile(`(?i)(?:^|[^0-9A-Za-z])v?(\d+(?:\.\d+)+(?:[._~+\-]?[0-9A-Za-z]+)*)`)
+	postgresPathVersionPattern     = regexp.MustCompile(`(?i)/postgresql/(\d+(?:\.\d+)?)(?:/|$)`)
+	vscodeServerCommitPattern      = regexp.MustCompile(`(?i)(?:stable-|commit[:=/\s-]*)([0-9a-f]{40})`)
+	serviceCgroupContainerPatterns = []struct {
+		runtime string
+		re      *regexp.Regexp
+	}{
+		{runtime: "docker", re: regexp.MustCompile(`(?:/docker/|docker-)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "containerd", re: regexp.MustCompile(`(?:cri-containerd-|containerd/|/containerd/)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "cri-o", re: regexp.MustCompile(`(?:crio-|cri-o/|/crio/)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "podman", re: regexp.MustCompile(`(?:libpod-|libpod/|podman/|/libpod-)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "container", re: regexp.MustCompile(`(?:^|[/:-])([a-f0-9]{64})(?:\.scope)?(?:$|/)`)},
+	}
 )
+
+type applicationContainerInfo struct {
+	IsContainer bool
+	ID          string
+	Runtime     string
+}
+
+func containerInfoForApplication(processes []ProcessAsset, app IdentifiedApplication) applicationContainerInfo {
+	info := applicationContainerInfo{
+		IsContainer: app.IsContainer,
+		ID:          strings.TrimSpace(app.ContainerID),
+		Runtime:     strings.TrimSpace(app.ContainerRuntime),
+	}
+	processInfo := containerInfoForPIDs(processes, app.RelatedPIDs)
+	if processInfo.IsContainer {
+		return processInfo
+	}
+	return info
+}
+
+func containerInfoForPIDs(processes []ProcessAsset, pids []int) applicationContainerInfo {
+	pidSet := map[int]struct{}{}
+	for _, pid := range normalizePIDList(pids) {
+		pidSet[pid] = struct{}{}
+	}
+	if len(pidSet) == 0 {
+		return applicationContainerInfo{}
+	}
+	for _, proc := range processes {
+		if _, ok := pidSet[proc.PID]; !ok {
+			continue
+		}
+		if info := containerInfoFromProcess(proc); info.IsContainer {
+			return info
+		}
+	}
+	return applicationContainerInfo{}
+}
+
+func containerInfoFromProcess(proc ProcessAsset) applicationContainerInfo {
+	id := strings.TrimSpace(proc.ContainerID)
+	runtime := strings.TrimSpace(proc.Runtime)
+	if id != "" {
+		if runtime == "" {
+			runtime = "container"
+		}
+		return applicationContainerInfo{IsContainer: true, ID: id, Runtime: runtime}
+	}
+	runtime, id = parseContainerIdentityFromCgroupLines(proc.Cgroup)
+	if id != "" {
+		return applicationContainerInfo{IsContainer: true, ID: id, Runtime: runtime}
+	}
+	return applicationContainerInfo{}
+}
+
+func parseContainerIdentityFromCgroupLines(lines []string) (string, string) {
+	content := strings.ToLower(strings.Join(lines, "\n"))
+	for _, pattern := range serviceCgroupContainerPatterns {
+		if match := pattern.re.FindStringSubmatch(content); len(match) > 1 {
+			return pattern.runtime, match[1]
+		}
+	}
+	return "", ""
+}
 
 func enrichIdentifiedApplicationVersion(app IdentifiedApplication, snapshot HostAssetSnapshot, softwareAssets []model.HostSoftwareAsset) IdentifiedApplication {
 	if version := normalizeApplicationVersion(app.Version); version != "" {
@@ -1421,31 +1519,45 @@ func (s *AssetAnalysisService) convertToApplicationAsset(hostID uuid.UUID, snaps
 	if versionSource == "" {
 		versionSource = "ai"
 	}
+	containerInfo := containerInfoForApplication(snapshot.Processes, app)
+	app.IsContainer = containerInfo.IsContainer
+	if app.ContainerID == "" {
+		app.ContainerID = containerInfo.ID
+	}
+	if app.ContainerRuntime == "" {
+		app.ContainerRuntime = containerInfo.Runtime
+	}
+	if app.IsContainer {
+		app.Evidence = mergeEvidence(app.Evidence, []string{fmt.Sprintf("container_application runtime=%s id=%s", app.ContainerRuntime, app.ContainerID)})
+	}
 	return &model.HostApplicationAsset{
-		ID:            uuid.New(),
-		HostID:        hostID,
-		Hostname:      snapshot.Hostname,
-		IPAddress:     snapshot.IPAddress,
-		OSType:        snapshot.OSType,
-		Category:      app.Category,
-		Name:          app.Name,
-		DisplayName:   app.DisplayName,
-		Version:       app.Version,
-		VersionSource: versionSource,
-		InstallPath:   app.InstallPath,
-		StartPath:     app.StartPath,
-		ConfigPaths:   mustMarshalJSON(app.ConfigPaths),
-		SitePaths:     mustMarshalJSON(app.SitePaths),
-		ListenPorts:   mustMarshalJSON(app.ListenPorts),
-		RunUser:       app.RunUser,
-		RelatedPIDs:   mustMarshalJSON(app.RelatedPIDs),
-		AIConfidence:  app.Confidence,
-		AIEvidence:    mustMarshalJSON(app.Evidence),
-		ReviewStatus:  "auto",
-		Status:        app.Status,
-		Fingerprint:   generateAppFingerprint(hostID.String(), app.Category, app.Name, app.InstallPath, app.ListenPorts, app.RelatedPIDs),
-		LastSeenAt:    time.Now(),
-		CollectedAt:   time.Now(),
+		ID:               uuid.New(),
+		HostID:           hostID,
+		Hostname:         snapshot.Hostname,
+		IPAddress:        snapshot.IPAddress,
+		OSType:           snapshot.OSType,
+		Category:         app.Category,
+		Name:             app.Name,
+		DisplayName:      app.DisplayName,
+		Version:          app.Version,
+		VersionSource:    versionSource,
+		InstallPath:      app.InstallPath,
+		StartPath:        app.StartPath,
+		ConfigPaths:      mustMarshalJSON(app.ConfigPaths),
+		SitePaths:        mustMarshalJSON(app.SitePaths),
+		ListenPorts:      mustMarshalJSON(app.ListenPorts),
+		RunUser:          app.RunUser,
+		RelatedPIDs:      mustMarshalJSON(app.RelatedPIDs),
+		IsContainer:      app.IsContainer,
+		ContainerID:      app.ContainerID,
+		ContainerRuntime: app.ContainerRuntime,
+		AIConfidence:     app.Confidence,
+		AIEvidence:       mustMarshalJSON(app.Evidence),
+		ReviewStatus:     "auto",
+		Status:           app.Status,
+		Fingerprint:      generateAppFingerprint(hostID.String(), app.Category, app.Name, app.InstallPath, app.ListenPorts, app.RelatedPIDs),
+		LastSeenAt:       time.Now(),
+		CollectedAt:      time.Now(),
 	}
 }
 
@@ -1562,6 +1674,8 @@ func normalizeIdentifiedApplication(app IdentifiedApplication) IdentifiedApplica
 	app.StartPath = strings.TrimSpace(app.StartPath)
 	app.RunUser = strings.TrimSpace(app.RunUser)
 	app.Status = strings.TrimSpace(app.Status)
+	app.ContainerID = strings.TrimSpace(app.ContainerID)
+	app.ContainerRuntime = strings.TrimSpace(app.ContainerRuntime)
 
 	if appType := publicApplicationType(firstNonEmpty(app.Name, app.DisplayName, app.Category)); appType != "" {
 		if meta, ok := marketVisibleApplicationCatalog[appType]; ok {
@@ -1733,21 +1847,24 @@ type ApplicationAnalysisResult struct {
 
 // IdentifiedApplication 识别出的应用
 type IdentifiedApplication struct {
-	Name          string   `json:"name"`
-	DisplayName   string   `json:"display_name"`
-	Category      string   `json:"category"`
-	Version       string   `json:"version"`
-	VersionSource string   `json:"version_source,omitempty"`
-	Confidence    float64  `json:"confidence"`
-	Evidence      []string `json:"evidence"`
-	RelatedPIDs   []int    `json:"related_pids"`
-	InstallPath   string   `json:"install_path"`
-	StartPath     string   `json:"start_path"`
-	ConfigPaths   []string `json:"config_paths"`
-	SitePaths     []string `json:"site_paths"`
-	ListenPorts   []int    `json:"listen_ports"`
-	RunUser       string   `json:"run_user"`
-	Status        string   `json:"status"`
+	Name             string   `json:"name"`
+	DisplayName      string   `json:"display_name"`
+	Category         string   `json:"category"`
+	Version          string   `json:"version"`
+	VersionSource    string   `json:"version_source,omitempty"`
+	Confidence       float64  `json:"confidence"`
+	Evidence         []string `json:"evidence"`
+	RelatedPIDs      []int    `json:"related_pids"`
+	IsContainer      bool     `json:"is_container"`
+	ContainerID      string   `json:"container_id,omitempty"`
+	ContainerRuntime string   `json:"container_runtime,omitempty"`
+	InstallPath      string   `json:"install_path"`
+	StartPath        string   `json:"start_path"`
+	ConfigPaths      []string `json:"config_paths"`
+	SitePaths        []string `json:"site_paths"`
+	ListenPorts      []int    `json:"listen_ports"`
+	RunUser          string   `json:"run_user"`
+	Status           string   `json:"status"`
 }
 
 // extractJSONFromResponse 从响应中提取 JSON
@@ -1870,7 +1987,7 @@ const applicationAnalysisSystemPrompt = `你是 Aegis 主机应用资产识别�
 ## 输入上下文
 用户消息会提供：
 - 主机信息：hostname, ip, os_type, os_version, arch
-- 进程快照：pid, comm, exe_path, cwd, username, listen_ports, cmdline
+- 进程快照：pid, comm, exe_path, cwd, username, listen_ports, cmdline, /proc/<pid>/cgroup, container_runtime, container_id
 - 后续 Observation 中可能包含工具调用结果
 
 ## 可用工具
@@ -1907,7 +2024,8 @@ Action Input: [JSON 参数]
 6. 版本不能猜测。没有工具、包、cmdline 或配置证据时，version 留空字符串。
 7. 应该识别 Docker、Tailscale、OpenSSH、CUPS、VS Code Server、Codex、Clash Verge、Aegis Agent/API Server/Server/DC/Builder 这类真实运行的工具或平台服务。
 8. 不要返回 shell 命令、语言运行时本身、临时脚本、systemd/dbus/cron/udev/NetworkManager 等系统基础进程、桌面会话辅助进程、containerd-shim 这类容器子进程，或无法从进程/路径/配置确认身份的噪声进程。
-9. 证据不足时不要输出该项，而不是输出 unknown。
+9. 容器判断必须优先使用 Agent 逻辑：/proc/<pid>/cgroup 出现 Docker/containerd/cri-o/podman/libpod/kubepods scope 或 64 位容器 ID 时，is_container=true，并返回 container_runtime/container_id；普通 0::/、system.slice、user.slice 且无容器 ID 时为主机应用。
+10. 证据不足时不要输出该项，而不是输出 unknown。
 
 ## 分类
 category 只能使用以下值之一：
@@ -1955,6 +2073,9 @@ Final Answer: {"applications": [...]}
     "config_from_cmdline=/etc/redis/redis.conf"
   ],
   "related_pids": [123],
+  "is_container": true,
+  "container_id": "64位容器ID，非容器为空字符串",
+  "container_runtime": "docker|containerd|cri-o|podman|container|空字符串",
   "install_path": "/usr/bin/redis-server",
   "start_path": "/var/lib/redis",
   "config_paths": ["/etc/redis/redis.conf"],

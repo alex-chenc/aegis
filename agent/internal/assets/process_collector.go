@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,17 @@ type ProcessCollector struct {
 	maxProcessCount int
 	bootTime        int64          // 缓存系统启动时间
 	userCache       map[int]string // UID -> username 缓存
+}
+
+var processCgroupContainerPatterns = []struct {
+	runtime string
+	re      *regexp.Regexp
+}{
+	{runtime: "docker", re: regexp.MustCompile(`(?:/docker/|docker-)([a-f0-9]{64})(?:\.scope)?`)},
+	{runtime: "containerd", re: regexp.MustCompile(`(?:cri-containerd-|containerd/|/containerd/)([a-f0-9]{64})(?:\.scope)?`)},
+	{runtime: "cri-o", re: regexp.MustCompile(`(?:crio-|cri-o/|/crio/)([a-f0-9]{64})(?:\.scope)?`)},
+	{runtime: "podman", re: regexp.MustCompile(`(?:libpod-|libpod/|podman/|/libpod-)([a-f0-9]{64})(?:\.scope)?`)},
+	{runtime: "container", re: regexp.MustCompile(`(?:^|[/:-])([a-f0-9]{64})(?:\.scope)?(?:$|/)`)},
 }
 
 // NewProcessCollector 创建进程采集器
@@ -244,20 +256,32 @@ func (c *ProcessCollector) readCgroup(procPath string, proc *ProcessAsset) {
 	}
 
 	content := string(data)
-	// 查找 Docker 容器 ID
-	// 格式示例: 12:cpuset:/docker/abc123def456
+	proc.Cgroup = nonEmptyCgroupLines(content)
+	if runtime, id := parseContainerIdentityFromProcessCgroup(content); id != "" {
+		proc.Runtime = runtime
+		proc.ContainerID = id
+	}
+}
+
+func nonEmptyCgroupLines(content string) []string {
+	lines := make([]string, 0)
 	for _, line := range strings.Split(content, "\n") {
-		if strings.Contains(line, "/docker/") {
-			parts := strings.Split(line, "/docker/")
-			if len(parts) >= 2 {
-				containerID := strings.TrimSpace(parts[1])
-				if len(containerID) >= 12 {
-					proc.ContainerID = containerID[:12]
-					return
-				}
-			}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
 		}
 	}
+	return lines
+}
+
+func parseContainerIdentityFromProcessCgroup(content string) (string, string) {
+	lower := strings.ToLower(content)
+	for _, pattern := range processCgroupContainerPatterns {
+		if match := pattern.re.FindStringSubmatch(lower); len(match) > 1 {
+			return pattern.runtime, match[1]
+		}
+	}
+	return "", ""
 }
 
 // buildSocketPortMap 构建 socket inode 到端口的映射

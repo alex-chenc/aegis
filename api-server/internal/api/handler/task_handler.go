@@ -4,6 +4,7 @@ import (
 	grpcclient "api-server/internal/grpc"
 	"api-server/internal/repository"
 	"api-server/internal/service"
+	"api-server/internal/storage"
 	"api-server/pkg/logger"
 	"encoding/json"
 	"net/http"
@@ -49,14 +50,16 @@ func NewTaskHandler(
 }
 
 type RunCheckRequest struct {
-	RuleIDs []string `json:"rule_ids"`
-	HostIDs []string `json:"host_ids"`
+	RuleIDs   []string `json:"rule_ids"`
+	HostIDs   []string `json:"host_ids"`
+	MaxRounds int      `json:"max_rounds"`
 }
 
 type RunFixRequest struct {
 	RuleIDs     []string `json:"rule_ids"`
 	HostIDs     []string `json:"host_ids"`
 	TaskGroupID string   `json:"task_group_id"`
+	MaxRounds   int      `json:"max_rounds"`
 }
 
 type TaskResponse struct {
@@ -99,6 +102,8 @@ type TaskLogResponse struct {
 	TaskType      string                 `json:"task_type"`
 	Status        string                 `json:"status"`
 	ScriptContent *string                `json:"script_content"`
+	AttemptNo     int                    `json:"attempt_no"`
+	MaxRounds     int                    `json:"max_rounds"`
 	Stdout        *string                `json:"stdout"`
 	Stderr        *string                `json:"stderr"`
 	ExitCode      *int                   `json:"exit_code"`
@@ -109,10 +114,24 @@ type TaskLogResponse struct {
 }
 
 type HealingStatusResponse struct {
-	Status        string `json:"status"`
-	TotalAttempts int    `json:"total_attempts"`
-	MaxAttempts   int    `json:"max_attempts"`
-	LastError     string `json:"last_error,omitempty"`
+	TaskID           string                `json:"task_id"`
+	Status           string                `json:"status"`
+	StartedAt        string                `json:"started_at,omitempty"`
+	TotalAttempts    int                   `json:"total_attempts"`
+	MaxAttempts      int                   `json:"max_attempts"`
+	LastError        string                `json:"last_error,omitempty"`
+	UserSuggestion   string                `json:"user_suggestion,omitempty"`
+	ScriptType       string                `json:"script_type,omitempty"`
+	QueuePosition    int                   `json:"queue_position,omitempty"`
+	ConcurrencyLimit int                   `json:"concurrency_limit,omitempty"`
+	Steps            []HealingStepResponse `json:"steps,omitempty"`
+}
+
+type HealingStepResponse struct {
+	Phase     string `json:"phase"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 type RedispatchTaskResponse struct {
@@ -150,7 +169,10 @@ func (h *TaskHandler) RunCheck(c *gin.Context) {
 		return
 	}
 
-	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "CHECK")
+	result, err := h.taskService.CreateAndDispatchTasksWithOptions(c.Request.Context(), req.RuleIDs, req.HostIDs, service.TaskDispatchOptions{
+		TaskType:  "CHECK",
+		MaxRounds: req.MaxRounds,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -211,9 +233,16 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 			})
 			return
 		}
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX", groupID)
+		result, err = h.taskService.CreateAndDispatchTasksWithOptions(c.Request.Context(), req.RuleIDs, req.HostIDs, service.TaskDispatchOptions{
+			TaskType:        "FIX",
+			ExistingGroupID: groupID,
+			MaxRounds:       req.MaxRounds,
+		})
 	} else {
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX")
+		result, err = h.taskService.CreateAndDispatchTasksWithOptions(c.Request.Context(), req.RuleIDs, req.HostIDs, service.TaskDispatchOptions{
+			TaskType:  "FIX",
+			MaxRounds: req.MaxRounds,
+		})
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -382,6 +411,8 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 			TaskType:      log.TaskType,
 			Status:        log.Status,
 			ScriptContent: log.ScriptContent,
+			AttemptNo:     log.AttemptNo,
+			MaxRounds:     log.MaxRounds,
 			Stdout:        log.Stdout,
 			Stderr:        log.Stderr,
 			ExitCode:      log.ExitCode,
@@ -400,12 +431,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		if h.selfHealingService != nil {
 			healingStatus := h.selfHealingService.GetHealingStatus(log.ID.String())
 			if healingStatus != nil {
-				responses[i].HealingStatus = &HealingStatusResponse{
-					Status:        healingStatus.Status,
-					TotalAttempts: healingStatus.TotalAttempts,
-					MaxAttempts:   healingStatus.MaxAttempts,
-					LastError:     healingStatus.LastError,
-				}
+				responses[i].HealingStatus = buildHealingStatusResponse(healingStatus)
 			}
 		}
 
@@ -461,6 +487,42 @@ func (h *TaskHandler) buildAuditInfo(taskID string, stderr *string) *AuditInfoRe
 	return auditInfo
 }
 
+func buildHealingStatusResponse(status *storage.HealingStatus) *HealingStatusResponse {
+	if status == nil {
+		return nil
+	}
+	steps := make([]HealingStepResponse, 0, len(status.Steps))
+	for _, step := range status.Steps {
+		timestamp := ""
+		if !step.Timestamp.IsZero() {
+			timestamp = step.Timestamp.Format(time.RFC3339)
+		}
+		steps = append(steps, HealingStepResponse{
+			Phase:     step.Phase,
+			Status:    step.Status,
+			Summary:   step.Summary,
+			Timestamp: timestamp,
+		})
+	}
+	startedAt := ""
+	if !status.StartedAt.IsZero() {
+		startedAt = status.StartedAt.Format(time.RFC3339)
+	}
+	return &HealingStatusResponse{
+		TaskID:           status.TaskID,
+		Status:           status.Status,
+		StartedAt:        startedAt,
+		TotalAttempts:    status.TotalAttempts,
+		MaxAttempts:      status.MaxAttempts,
+		LastError:        status.LastError,
+		UserSuggestion:   status.UserSuggestion,
+		ScriptType:       status.ScriptType,
+		QueuePosition:    status.QueuePosition,
+		ConcurrencyLimit: status.ConcurrencyLimit,
+		Steps:            steps,
+	}
+}
+
 func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 	taskIDStr := c.Param("id")
 	taskID, err := uuid.Parse(taskIDStr)
@@ -488,6 +550,8 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 		TaskType:      log.TaskType,
 		Status:        log.Status,
 		ScriptContent: log.ScriptContent,
+		AttemptNo:     log.AttemptNo,
+		MaxRounds:     log.MaxRounds,
 		Stdout:        log.Stdout,
 		Stderr:        log.Stderr,
 		ExitCode:      log.ExitCode,
@@ -510,12 +574,7 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 	if h.selfHealingService != nil {
 		healingStatus := h.selfHealingService.GetHealingStatus(log.ID.String())
 		if healingStatus != nil {
-			response.HealingStatus = &HealingStatusResponse{
-				Status:        healingStatus.Status,
-				TotalAttempts: healingStatus.TotalAttempts,
-				MaxAttempts:   healingStatus.MaxAttempts,
-				LastError:     healingStatus.LastError,
-			}
+			response.HealingStatus = buildHealingStatusResponse(healingStatus)
 		}
 	}
 
@@ -582,6 +641,7 @@ type TaskGroupResponse struct {
 	PendingCount int     `json:"pending_count"`
 	RunningCount int     `json:"running_count"`
 	TimeoutCount int     `json:"timeout_count"`
+	PassRate     float64 `json:"pass_rate"`
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`
 }
@@ -651,6 +711,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 			PendingCount: s.PendingCount,
 			RunningCount: s.RunningCount,
 			TimeoutCount: s.TimeoutCount,
+			PassRate:     s.PassRate,
 			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
 		}
 		if s.FinishedAt != nil {
@@ -772,6 +833,9 @@ func (h *TaskHandlerWithHealing) TriggerSelfHealing(c *gin.Context) {
 		ErrorMessage:    errMsg,
 		ExitCode:        exitCode,
 		UserSuggestion:  req.UserSuggestion,
+		TaskGroupID:     taskLog.TaskGroupID,
+		AttemptNo:       taskLog.AttemptNo,
+		MaxRounds:       taskLog.MaxRounds,
 	}
 
 	if err := h.healingService.TriggerHealing(healingTask); err != nil {
@@ -827,16 +891,7 @@ func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data": gin.H{
-			"task_id":         healingStatus.TaskID,
-			"status":          healingStatus.Status,
-			"started_at":      healingStatus.StartedAt,
-			"total_attempts":  healingStatus.TotalAttempts,
-			"max_attempts":    healingStatus.MaxAttempts,
-			"last_error":      healingStatus.LastError,
-			"user_suggestion": healingStatus.UserSuggestion,
-			"script_type":     healingStatus.ScriptType,
-		},
+		"data":    buildHealingStatusResponse(healingStatus),
 	})
 }
 

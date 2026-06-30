@@ -157,6 +157,9 @@ type WeakPasswordCandidateDTO struct {
 	ApplicationType        string                            `json:"application_type"`
 	ApplicationVersion     string                            `json:"application_version,omitempty"`
 	ProfileID              string                            `json:"profile_id,omitempty"`
+	IsContainer            bool                              `json:"is_container"`
+	ContainerID            string                            `json:"container_id,omitempty"`
+	ContainerRuntime       string                            `json:"container_runtime,omitempty"`
 	Confidence             float64                           `json:"confidence"`
 	CandidatePaths         []string                          `json:"candidate_paths"`
 	CredentialTypes        []string                          `json:"credential_types"`
@@ -284,12 +287,15 @@ type CredentialCollectionPlan struct {
 }
 
 type CredentialApplication struct {
-	Application string                `json:"application"`
-	AssetID     string                `json:"asset_id"`
-	ProfileID   string                `json:"profile_id"`
-	Paths       []string              `json:"paths"`
-	RelatedPIDs []int                 `json:"related_pids,omitempty"`
-	Extractors  []CredentialExtractor `json:"extractors"`
+	Application      string                `json:"application"`
+	AssetID          string                `json:"asset_id"`
+	ProfileID        string                `json:"profile_id"`
+	Paths            []string              `json:"paths"`
+	RelatedPIDs      []int                 `json:"related_pids,omitempty"`
+	IsContainer      bool                  `json:"is_container,omitempty"`
+	ContainerID      string                `json:"container_id,omitempty"`
+	ContainerRuntime string                `json:"container_runtime,omitempty"`
+	Extractors       []CredentialExtractor `json:"extractors"`
 }
 
 type CredentialExtractor struct {
@@ -883,13 +889,20 @@ func mergeWeakPasswordApplicationAsset(existing, incoming model.HostApplicationA
 }
 
 func weakPasswordAssetRank(asset model.HostApplicationAsset) float64 {
-	rank := asset.AIConfidence * 1000
+	rank := 0.0
+	if !asset.CollectedAt.IsZero() {
+		rank += float64(asset.CollectedAt.Unix()) * 1000
+	}
+	if !asset.LastSeenAt.IsZero() {
+		rank += float64(asset.LastSeenAt.Unix())
+	}
+	if asset.IsContainer {
+		rank += 500
+	}
+	rank += asset.AIConfidence * 100
 	rank += float64(len(weakJSONStrings(asset.ConfigPaths))) * 20
 	rank += float64(len(weakJSONStrings(asset.ListenPorts))) * 5
 	rank += float64(len(weakJSONInts(asset.RelatedPIDs))) * 2
-	if !asset.CollectedAt.IsZero() {
-		rank += float64(asset.CollectedAt.Unix()) / 1_000_000_000
-	}
 	return rank
 }
 
@@ -932,33 +945,96 @@ func (s *WeakPasswordService) ensureHostRuntimeOnline(ctx context.Context, hostI
 }
 
 func (s *WeakPasswordService) hydrateCandidateRuntimeEvidence(candidate *model.WeakPasswordCandidateApplication) {
-	if s == nil || s.repo == nil || candidate == nil || candidate.AssetID == nil {
+	if s == nil || s.repo == nil || candidate == nil {
 		return
 	}
-	var asset model.HostApplicationAsset
-	if err := s.repo.DB().Where("id = ?", *candidate.AssetID).First(&asset).Error; err != nil {
-		return
+	evidencePIDs := candidateRelatedPIDs(*candidate)
+	relatedPIDs := []int{}
+	assetPaths := weakJSONStrings(candidate.CandidatePathsJSON)
+	containerInfo := weakPasswordContainerInfoFromEvidence(candidate.AssetEvidenceJSON)
+	var primaryAssetID string
+	if candidate.AssetID != nil {
+		var asset model.HostApplicationAsset
+		if err := s.repo.DB().
+			Where("id = ? AND status IN ?", *candidate.AssetID, []string{"active", "needs_review"}).
+			First(&asset).Error; err == nil {
+			primaryAssetID = asset.ID.String()
+			relatedPIDs = append(relatedPIDs, weakJSONInts(asset.RelatedPIDs)...)
+			assetPaths = mergeCredentialPaths(assetPaths, weakJSONStrings(asset.ConfigPaths))
+			if info := weakPasswordContainerInfoFromAsset(asset); info.IsContainer {
+				containerInfo = info
+			}
+		}
 	}
-	relatedPIDs := uniquePositiveInts(append(candidateRelatedPIDs(*candidate), weakJSONInts(asset.RelatedPIDs)...))
+
+	for _, asset := range s.recentApplicationAssetsForCandidate(candidate, 5) {
+		if primaryAssetID == "" {
+			primaryAssetID = asset.ID.String()
+		}
+		relatedPIDs = append(relatedPIDs, weakJSONInts(asset.RelatedPIDs)...)
+		assetPaths = mergeCredentialPaths(assetPaths, weakJSONStrings(asset.ConfigPaths))
+		if info := weakPasswordContainerInfoFromAsset(asset); info.IsContainer {
+			containerInfo = info
+		}
+	}
 	if len(relatedPIDs) == 0 {
+		relatedPIDs = append(relatedPIDs, evidencePIDs...)
+	}
+	relatedPIDs = uniquePositiveInts(relatedPIDs)
+	if len(relatedPIDs) == 0 && len(assetPaths) == 0 && !containerInfo.IsContainer {
 		return
 	}
 	var evidence map[string]interface{}
 	if len(candidate.AssetEvidenceJSON) == 0 || json.Unmarshal(candidate.AssetEvidenceJSON, &evidence) != nil {
 		evidence = map[string]interface{}{}
 	}
-	evidence["related_pids"] = relatedPIDs
+	if len(relatedPIDs) > 0 {
+		evidence["related_pids"] = relatedPIDs
+	}
 	if _, ok := evidence["source_table"]; !ok {
 		evidence["source_table"] = "host_application_assets"
 	}
-	if _, ok := evidence["asset_id"]; !ok {
-		evidence["asset_id"] = asset.ID.String()
+	if primaryAssetID != "" {
+		if _, ok := evidence["asset_id"]; !ok {
+			evidence["asset_id"] = primaryAssetID
+		}
+	}
+	if containerInfo.IsContainer {
+		evidence["is_container"] = true
+		evidence["container_id"] = containerInfo.ID
+		evidence["container_runtime"] = containerInfo.Runtime
 	}
 	candidate.AssetEvidenceJSON = mustJSON(evidence)
-	assetPaths := weakJSONStrings(asset.ConfigPaths)
 	if len(assetPaths) > 0 {
-		candidate.CandidatePathsJSON = mustJSON(mergeCredentialPaths(weakJSONStrings(candidate.CandidatePathsJSON), assetPaths))
+		candidate.CandidatePathsJSON = mustJSON(assetPaths)
 	}
+}
+
+func (s *WeakPasswordService) recentApplicationAssetsForCandidate(candidate *model.WeakPasswordCandidateApplication, limit int) []model.HostApplicationAsset {
+	if s == nil || s.repo == nil || candidate == nil {
+		return nil
+	}
+	appType := normalizeApplicationType(candidate.ApplicationType)
+	if appType == "" || appType == "unknown" {
+		appType = normalizeApplicationType(candidate.ApplicationName)
+	}
+	if appType == "" || appType == "unknown" {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var assets []model.HostApplicationAsset
+	if err := s.repo.DB().
+		Where("host_id = ?", candidate.HostID).
+		Where("status IN ?", []string{"active", "needs_review"}).
+		Where("(LOWER(name) = ? OR LOWER(display_name) = ? OR LOWER(category) = ?)", appType, appType, appType).
+		Order("collected_at DESC, updated_at DESC").
+		Limit(limit).
+		Find(&assets).Error; err != nil {
+		return nil
+	}
+	return assets
 }
 
 func (s *WeakPasswordService) CreateTaskByApplication(ctx context.Context, req model.CreateTaskByApplicationRequest, createdBy *uuid.UUID) (*CreateTaskByApplicationResponse, error) {
@@ -1184,13 +1260,7 @@ func (s *WeakPasswordService) attemptProcessBasedRepair(ctx context.Context, tas
 		candidates := hintConfigCandidates(hints)
 		discovered = append(discovered, candidates...)
 		call.Status = "completed"
-		call.ResultSummaryJSON = mustJSON(map[string]interface{}{
-			"pid":                    pid,
-			"container_detected":     hints.ContainerRoot != "",
-			"container_runtime":      hints.ContainerRuntime,
-			"candidate_path_count":   len(candidates),
-			"open_config_file_count": len(hints.OpenConfigFiles),
-		})
+		call.ResultSummaryJSON = mustJSON(processConfigHintsSummary(pid, hints, candidates))
 		_ = s.repo.UpdateToolCall(call)
 	}
 
@@ -1241,11 +1311,14 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 	}
 
 	currentPlanSummary, _ := json.Marshal(map[string]interface{}{
-		"application":  originalPlan.Applications[0].Application,
-		"profile_id":   originalPlan.Applications[0].ProfileID,
-		"paths":        originalPlan.Applications[0].Paths,
-		"extractors":   originalPlan.Applications[0].Extractors,
-		"related_pids": originalPlan.Applications[0].RelatedPIDs,
+		"application":       originalPlan.Applications[0].Application,
+		"profile_id":        originalPlan.Applications[0].ProfileID,
+		"paths":             originalPlan.Applications[0].Paths,
+		"extractors":        originalPlan.Applications[0].Extractors,
+		"related_pids":      originalPlan.Applications[0].RelatedPIDs,
+		"is_container":      originalPlan.Applications[0].IsContainer,
+		"container_id":      originalPlan.Applications[0].ContainerID,
+		"container_runtime": originalPlan.Applications[0].ContainerRuntime,
 	})
 
 	// Build system prompt for repair
@@ -1260,7 +1333,9 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 
 容器/非容器路径规则：
 - 当前计划里的 related_pids 是唯一可信 PID 列表；不要使用 pid=1，除非它明确出现在 related_pids。
-- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
+	- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
+	- 如果当前计划 is_container=true，必须视为容器应用：先利用 Agent 容器环境变量采集结果，再通过带 pid 的工具读取 /proc/<pid>/root 下的容器内文件。
+	- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
 - new_paths 必须填写应用视角的绝对路径，例如 /etc/redis/redis.conf；不要返回 /proc/<pid>/root/...。
 - Redis 若通过 redis-server --requirepass/--masterauth 启动，凭据由受控采集工具从进程参数提取，不要为了这种情况递归搜索宿主机 /etc。
 
@@ -1433,7 +1508,7 @@ new_extractors 必须使用以下字段：
 	}
 
 	call.Status = "completed"
-	call.ResultSummaryJSON = mustJSON(map[string]interface{}{"result_length": len(toolResp.GetResult())})
+	call.ResultSummaryJSON = mustJSON(repairToolResultSummary(repairResult.Tool, toolResp.GetResult()))
 	_ = s.repo.UpdateToolCall(call)
 
 	// Update app status
@@ -1667,13 +1742,13 @@ func (s *WeakPasswordService) executeApplicationTask(ctx context.Context, taskID
 		newPathCount := len(repairedPlan.Applications[0].Paths)
 		newExtractorCount := len(repairedPlan.Applications[0].Extractors)
 		if newPathCount <= oldPathCount && newExtractorCount <= oldExtractorCount {
-			s.logger.Info("AI repair did not discover new paths or extractors, continuing with next attempt",
+			s.logger.Info("AI repair did not discover new paths or extractors, stopping repair loop",
 				zap.String("task_id", taskID.String()),
 				zap.Int("old_paths", oldPathCount),
 				zap.Int("new_paths", newPathCount),
 				zap.Int("old_extractors", oldExtractorCount),
 				zap.Int("new_extractors", newExtractorCount))
-			continue
+			break
 		}
 
 		// Update plan for next attempt
@@ -2110,9 +2185,10 @@ func collectionResultSummary(plan CredentialCollectionPlan, result AgentCredenti
 	if len(fieldNames) == 0 {
 		fieldNames = planExtractorFieldNames(plan)
 	}
+	fieldNames = mergeStringLists(fieldNames, planContainerFieldNames(plan))
 	if len(sourcePaths) == 0 {
 		for _, app := range plan.Applications {
-			sourcePaths = mergeStringLists(sourcePaths, app.Paths)
+			sourcePaths = mergeStringLists(sourcePaths, planDisplaySourcePaths(app))
 		}
 	}
 	if len(sourcePaths) == 0 {
@@ -2132,6 +2208,74 @@ func collectionResultSummary(plan CredentialCollectionPlan, result AgentCredenti
 	}
 }
 
+func processConfigHintsSummary(pid int, hints AgentProcessConfigHintsResult, candidates []string) map[string]interface{} {
+	sourcePaths := displayCredentialPathsForContainerRoot(hints.ContainerRoot, candidates)
+	if len(sourcePaths) == 0 {
+		if strings.TrimSpace(hints.ContainerRoot) != "" {
+			sourcePaths = []string{hints.ContainerRoot}
+		} else {
+			sourcePaths = []string{"未记录路径"}
+		}
+	}
+
+	fields := []string{fmt.Sprintf("pid=%d", pid)}
+	if strings.TrimSpace(hints.ContainerRoot) != "" {
+		fields = append(fields, "container_app=true", "container_root="+hints.ContainerRoot)
+	}
+	if strings.TrimSpace(hints.ContainerRuntime) != "" {
+		fields = append(fields, "container_runtime="+hints.ContainerRuntime)
+	}
+	if strings.TrimSpace(hints.ContainerID) != "" {
+		fields = append(fields, "container_id="+hints.ContainerID)
+	}
+	return map[string]interface{}{
+		"pid":                    pid,
+		"container_detected":     hints.ContainerRoot != "",
+		"container_runtime":      hints.ContainerRuntime,
+		"container_id":           hints.ContainerID,
+		"candidate_path_count":   len(candidates),
+		"open_config_file_count": len(hints.OpenConfigFiles),
+		"source_path":            strings.Join(sourcePaths, "\n"),
+		"field_name":             strings.Join(fields, "\n"),
+		"source_paths":           sourcePaths,
+		"field_names":            fields,
+	}
+}
+
+func displayCredentialPathsForContainerRoot(containerRoot string, paths []string) []string {
+	containerRoot = strings.TrimRight(strings.TrimSpace(containerRoot), "/")
+	if containerRoot == "" {
+		return mergeCredentialPaths(nil, paths)
+	}
+	out := []string{}
+	for _, path := range mergeCredentialPaths(nil, paths) {
+		if strings.HasPrefix(path, containerRoot+"/") || path == containerRoot {
+			out = mergeStringLists(out, []string{path})
+			continue
+		}
+		if strings.HasPrefix(path, "/proc/") {
+			out = mergeStringLists(out, []string{path})
+			continue
+		}
+		relative := strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator))
+		if relative == "." || relative == "" {
+			continue
+		}
+		out = mergeStringLists(out, []string{filepath.Join(containerRoot, relative)})
+	}
+	return out
+}
+
+func repairToolResultSummary(tool, result string) map[string]interface{} {
+	if tool == "WeakPassword.ProcessConfigHints" {
+		var hints AgentProcessConfigHintsResult
+		if err := json.Unmarshal([]byte(result), &hints); err == nil {
+			return processConfigHintsSummary(hints.PID, hints, hintConfigCandidates(hints))
+		}
+	}
+	return map[string]interface{}{"result_length": len(result)}
+}
+
 func planExtractorFieldNames(plan CredentialCollectionPlan) []string {
 	fields := []string{}
 	for _, app := range plan.Applications {
@@ -2146,6 +2290,39 @@ func planExtractorFieldNames(plan CredentialCollectionPlan) []string {
 		}
 	}
 	return fields
+}
+
+func planContainerFieldNames(plan CredentialCollectionPlan) []string {
+	fields := []string{}
+	for _, app := range plan.Applications {
+		if !app.IsContainer {
+			continue
+		}
+		fields = mergeStringLists(fields, []string{"container_app=true"})
+		if app.ContainerRuntime != "" {
+			fields = mergeStringLists(fields, []string{"container_runtime=" + app.ContainerRuntime})
+		}
+		if app.ContainerID != "" {
+			fields = mergeStringLists(fields, []string{"container_id=" + app.ContainerID})
+		}
+	}
+	return fields
+}
+
+func planDisplaySourcePaths(app CredentialApplication) []string {
+	if !app.IsContainer {
+		return app.Paths
+	}
+	sourcePaths := []string{}
+	pids := uniquePositiveInts(app.RelatedPIDs)
+	for _, pid := range pids {
+		root := fmt.Sprintf("/proc/%d/root", pid)
+		sourcePaths = mergeStringLists(sourcePaths, displayCredentialPathsForContainerRoot(root, app.Paths))
+	}
+	if len(sourcePaths) == 0 {
+		return app.Paths
+	}
+	return sourcePaths
 }
 
 func collectionProgressSourceAndField(summary datatypes.JSON, fallbackPath, fallbackField string) (string, string) {
@@ -2705,17 +2882,20 @@ func buildCandidateFromAsset(analysisID uuid.UUID, asset model.HostApplicationAs
 		CandidatePathsJSON: mustJSON(paths),
 		ExtractorPlanJSON:  mustJSON(extractors),
 		AssetEvidenceJSON: mustJSON(map[string]interface{}{
-			"asset_id":     asset.ID.String(),
-			"hostname":     asset.Hostname,
-			"ip_address":   asset.IPAddress,
-			"category":     asset.Category,
-			"start_path":   asset.StartPath,
-			"config_paths": paths,
-			"listen_ports": weakJSONStrings(asset.ListenPorts),
-			"run_user":     asset.RunUser,
-			"related_pids": relatedPIDs,
-			"collected_at": asset.CollectedAt,
-			"source_table": "host_application_assets",
+			"asset_id":          asset.ID.String(),
+			"hostname":          asset.Hostname,
+			"ip_address":        asset.IPAddress,
+			"category":          asset.Category,
+			"start_path":        asset.StartPath,
+			"config_paths":      paths,
+			"listen_ports":      weakJSONStrings(asset.ListenPorts),
+			"run_user":          asset.RunUser,
+			"related_pids":      relatedPIDs,
+			"is_container":      asset.IsContainer,
+			"container_id":      asset.ContainerID,
+			"container_runtime": asset.ContainerRuntime,
+			"collected_at":      asset.CollectedAt,
+			"source_table":      "host_application_assets",
 		}),
 		AIReason:  reason,
 		Status:    model.AppStatusCandidate,
@@ -2728,17 +2908,21 @@ func buildCollectionPlan(planID, taskID uuid.UUID, candidate model.WeakPasswordC
 	extractors := []CredentialExtractor{}
 	_ = json.Unmarshal(candidate.ExtractorPlanJSON, &extractors)
 	relatedPIDs := candidateRelatedPIDs(candidate)
+	containerInfo := weakPasswordContainerInfoFromEvidence(candidate.AssetEvidenceJSON)
 	return CredentialCollectionPlan{
 		TaskID: taskID.String(),
 		PlanID: planID.String(),
 		HostID: candidate.HostID.String(),
 		Applications: []CredentialApplication{{
-			Application: candidate.ApplicationType,
-			AssetID:     optionalUUIDString(candidate.AssetID),
-			ProfileID:   candidate.ProfileID,
-			Paths:       paths,
-			RelatedPIDs: relatedPIDs,
-			Extractors:  extractors,
+			Application:      candidate.ApplicationType,
+			AssetID:          optionalUUIDString(candidate.AssetID),
+			ProfileID:        candidate.ProfileID,
+			Paths:            paths,
+			RelatedPIDs:      relatedPIDs,
+			IsContainer:      containerInfo.IsContainer,
+			ContainerID:      containerInfo.ID,
+			ContainerRuntime: containerInfo.Runtime,
+			Extractors:       extractors,
 		}},
 		CollectionPolicy: CredentialCollectionPolicy{
 			MaxFileBytes:          1024 * 1024,
@@ -2765,6 +2949,7 @@ func candidateDTO(candidate model.WeakPasswordCandidateApplication, hostname, ip
 			ip = evidenceIP
 		}
 	}
+	containerInfo := weakPasswordContainerInfoFromEvidence(candidate.AssetEvidenceJSON)
 	return WeakPasswordCandidateDTO{
 		CandidateApplicationID: candidate.ID.String(),
 		HostID:                 candidate.HostID.String(),
@@ -2775,6 +2960,9 @@ func candidateDTO(candidate model.WeakPasswordCandidateApplication, hostname, ip
 		ApplicationType:        candidate.ApplicationType,
 		ApplicationVersion:     candidate.ApplicationVersion,
 		ProfileID:              candidate.ProfileID,
+		IsContainer:            containerInfo.IsContainer,
+		ContainerID:            containerInfo.ID,
+		ContainerRuntime:       containerInfo.Runtime,
 		Confidence:             candidate.Confidence,
 		CandidatePaths:         weakJSONStrings(candidate.CandidatePathsJSON),
 		CredentialTypes:        weakJSONStrings(candidate.CredentialTypes),
@@ -2792,6 +2980,54 @@ func candidateHostInfo(candidate model.WeakPasswordCandidateApplication) (string
 	hostname, _ := evidence["hostname"].(string)
 	ip, _ := evidence["ip_address"].(string)
 	return hostname, ip
+}
+
+func weakPasswordContainerInfoFromEvidence(data datatypes.JSON) applicationContainerInfo {
+	var evidence map[string]interface{}
+	if len(data) == 0 || json.Unmarshal(data, &evidence) != nil {
+		return applicationContainerInfo{}
+	}
+	return applicationContainerInfo{
+		IsContainer: boolFromInterface(evidence["is_container"]),
+		ID:          strings.TrimSpace(stringFromInterface(evidence["container_id"])),
+		Runtime:     strings.TrimSpace(stringFromInterface(evidence["container_runtime"])),
+	}
+}
+
+func weakPasswordContainerInfoFromAsset(asset model.HostApplicationAsset) applicationContainerInfo {
+	return applicationContainerInfo{
+		IsContainer: asset.IsContainer,
+		ID:          strings.TrimSpace(asset.ContainerID),
+		Runtime:     strings.TrimSpace(asset.ContainerRuntime),
+	}
+}
+
+func boolFromInterface(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") || strings.EqualFold(strings.TrimSpace(typed), "yes") || strings.TrimSpace(typed) == "1"
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	default:
+		return false
+	}
+}
+
+func stringFromInterface(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func normalizeApplicationType(value string) string {
@@ -3088,7 +3324,7 @@ func mergeCredentialPaths(existing []string, discovered []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(existing)+len(discovered))
 	add := func(path string) {
-		path = strings.TrimSpace(path)
+		path = cleanCredentialPathHint(path)
 		if !isSafeCredentialPath(path) {
 			return
 		}
@@ -3105,6 +3341,36 @@ func mergeCredentialPaths(existing []string, discovered []string) []string {
 		add(path)
 	}
 	return out
+}
+
+func cleanCredentialPathHint(path string) string {
+	path = strings.TrimSpace(strings.Trim(path, `"'`))
+	if key, value, ok := strings.Cut(path, "="); ok && strings.Contains(strings.ToLower(key), "config") {
+		path = strings.TrimSpace(strings.Trim(value, `"'`))
+	}
+	path = strings.TrimPrefix(path, "file://")
+	path = strings.TrimPrefix(path, "file:")
+	path = stripProcRootPathPrefix(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+func stripProcRootPathPrefix(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/proc/") {
+		return path
+	}
+	rest := strings.TrimPrefix(path, "/proc/")
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 || parts[1] != "root" {
+		return path
+	}
+	if len(parts) == 2 || strings.TrimSpace(parts[2]) == "" {
+		return "/"
+	}
+	return "/" + parts[2]
 }
 
 func mergeStringLists(existing []string, discovered []string) []string {
@@ -3315,11 +3581,14 @@ func redactCollectionPlanSummary(plan CredentialCollectionPlan) map[string]inter
 	apps := make([]map[string]interface{}, 0, len(plan.Applications))
 	for _, app := range plan.Applications {
 		apps = append(apps, map[string]interface{}{
-			"application":     app.Application,
-			"asset_id":        app.AssetID,
-			"profile_id":      app.ProfileID,
-			"path_count":      len(app.Paths),
-			"extractor_count": len(app.Extractors),
+			"application":       app.Application,
+			"asset_id":          app.AssetID,
+			"profile_id":        app.ProfileID,
+			"path_count":        len(app.Paths),
+			"is_container":      app.IsContainer,
+			"container_id":      app.ContainerID,
+			"container_runtime": app.ContainerRuntime,
+			"extractor_count":   len(app.Extractors),
 		})
 	}
 	return map[string]interface{}{

@@ -53,7 +53,7 @@ func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
 		"'ai_agent'",
 		"'mcp_server'",
 		"normalized(raw_name, canonical_name, display_name, category)",
-		"status = 'active'",
+		"app.status <> 'deleted'",
 		"'docker-proxy'",
 		"'tailscaled'",
 		"'postgresql-client'",
