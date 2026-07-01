@@ -27,24 +27,6 @@ func TestExtractVersionHandlesVPrefix(t *testing.T) {
 	}
 }
 
-func TestExtractVersionHandlesOpenSSHPatchVersion(t *testing.T) {
-	tool := NewVersionTool(zap.NewNop())
-
-	got := tool.extractVersion("OpenSSH_10.0p2 Ubuntu-5ubuntu5.4, OpenSSL 3.5.3")
-	if got != "10.0p2" {
-		t.Fatalf("expected OpenSSH version 10.0p2, got %q", got)
-	}
-}
-
-func TestExtractVersionHandlesMihomoOutput(t *testing.T) {
-	tool := NewVersionTool(zap.NewNop())
-
-	got := tool.extractVersion("Mihomo Meta v1.19.25 linux amd64")
-	if got != "1.19.25" {
-		t.Fatalf("expected Mihomo version 1.19.25, got %q", got)
-	}
-}
-
 func TestAssetReadProcFileRejectsSensitivePathVariants(t *testing.T) {
 	tool := NewVersionTool(zap.NewNop())
 

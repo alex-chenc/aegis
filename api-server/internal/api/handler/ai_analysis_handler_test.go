@@ -118,11 +118,22 @@ func TestPauseAnalysisCancelsActiveRun(t *testing.T) {
 	}
 }
 
-func TestCollectingSSEWriterWritesDoneWithoutFlowchartImage(t *testing.T) {
+func TestCollectingSSEWriterWritesFlowchartImageBeforeDone(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writer := &collectingSSEWriter{
 		writer:    llm.NewSSEWriter(recorder),
 		collector: &SSEResponseCollector{},
+		beforeDone: func(content string) error {
+			if content != "Final Answer: 已确认威胁" {
+				t.Fatalf("unexpected final content passed to image callback: %q", content)
+			}
+			return llm.NewSSEWriter(recorder).Write(llm.SSEEvent{
+				Type: "flowchart_image",
+				Result: map[string]interface{}{
+					"url": "https://example.test/trace.png",
+				},
+			})
+		},
 	}
 
 	if err := writer.WriteContent("Final Answer: 已确认威胁"); err != nil {
@@ -133,11 +144,16 @@ func TestCollectingSSEWriterWritesDoneWithoutFlowchartImage(t *testing.T) {
 	}
 
 	body := recorder.Body.String()
-	if strings.Contains(body, `"type":"flowchart_image"`) {
-		t.Fatalf("did not expect flowchart_image event after image model removal: %s", body)
+	imageIdx := strings.Index(body, `"type":"flowchart_image"`)
+	doneIdx := strings.Index(body, `"type":"done"`)
+	if imageIdx < 0 {
+		t.Fatalf("expected flowchart_image event in SSE body: %s", body)
 	}
-	if !strings.Contains(body, `"type":"done"`) {
+	if doneIdx < 0 {
 		t.Fatalf("expected done event in SSE body: %s", body)
+	}
+	if imageIdx > doneIdx {
+		t.Fatalf("expected flowchart_image before done, body: %s", body)
 	}
 }
 
@@ -586,6 +602,71 @@ func TestBuildAlertWritebackUsesConclusionSummaryAndRecommendations(t *testing.T
 	}
 }
 
+func TestIsAllFalsePositive_AllFalsePositive(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报1"},
+			{"alert_id": "ALT-002", "action": "mark_false_positive", "summary": "误报2"}
+		]
+	}`
+	if !isAllFalsePositive(content) {
+		t.Fatal("expected all false positive to return true")
+	}
+}
+
+func TestIsAllFalsePositive_MixedActions(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "mark_false_positive", "summary": "误报"},
+			{"alert_id": "ALT-002", "action": "confirm_threat", "summary": "确认威胁"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected mixed actions to return false")
+	}
+}
+
+func TestIsAllFalsePositive_ConfirmThreat(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "confirm_threat", "summary": "确认威胁"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected confirm_threat to return false")
+	}
+}
+
+func TestIsAllFalsePositive_EmptyConclusions(t *testing.T) {
+	content := `{
+		"attack_graph": {"nodes": [], "edges": []},
+		"conclusions": []
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected empty conclusions to return false")
+	}
+}
+
+func TestIsAllFalsePositive_InvalidJSON(t *testing.T) {
+	if isAllFalsePositive("not json at all") {
+		t.Fatal("expected invalid JSON to return false")
+	}
+}
+
+func TestIsAllFalsePositive_GenerateRule(t *testing.T) {
+	content := `{
+		"conclusions": [
+			{"alert_id": "ALT-001", "action": "generate_rule", "summary": "生成规则"}
+		]
+	}`
+	if isAllFalsePositive(content) {
+		t.Fatal("expected generate_rule to return false")
+	}
+}
+
 func TestBuildExecutionResultResponse(t *testing.T) {
 	execID := uuid.New()
 	exec := &model.AgentExecution{
@@ -935,23 +1016,23 @@ func TestGetSessionHistoryReturnsAlerts(t *testing.T) {
 		Messages:   []*llm.AIMessage{},
 		AlertSnapshots: []AlertContextSnapshot{
 			{
-				ID:         "internal-1",
-				AlertID:    "ALT-001",
-				Hostname:   "web-server-01",
-				RuleTitle:  "Suspicious Process Execution",
-				MitreID:    "T1059",
-				Severity:   "high",
-				Status:     "pending",
+				ID:        "internal-1",
+				AlertID:   "ALT-001",
+				Hostname:  "web-server-01",
+				RuleTitle: "Suspicious Process Execution",
+				MitreID:   "T1059",
+				Severity:  "high",
+				Status:    "pending",
 				LastSeenAt: now,
 			},
 			{
-				ID:         "internal-2",
-				AlertID:    "ALT-002",
-				Hostname:   "db-server-01",
-				RuleTitle:  "Unauthorized Access Attempt",
-				MitreID:    "T1078",
-				Severity:   "critical",
-				Status:     "pending",
+				ID:        "internal-2",
+				AlertID:   "ALT-002",
+				Hostname:  "db-server-01",
+				RuleTitle: "Unauthorized Access Attempt",
+				MitreID:   "T1078",
+				Severity:  "critical",
+				Status:    "pending",
 				LastSeenAt: now,
 			},
 		},
@@ -1390,8 +1471,8 @@ func TestBuildExecutionResultResponse_BackwardCompatibleConclusionDerivesVerdict
 	oldConclusion := model.JSONB{
 		"conclusions": []interface{}{
 			map[string]interface{}{
-				"action":   "confirm_threat",
-				"summary":  "确认反弹shell攻击",
+				"action":  "confirm_threat",
+				"summary": "确认反弹shell攻击",
 				"alert_id": "ALT-001",
 			},
 		},

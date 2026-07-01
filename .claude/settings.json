@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/aegis-agent/aegis-agent --version)",
+      "Read(//code/ai-benchmark/**)",
+      "Bash(GOPATH=/tmp/gopath go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)",
+      "Read(//tmp/gopath/bin/**)",
+      "Read(//tmp/**)",
+      "Read(//root/go/**)",
+      "Bash(protoc --go_out=. --go_opt=paths=source_relative --grpc-go_out=. --grpc-go_opt=paths=source_relative --plugin=protoc-gen-grpc-go=/tmp/gopath/bin/protoc-gen-go-grpc --plugin=protoc-gen-go=/tmp/gopath/bin/protoc-gen-go proto/api_server_comm.proto)",
+      "Bash(protoc -I . --go_out=. --go_opt=Mproto/api_server_comm.proto=api-server/pkg/api/v1 --grpc-go_out=. --grpc-go_opt=Mproto/api_server_comm.proto=api-server/pkg/api/v1 --plugin=protoc-gen-grpc-go=/tmp/gopath/bin/protoc-gen-go-grpc --plugin=protoc-gen-go=/tmp/gopath/bin/protoc-gen-go proto/api_server_comm.proto)",
+      "Bash(docker-compose ps:*)",
+      "Bash(ldd /code/ai-benchmark/api-server/bin/api-server)",
+      "Bash(ldd bin/api-server)",
+      "Bash(/code/ai-benchmark/api-server/bin/api-server version:*)",
+      "Bash(kill 1861199)",
+      "Bash(nohup ./bin/api-server)",
+      "Bash(page_size=5 2>&1)"
+    ],
+    "additionalDirectories": [
+      "/code/ai-benchmark/server/pkg/api/v1"
+    ]
+  }
+}

@@ -36,10 +36,14 @@ const CheckScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师
 
 要求：
 1. 脚本必须是完整的、可执行的 bash 脚本，以#!/bin/bash 开头
-2. 脚本执行成功返回 exit code 0，失败返回 exit code 1
-3. 脚本应该有清晰的输出，说明检查通过或失败的原因
+2. 退出码语义必须严格区分：
+   - exit code 0：检查执行成功，且基线项通过
+   - exit code 1：检查执行成功，但基线项未通过（这是业务结果，不是脚本错误）
+   - exit code 2 或更高：脚本执行错误、依赖命令缺失、权限不足、解析失败、环境异常
+3. 脚本应该有清晰的输出，说明检查通过、未通过或执行错误的原因
 4. 使用标准的 bash 命令和工具
 5. 脚本应该健壮，处理可能的异常情况
+6. 不要把合规未通过写成脚本错误；只有脚本无法可靠完成检查时才返回 2 或更高
 
 规则检查内容：
 %s
@@ -49,7 +53,7 @@ const CheckScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师
 // FixScriptGenerationPrompt generates shell fix scripts from rule content
 const FixScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师，擅长编写系统配置和修复脚本。
 
-请根据以下基线规则的修复内容，生成一个 Shell 修复脚本。
+请根据以下基线规则的检测内容和修复建议，生成一个 Shell 修复脚本。
 
 要求：
 1. 脚本必须是完整的、可执行的 bash 脚本，以#!/bin/bash 开头
@@ -58,6 +62,13 @@ const FixScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师�
 4. 使用标准的 bash 命令和工具
 5. 脚本应该健壮，处理可能的异常情况
 6. 对于需要 root 权限的操作，应该有权限检查
+7. 修复动作必须满足检测内容的逆逻辑：修复完成后，同等语义的检测应返回通过
+8. 必须根据检测内容写出修复后的验证步骤；验证不通过时返回非 0
+9. 优先采用修复建议中的方法；如建议不完整，补足必要的幂等检查、备份和验证
+10. 修复脚本必须幂等，多次执行不应破坏已有正确配置
+
+规则检测内容：
+%s
 
 规则修复内容：
 %s
@@ -99,8 +110,8 @@ func GetCheckScriptGenerationPrompt(checkContent string) string {
 }
 
 // GetFixScriptGenerationPrompt returns the fix script generation prompt
-func GetFixScriptGenerationPrompt(fixContent string) string {
-	return fmt.Sprintf(FixScriptGenerationPrompt, fixContent)
+func GetFixScriptGenerationPrompt(checkContent, fixContent string) string {
+	return fmt.Sprintf(FixScriptGenerationPrompt, checkContent, fixContent)
 }
 
 // GetSelfHealingFixPrompt returns the self-healing fix prompt

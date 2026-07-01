@@ -1,31 +1,132 @@
-# Repository Guidelines
+# AGENTS.md
 
-## Project Structure & Module Organization
+This file gives Codex project guidance for the Aegis (`ai-benchmark`) repository.
+`CLAUDE.md` and `.claude/` are kept for Claude compatibility; the Codex-native
+copy of the operational guidance lives here and under `.agents/codex-skills/`.
 
-Aegis is a multi-service host security platform. Go services are split by role: `api-server/` handles REST, LLM, storage, and orchestration; `server/` is the gRPC agent hub; `dc/` consumes Kafka and drives alert/blocking; `agent/` handles eBPF, Sigma matching, and task execution; `builder/` builds dynamic eBPF packages. Shared protobufs live in `proto/`, generated Go stubs in service `pkg/api/`, migrations in `migrations/` and `api-server/migrations/`, scripts in `scripts/`, and Docker/release assets in `docker/`, `docker-compose.yml`, and `release/`. The Vue 3 frontend is in `frontend/src/`; Playwright specs are in `frontend/e2e/`.
+## Project Overview
 
-## Build, Test, and Development Commands
+Aegis is an AI-native host security platform for automated baseline auditing,
+vulnerability management, and runtime threat detection. The system is split into:
 
-- `docker compose up -d --build`: build and run the full local stack.
-- `cd api-server && make build && make test`: build and test the API server.
-- `cd server && make build && make test`: build and test the gRPC hub.
-- `cd dc && make build && make test`: build and test the data consumer.
-- `cd agent && make bpf && make build && make test`: compile eBPF artifacts, binaries, and tests.
-- `cd frontend && npm install && npm run dev`: run the Vite dev server.
-- `cd frontend && npm run build && npm run test`: build assets and run Vitest.
+- `api-server/`: Go HTTP control plane, LLM services, repositories, MinIO, Redis,
+  Kafka producer, and gRPC client.
+- `server/`: Go gRPC agent hub, command forwarding, Kafka producer, host storage.
+- `dc/`: Go data consumer for Kafka events, aggregation, LLM analysis, alerts,
+  and blocking.
+- `agent/`: Go data-plane agent with eBPF collection, Sigma matching, command
+  execution, and gRPC streaming to `server`.
+- `frontend/`: Vue 3 UI with Element Plus, Pinia, Axios, and ECharts.
 
-## Coding Style & Naming Conventions
+Primary services and ports:
 
-Use `gofmt` for Go and keep package names lowercase. Do not edit generated `*.pb.go` files unless the matching `proto/*.proto` changed. Frontend uses Vue 3, TypeScript, Pinia, and Element Plus; keep two-space indentation, prefer PascalCase component filenames, and use the `@/` alias for `frontend/src`. Run `npm run lint` and `npm run type-check` before UI PRs.
+| Service | Ports | Purpose |
+| --- | --- | --- |
+| `frontend` | `8081` | Vue UI via Nginx |
+| `api-server` | `8082`, `19093` | REST API and gRPC client |
+| `server` | `19090`, `19094` | Agent hub and API-server command forwarding |
+| `dc` | `19092` | Kafka consumer and alert pipeline |
+| `postgres` | `5432` | Primary database |
+| `redis` | `6379` | Cache and queues |
+| `minio` | `9000`, `9001` | Script and agent artifact storage |
+| `kafka` | `29092` | Runtime event stream |
 
-## Testing Guidelines
+## Codex Skills
 
-Backend unit tests use Go's standard runner. Run targeted packages while iterating, for example `go test ./internal/assistant`, then broaden to `go test ./...`. Frontend unit tests use Vitest; place them beside source as `*.test.ts`. Playwright specs may require a running stack and environment flags.
+Use project skills from `.claude/skills/` (Claude) or `.agents/codex-skills/` (Codex) when their trigger matches the task.
+Read the relevant `SKILL.md` before running commands or changing related files.
 
-## Commit & Pull Request Guidelines
+- **aegis-build-test** — Build, test, service verification, docker compose checks, agent packaging, API smoke tests. Read `.claude/skills/aegis-build-test/SKILL.md`.
+- **aegis-release-packaging** — Offline release package creation, Docker image export, MinIO-with-agent image, release zip/start script/database init packaging. Read `.claude/skills/aegis-release-packaging/SKILL.md`.
+- **aegis-software-designer** — Design-driven development workflow with TDD, documentation-first, and mandatory build/test verification. Enforces analysis → design → test cases → implementation → logging check → build verification → code review flow. Read `.claude/skills/aegis-software-designer/SKILL.md`.
+- **daily-program-logging** — Ensures code includes proper operational logging at key points: service startup/shutdown, API calls, background tasks, external dependency calls, important business processes, error handling. Read `.claude/skills/daily-program-logging/SKILL.md`.
+- **root-cause-debugging** — Traces the complete bug-related call chain, analyzes root cause based on business logic, and applies the smallest safe fix. Use for bugs, runtime errors, test failures, CI failures, and abnormal behavior. Read `.claude/skills/root-cause-debugging/SKILL.md`.
 
-History mostly follows conventional commits such as `feat: ...` and `fix ...`; prefer `feat:`, `fix:`, `refactor:`, `test:`, or `docs:` with an imperative summary. PRs should explain the change, list backend/frontend/migration impact, link issues, include screenshots for UI work, and note tests run.
+After development work, run the narrowest useful verification from
+`aegis-build-test` when feasible. If verification cannot run because of sandbox,
+missing dependencies, Docker availability, or time, report that explicitly.
 
-## Security & Configuration Tips
+## Architecture Notes
 
-Copy `.env.example` to `.env` and never commit real keys. Treat Docker volumes, migrations, blocking policies, and agent task dispatch as high-impact changes that need explicit testing notes.
+Agent registration and command execution use bidirectional gRPC defined in
+`proto/agent_comm.proto`.
+
+Task command flow:
+
+```text
+Frontend -> api-server:8082 -> server:19094 -> agent stream on server:19090
+```
+
+Runtime detection flow:
+
+```text
+agent eBPF/Sigma -> server -> Kafka topic aegis.security.events -> dc -> PostgreSQL/WebSocket
+```
+
+Important Kafka topics:
+
+| Topic | Purpose |
+| --- | --- |
+| `aegis.security.events` | Runtime security events from agent hub to DC |
+| `aegis.block.commands` | Block commands from DC to agent hub |
+
+The LLM integration follows a worker-queue pattern in `api-server/internal/service/`
+with `api-server/internal/llm/client.go` handling API calls and retries.
+
+## Repository Patterns
+
+- Repositories follow GORM patterns with `NewXxxRepository(db *gorm.DB)`.
+- Service config is loaded from service-specific config files.
+- SQL migrations live in `migrations/`.
+- Generated protobuf Go code must stay consistent with `proto/*.proto`.
+- Build eBPF programs before building the agent when agent runtime collection
+  code changes.
+
+## Common Commands
+
+Use these as starting points; prefer the skill-specific procedure for verification.
+
+```bash
+cd api-server && make build
+cd server && make build
+cd dc && make build
+cd agent && make bpf && make build
+cd frontend && npm run build
+docker compose up -d --build
+```
+
+Frontend checks:
+
+```bash
+cd frontend
+npm run test -- --grep "test name"
+npm run test -- src/components/FooBar.test.ts
+npm run lint
+npm run type-check
+```
+
+## Important Files
+
+| Concern | Location |
+| --- | --- |
+| API server entry | `api-server/cmd/main.go` |
+| Server entry | `server/cmd/main.go` |
+| DC entry | `dc/cmd/main.go` |
+| Agent entry | `agent/cmd/agent/main.go` |
+| Agent/server proto | `proto/agent_comm.proto` |
+| API-server/server proto | `proto/api_server_comm.proto` |
+| LLM prompts | `api-server/internal/llm/prompts.go` |
+| File parsers | `api-server/internal/fileparser/` |
+| Sigma rules | `agent/internal/sigma/` |
+| DC pipeline | `dc/internal/pipeline/` |
+| Docker stack | `docker-compose.yml` |
+| Current architecture docs | `docs/aegis_system_design_v5.5/` |
+| Newer draft architecture docs | `docs/aegis_system_design_v5.6/` |
+
+## Safety Notes
+
+- Do not revert unrelated user changes.
+- Treat commands that remove data, reset git state, or stop/delete volumes as
+  destructive and ask before running them unless the user explicitly requested it.
+- Docker, package installation, and network-dependent verification may require
+  user approval in sandboxed environments.

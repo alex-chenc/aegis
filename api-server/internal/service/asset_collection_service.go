@@ -262,26 +262,6 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.Error(err))
 	}
 
-	softwareCount := 0
-	if hasCollectType(types, "software") {
-		if err := s.updateTaskStage(taskID, assetCollectionStatusCollecting, "software_inventory"); err != nil {
-			s.logger.Warn("Failed to update task to software inventory",
-				zap.String("task_id", taskID.String()),
-				zap.Error(err))
-		}
-		count, err := s.collectAndSaveSoftwareAssets(ctx, hostUUID, hostID, snapshot)
-		if err != nil {
-			s.logger.Warn("Software asset collection failed",
-				zap.String("host_id", hostID),
-				zap.Error(err))
-		} else {
-			softwareCount = count
-			s.logger.Info("Software assets saved",
-				zap.String("host_id", hostID),
-				zap.Int("count", count))
-		}
-	}
-
 	// 采集 AI 资产（LLM 服务 / AI Agent / MCP Server）
 	aiAssetCount := 0
 	aiAssets, err := s.collectAIAssets(ctx, hostID)
@@ -290,7 +270,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.String("host_id", hostID),
 			zap.Error(err))
 	} else if len(aiAssets) > 0 {
-		count, err := s.saveAIAssetsFromList(hostUUID, snapshot, aiAssets)
+		count, err := s.saveAIAssetsFromList(hostUUID, snapshot.Hostname, snapshot.IPAddress, snapshot.OSType, aiAssets)
 		if err != nil {
 			s.logger.Error("Failed to save AI assets",
 				zap.String("host_id", hostID),
@@ -332,7 +312,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 	taskHost.Hostname = snapshot.Hostname
 	taskHost.IPAddress = snapshot.IPAddress
 	taskHost.Status = assetCollectionStatusCompleted
-	taskHost.SoftwareCount = softwareCount
+	taskHost.SoftwareCount = 0
 	taskHost.ProcessCount = len(snapshot.Processes)
 	taskHost.ApplicationCount = applicationCount + aiAssetCount
 	taskHost.RawSnapshotID = &processSnapshot.ID
@@ -383,33 +363,9 @@ func (s *AssetCollectionService) collectAIAssets(ctx context.Context, hostID str
 }
 
 // saveAIAssetsFromList 将 AI 资产列表保存到数据库
-func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, snapshot HostAssetSnapshot, aiAssets []AIAsset) (int, error) {
+func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, hostname, ipAddress, osType string, aiAssets []AIAsset) (int, error) {
 	count := 0
 	for _, ai := range aiAssets {
-		identified := normalizeIdentifiedApplication(IdentifiedApplication{
-			Name:        ai.Name,
-			DisplayName: ai.DisplayName,
-			Category:    ai.Category,
-			Version:     ai.Version,
-			Confidence:  0.9,
-			RelatedPIDs: ai.PIDs,
-			ConfigPaths: []string{},
-			ListenPorts: ai.ListenPorts,
-			Status:      "active",
-		})
-		if identified.Name == "" || !isMarketVisibleApplication(identified) {
-			s.logger.Debug("Skipping non-public AI asset",
-				zap.String("name", ai.Name),
-				zap.String("category", ai.Category))
-			continue
-		}
-		if ai.ConfigPath != "" {
-			identified.ConfigPaths = append(identified.ConfigPaths, ai.ConfigPath)
-		}
-		ai.Name = identified.Name
-		ai.DisplayName = identified.DisplayName
-		ai.Category = identified.Category
-
 		// 构建 fingerprint 用于去重
 		identity := ai.Endpoint
 		if identity == "" {
@@ -422,14 +378,14 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, snapshot
 				identity = command
 			}
 		}
-		fp := generateAppFingerprint(hostID.String(), ai.Category, ai.Name, identity, ai.ListenPorts, ai.PIDs)
+		fpInput := fmt.Sprintf("%s:%s:%s:%s", hostID.String(), ai.Category, ai.Name, identity)
+		fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fpInput)))
 
 		listenPortsJSON := mustMarshalJSON(ai.ListenPorts)
 		configPaths := []string{}
 		if ai.ConfigPath != "" {
 			configPaths = append(configPaths, ai.ConfigPath)
 		}
-		containerInfo := containerInfoForPIDs(snapshot.Processes, ai.PIDs)
 		evidence := []map[string]string{
 			{
 				"source":      ai.Source,
@@ -438,42 +394,32 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, snapshot
 				"endpoint":    ai.Endpoint,
 			},
 		}
-		if containerInfo.IsContainer {
-			evidence = append(evidence, map[string]string{
-				"source":            "process_cgroup",
-				"container_runtime": containerInfo.Runtime,
-				"container_id":      containerInfo.ID,
-			})
-		}
 
 		app := &model.HostApplicationAsset{
-			ID:               uuid.New(),
-			HostID:           hostID,
-			Hostname:         snapshot.Hostname,
-			IPAddress:        snapshot.IPAddress,
-			OSType:           snapshot.OSType,
-			Category:         ai.Category,
-			Name:             ai.Name,
-			DisplayName:      ai.DisplayName,
-			Version:          ai.Version,
-			VersionSource:    ai.Source,
-			ListenPorts:      listenPortsJSON,
-			InstallPath:      ai.ConfigPath,
-			StartPath:        ai.Endpoint,
-			ConfigPaths:      mustMarshalJSON(configPaths),
-			RelatedPIDs:      mustMarshalJSON(ai.PIDs),
-			IsContainer:      containerInfo.IsContainer,
-			ContainerID:      containerInfo.ID,
-			ContainerRuntime: containerInfo.Runtime,
-			AIConfidence:     0.9, // Agent 侧直接采集，高置信度
-			AIEvidence:       mustMarshalJSON(evidence),
-			AIRawOutput:      mustMarshalJSON(ai),
-			ReviewStatus:     "auto",
-			Status:           "active",
-			Fingerprint:      fp,
-			CollectedAt:      time.Now(),
-			FirstSeenAt:      time.Now(),
-			LastSeenAt:       time.Now(),
+			ID:            uuid.New(),
+			HostID:        hostID,
+			Hostname:      hostname,
+			IPAddress:     ipAddress,
+			OSType:        osType,
+			Category:      ai.Category,
+			Name:          ai.Name,
+			DisplayName:   ai.DisplayName,
+			Version:       ai.Version,
+			VersionSource: ai.Source,
+			ListenPorts:   listenPortsJSON,
+			InstallPath:   ai.ConfigPath,
+			StartPath:     ai.Endpoint,
+			ConfigPaths:   mustMarshalJSON(configPaths),
+			RelatedPIDs:   mustMarshalJSON(ai.PIDs),
+			AIConfidence:  0.9, // Agent 侧直接采集，高置信度
+			AIEvidence:    mustMarshalJSON(evidence),
+			AIRawOutput:   mustMarshalJSON(ai),
+			ReviewStatus:  "auto",
+			Status:        "active",
+			Fingerprint:   fp,
+			CollectedAt:   time.Now(),
+			FirstSeenAt:   time.Now(),
+			LastSeenAt:    time.Now(),
 		}
 
 		if err := s.repo.UpsertApplicationAsset(app); err != nil {
@@ -482,17 +428,6 @@ func (s *AssetCollectionService) saveAIAssetsFromList(hostID uuid.UUID, snapshot
 				zap.String("category", ai.Category),
 				zap.Error(err))
 			continue
-		}
-		if removed, err := s.repo.DeactivateDuplicateApplicationAssets(hostID, applicationDedupeNames(identified), app.Fingerprint); err != nil {
-			s.logger.Warn("failed to deactivate duplicate AI application assets",
-				zap.String("host_id", hostID.String()),
-				zap.String("app_name", ai.Name),
-				zap.Error(err))
-		} else if removed > 0 {
-			s.logger.Info("duplicate AI application assets deactivated",
-				zap.String("host_id", hostID.String()),
-				zap.String("app_name", ai.Name),
-				zap.Int64("count", removed))
 		}
 		count++
 	}
@@ -567,70 +502,6 @@ func (s *AssetCollectionService) collectProcessSnapshot(ctx context.Context, hos
 	})
 
 	return snapshot, nil
-}
-
-func (s *AssetCollectionService) collectAndSaveSoftwareAssets(ctx context.Context, hostUUID uuid.UUID, hostID string, baseSnapshot HostAssetSnapshot) (int, error) {
-	args := map[string]interface{}{
-		"host_id":               hostID,
-		"collect_types":         []string{"software"},
-		"include_package_files": false,
-		"include_listen_ports":  false,
-		"max_process_count":     1,
-	}
-	argsJSON, err := json.Marshal(args)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal software collection args: %w", err)
-	}
-
-	softwareCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	resp, err := s.serverClient.ExecuteTool(softwareCtx, uuid.New().String(), hostID, "AssetCollectHostAssets", string(argsJSON), 90)
-	if err != nil {
-		return 0, fmt.Errorf("software asset collection call failed: %w", err)
-	}
-	if resp == nil || !resp.Success {
-		errMsg := "software asset collection failed"
-		if resp != nil && resp.Error != "" {
-			errMsg = resp.Error
-		}
-		return 0, fmt.Errorf("%s", errMsg)
-	}
-
-	var snapshot HostAssetSnapshot
-	if err := json.Unmarshal([]byte(resp.Result), &snapshot); err != nil {
-		return 0, fmt.Errorf("failed to parse software asset snapshot: %w", err)
-	}
-	if snapshot.Hostname == "" {
-		snapshot.Hostname = baseSnapshot.Hostname
-	}
-	if snapshot.IPAddress == "" {
-		snapshot.IPAddress = baseSnapshot.IPAddress
-	}
-	if snapshot.OSType == "" {
-		snapshot.OSType = baseSnapshot.OSType
-	}
-	if snapshot.OSVersion == "" {
-		snapshot.OSVersion = baseSnapshot.OSVersion
-	}
-	if snapshot.Arch == "" {
-		snapshot.Arch = baseSnapshot.Arch
-	}
-
-	count := 0
-	for _, pkg := range snapshot.Packages {
-		asset := s.convertPackageToAsset(hostUUID, snapshot, pkg)
-		if err := s.repo.UpsertSoftwareAsset(asset); err != nil {
-			s.logger.Warn("failed to upsert software asset",
-				zap.String("host_id", hostID),
-				zap.String("package", pkg.Name),
-				zap.Error(err))
-			continue
-		}
-		count++
-	}
-
-	return count, nil
 }
 
 func (s *AssetCollectionService) updateTaskStage(taskID uuid.UUID, status, stage string) error {
@@ -803,37 +674,14 @@ func hasCollectType(types []string, target string) bool {
 }
 
 func normalizeCollectTypes(types []string) []string {
-	includeSoftware := false
-	includeProcess := false
 	includeAnalysis := false
 	for _, t := range types {
-		switch t {
-		case "software":
-			includeSoftware = true
-		case "process":
-			includeProcess = true
-		case "application_analysis":
+		if t == "application_analysis" || t == "full" {
 			includeAnalysis = true
-		case "full":
-			includeSoftware = true
-			includeProcess = true
-			includeAnalysis = true
+			break
 		}
 	}
-	if includeAnalysis {
-		includeProcess = true
-	}
-	if !includeSoftware && !includeProcess && !includeAnalysis {
-		includeProcess = true
-	}
-
-	normalized := make([]string, 0, 3)
-	if includeSoftware {
-		normalized = append(normalized, "software")
-	}
-	if includeProcess {
-		normalized = append(normalized, "process")
-	}
+	normalized := []string{"process"}
 	if includeAnalysis {
 		normalized = append(normalized, "application_analysis")
 	}
@@ -921,7 +769,5 @@ type ProcessAsset struct {
 	Username    string    `json:"username"`
 	ListenPorts []int     `json:"listen_ports"`
 	StartTime   time.Time `json:"start_time,omitempty"`
-	Cgroup      []string  `json:"cgroup,omitempty"`
 	ContainerID string    `json:"container_id,omitempty"`
-	Runtime     string    `json:"container_runtime,omitempty"`
 }

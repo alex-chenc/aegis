@@ -78,7 +78,7 @@
         <el-table-column label="状态" width="140">
           <template #default="{ row }">
             <el-tooltip
-              v-if="row.displayState === '脚本修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'"
+              v-if="row.displayState === '大模型修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'"
               :content="row.healingStatus?.last_error || row.stderr || '未知错误'"
               placement="top"
             >
@@ -116,9 +116,9 @@
               type="primary"
               size="small"
               @click="showScript(row, 'script')"
-              :disabled="row.displayState === '脚本修复中'"
+              :disabled="row.displayState === '大模型修复中'"
             >
-              {{ row.displayState === '脚本修复中' ? '修复中' : '查看脚本' }}
+              {{ row.displayState === '大模型修复中' ? '修复中' : '查看脚本' }}
             </el-button>
           </template>
         </el-table-column>
@@ -146,7 +146,7 @@
               @click="triggerScriptRepair(row)"
               :loading="repairingTask === row.id"
             >
-              脚本修复
+              大模型修复
             </el-button>
             <el-button
               v-if="canReExecute(row)"
@@ -168,21 +168,11 @@
               修复建议
             </el-button>
             <el-button
-              v-if="row.displayState === '未通过' && !isVulnerabilityTask"
-              link
-              type="success"
-              size="small"
-              @click="runFix(row)"
-              :loading="fixingTask === row.id"
-            >
-              修复
-            </el-button>
-            <el-button
               link
               type="danger"
               size="small"
               @click="deleteTask(row)"
-              :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === '脚本修复中'"
+              :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === '大模型修复中'"
             >
               删除
             </el-button>
@@ -193,7 +183,7 @@
 
     <el-card v-if="healingProcessTasks.length" style="margin-top: 20px">
       <template #header>
-        <span>ReAct 修复过程</span>
+        <span>大模型修复过程</span>
       </template>
       <div class="healing-process-list">
         <section v-for="task in healingProcessTasks" :key="task.id" class="healing-process-item">
@@ -262,7 +252,7 @@
             v-model="suggestionText"
             type="textarea"
             :rows="4"
-            placeholder="请输入您的修复建议，系统会将建议发送给大模型进行脚本修复"
+            placeholder="请输入您的修复建议，系统会将建议发送给大模型进行修复脚本生成"
           />
         </el-form-item>
       </el-form>
@@ -286,7 +276,6 @@ import {
   triggerSelfHealing,
   getHealingStatus,
   redispatchTask,
-  runFixInGroup,
   deleteTask as deleteTaskApi,
   normalizeType,
   normalizeStatus,
@@ -296,7 +285,7 @@ import {
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '脚本修复中' | '脚本修复成功' | '脚本修复失败' | '脚本修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败' | '审计未通过'
+type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '大模型修复中' | '大模型修复成功' | '大模型修复失败' | '大模型修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败' | '审计未通过'
 
 const route = useRoute()
 const router = useRouter()
@@ -313,7 +302,6 @@ const scriptDialogTitle = ref('')
 const currentScript = ref('')
 const reexecutingTask = ref<string | null>(null)
 const repairingTask = ref<string | null>(null)
-const fixingTask = ref<string | null>(null)
 const typeFilter = ref<string>('all')
 const suggestionDialogVisible = ref(false)
 const suggestionText = ref('')
@@ -403,11 +391,11 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
       if (isFix) return '修复失败'
       return '检测失败'
     }
-    if (healingStatus.status === 'healing') return '脚本修复中'
-    if (healingStatus.status === 'queued') return '脚本修复中'
-    if (healingStatus.status === 'healed') return '脚本修复成功'
-    if (healingStatus.status === 'failed') return '脚本修复失败'
-    if (healingStatus.status === 'timeout') return '脚本修复超时'
+    if (healingStatus.status === 'healing') return '大模型修复中'
+    if (healingStatus.status === 'queued') return '大模型修复中'
+    if (healingStatus.status === 'healed') return '大模型修复成功'
+    if (healingStatus.status === 'failed') return '大模型修复失败'
+    if (healingStatus.status === 'timeout') return '大模型修复超时'
   }
   if (isPoc) return 'POC验证失败'
   if (isFix) return '修复失败'
@@ -420,13 +408,13 @@ function getStateTagType(state: DisplayState): string {
     case '修复中':
     case 'POC验证中':
     case '漏洞修复中':
-    case '脚本修复中':
+    case '大模型修复中':
       return 'warning'
     case '通过':
     case '修复成功':
     case 'POC验证成功':
     case '漏洞修复成功':
-    case '脚本修复成功':
+    case '大模型修复成功':
       return 'success'
     case '未通过':
       return 'info'
@@ -434,8 +422,8 @@ function getStateTagType(state: DisplayState): string {
     case '修复失败':
     case 'POC验证失败':
     case '漏洞修复失败':
-    case '脚本修复失败':
-    case '脚本修复超时':
+    case '大模型修复失败':
+    case '大模型修复超时':
     case '检测超时':
     case '修复超时':
     case '审计未通过':
@@ -447,9 +435,9 @@ function getStateTagType(state: DisplayState): string {
 function canShowScriptRepair(row: any): boolean {
   const taskType = normalizeType(row.task_type)
   if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
-    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '脚本修复失败' || row.displayState === '脚本修复超时'
+    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '大模型修复失败' || row.displayState === '大模型修复超时'
   } else {
-    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '脚本修复失败' || row.displayState === '脚本修复超时'
+    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '大模型修复失败' || row.displayState === '大模型修复超时'
   }
 }
 
@@ -459,7 +447,7 @@ function canReExecute(row: any): boolean {
          row.displayState === '修复失败' ||
          row.displayState === 'POC验证失败' ||
          row.displayState === '漏洞修复失败' ||
-         row.displayState === '脚本修复成功' ||
+         row.displayState === '大模型修复成功' ||
          row.displayState === '检测超时' ||
          row.displayState === '修复超时'
 }
@@ -469,7 +457,7 @@ function canShowSuggestion(row: any): boolean {
          row.displayState === '修复失败' ||
          row.displayState === 'POC验证失败' ||
          row.displayState === '漏洞修复失败' ||
-         row.displayState === '脚本修复失败'
+         row.displayState === '大模型修复失败'
 }
 
 function isTaskTerminal(task: TaskLog) {
@@ -540,11 +528,11 @@ const triggerScriptRepair = async (task: TaskLog) => {
   repairingTask.value = task.id
   try {
     await triggerSelfHealing(task.id, '')
-    ElMessage.success('脚本修复已触发，正在调用大模型进行修复...')
+    ElMessage.success('大模型修复已触发，正在生成并下发修复脚本...')
     // 获取单个任务的 healing status
     await fetchSingleHealingStatus(task.id)
   } catch (e: any) {
-    ElMessage.error(e.message || '脚本修复失败')
+    ElMessage.error(e.message || '大模型修复失败')
     repairingTask.value = null
   }
 }
@@ -560,7 +548,7 @@ const submitSuggestion = async () => {
   submittingSuggestion.value = true
   try {
     await triggerSelfHealing(selectedTask.value.id, suggestionText.value)
-    ElMessage.success('修复建议已提交，系统正在进行脚本修复')
+    ElMessage.success('修复建议已提交，系统正在进行大模型修复')
     suggestionDialogVisible.value = false
     repairingTask.value = selectedTask.value.id
     // 获取单个任务的 healing status
@@ -582,23 +570,6 @@ const reExecute = async (task: TaskLog) => {
     ElMessage.error(e.message || '重新下发失败')
   } finally {
     reexecutingTask.value = null
-  }
-}
-
-const runFix = async (task: TaskLog) => {
-  fixingTask.value = task.id
-  try {
-    await runFixInGroup({
-      rule_ids: [task.rule_id],
-      host_ids: [task.host_id],
-      task_group_id: task.task_group_id,
-    })
-    ElMessage.success('修复任务已创建')
-    await refresh()
-  } catch (e: any) {
-    ElMessage.error(e.message || '创建修复任务失败')
-  } finally {
-    fixingTask.value = null
   }
 }
 

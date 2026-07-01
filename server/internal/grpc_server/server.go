@@ -411,17 +411,13 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				}
 
 				status := "SUCCESS"
-				// 对于检查任务：脚本正常执行完成时，无论 exit code 是什么，status 都应为 success。
-				// exit code 会单独存储，由前端基于 exit code 判断"通过/未通过"。
-				// 对于修复任务、POC验证任务：exit code = 0 表示成功，exit code != 0 表示失败（需要触发自愈）。
-				// status=failed 仅用于需要触发自愈的场景（修复任务失败、POC验证失败）。
 				if s.taskLogRepo != nil {
 					taskLog, findErr := s.taskLogRepo.FindByID(taskID)
 					if findErr == nil {
 						taskType := strings.ToUpper(taskLog.TaskType)
-						if (taskType == "FIX" || taskType == "VULNERABILITY_FIX" || taskType == "POC_VERIFY") && result.ExitCode != 0 {
-							status = "FAILED"
-							logger.Info("task failed with non-zero exit code, marking as failed for self-healing",
+						status = statusForCommandResult(taskType, result.ExitCode, result.Stderr)
+						if status == "FAILED" {
+							logger.Info("task execution failed, marking as failed for large-model repair",
 								zap.String("task_id", result.TaskId),
 								zap.String("task_type", taskType),
 								zap.Int32("exit_code", result.ExitCode),
@@ -1081,6 +1077,44 @@ func (s *GRPCServer) storeCollectCallback(key string, callback func(*pb.CommandR
 
 func (s *GRPCServer) removeCollectCallback(key string) {
 	collectCallbacks.Delete(key)
+}
+
+func statusForCommandResult(taskType string, exitCode int32, stderr string) string {
+	normalizedType := strings.ToUpper(strings.TrimSpace(taskType))
+	if normalizedType == "CHECK" {
+		if isCheckCommandExecutionError(exitCode, stderr) {
+			return "FAILED"
+		}
+		return "SUCCESS"
+	}
+
+	if (normalizedType == "FIX" || normalizedType == "VULNERABILITY_FIX" || normalizedType == "POC_VERIFY") && exitCode != 0 {
+		return "FAILED"
+	}
+	return "SUCCESS"
+}
+
+func isCheckCommandExecutionError(exitCode int32, stderr string) bool {
+	if exitCode < 0 || exitCode >= 2 {
+		return true
+	}
+	lower := strings.ToLower(stderr)
+	for _, pattern := range []string{
+		"failed to start",
+		"failed to write script",
+		"failed to create temp dir",
+		"[timeout]",
+		"syntax error",
+		"command not found",
+		"permission denied",
+		"no such file or directory",
+		"unexpected end of file",
+	} {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GRPCServer) parseSoftwareList(output string) ([]model.SoftwareInfo, error) {

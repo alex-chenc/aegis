@@ -162,11 +162,13 @@ test('真实业务端口：助手权限、基线上传生成下发、资产采�
     test.info().annotations.push({ type: 'pdf-exact-path-present', description: String(pdfWasExact) })
 
     await page.goto(`${BASE_URL}/baseline/workbench`)
-    await expect(page.getByText('模板上传')).toBeVisible()
-    await expect(page.getByText('将基线文档拖到此处')).toBeVisible()
+    await expect(page.getByRole('heading', { name: '规则管理' })).toBeVisible()
+    await page.getByRole('button', { name: /文件解析/ }).click()
+    const parseDialog = page.getByRole('dialog', { name: '文件解析' })
+    await expect(parseDialog).toBeVisible()
 
     const uploadResponsePromise = page.waitForResponse(resp => resp.url().includes('/api/v1/templates/upload'), { timeout: 120_000 })
-    await page.locator('input[type="file"]').first().setInputFiles(pdfPath)
+    await parseDialog.locator('input[type="file"]').setInputFiles(pdfPath)
     const continueButton = page.getByRole('dialog', { name: '文件已存在' }).getByRole('button', { name: '继续上传' })
     const firstUploadState = await Promise.race([
       uploadResponsePromise.then(() => 'uploaded' as const),

@@ -9,14 +9,12 @@ import (
 
 	hostasset "aegis-agent/internal/asset"
 	"aegis-agent/internal/assets"
-	"aegis-agent/internal/weakpass"
 	"go.uber.org/zap"
 )
 
 type ToolManager struct {
 	allowedCommands []string
 	versionTool     *assets.VersionTool
-	weakPassword    *weakpass.Collector
 	logger          *zap.Logger
 }
 
@@ -28,9 +26,8 @@ func NewToolManager() *ToolManager {
 			"whoami", "id", "groups", "find", "stat",
 			"file", "strings", "md5sum", "sha256sum",
 		},
-		versionTool:  assets.NewVersionTool(logger),
-		weakPassword: weakpass.NewCollector(logger),
-		logger:       logger,
+		versionTool: assets.NewVersionTool(logger),
+		logger:      logger,
 	}
 }
 
@@ -190,20 +187,6 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			}
 		}
 		return m.collectProcessSnapshot(hostID, offset, limit, includeListenPorts, maxProcessCount)
-	case "WeakPassword.CollectCredentials":
-		return m.weakPassword.CollectCredentials(context.Background(), params)
-	case "WeakPassword.ProbePath":
-		return m.weakPassword.ProbePath(context.Background(), params)
-	case "WeakPassword.ListConfigDir":
-		return m.weakPassword.ListConfigDir(context.Background(), params)
-	case "WeakPassword.ReadConfigSlice":
-		return m.weakPassword.ReadConfigSlice(context.Background(), params)
-	case "WeakPassword.ServiceUnitInspect":
-		return m.weakPassword.ServiceUnitInspect(context.Background(), params)
-	case "WeakPassword.ProcessConfigHints":
-		return m.weakPassword.ProcessConfigHints(context.Background(), params)
-	case "WeakPassword.PurgeCredentialCache":
-		return m.weakPassword.PurgeCredentialCache(context.Background(), params)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", tool)
 	}

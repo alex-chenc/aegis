@@ -21,6 +21,12 @@ func NewTaskLogRepository(db *gorm.DB) *TaskLogRepository {
 }
 
 func (r *TaskLogRepository) Create(log *model.TaskLog) error {
+	if log.AttemptNo <= 0 {
+		log.AttemptNo = 1
+	}
+	if log.MaxRounds <= 0 {
+		log.MaxRounds = 3
+	}
 	result := r.db.Create(log)
 	if result.Error != nil {
 		logger.Error("failed to create task log",

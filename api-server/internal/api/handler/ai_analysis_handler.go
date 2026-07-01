@@ -434,6 +434,21 @@ func extractFinalAnswerResult(content string) (*finalAnswerResult, error) {
 	return nil, fmt.Errorf("no final answer JSON found")
 }
 
+// isAllFalsePositive checks whether all conclusions in the AI analysis are false positives.
+// Returns true only when every conclusion's action is "mark_false_positive".
+func isAllFalsePositive(content string) bool {
+	result, err := extractFinalAnswerResult(content)
+	if err != nil || len(result.Conclusions) == 0 {
+		return false
+	}
+	for _, c := range result.Conclusions {
+		if c.Action != "mark_false_positive" {
+			return false
+		}
+	}
+	return true
+}
+
 func buildAlertWritebacks(session *AISSESion, result *finalAnswerResult) []alertWriteback {
 	if session == nil || result == nil {
 		return nil
@@ -572,8 +587,10 @@ func compactJSONValue(value interface{}, depth int) interface{} {
 
 // collectingSSEWriter wraps SSEWriter to also collect content for persistence
 type collectingSSEWriter struct {
-	writer    *llm.SSEWriter
-	collector *SSEResponseCollector
+	writer      *llm.SSEWriter
+	collector   *SSEResponseCollector
+	beforeDone  func(content string) error
+	doneHandled bool
 }
 
 func (w *collectingSSEWriter) Write(event llm.SSEEvent) error {
@@ -614,6 +631,12 @@ func (w *collectingSSEWriter) WriteContent(content string) error {
 }
 
 func (w *collectingSSEWriter) WriteDone() error {
+	if w.beforeDone != nil && !w.doneHandled {
+		w.doneHandled = true
+		if err := w.beforeDone(w.collector.GetContent()); err != nil {
+			return err
+		}
+	}
 	return w.writer.WriteDone()
 }
 
@@ -1066,6 +1089,11 @@ func (h *AIAnalysisHandler) StreamMessage(c *gin.Context) {
 		sseWriter.WriteContent(aiResponseContent)
 	}
 
+	// Generate flowchart image from final content (skip if all conclusions are false positives)
+	if aiResponseContent != "" && !isAllFalsePositive(aiResponseContent) {
+		_ = h.writeFlowchartImageEvent(c.Request.Context(), sseWriter, aiResponseContent)
+	}
+
 	// Signal the SSE stream is complete
 	sseWriter.WriteDone()
 
@@ -1460,6 +1488,68 @@ func marshalJSONB(v interface{}) model.JSONB {
 	return result
 }
 
+func (h *AIAnalysisHandler) writeFlowchartImageEvent(ctx context.Context, writer *llm.SSEWriter, finalContent string) error {
+	finalContent = strings.TrimSpace(finalContent)
+	if finalContent == "" {
+		return nil
+	}
+
+	config, err := h.configRepo.GetActiveImageModel()
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型配置不可用: " + err.Error(),
+		})
+	}
+
+	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型密钥解密失败: " + err.Error(),
+		})
+	}
+
+	req := ImageModelConfigRequest{
+		APIKey:    apiKey,
+		Provider:  config.Provider,
+		BaseURL:   config.BaseURL,
+		ModelName: config.ModelName,
+	}
+	normalizeImageModelConfigRequest(&req)
+
+	imageURL, err := generateImageModel(ctx, req, buildFlowchartImagePrompt(finalContent))
+	if err != nil {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型生成溯源图失败: " + err.Error(),
+		})
+	}
+	if imageURL == "" {
+		return writer.Write(llm.SSEEvent{
+			Type:  "flowchart_image",
+			Error: "图片模型未返回图片 URL",
+		})
+	}
+
+	return writer.Write(llm.SSEEvent{
+		Type: "flowchart_image",
+		Result: map[string]interface{}{
+			"url":        imageURL,
+			"provider":   req.Provider,
+			"model_name": req.ModelName,
+		},
+	})
+}
+
+func buildFlowchartImagePrompt(finalContent string) string {
+	const maxPromptContentBytes = 4000
+	if len(finalContent) > maxPromptContentBytes {
+		finalContent = finalContent[:maxPromptContentBytes]
+	}
+	return "请根据以下 AI 安全分析最终结论生成一张攻击溯源流程图。要求：白底，清晰的节点和箭头，突出攻击入口、执行过程、横向移动、影响范围和最终处置建议；不要生成写实人物；使用中文标签。\n\n" + finalContent
+}
+
 // SendMessage handles regular (non-streaming) message sending
 // POST /api/v1/detection/alerts/ai-analysis/{session_id}/message
 func (h *AIAnalysisHandler) SendMessage(c *gin.Context) {
@@ -1763,15 +1853,15 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	}
 
 	exitReasonMap := map[string]string{
-		"normal_completed": "正常完成",
-		"max_iterations":   "达到最大轮次",
-		"timeout":          "执行超时",
-		"user_cancelled":   "用户取消",
-		"error":            "执行错误",
-		"audit_rejected":   "审计拒绝",
-		"drift_detected":   "检测到计划漂移",
-		"rate_limit":       "速率限制",
-		"context_overflow": "上下文窗口溢出",
+		"normal_completed":  "正常完成",
+		"max_iterations":    "达到最大轮次",
+		"timeout":           "执行超时",
+		"user_cancelled":    "用户取消",
+		"error":             "执行错误",
+		"audit_rejected":    "审计拒绝",
+		"drift_detected":    "检测到计划漂移",
+		"rate_limit":        "速率限制",
+		"context_overflow":  "上下文窗口溢出",
 	}
 
 	statusDisplay := exec.Status
@@ -1841,21 +1931,21 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	}
 
 	return map[string]interface{}{
-		"execution_id":            exec.ID.String(),
-		"task_id":                 exec.TaskID,
-		"session_id":              exec.SessionID,
-		"status":                  statusDisplay,
-		"exit_reason":             exitReasonDisplay,
-		"started_at":              exec.StartedAt,
-		"ended_at":                exec.EndedAt,
-		"total_duration_ms":       exec.TotalDurationMs,
-		"steps":                   stepResponses,
-		"errors":                  extractErrorsFromExecution(exec),
-		"conclusion":              conclusion,
-		"final_answer":            exec.FinalAnswer,
-		"context_budget":          contextBudget,
-		"compression_records":     compressionRecords,
-		"total_prompt_tokens":     totalPromptTokens,
+		"execution_id":          exec.ID.String(),
+		"task_id":               exec.TaskID,
+		"session_id":            exec.SessionID,
+		"status":                statusDisplay,
+		"exit_reason":           exitReasonDisplay,
+		"started_at":            exec.StartedAt,
+		"ended_at":              exec.EndedAt,
+		"total_duration_ms":     exec.TotalDurationMs,
+		"steps":                 stepResponses,
+		"errors":                extractErrorsFromExecution(exec),
+		"conclusion":            conclusion,
+		"final_answer":          exec.FinalAnswer,
+		"context_budget":        contextBudget,
+		"compression_records":   compressionRecords,
+		"total_prompt_tokens":   totalPromptTokens,
 		"total_completion_tokens": totalCompletionTokens,
 	}
 }
@@ -1897,10 +1987,10 @@ func parseConclusionFromAnswer(finalAnswer string) map[string]interface{} {
 	}
 
 	verdictDisplayMap := map[string]string{
-		"benign":     "良性/误报",
-		"malicious":  "恶意",
+		"benign":    "良性/误报",
+		"malicious": "恶意",
 		"suspicious": "可疑",
-		"unknown":    "未知",
+		"unknown":   "未知",
 	}
 
 	if v, ok := verdictDisplayMap[verdict]; ok {
@@ -1933,9 +2023,9 @@ var actionVerdictMap = map[string]string{
 
 // verdictSeverity ranks verdict severity for "most severe wins" logic.
 var verdictSeverity = map[string]int{
-	"benign":     0,
+	"benign":    0,
 	"suspicious": 1,
-	"malicious":  2,
+	"malicious": 2,
 }
 
 // deriveVerdictFromActions returns the most severe verdict from a list of action strings.

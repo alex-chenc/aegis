@@ -67,26 +67,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_aggregations_time ON llm_aggregations(start_t
 -- Update block_policies: add auto_dispose field
 ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE;
 
--- Update sigma_rules: ensure rule_id is unique.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'sigma_rules'::regclass
-          AND contype = 'u'
-          AND conkey = ARRAY[
-              (
-                  SELECT attnum
-                  FROM pg_attribute
-                  WHERE attrelid = 'sigma_rules'::regclass
-                    AND attname = 'rule_id'
-              )
-          ]::smallint[]
-    ) THEN
-        ALTER TABLE sigma_rules ADD CONSTRAINT fk_sigma_rules_rule_id UNIQUE (rule_id);
-    END IF;
-END $$;
+-- Update sigma_rules: add rule_id as foreign key reference
+ALTER TABLE sigma_rules ADD CONSTRAINT IF NOT EXISTS fk_sigma_rules_rule_id UNIQUE (rule_id);
 
 -- Comments for documentation
 COMMENT ON COLUMN alerts.judgment_source IS 'system or ai - indicates who made the judgment';

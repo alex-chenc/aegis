@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"api-server/pkg/logger"
 	"testing"
 	"time"
 
@@ -18,12 +17,6 @@ func uuidPtr(id uuid.UUID) *uuid.UUID {
 
 func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-
-	if logger.Logger == nil {
-		if err := logger.Init(&logger.Config{Level: "error"}); err != nil {
-			t.Fatalf("failed to init logger: %v", err)
-		}
-	}
 
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -42,7 +35,7 @@ func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 			script_content TEXT NULL,
 			script_version INTEGER NULL,
 			attempt_no INTEGER NOT NULL DEFAULT 1,
-			max_rounds INTEGER NOT NULL DEFAULT 1,
+			max_rounds INTEGER NOT NULL DEFAULT 3,
 			stdout TEXT NULL,
 			stderr TEXT NULL,
 			exit_code INTEGER NULL,
@@ -52,7 +45,7 @@ func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 			created_at DATETIME NOT NULL
 		)
 	`).Error; err != nil {
-		t.Fatalf("failed to migrate task_logs: %v", err)
+		t.Fatalf("failed to create task_logs table: %v", err)
 	}
 
 	return db

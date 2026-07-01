@@ -64,16 +64,3 @@ func TestResolveTargetHostIDsAllHostsRequiresConnectedAgents(t *testing.T) {
 		t.Fatal("expected error when no connected hosts are available")
 	}
 }
-
-func TestNormalizeCollectTypesPreservesSoftwareAndAnalysis(t *testing.T) {
-	got := normalizeCollectTypes([]string{"software", "application_analysis"})
-	want := []string{"software", "process", "application_analysis"}
-	if len(got) != len(want) {
-		t.Fatalf("normalizeCollectTypes = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("normalizeCollectTypes = %#v, want %#v", got, want)
-		}
-	}
-}

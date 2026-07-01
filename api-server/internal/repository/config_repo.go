@@ -88,6 +88,21 @@ func (r *ConfigRepository) GetActive() (*model.LLMConfig, error) {
 	return &cfg, nil
 }
 
+func (r *ConfigRepository) GetActiveImageModel() (*model.ImageModelConfig, error) {
+	var cfg model.ImageModelConfig
+	result := r.db.Where("is_active = ?", true).First(&cfg)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, result.Error
+		}
+		logger.Error("failed to get active image model config", zap.Error(result.Error))
+		return nil, result.Error
+	}
+
+	logger.Debug("active image model config retrieved", zap.String("id", cfg.ID.String()))
+	return &cfg, nil
+}
+
 func (r *ConfigRepository) Upsert(cfg *model.LLMConfig, apiKey string) error {
 	encryptedKey, err := r.encrypt(apiKey)
 	if err != nil {
@@ -121,6 +136,39 @@ func (r *ConfigRepository) Upsert(cfg *model.LLMConfig, apiKey string) error {
 	return nil
 }
 
+func (r *ConfigRepository) UpsertImageModel(cfg *model.ImageModelConfig, apiKey string) error {
+	encryptedKey, err := r.encrypt(apiKey)
+	if err != nil {
+		logger.Error("failed to encrypt image model API key", zap.Error(err))
+		return err
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.ImageModelConfig{}).Where("1 = 1").Update("is_active", false).Error; err != nil {
+			return err
+		}
+
+		cfg.APIKeyEncrypted = encryptedKey
+		if err := tx.Create(cfg).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if err != nil {
+		logger.Error("failed to upsert image model config", zap.Error(err))
+		return err
+	}
+
+	logger.Info("image model config upserted successfully",
+		zap.String("id", cfg.ID.String()),
+		zap.String("provider", cfg.Provider),
+		zap.String("base_url", cfg.BaseURL),
+		zap.String("model_name", cfg.ModelName),
+	)
+	return nil
+}
+
 func (r *ConfigRepository) UpdateTestStatus(id uuid.UUID, status string) error {
 	result := r.db.Model(&model.LLMConfig{}).
 		Where("id = ?", id).
@@ -138,6 +186,29 @@ func (r *ConfigRepository) UpdateTestStatus(id uuid.UUID, status string) error {
 	}
 
 	logger.Info("LLM config test status updated",
+		zap.String("id", id.String()),
+		zap.String("status", status),
+	)
+	return nil
+}
+
+func (r *ConfigRepository) UpdateImageModelTestStatus(id uuid.UUID, status string) error {
+	result := r.db.Model(&model.ImageModelConfig{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"last_test_status": status,
+			"last_test_at":     gorm.Expr("NOW()"),
+		})
+
+	if result.Error != nil {
+		logger.Error("failed to update image model test status",
+			zap.Error(result.Error),
+			zap.String("id", id.String()),
+		)
+		return result.Error
+	}
+
+	logger.Info("image model config test status updated",
 		zap.String("id", id.String()),
 		zap.String("status", status),
 	)
