@@ -18,6 +18,8 @@ type TaskLog struct {
 	ScriptVersion   *int       `json:"script_version"`
 	AttemptNo       int        `gorm:"not null;default:1" json:"attempt_no"`
 	MaxRounds       int        `gorm:"not null;default:3" json:"max_rounds"`
+	AutoVerify      bool       `gorm:"not null;default:false" json:"auto_verify"`
+	VerifyRound     int        `gorm:"not null;default:0" json:"verify_round"`
 	Stdout          *string    `gorm:"type:text" json:"stdout"`
 	Stderr          *string    `gorm:"type:text" json:"stderr"`
 	ExitCode        *int       `json:"exit_code"`

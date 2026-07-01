@@ -49,14 +49,18 @@ func NewTaskHandler(
 }
 
 type RunCheckRequest struct {
-	RuleIDs []string `json:"rule_ids"`
-	HostIDs []string `json:"host_ids"`
+	RuleIDs    []string `json:"rule_ids"`
+	HostIDs    []string `json:"host_ids"`
+	AutoVerify bool     `json:"auto_verify"`
+	MaxRounds  int      `json:"max_rounds"`
 }
 
 type RunFixRequest struct {
 	RuleIDs     []string `json:"rule_ids"`
 	HostIDs     []string `json:"host_ids"`
 	TaskGroupID string   `json:"task_group_id"`
+	AutoVerify  bool     `json:"auto_verify"`
+	MaxRounds   int      `json:"max_rounds"`
 }
 
 type TaskResponse struct {
@@ -102,6 +106,10 @@ type TaskLogResponse struct {
 	Stdout        *string                `json:"stdout"`
 	Stderr        *string                `json:"stderr"`
 	ExitCode      *int                   `json:"exit_code"`
+	AttemptNo     int                    `json:"attempt_no"`
+	MaxRounds     int                    `json:"max_rounds"`
+	AutoVerify    bool                   `json:"auto_verify"`
+	VerifyRound   int                    `json:"verify_round"`
 	StartedAt     *string                `json:"started_at"`
 	FinishedAt    *string                `json:"finished_at"`
 	HealingStatus *HealingStatusResponse `json:"healing_status,omitempty"`
@@ -150,7 +158,11 @@ func (h *TaskHandler) RunCheck(c *gin.Context) {
 		return
 	}
 
-	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "CHECK")
+	opts := &service.DispatchOptions{
+		AutoVerify: req.AutoVerify,
+		MaxRounds:  req.MaxRounds,
+	}
+	result, err := h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "CHECK", opts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -158,6 +170,12 @@ func (h *TaskHandler) RunCheck(c *gin.Context) {
 		})
 		return
 	}
+
+	logger.Info("check tasks created",
+		zap.String("task_group_id", result.TaskGroupID.String()),
+		zap.Bool("auto_verify", req.AutoVerify),
+		zap.Int("max_rounds", req.MaxRounds),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -200,6 +218,11 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 		return
 	}
 
+	opts := &service.DispatchOptions{
+		AutoVerify: req.AutoVerify,
+		MaxRounds:  req.MaxRounds,
+	}
+
 	var result *service.TaskCreateResult
 	var err error
 	if req.TaskGroupID != "" {
@@ -211,9 +234,9 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 			})
 			return
 		}
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX", groupID)
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX", opts, groupID)
 	} else {
-		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX")
+		result, err = h.taskService.CreateAndDispatchTasks(c.Request.Context(), req.RuleIDs, req.HostIDs, "FIX", opts)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -222,6 +245,12 @@ func (h *TaskHandler) RunFix(c *gin.Context) {
 		})
 		return
 	}
+
+	logger.Info("fix tasks created",
+		zap.String("task_group_id", result.TaskGroupID.String()),
+		zap.Bool("auto_verify", req.AutoVerify),
+		zap.Int("max_rounds", req.MaxRounds),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -385,6 +414,10 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 			Stdout:        log.Stdout,
 			Stderr:        log.Stderr,
 			ExitCode:      log.ExitCode,
+			AttemptNo:     log.AttemptNo,
+			MaxRounds:     log.MaxRounds,
+			AutoVerify:    log.AutoVerify,
+			VerifyRound:   log.VerifyRound,
 		}
 
 		if log.StartedAt != nil {
@@ -491,6 +524,10 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 		Stdout:        log.Stdout,
 		Stderr:        log.Stderr,
 		ExitCode:      log.ExitCode,
+		AttemptNo:     log.AttemptNo,
+		MaxRounds:     log.MaxRounds,
+		AutoVerify:    log.AutoVerify,
+		VerifyRound:   log.VerifyRound,
 	}
 
 	if log.RuleID != nil {
@@ -589,6 +626,7 @@ type TaskGroupResponse struct {
 	PendingCount int     `json:"pending_count"`
 	RunningCount int     `json:"running_count"`
 	TimeoutCount int     `json:"timeout_count"`
+	PassRate     float64 `json:"pass_rate"`
 	CreatedAt    string  `json:"created_at"`
 	FinishedAt   *string `json:"finished_at"`
 }
@@ -658,6 +696,7 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 			PendingCount: s.PendingCount,
 			RunningCount: s.RunningCount,
 			TimeoutCount: s.TimeoutCount,
+			PassRate:     s.PassRate,
 			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
 		}
 		if s.FinishedAt != nil {

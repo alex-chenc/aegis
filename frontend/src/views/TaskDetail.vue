@@ -26,9 +26,6 @@
         <el-col :span="3">
           <el-statistic title="超时" :value="status.timeout || 0" />
         </el-col>
-        <el-col :span="3">
-          <el-statistic title="通过率" :value="groupPassRate" suffix="%" />
-        </el-col>
         <el-col :span="6">
           <el-progress
             :percentage="progressPercent"
@@ -98,15 +95,6 @@
             <el-tag v-else :type="getStateTagType(row.displayState)" size="small">
               {{ row.displayState }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="通过率" width="130">
-          <template #default="{ row }">
-            <el-progress
-              :percentage="getTaskPassRate(row)"
-              :stroke-width="10"
-              :status="getTaskPassRate(row) >= 100 ? 'success' : row.displayState === '未通过' ? undefined : isTaskTerminal(row) ? 'exception' : undefined"
-            />
           </template>
         </el-table-column>
         <el-table-column label="脚本" width="100">
@@ -442,13 +430,13 @@ function canShowScriptRepair(row: any): boolean {
 }
 
 function canReExecute(row: any): boolean {
-  return row.displayState === '未通过' ||
-         row.displayState === '检测失败' ||
-         row.displayState === '修复失败' ||
+  const taskType = normalizeType(row.task_type)
+  // 检测类型任务不允许手动重新下发，通过自动验证流程处理
+  if (taskType === 'CHECK') return false
+  return row.displayState === '修复失败' ||
          row.displayState === 'POC验证失败' ||
          row.displayState === '漏洞修复失败' ||
          row.displayState === '大模型修复成功' ||
-         row.displayState === '检测超时' ||
          row.displayState === '修复超时'
 }
 

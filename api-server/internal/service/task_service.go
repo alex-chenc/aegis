@@ -26,6 +26,7 @@ type TaskService struct {
 	redisClient      *storage.RedisClient
 	scriptGenService *ScriptGenerationService
 	selfHealingSvc   *SelfHealingService
+	autoVerifySvc    *AutoVerifyService
 	auditService     *ScriptAuditService
 	serverClient     *grpcclient.ServerClient
 }
@@ -61,6 +62,10 @@ func (s *TaskService) SetSelfHealingService(service *SelfHealingService) {
 	s.selfHealingSvc = service
 }
 
+func (s *TaskService) SetAutoVerifyService(service *AutoVerifyService) {
+	s.autoVerifySvc = service
+}
+
 func (s *TaskService) SetAuditService(service *ScriptAuditService) {
 	s.auditService = service
 }
@@ -69,7 +74,12 @@ func (s *TaskService) GetHostByID(hostID uuid.UUID) (*model.Host, error) {
 	return s.hostRepo.FindByID(hostID)
 }
 
-func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, existingGroupID ...uuid.UUID) (*TaskCreateResult, error) {
+type DispatchOptions struct {
+	AutoVerify bool
+	MaxRounds  int
+}
+
+func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, opts *DispatchOptions, existingGroupID ...uuid.UUID) (*TaskCreateResult, error) {
 	var taskGroupID uuid.UUID
 	if len(existingGroupID) > 0 && existingGroupID[0] != uuid.Nil {
 		taskGroupID = existingGroupID[0]
@@ -78,6 +88,15 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 	}
 	var taskIDs []string
 	now := time.Now()
+
+	autoVerify := false
+	maxRounds := 3
+	if opts != nil {
+		autoVerify = opts.AutoVerify
+		if opts.MaxRounds > 0 {
+			maxRounds = opts.MaxRounds
+		}
+	}
 
 	for _, ruleIDStr := range ruleIDs {
 		ruleID, err := uuid.Parse(ruleIDStr)
@@ -133,7 +152,9 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 				Status:        "PENDING",
 				ScriptContent: &scriptContent,
 				AttemptNo:     1,
-				MaxRounds:     3,
+				MaxRounds:     maxRounds,
+				AutoVerify:    autoVerify,
+				VerifyRound:   0,
 				CreatedAt:     now,
 				StartedAt:     &now,
 			}
@@ -343,6 +364,11 @@ func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string,
 
 	if findErr == nil {
 		s.maybeTriggerLargeModelRepair(taskLog, normalizedStatus, exitCode, stdout, stderr)
+	}
+
+	// Auto-verify: trigger detection-repair loop if enabled
+	if findErr == nil && s.autoVerifySvc != nil {
+		s.autoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode)
 	}
 }
 

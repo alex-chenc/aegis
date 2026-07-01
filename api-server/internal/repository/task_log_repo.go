@@ -203,6 +203,7 @@ type TaskGroupSummary struct {
 	PendingCount int        `gorm:"column:pending_count" json:"pending_count"`
 	RunningCount int        `gorm:"column:running_count" json:"running_count"`
 	TimeoutCount int        `gorm:"column:timeout_count" json:"timeout_count"`
+	PassRate     float64    `gorm:"column:pass_rate" json:"pass_rate"`
 	CreatedAt    time.Time  `gorm:"column:created_at" json:"created_at"`
 	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at"`
 }
@@ -242,6 +243,7 @@ func (r *TaskLogRepository) ListTaskGroups(params ListTaskGroupsParams) ([]TaskG
 			SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending_count,
 			SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) as running_count,
 			SUM(CASE WHEN status = 'TIMEOUT' THEN 1 ELSE 0 END) as timeout_count,
+			CASE WHEN COUNT(*) > 0 THEN ROUND(CAST(SUM(CASE WHEN status = 'SUCCESS' AND exit_code = 0 THEN 1 ELSE 0 END) AS NUMERIC) / COUNT(*) * 100, 1) ELSE 0 END as pass_rate,
 			MIN(created_at) as created_at,
 			MAX(finished_at) as finished_at
 		`).

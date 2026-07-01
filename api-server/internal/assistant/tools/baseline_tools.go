@@ -13,7 +13,7 @@ import (
 
 // TaskServiceForTools 任务服务接口（基线检查/修复）
 type TaskServiceForTools interface {
-	CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, existingGroupID ...uuid.UUID) (*service.TaskCreateResult, error)
+	CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, opts *service.DispatchOptions, existingGroupID ...uuid.UUID) (*service.TaskCreateResult, error)
 }
 
 type ScriptGenerationServiceForTools interface {
@@ -357,7 +357,7 @@ func makeRunCheckHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			return nil, fmt.Errorf("host_ids: %w", err)
 		}
 
-		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "CHECK")
+		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "CHECK", nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create check tasks: %w", err)
 		}
@@ -389,7 +389,7 @@ func makeRunFixHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			return nil, fmt.Errorf("host_ids: %w", err)
 		}
 
-		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "FIX")
+		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "FIX", nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fix tasks: %w", err)
 		}

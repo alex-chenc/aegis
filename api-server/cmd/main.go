@@ -159,6 +159,9 @@ func main() {
 	selfHealingService := service.NewSelfHealingService(healingLogRepo, scriptVersionRepo, configRepo, ruleRepo, taskLogRepo, minioClient, redisClient, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, 3, scriptAuditService)
 	taskService.SetSelfHealingService(selfHealingService)
 	selfHealingService.SetTaskRedispatcher(taskService)
+	// V6.1: Auto-verify service for automatic detection-repair loop
+	autoVerifyService := service.NewAutoVerifyService(taskLogRepo, ruleRepo, taskService)
+	taskService.SetAutoVerifyService(autoVerifyService)
 	// V5.8: Asset repository for vulnerability scanning
 	assetCollectionRepo := repository.NewAssetCollectionRepository(db)
 	weakPasswordRepo := repository.NewWeakPasswordRepository(db)

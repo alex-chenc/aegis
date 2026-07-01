@@ -30,6 +30,7 @@ export interface RunCheckRequest {
   rule_ids: string[]
   host_ids: string[]
   max_rounds?: number
+  auto_verify?: boolean
 }
 
 export interface RunFixRequest {
@@ -37,6 +38,7 @@ export interface RunFixRequest {
   host_ids: string[]
   task_group_id?: string
   max_rounds?: number
+  auto_verify?: boolean
 }
 
 export interface RunFixInGroupRequest {
@@ -104,6 +106,8 @@ export interface TaskLog {
   script_content?: string
   attempt_no?: number
   max_rounds?: number
+  auto_verify?: boolean
+  verify_round?: number
   stdout?: string
   stderr?: string
   exit_code?: number

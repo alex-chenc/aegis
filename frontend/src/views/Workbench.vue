@@ -318,6 +318,12 @@
           <el-form-item label="最大轮数">
             <el-input-number v-model="dispatchMaxRounds" :min="1" :max="10" />
           </el-form-item>
+          <el-form-item label="自动验证">
+            <el-switch v-model="dispatchAutoVerify" />
+            <span style="font-size: 12px; color: #666; margin-left: 8px;">
+              检测未通过时自动修复并重新检测，直到通过或达到最大轮数
+            </span>
+          </el-form-item>
         </el-form>
         <div class="dispatch-warning">
           <el-alert v-if="checkScriptWarning" :title="checkScriptWarning" type="warning" :closable="false" show-icon />
@@ -476,6 +482,7 @@ const hostSearch = ref('')
 const dispatchRuleSearch = ref('')
 const dispatchDialogVisible = ref(false)
 const dispatchMaxRounds = ref(1)
+const dispatchAutoVerify = ref(false)
 
 const parseDialogVisible = ref(false)
 const uploading = ref(false)
@@ -1058,8 +1065,8 @@ async function executeTask(type: 'CHECK' | 'FIX') {
     taskStore.setSelectedRules(selectedRules.value)
     taskStore.setSelectedHosts(selectedHostIds.value)
     const result = type === 'CHECK'
-      ? await taskStore.executeCheck(dispatchMaxRounds.value)
-      : await taskStore.executeFix(dispatchMaxRounds.value)
+      ? await taskStore.executeCheck(dispatchMaxRounds.value, dispatchAutoVerify.value)
+      : await taskStore.executeFix(dispatchMaxRounds.value, dispatchAutoVerify.value)
     if (result) {
       dispatchDialogVisible.value = false
       await ElMessageBox.confirm(

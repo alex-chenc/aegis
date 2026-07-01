@@ -33,19 +33,9 @@
               {{ hasLiveTasks ? '实时刷新中' : '实时空闲' }}
             </span>
             <span class="refresh-time">最后刷新 {{ lastRefreshText }}</span>
-            <el-dropdown @command="handleReportCommand">
-              <el-button>
-                合规报告
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="pdf">导出 PDF</el-dropdown-item>
-                  <el-dropdown-item command="excel">导出 Excel</el-dropdown-item>
-                  <el-dropdown-item command="weekly">每周报告</el-dropdown-item>
-                  <el-dropdown-item command="monthly">每月报告</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <el-button @click="exportExcelReport" :loading="exporting">
+              导出合规报告
+            </el-button>
             <el-button
               type="danger"
               :disabled="selectedTaskIds.length === 0"
@@ -113,13 +103,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="task_count" label="任务数" width="80" />
-        <el-table-column label="通过率" width="150">
+        <el-table-column label="通过率" width="100">
           <template #default="{ row }">
-            <el-progress
-              :percentage="getPassRate(row)"
-              :stroke-width="10"
-              :status="getPassRate(row) >= 100 ? 'success' : normalizeStatus(row.status) === 'failed' ? 'exception' : undefined"
-            />
+            <span :style="{ color: getPassRate(row) >= 100 ? '#67c23a' : getPassRate(row) > 0 ? '#e6a23c' : '#f56c6c', fontWeight: 600 }">
+              {{ getPassRate(row) }}%
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="进度" min-width="220">
@@ -185,6 +173,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import {
   listTasks,
+  getTaskLogs,
   deleteTaskGroup,
   batchDeleteTasks,
   normalizeType,
@@ -203,6 +192,7 @@ const defaultTypeScope = computed(() =>
 )
 
 const loading = ref(false)
+const exporting = ref(false)
 const taskGroups = ref<TaskGroupSummary[]>([])
 const selectedTaskIds = ref<string[]>([])
 const lastRefreshAt = ref<Date | null>(null)
@@ -322,8 +312,11 @@ const getStatusText = (status: string) => {
 }
 
 const getPassRate = (row: TaskGroupSummary) => {
+  // 优先使用后端返回的 pass_rate 字段
   if (typeof row.pass_rate === 'number') return Math.round(row.pass_rate)
   if (!row.task_count) return 0
+  // 通过率 = 通过的任务数 / 总任务数（通过 = SUCCESS 且 exit_code=0）
+  // 这里用 success_count 作为近似值（后端会精确计算）
   return Math.round(((row.success_count || 0) / row.task_count) * 100)
 }
 
@@ -336,47 +329,92 @@ const goToDetail = (taskGroupId: string) => {
   router.push(`${detailBasePath.value}/${taskGroupId}`)
 }
 
-const handleReportCommand = (command: string) => {
-  if (command === 'pdf') {
-    window.print()
-    return
+const getTaskTypeLabel = (type: string) => {
+  const normalized = normalizeType(type)
+  switch (normalized) {
+    case 'CHECK': return '检测'
+    case 'FIX': return '修复'
+    case 'POC_VERIFY': return 'POC验证'
+    case 'VULNERABILITY_FIX': return '漏洞修复'
+    default: return type
   }
-  if (command === 'excel') {
-    exportExcelReport()
-    return
-  }
-  const label = command === 'weekly' ? '每周' : '每月'
-  localStorage.setItem('baseline_report_schedule', command)
-  ElMessage.success(`${label}合规报告已启用`)
 }
 
-const exportExcelReport = () => {
-  const rows = [
-    ['任务组ID', '类型', '任务数', '通过率', '成功', '失败', '超时', '待执行', '执行中', '状态', '创建时间'],
-    ...taskGroups.value.map(row => [
-      row.task_group_id,
-      row.task_type,
-      row.task_count,
-      `${getPassRate(row)}%`,
-      row.success_count,
-      row.failed_count,
-      row.timeout_count || 0,
-      row.pending_count,
-      row.running_count,
-      getStatusText(normalizeStatus(row.status)),
-      formatTime(row.created_at)
-    ])
-  ]
-  const table = rows
-    .map(cols => `<tr>${cols.map(col => `<td>${String(col).replace(/[<&>]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s] || s))}</td>`).join('')}</tr>`)
-    .join('')
-  const blob = new Blob([`<table>${table}</table>`], { type: 'application/vnd.ms-excel;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${isVulnerabilityTask.value ? 'vulnerability' : 'baseline'}-compliance-report.xls`
-  link.click()
-  URL.revokeObjectURL(url)
+const getTaskDisplayStatus = (task: any) => {
+  const taskType = normalizeType(task.task_type)
+  const status = normalizeStatus(task.status)
+  const exitCode = task.exit_code
+
+  if (status === 'pending') return '待执行'
+  if (status === 'running') return '执行中'
+  if (status === 'timeout') return '超时'
+  if (status === 'audit_blocked') return '审计未通过'
+  if (status === 'success') {
+    if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
+      return exitCode === 0 ? '通过' : '未通过'
+    }
+    return exitCode === 0 ? '成功' : '失败'
+  }
+  if (status === 'failed') return '失败'
+  return status
+}
+
+const exportExcelReport = async () => {
+  exporting.value = true
+  try {
+    // 为每个任务组获取详细任务数据
+    const allRows: string[][] = [
+      ['任务组ID', '规则标题', '主机', '任务类型', '状态', '退出码', '通过', '创建时间']
+    ]
+
+    for (const group of taskGroups.value) {
+      try {
+        const tasks = await getTaskLogs(group.task_group_id)
+        for (const task of tasks) {
+          const passed = normalizeStatus(task.status) === 'success' && (task.exit_code ?? 0) === 0 ? '是' : '否'
+          allRows.push([
+            group.task_group_id,
+            task.rule_title || task.rule_id || '-',
+            task.hostname || task.host_id || '-',
+            getTaskTypeLabel(task.task_type),
+            getTaskDisplayStatus(task),
+            task.exit_code !== undefined ? String(task.exit_code) : '-',
+            passed,
+            formatTime(task.finished_at || task.created_at || group.created_at)
+          ])
+        }
+      } catch {
+        // 单个任务组获取失败时添加汇总行
+        allRows.push([
+          group.task_group_id,
+          '(获取详情失败)',
+          '-',
+          getTaskTypeLabel(group.task_type),
+          getStatusText(normalizeStatus(group.status)),
+          '-',
+          '-',
+          formatTime(group.created_at)
+        ])
+      }
+    }
+
+    const escapeHtml = (s: string) => String(s).replace(/[<&>]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] || c))
+    const table = allRows
+      .map(cols => `<tr>${cols.map(col => `<td>${escapeHtml(col)}</td>`).join('')}</tr>`)
+      .join('')
+    const blob = new Blob([`<table>${table}</table>`], { type: 'application/vnd.ms-excel;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${isVulnerabilityTask.value ? 'vulnerability' : 'baseline'}-compliance-report.xls`
+    link.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('合规报告已导出')
+  } catch (e: any) {
+    ElMessage.error(e.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 const startAutoRefresh = () => {

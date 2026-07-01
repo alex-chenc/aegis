@@ -47,15 +47,16 @@ export const useTaskStore = defineStore('tasks', {
       this.selectedHostIds = []
     },
 
-    async executeCheck(maxRounds = 1): Promise<RunTaskResponse | null> {
+    async executeCheck(maxRounds = 1, autoVerify = false): Promise<RunTaskResponse | null> {
       if (!this.hasSelection) return null
-      
+
       this.loading = true
       try {
         const result = await runCheck({
           rule_ids: this.selectedRuleIds,
           host_ids: this.selectedHostIds,
-          max_rounds: maxRounds
+          max_rounds: maxRounds,
+          auto_verify: autoVerify
         })
         this.currentTaskGroupId = result.task_group_id
         return result
@@ -64,15 +65,16 @@ export const useTaskStore = defineStore('tasks', {
       }
     },
 
-    async executeFix(maxRounds = 1): Promise<RunTaskResponse | null> {
+    async executeFix(maxRounds = 1, autoVerify = false): Promise<RunTaskResponse | null> {
       if (!this.hasSelection) return null
-      
+
       this.loading = true
       try {
         const result = await runFix({
           rule_ids: this.selectedRuleIds,
           host_ids: this.selectedHostIds,
-          max_rounds: maxRounds
+          max_rounds: maxRounds,
+          auto_verify: autoVerify
         })
         this.currentTaskGroupId = result.task_group_id
         return result
