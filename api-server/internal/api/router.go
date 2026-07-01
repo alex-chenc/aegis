@@ -32,6 +32,7 @@ type Router struct {
 	commandAuditHandler    *handler.CommandAuditHandler
 	auditLogHandler        *handler.AuditLogHandler
 	assetHandler           *handler.AssetHandler
+	weakPasswordHandler    *handler.WeakPasswordHandler
 	assistantHandler       *handler.AssistantHandler
 }
 
@@ -55,6 +56,7 @@ func NewRouter(
 	commandAuditHandler *handler.CommandAuditHandler,
 	auditLogHandler *handler.AuditLogHandler,
 	assetHandler *handler.AssetHandler,
+	weakPasswordHandler *handler.WeakPasswordHandler,
 	assistantHandler *handler.AssistantHandler,
 ) *Router {
 	return &Router{
@@ -77,6 +79,7 @@ func NewRouter(
 		commandAuditHandler:    commandAuditHandler,
 		auditLogHandler:        auditLogHandler,
 		assetHandler:           assetHandler,
+		weakPasswordHandler:    weakPasswordHandler,
 		assistantHandler:       assistantHandler,
 	}
 }
@@ -144,6 +147,11 @@ func (r *Router) Setup() {
 
 		// 智能资产采集接口 (V5.8)
 		r.assetHandler.RegisterRoutes(v1)
+
+		// V6.1 弱密码检测接口
+		if r.weakPasswordHandler != nil {
+			r.weakPasswordHandler.RegisterRoutes(v1)
+		}
 
 		// 模板接口
 		templates := v1.Group("/templates")

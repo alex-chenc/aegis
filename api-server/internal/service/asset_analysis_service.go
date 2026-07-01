@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -755,20 +756,24 @@ type ApplicationAnalysisResult struct {
 
 // IdentifiedApplication 识别出的应用
 type IdentifiedApplication struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Category    string   `json:"category"`
-	Version     string   `json:"version"`
-	Confidence  float64  `json:"confidence"`
-	Evidence    []string `json:"evidence"`
-	RelatedPIDs []int    `json:"related_pids"`
-	InstallPath string   `json:"install_path"`
-	StartPath   string   `json:"start_path"`
-	ConfigPaths []string `json:"config_paths"`
-	SitePaths   []string `json:"site_paths"`
-	ListenPorts []int    `json:"listen_ports"`
-	RunUser     string   `json:"run_user"`
-	Status      string   `json:"status"`
+	Name             string   `json:"name"`
+	DisplayName      string   `json:"display_name"`
+	Category         string   `json:"category"`
+	Version          string   `json:"version"`
+	VersionSource    string   `json:"version_source,omitempty"`
+	Confidence       float64  `json:"confidence"`
+	Evidence         []string `json:"evidence"`
+	RelatedPIDs      []int    `json:"related_pids"`
+	IsContainer      bool     `json:"is_container"`
+	ContainerID      string   `json:"container_id,omitempty"`
+	ContainerRuntime string   `json:"container_runtime,omitempty"`
+	InstallPath      string   `json:"install_path"`
+	StartPath        string   `json:"start_path"`
+	ConfigPaths      []string `json:"config_paths"`
+	SitePaths        []string `json:"site_paths"`
+	ListenPorts      []int    `json:"listen_ports"`
+	RunUser          string   `json:"run_user"`
+	Status           string   `json:"status"`
 }
 
 // extractJSONFromResponse 从响应中提取 JSON
@@ -967,3 +972,86 @@ Final Answer: {"applications": [...]}
 - 置信度低于 0.3 的标记为 needs_review
 - 如果本分片没有可识别应用，输出 Final Answer: {"applications":[]}
 - **必须合并相关进程，避免重复应用**`
+
+// Container-related helpers for weak password detection
+
+var (
+	serviceCgroupContainerPatterns = []struct {
+		runtime string
+		re      *regexp.Regexp
+	}{
+		{runtime: "docker", re: regexp.MustCompile(`(?:/docker/|docker-)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "containerd", re: regexp.MustCompile(`(?:cri-containerd-|containerd/|/containerd/)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "cri-o", re: regexp.MustCompile(`(?:crio-|cri-o/|/crio/)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "podman", re: regexp.MustCompile(`(?:libpod-|libpod/|podman/|/libpod-)([a-f0-9]{64})(?:\.scope)?`)},
+		{runtime: "container", re: regexp.MustCompile(`(?:^|[/:-])([a-f0-9]{64})(?:\.scope)?(?:$|/)`)},
+	}
+)
+
+type applicationContainerInfo struct {
+	IsContainer bool
+	ID          string
+	Runtime     string
+}
+
+func containerInfoForApplication(processes []ProcessAsset, app IdentifiedApplication) applicationContainerInfo {
+	info := applicationContainerInfo{
+		IsContainer: app.IsContainer,
+		ID:          strings.TrimSpace(app.ContainerID),
+		Runtime:     strings.TrimSpace(app.ContainerRuntime),
+	}
+	processInfo := containerInfoForPIDs(processes, app.RelatedPIDs)
+	if processInfo.IsContainer {
+		return processInfo
+	}
+	return info
+}
+
+func containerInfoForPIDs(processes []ProcessAsset, pids []int) applicationContainerInfo {
+	pidSet := map[int]struct{}{}
+	for _, pid := range normalizePIDList(pids) {
+		pidSet[pid] = struct{}{}
+	}
+	if len(pidSet) == 0 {
+		return applicationContainerInfo{}
+	}
+	for _, proc := range processes {
+		if _, ok := pidSet[proc.PID]; !ok {
+			continue
+		}
+		if info := containerInfoFromProcess(proc); info.IsContainer {
+			return info
+		}
+	}
+	return applicationContainerInfo{}
+}
+
+func containerInfoFromProcess(proc ProcessAsset) applicationContainerInfo {
+	id := strings.TrimSpace(proc.ContainerID)
+	runtime := strings.TrimSpace(proc.Runtime)
+	if id != "" {
+		if runtime == "" {
+			runtime = "container"
+		}
+		return applicationContainerInfo{IsContainer: true, ID: id, Runtime: runtime}
+	}
+	runtime, id = parseContainerIdentityFromCgroupLines(proc.Cgroup)
+	if id != "" {
+		return applicationContainerInfo{IsContainer: true, ID: id, Runtime: runtime}
+	}
+	return applicationContainerInfo{}
+}
+
+func parseContainerIdentityFromCgroupLines(lines []string) (string, string) {
+	content := strings.ToLower(strings.Join(lines, "\n"))
+	for _, pattern := range serviceCgroupContainerPatterns {
+		if match := pattern.re.FindStringSubmatch(content); len(match) > 1 {
+			return pattern.runtime, match[1]
+		}
+	}
+	return "", ""
+}
+
+func normalizePIDList(pids []int) []int {
+	return mergePIDs(nil, pids)
+}

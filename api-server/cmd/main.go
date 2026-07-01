@@ -161,6 +161,7 @@ func main() {
 	selfHealingService.SetTaskRedispatcher(taskService)
 	// V5.8: Asset repository for vulnerability scanning
 	assetCollectionRepo := repository.NewAssetCollectionRepository(db)
+	weakPasswordRepo := repository.NewWeakPasswordRepository(db)
 	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService, assetCollectionRepo)
 	vulnService.SetTaskService(taskService)
 	logger.Info("Vulnerability service initialized with asset repository for V5.8 asset-based scanning")
@@ -284,6 +285,12 @@ func main() {
 	assetHandler := handler.NewAssetHandler(assetCollectionService, assetQueryService, assetAnalysisService, logger.Get())
 	logger.Info("Intelligent asset collection module initialized")
 
+	// V6.1 Weak Password Detection
+	weakPasswordService := service.NewWeakPasswordService(weakPasswordRepo, serverClient, logger.Get().Named("weak_password"))
+	weakPasswordService.SetConfigRepository(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	weakPasswordHandler := handler.NewWeakPasswordHandler(weakPasswordService, logger.Get().Named("weak_password_handler"))
+	logger.Info("Weak password detection module initialized")
+
 	// V6.0 Assistant
 	assistantLogger := logger.Get().Named("assistant")
 	contextLoader := assistant.NewContextLoader(assistant.ContextLoaderDeps{
@@ -317,6 +324,7 @@ func main() {
 		assetQueryService,
 		vulnService,
 		hostVulnerabilityScriptService,
+		weakPasswordService,
 	)
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
 	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
@@ -471,7 +479,7 @@ func main() {
 	}
 
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, assistantHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler)
 	router.Setup()
 
 	// Start HTTP server
@@ -531,6 +539,7 @@ func registerAssistantTools(
 	assetQueryService *service.AssetQueryService,
 	vulnService *service.VulnerabilityService,
 	hostVulnerabilityScriptService *service.HostVulnerabilityScriptService,
+	weakPasswordService *service.WeakPasswordService,
 ) {
 	// Host tools
 	if err := assistantTools.RegisterHostTools(registry, assistantTools.HostToolDeps{HostRepo: hostRepo, ServerClient: serverClient}); err != nil {
@@ -560,6 +569,10 @@ func registerAssistantTools(
 		AssetRepo:         assetCollectionRepo,
 	}); err != nil {
 		logger.Warn("failed to register asset tools", zap.Error(err))
+	}
+	// Weak password tools
+	if err := assistantTools.RegisterWeakPasswordTools(registry, assistantTools.WeakPasswordToolDeps{Service: weakPasswordService}); err != nil {
+		logger.Warn("failed to register weak password tools", zap.Error(err))
 	}
 	// Task tools
 	if err := assistantTools.RegisterTaskTools(registry, assistantTools.TaskToolDeps{TaskLogRepo: taskLogRepo}); err != nil {

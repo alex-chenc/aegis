@@ -152,6 +152,9 @@ type HostApplicationAsset struct {
 	FrameworkName    string         `json:"framework_name"`
 	FrameworkVersion string         `json:"framework_version"`
 	RelatedPIDs      datatypes.JSON `gorm:"column:related_pids;type:jsonb;default:'[]'" json:"related_pids"`
+	IsContainer      bool           `gorm:"default:false" json:"is_container"`
+	ContainerID      string         `gorm:"type:varchar(128)" json:"container_id"`
+	ContainerRuntime string         `gorm:"type:varchar(64)" json:"container_runtime"`
 	RelatedPackages  datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"related_packages"`
 	AIConfidence     float64        `gorm:"type:numeric(4,3);default:0" json:"ai_confidence"`
 	AIEvidence       datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"ai_evidence"`
