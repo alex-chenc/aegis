@@ -60,3 +60,21 @@ func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
 		}
 	}
 }
+
+func TestBaselineTaskExecutionSchemaStatementsIncludeAutoVerifyColumns(t *testing.T) {
+	statements := strings.Join(baselineTaskExecutionSchemaStatements(), "\n")
+
+	requiredFragments := []string{
+		"ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS attempt_no",
+		"ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS max_rounds",
+		"ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS auto_verify",
+		"ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS verify_round",
+		"CREATE INDEX IF NOT EXISTS idx_task_logs_auto_verify",
+	}
+
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("expected baseline task schema to include %q", fragment)
+		}
+	}
+}

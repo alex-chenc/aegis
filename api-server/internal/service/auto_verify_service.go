@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"api-server/internal/model"
@@ -17,9 +19,10 @@ import (
 // Flow for CHECK tasks: CHECK fails → FIX → CHECK → ... until pass or max rounds.
 // Flow for FIX tasks: FIX succeeds → CHECK → if fail → FIX → ... until pass or max rounds.
 type AutoVerifyService struct {
-	taskLogRepo  *repository.TaskLogRepository
-	ruleRepo     *repository.RuleRepository
-	taskService  *TaskService
+	taskLogRepo    *repository.TaskLogRepository
+	ruleRepo       *repository.RuleRepository
+	taskService    *TaskService
+	handledResults sync.Map
 }
 
 func NewAutoVerifyService(
@@ -34,11 +37,58 @@ func NewAutoVerifyService(
 	}
 }
 
+const autoVerifyScanInterval = 5 * time.Second
+
+func (s *AutoVerifyService) StartResultScanner(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(autoVerifyScanInterval)
+		defer ticker.Stop()
+
+		logger.Info("auto-verify result scanner started", zap.Duration("interval", autoVerifyScanInterval))
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("auto-verify result scanner stopped")
+				return
+			case <-ticker.C:
+				s.scanCompletedTaskResults()
+			}
+		}
+	}()
+}
+
+func (s *AutoVerifyService) scanCompletedTaskResults() {
+	tasks, err := s.taskLogRepo.FindAutoVerifyTerminalTasks(200)
+	if err != nil {
+		logger.Error("auto-verify: failed to scan completed task results", zap.Error(err))
+		return
+	}
+
+	for i := range tasks {
+		task := &tasks[i]
+		key := autoVerifyResultKey(task)
+		if _, loaded := s.handledResults.LoadOrStore(key, struct{}{}); loaded {
+			continue
+		}
+
+		exitCode := 0
+		if task.ExitCode != nil {
+			exitCode = *task.ExitCode
+		}
+		if handled := s.HandleTaskResult(task, strings.ToUpper(strings.TrimSpace(task.Status)), exitCode); !handled {
+			s.handledResults.Delete(key)
+		}
+	}
+}
+
 // HandleTaskResult checks if auto-verification should be triggered after a task completes.
 // Called from TaskService.ProcessTaskResult after updating the task result.
-func (s *AutoVerifyService) HandleTaskResult(taskLog *model.TaskLog, normalizedStatus string, exitCode int) {
+func (s *AutoVerifyService) HandleTaskResult(taskLog *model.TaskLog, normalizedStatus string, exitCode int) bool {
 	if !taskLog.AutoVerify {
-		return
+		return false
+	}
+	if !IsTerminalTaskStatus(normalizedStatus) {
+		return false
 	}
 
 	taskType := strings.ToUpper(strings.TrimSpace(taskLog.TaskType))
@@ -59,23 +109,24 @@ func (s *AutoVerifyService) HandleTaskResult(taskLog *model.TaskLog, normalizedS
 
 	switch taskType {
 	case "CHECK":
-		s.handleCheckResult(taskLog, normalizedStatus, exitCode, currentRound, maxRounds)
+		return s.handleCheckResult(taskLog, normalizedStatus, exitCode, currentRound, maxRounds)
 	case "FIX":
-		s.handleFixResult(taskLog, normalizedStatus, exitCode, currentRound, maxRounds)
+		return s.handleFixResult(taskLog, normalizedStatus, exitCode, currentRound, maxRounds)
 	}
+	return false
 }
 
 // handleCheckResult handles CHECK task completion in auto-verify mode.
 // If CHECK passed (exit_code=0), verification is complete.
 // If CHECK failed (exit_code=1, non-compliant), trigger FIX and continue.
-func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status string, exitCode, currentRound, maxRounds int) {
+func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status string, exitCode, currentRound, maxRounds int) bool {
 	if status != "SUCCESS" {
 		// CHECK task itself failed (execution error, timeout, etc.) - stop auto-verify
 		logger.Info("auto-verify stopped: CHECK task execution failed",
 			zap.String("task_id", taskLog.ID.String()),
 			zap.String("status", status),
 		)
-		return
+		return true
 	}
 
 	if exitCode == 0 {
@@ -84,7 +135,7 @@ func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status str
 			zap.String("task_id", taskLog.ID.String()),
 			zap.Int("total_rounds", currentRound),
 		)
-		return
+		return true
 	}
 
 	// CHECK failed (exit_code=1, non-compliant) - need to FIX
@@ -94,7 +145,7 @@ func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status str
 			zap.Int("verify_round", currentRound),
 			zap.Int("max_rounds", maxRounds),
 		)
-		return
+		return true
 	}
 
 	logger.Info("auto-verify: CHECK failed, triggering FIX",
@@ -102,50 +153,65 @@ func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status str
 		zap.Int("next_round", currentRound+1),
 	)
 
-	go s.triggerFixForVerify(taskLog, currentRound+1)
+	return s.triggerFixForVerify(taskLog, currentRound+1, maxRounds)
 }
 
 // handleFixResult handles FIX task completion in auto-verify mode.
 // If FIX succeeded (exit_code=0), trigger CHECK to verify.
 // If FIX failed, trigger another FIX attempt (up to max rounds).
-func (s *AutoVerifyService) handleFixResult(taskLog *model.TaskLog, status string, exitCode, currentRound, maxRounds int) {
+func (s *AutoVerifyService) handleFixResult(taskLog *model.TaskLog, status string, exitCode, currentRound, maxRounds int) bool {
 	if status == "SUCCESS" && exitCode == 0 {
 		// FIX succeeded - trigger CHECK to verify the fix
 		logger.Info("auto-verify: FIX succeeded, triggering CHECK verification",
 			zap.String("task_id", taskLog.ID.String()),
 			zap.Int("verify_round", currentRound),
 		)
-		go s.triggerCheckForVerify(taskLog, currentRound)
-		return
+		return s.triggerCheckForVerify(taskLog, currentRound, maxRounds)
 	}
 
-	// FIX failed - try another FIX if rounds remain
 	if currentRound >= maxRounds {
 		logger.Warn("auto-verify stopped: max rounds reached after FIX failure",
 			zap.String("task_id", taskLog.ID.String()),
 			zap.Int("verify_round", currentRound),
 			zap.Int("max_rounds", maxRounds),
 		)
-		return
+		return true
 	}
 
-	logger.Info("auto-verify: FIX failed, triggering another FIX attempt",
+	logger.Info("auto-verify: FIX failed, triggering large-model script repair",
 		zap.String("task_id", taskLog.ID.String()),
-		zap.Int("next_round", currentRound+1),
+		zap.Int("verify_round", currentRound),
 	)
-
-	go s.triggerFixForVerify(taskLog, currentRound+1)
+	if s.taskService == nil {
+		logger.Warn("auto-verify: task service unavailable, cannot trigger script repair",
+			zap.String("task_id", taskLog.ID.String()))
+		return true
+	}
+	s.taskService.maybeTriggerLargeModelRepair(taskLog, status, exitCode, stringValue(taskLog.Stdout), stringValue(taskLog.Stderr))
+	return true
 }
 
 // triggerFixForVerify creates and dispatches a FIX task for auto-verification.
-func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, round int) {
+func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, round, maxRounds int) bool {
 	ctx := context.Background()
 
 	if originalTask.RuleID == nil {
 		logger.Error("auto-verify: cannot trigger FIX, no rule_id",
 			zap.String("task_id", originalTask.ID.String()),
 		)
-		return
+		return false
+	}
+
+	exists, err := s.taskLogRepo.HasAutoVerifyFollowup(originalTask.TaskGroupID, originalTask.RuleID, originalTask.HostID, "FIX", round)
+	if err != nil {
+		return false
+	}
+	if exists {
+		logger.Debug("auto-verify: FIX followup already exists",
+			zap.String("original_task_id", originalTask.ID.String()),
+			zap.Int("round", round),
+		)
+		return true
 	}
 
 	rule, err := s.ruleRepo.FindByID(*originalTask.RuleID)
@@ -155,7 +221,7 @@ func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, rou
 			zap.String("rule_id", originalTask.RuleID.String()),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 
 	var scriptContent string
@@ -166,7 +232,7 @@ func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, rou
 		logger.Error("auto-verify: no FIX script available",
 			zap.String("rule_id", originalTask.RuleID.String()),
 		)
-		return
+		return false
 	}
 
 	hostIDStr := originalTask.HostID.String()
@@ -180,7 +246,7 @@ func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, rou
 		Status:        "PENDING",
 		ScriptContent: &scriptContent,
 		AttemptNo:     1,
-		MaxRounds:     1, // FIX itself doesn't need self-healing in auto-verify mode
+		MaxRounds:     maxRounds,
 		AutoVerify:    true,
 		VerifyRound:   round,
 		CreatedAt:     time.Now(),
@@ -192,29 +258,45 @@ func (s *AutoVerifyService) triggerFixForVerify(originalTask *model.TaskLog, rou
 			zap.String("original_task_id", originalTask.ID.String()),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 
 	logger.Info("auto-verify: FIX task created",
 		zap.String("fix_task_id", fixTask.ID.String()),
 		zap.String("original_task_id", originalTask.ID.String()),
 		zap.Int("round", round),
+		zap.Int("max_rounds", maxRounds),
 	)
 
 	ruleID, _ := uuid.Parse(ruleIDStr)
 	hostID, _ := uuid.Parse(hostIDStr)
-	go s.taskService.dispatchToAgent(ctx, fixTask.ID, hostID, ruleID, scriptContent, "FIX")
+	if s.taskService != nil {
+		go s.taskService.dispatchToAgent(ctx, fixTask.ID, hostID, ruleID, scriptContent, "FIX")
+	}
+	return true
 }
 
 // triggerCheckForVerify creates and dispatches a CHECK task for auto-verification.
-func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, round int) {
+func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, round, maxRounds int) bool {
 	ctx := context.Background()
 
 	if originalTask.RuleID == nil {
 		logger.Error("auto-verify: cannot trigger CHECK, no rule_id",
 			zap.String("task_id", originalTask.ID.String()),
 		)
-		return
+		return false
+	}
+
+	exists, err := s.taskLogRepo.HasAutoVerifyFollowup(originalTask.TaskGroupID, originalTask.RuleID, originalTask.HostID, "CHECK", round)
+	if err != nil {
+		return false
+	}
+	if exists {
+		logger.Debug("auto-verify: CHECK followup already exists",
+			zap.String("original_task_id", originalTask.ID.String()),
+			zap.Int("round", round),
+		)
+		return true
 	}
 
 	rule, err := s.ruleRepo.FindByID(*originalTask.RuleID)
@@ -224,7 +306,7 @@ func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, r
 			zap.String("rule_id", originalTask.RuleID.String()),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 
 	var scriptContent string
@@ -235,7 +317,7 @@ func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, r
 		logger.Error("auto-verify: no CHECK script available",
 			zap.String("rule_id", originalTask.RuleID.String()),
 		)
-		return
+		return false
 	}
 
 	hostIDStr := originalTask.HostID.String()
@@ -249,7 +331,7 @@ func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, r
 		Status:        "PENDING",
 		ScriptContent: &scriptContent,
 		AttemptNo:     1,
-		MaxRounds:     1,
+		MaxRounds:     maxRounds,
 		AutoVerify:    true,
 		VerifyRound:   round,
 		CreatedAt:     time.Now(),
@@ -261,20 +343,42 @@ func (s *AutoVerifyService) triggerCheckForVerify(originalTask *model.TaskLog, r
 			zap.String("original_task_id", originalTask.ID.String()),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 
 	logger.Info("auto-verify: CHECK task created",
 		zap.String("check_task_id", checkTask.ID.String()),
 		zap.String("original_task_id", originalTask.ID.String()),
 		zap.Int("round", round),
+		zap.Int("max_rounds", maxRounds),
 	)
 
 	ruleID, _ := uuid.Parse(ruleIDStr)
 	hostID, _ := uuid.Parse(hostIDStr)
-	go s.taskService.dispatchToAgent(ctx, checkTask.ID, hostID, ruleID, scriptContent, "CHECK")
+	if s.taskService != nil {
+		go s.taskService.dispatchToAgent(ctx, checkTask.ID, hostID, ruleID, scriptContent, "CHECK")
+	}
+	return true
 }
 
 func autoVerifyTimePtr(t time.Time) *time.Time {
 	return &t
+}
+
+func autoVerifyResultKey(task *model.TaskLog) string {
+	exitCode := "nil"
+	if task.ExitCode != nil {
+		exitCode = fmt.Sprintf("%d", *task.ExitCode)
+	}
+	finishedAt := "nil"
+	if task.FinishedAt != nil {
+		finishedAt = fmt.Sprintf("%d", task.FinishedAt.UnixNano())
+	}
+	return strings.Join([]string{
+		task.ID.String(),
+		strings.ToUpper(strings.TrimSpace(task.Status)),
+		exitCode,
+		fmt.Sprintf("%d", task.AttemptNo),
+		finishedAt,
+	}, ":")
 }

@@ -109,6 +109,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to ensure AI analysis trace schema: %w", err)
 	}
 
+	if err := ensureBaselineTaskExecutionSchema(db); err != nil {
+		logger.Error("failed to ensure baseline task execution schema", zap.Error(err))
+		return nil, fmt.Errorf("failed to ensure baseline task execution schema: %w", err)
+	}
+
 	if err := ensureAssetCollectionSchema(db); err != nil {
 		logger.Error("failed to ensure asset collection schema", zap.Error(err))
 		return nil, fmt.Errorf("failed to ensure asset collection schema: %w", err)
@@ -324,6 +329,26 @@ func ensureAIAnalysisTraceSchema(db *gorm.DB) error {
 		}
 	}
 
+	return nil
+}
+
+func baselineTaskExecutionSchemaStatements() []string {
+	return []string{
+		`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS attempt_no INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS max_rounds INTEGER NOT NULL DEFAULT 3`,
+		`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS auto_verify BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS verify_round INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_task_logs_attempt_rounds ON task_logs(attempt_no, max_rounds)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_logs_auto_verify ON task_logs(auto_verify) WHERE auto_verify = true`,
+	}
+}
+
+func ensureBaselineTaskExecutionSchema(db *gorm.DB) error {
+	for _, statement := range baselineTaskExecutionSchemaStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

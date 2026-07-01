@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"api-server/internal/model"
+	"api-server/pkg/logger"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
@@ -17,8 +18,13 @@ func uuidPtr(id uuid.UUID) *uuid.UUID {
 
 func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	if logger.Logger == nil {
+		if err := logger.Init(&logger.Config{Level: "error", MaxSize: 10, MaxBackups: 1, MaxAge: 1}); err != nil {
+			t.Fatalf("failed to init logger: %v", err)
+		}
+	}
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
@@ -36,6 +42,8 @@ func setupTaskLogRepoTestDB(t *testing.T) *gorm.DB {
 			script_version INTEGER NULL,
 			attempt_no INTEGER NOT NULL DEFAULT 1,
 			max_rounds INTEGER NOT NULL DEFAULT 3,
+			auto_verify BOOLEAN NOT NULL DEFAULT 0,
+			verify_round INTEGER NOT NULL DEFAULT 0,
 			stdout TEXT NULL,
 			stderr TEXT NULL,
 			exit_code INTEGER NULL,
@@ -115,5 +123,110 @@ func TestTaskLogRepository_UpdateForRedispatch(t *testing.T) {
 
 	if updated.StartedAt == nil {
 		t.Fatalf("expected started_at to be set")
+	}
+}
+
+func TestTaskLogRepository_FindAutoVerifyTerminalTasks(t *testing.T) {
+	db := setupTaskLogRepoTestDB(t)
+	repo := NewTaskLogRepository(db)
+
+	now := time.Now()
+	exitCode := 1
+	tasks := []*model.TaskLog{
+		{
+			ID:          uuid.New(),
+			TaskGroupID: uuid.New(),
+			RuleID:      uuidPtr(uuid.New()),
+			HostID:      uuid.New(),
+			TaskType:    "CHECK",
+			Status:      "SUCCESS",
+			ExitCode:    &exitCode,
+			MaxRounds:   3,
+			AutoVerify:  true,
+			StartedAt:   &now,
+			FinishedAt:  &now,
+			CreatedAt:   now,
+		},
+		{
+			ID:          uuid.New(),
+			TaskGroupID: uuid.New(),
+			RuleID:      uuidPtr(uuid.New()),
+			HostID:      uuid.New(),
+			TaskType:    "CHECK",
+			Status:      "RUNNING",
+			MaxRounds:   3,
+			AutoVerify:  true,
+			StartedAt:   &now,
+			CreatedAt:   now,
+		},
+		{
+			ID:          uuid.New(),
+			TaskGroupID: uuid.New(),
+			RuleID:      uuidPtr(uuid.New()),
+			HostID:      uuid.New(),
+			TaskType:    "CHECK",
+			Status:      "SUCCESS",
+			ExitCode:    &exitCode,
+			MaxRounds:   3,
+			AutoVerify:  false,
+			StartedAt:   &now,
+			FinishedAt:  &now,
+			CreatedAt:   now,
+		},
+	}
+	for _, task := range tasks {
+		if err := repo.Create(task); err != nil {
+			t.Fatalf("failed to create task: %v", err)
+		}
+	}
+
+	found, err := repo.FindAutoVerifyTerminalTasks(100)
+	if err != nil {
+		t.Fatalf("FindAutoVerifyTerminalTasks failed: %v", err)
+	}
+	if len(found) != 1 || found[0].ID != tasks[0].ID {
+		t.Fatalf("expected only terminal auto-verify task, got %#v", found)
+	}
+}
+
+func TestTaskLogRepository_HasAutoVerifyFollowup(t *testing.T) {
+	db := setupTaskLogRepoTestDB(t)
+	repo := NewTaskLogRepository(db)
+
+	groupID := uuid.New()
+	ruleID := uuid.New()
+	hostID := uuid.New()
+	now := time.Now()
+	task := &model.TaskLog{
+		ID:          uuid.New(),
+		TaskGroupID: groupID,
+		RuleID:      &ruleID,
+		HostID:      hostID,
+		TaskType:    "FIX",
+		Status:      "PENDING",
+		MaxRounds:   3,
+		AutoVerify:  true,
+		VerifyRound: 2,
+		StartedAt:   &now,
+		CreatedAt:   now,
+	}
+	if err := repo.Create(task); err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	exists, err := repo.HasAutoVerifyFollowup(groupID, &ruleID, hostID, "FIX", 2)
+	if err != nil {
+		t.Fatalf("HasAutoVerifyFollowup failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected followup to exist")
+	}
+
+	exists, err = repo.HasAutoVerifyFollowup(groupID, &ruleID, hostID, "CHECK", 2)
+	if err != nil {
+		t.Fatalf("HasAutoVerifyFollowup failed: %v", err)
+	}
+	if exists {
+		t.Fatal("did not expect CHECK followup to exist")
 	}
 }

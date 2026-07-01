@@ -217,6 +217,7 @@ func main() {
 	templateService.StartWorkers(ctx)
 	scriptGenService.StartWorkers(ctx)
 	selfHealingService.StartWorkers(ctx)
+	autoVerifyService.StartResultScanner(ctx)
 
 	logger.Info("background workers started")
 

@@ -66,6 +66,8 @@ func setupHealingLogRepoTestDB(t *testing.T) *gorm.DB {
 			script_version INTEGER NULL,
 			attempt_no INTEGER NOT NULL DEFAULT 1,
 			max_rounds INTEGER NOT NULL DEFAULT 1,
+			auto_verify BOOLEAN NOT NULL DEFAULT 0,
+			verify_round INTEGER NOT NULL DEFAULT 0,
 			stdout TEXT NULL,
 			stderr TEXT NULL,
 			exit_code INTEGER NULL,

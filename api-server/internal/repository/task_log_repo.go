@@ -96,6 +96,48 @@ func (r *TaskLogRepository) FindByID(id uuid.UUID) (*model.TaskLog, error) {
 	return &log, nil
 }
 
+func (r *TaskLogRepository) FindAutoVerifyTerminalTasks(limit int) ([]model.TaskLog, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var tasks []model.TaskLog
+	result := r.db.
+		Where("auto_verify = ? AND status IN ?", true, []string{"SUCCESS", "FAILED", "TIMEOUT", "AUDIT_BLOCKED"}).
+		Order("finished_at DESC, created_at DESC").
+		Limit(limit).
+		Find(&tasks)
+	if result.Error != nil {
+		logger.Error("failed to find terminal auto-verify tasks", zap.Error(result.Error))
+		return nil, result.Error
+	}
+	return tasks, nil
+}
+
+func (r *TaskLogRepository) HasAutoVerifyFollowup(taskGroupID uuid.UUID, ruleID *uuid.UUID, hostID uuid.UUID, taskType string, verifyRound int) (bool, error) {
+	query := r.db.Model(&model.TaskLog{}).
+		Where("task_group_id = ? AND host_id = ? AND UPPER(task_type) = ? AND auto_verify = ? AND verify_round = ?",
+			taskGroupID, hostID, strings.ToUpper(strings.TrimSpace(taskType)), true, verifyRound)
+	if ruleID == nil {
+		query = query.Where("rule_id IS NULL")
+	} else {
+		query = query.Where("rule_id = ?", *ruleID)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		logger.Error("failed to check auto-verify followup",
+			zap.Error(err),
+			zap.String("task_group_id", taskGroupID.String()),
+			zap.String("host_id", hostID.String()),
+			zap.String("task_type", taskType),
+			zap.Int("verify_round", verifyRound),
+		)
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *TaskLogRepository) UpdateForHealingRedispatch(id uuid.UUID, healingID uuid.UUID, scriptContent string, scriptVersion int, attemptNo int) error {
 	if attemptNo <= 0 {
 		attemptNo = 1

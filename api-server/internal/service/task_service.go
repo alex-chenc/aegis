@@ -362,12 +362,12 @@ func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string,
 		zap.Int("exit_code", exitCode),
 	)
 
-	if findErr == nil {
+	if findErr == nil && IsTerminalTaskStatus(normalizedStatus) {
 		s.maybeTriggerLargeModelRepair(taskLog, normalizedStatus, exitCode, stdout, stderr)
 	}
 
 	// Auto-verify: trigger detection-repair loop if enabled
-	if findErr == nil && s.autoVerifySvc != nil {
+	if findErr == nil && IsTerminalTaskStatus(normalizedStatus) && s.autoVerifySvc != nil {
 		s.autoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode)
 	}
 }
@@ -382,6 +382,25 @@ func (s *TaskService) maybeTriggerLargeModelRepair(taskLog *model.TaskLog, statu
 			zap.String("healing_id", taskLog.HealingID.String()),
 		)
 		return
+	}
+	if s.redisClient != nil {
+		if status, err := s.redisClient.GetHealingStatusStruct(taskLog.ID.String()); err == nil && status != nil {
+			logger.Debug("task already has large-model repair status, skip auto trigger",
+				zap.String("task_id", taskLog.ID.String()),
+				zap.String("healing_status", status.Status),
+			)
+			return
+		}
+	}
+	if s.healingLogRepo != nil {
+		healingLog, err := s.healingLogRepo.GetLatestByOriginalTaskID(taskLog.ID)
+		if err == nil && healingLog != nil {
+			logger.Debug("task already has large-model repair log, skip auto trigger",
+				zap.String("task_id", taskLog.ID.String()),
+				zap.String("healing_status", healingLog.Status),
+			)
+			return
+		}
 	}
 	exitCodePtr := &exitCode
 	if !IsLLMRepairableTask(taskLog.TaskType, status, exitCodePtr, stderr) {

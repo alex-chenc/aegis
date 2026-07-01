@@ -68,9 +68,13 @@ func (r *RuleRepository) UpdateScript(ruleID uuid.UUID, scriptType, scriptConten
 	if scriptType == "CHECK" {
 		updates["generated_check_script"] = scriptContent
 		updates["check_script_version"] = version
+		updates["check_script_status"] = "generated"
+		updates["check_script_error"] = ""
 	} else {
 		updates["generated_fix_script"] = scriptContent
 		updates["fix_script_version"] = version
+		updates["fix_script_status"] = "generated"
+		updates["fix_script_error"] = ""
 	}
 
 	result := r.db.Model(&model.AegisRule{}).Where("id = ?", ruleID).Updates(updates)

@@ -23,6 +23,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const testDockerContainerID = "4f8c2d9e1a7b"
+
 // MockAgentClient is a mock implementation of WeakPasswordAgentClient for testing
 type MockAgentClient struct {
 	GetAgentStatusFunc func(ctx context.Context, hostID string) (*pb.GetAgentStatusResponse, error)
