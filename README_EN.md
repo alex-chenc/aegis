@@ -6,42 +6,11 @@
 
 ![AI Trace](docs/screenshots/ui-refresh/ai_trace.png)
 
-![Agent Mode](docs/screenshots/ui-refresh/agent.png)
-
 ## Overview
 
 Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology to achieve dynamic audit management of host configurations and vulnerabilities. Through continuous AI noise reduction and automated judgment, it builds a closed loop from precise protection to automated response. We are committed to creating a minimalist, intelligent server baseline automation management platform for DevOps and security engineers through the forward-looking technology of "model against model".
 
 ## Core Features
-
-### Dual-mode Intelligent Security Console (V6.0)
-
-The core change in V6.0 is that all major platform capabilities, including host
-management, baseline checks, vulnerability remediation, script audit,
-self-healing, real-time detection, alert tracing, blocking policies, asset
-collection, and dynamic detection packages, can be launched, orchestrated, and
-tracked through Agent mode using natural language. The original operation mode
-is still available for precise inspection, manual configuration, and fine-grained
-control.
-
-- Simpler operations: users no longer need to remember every page entry or form
-  path. They can describe the goal directly, such as "check SSH baselines for
-  these hosts", "analyze whether this host was attacked", or "generate and
-  dispatch a remediation script".
-- Smoother workflows: the agent can break down a task, select tools, and connect
-  host data, assets, vulnerabilities, baselines, alerts, Agent runtime evidence,
-  and DetectionPackage capabilities, reducing back-and-forth page switching.
-- More complete analysis: the agent actively gathers context around the goal and
-  turns asset details, vulnerability risks, baseline results, alert evidence,
-  process/network behavior, and historical task results into understandable
-  conclusions.
-- Safer execution: high-risk actions are still governed by `request_approval`,
-  `whitelist`, and `full_access` permission modes. Blocking, remediation,
-  signing, and enabling detection packages can explain their impact first and run
-  only after approval.
-- Traceable results: plans, tool calls, approval records, execution results, and
-  errors are preserved as audit trails, making it easier to review why a decision
-  was made, which tools were called, and which hosts were affected.
 
 ### Host and Agent Management
 
@@ -117,12 +86,12 @@ control.
 - Uses a ReAct agent for execution planning, tool calls, reflection, auditing, correction, and summarization
 - Streams reasoning, tool calls, observations, execution plans, and final conclusions through SSE
 - Historical sessions can restore analysis process, conclusions, disposal suggestions, and execution results
-- Supports attack trace graphs rendered from the text model's structured `attack_graph` output, plus structured disposal suggestions
+- Supports attack trace graphs, attack flowchart images, and structured disposal suggestions
 - Supports context compression, batch event analysis, and observability for large-context analysis
 
 ### System Configuration and Observability
 
-- Model configuration supports text model settings, connection tests, and secure saving; the primary attack trace graph is generated from the text model's structured result
+- Model configuration supports separate text model and image model settings, connection tests, and secure saving
 - When no model has been configured for the first time, the page shows an editable empty state instead of reporting it as a system error
 - Supports OpenAI-compatible models, DashScope, and other LLM services
 - Audit log page displays total audit count, pass rate, failure count, retry distribution, and detail drawer
@@ -161,8 +130,8 @@ Visit http://localhost:8081 in your browser.
 
 ```bash
 # 1. Extract the offline release package
-unzip aegis-v6.0-linux-amd64-release.zip
-cd v6.0
+unzip aegis-v5.8-linux-amd64-release.zip
+cd v5.8
 
 # 2. Run the deployment script (auto-detects IP, loads images, starts services)
 bash start.sh

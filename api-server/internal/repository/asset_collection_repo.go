@@ -120,39 +120,10 @@ func (r *AssetCollectionRepository) UpsertSoftwareAsset(asset *model.HostSoftwar
 
 // UpsertApplicationAsset Upsert 应用资产
 func (r *AssetCollectionRepository) UpsertApplicationAsset(asset *model.HostApplicationAsset) error {
-	updates := clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "is_container", "container_id", "container_runtime", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "review_status", "status", "last_seen_at", "collected_at", "updated_at"})
-	updates = append(updates,
-		clause.Assignment{
-			Column: clause.Column{Name: "version"},
-			Value:  gorm.Expr("CASE WHEN excluded.version IS NOT NULL AND excluded.version <> '' THEN excluded.version ELSE host_application_assets.version END"),
-		},
-		clause.Assignment{
-			Column: clause.Column{Name: "version_source"},
-			Value:  gorm.Expr("CASE WHEN excluded.version IS NOT NULL AND excluded.version <> '' THEN excluded.version_source ELSE host_application_assets.version_source END"),
-		},
-	)
-
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "host_id"}, {Name: "fingerprint"}},
-		DoUpdates: updates,
+		DoUpdates: clause.AssignmentColumns([]string{"hostname", "ip_address", "group_name", "os_type", "category", "name", "display_name", "version", "version_source", "install_path", "start_path", "config_paths", "site_paths", "domains", "listen_ports", "run_user", "runtime_name", "runtime_version", "framework_name", "framework_version", "related_pids", "related_packages", "ai_confidence", "ai_evidence", "ai_raw_output", "last_seen_at", "collected_at", "updated_at"}),
 	}).Create(asset).Error
-}
-
-// DeactivateDuplicateApplicationAssets marks older same-host application records as deleted.
-func (r *AssetCollectionRepository) DeactivateDuplicateApplicationAssets(hostID uuid.UUID, names []string, keepFingerprint string) (int64, error) {
-	if len(names) == 0 || keepFingerprint == "" {
-		return 0, nil
-	}
-	result := r.db.Model(&model.HostApplicationAsset{}).
-		Where("host_id = ?", hostID).
-		Where("status IN ?", []string{"active", "needs_review"}).
-		Where("fingerprint <> ?", keepFingerprint).
-		Where("LOWER(name) IN ?", names).
-		Updates(map[string]interface{}{
-			"status":     "deleted",
-			"updated_at": time.Now(),
-		})
-	return result.RowsAffected, result.Error
 }
 
 // CreateProcessSnapshot 创建进程快照
@@ -215,7 +186,7 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 	var assets []model.HostApplicationAsset
 	var total int64
 
-	q := r.applicationAssetsBaseQuery().Where("status != ?", "deleted")
+	q := r.db.Model(&model.HostApplicationAsset{}).Where("status != ?", "deleted")
 
 	if query.Category != "" {
 		q = q.Where("category = ?", query.Category)
@@ -237,8 +208,7 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 		q = q.Where("status = ?", query.Status)
 	}
 
-	deduped := dedupedApplicationAssetsQuery(r.db, q)
-	if err := deduped.Where("asset_rank = ?", 1).Count(&total).Error; err != nil {
+	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -251,37 +221,12 @@ func (r *AssetCollectionRepository) GetApplicationAssets(query model.Application
 		pageSize = 20
 	}
 
-	err := deduped.Where("asset_rank = ?", 1).
-		Order("collected_at DESC").
+	err := q.Order("collected_at DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&assets).Error
 
 	return assets, total, err
-}
-
-func (r *AssetCollectionRepository) applicationAssetsBaseQuery() *gorm.DB {
-	return r.db.Model(&model.HostApplicationAsset{})
-}
-
-func dedupedApplicationAssetsQuery(db *gorm.DB, base *gorm.DB) *gorm.DB {
-	ranked := base.Select(`host_application_assets.*,
-		ROW_NUMBER() OVER (
-			PARTITION BY host_id, LOWER(name)
-			ORDER BY
-				CASE status
-					WHEN 'active' THEN 0
-					WHEN 'needs_review' THEN 1
-					WHEN 'inactive' THEN 2
-					ELSE 3
-				END,
-				collected_at DESC,
-				last_seen_at DESC,
-				updated_at DESC,
-				is_container DESC,
-				ai_confidence DESC
-		) AS asset_rank`)
-	return db.Table("(?) AS ranked_application_assets", ranked)
 }
 
 // GetApplicationAsset 获取应用资产详情
@@ -309,21 +254,14 @@ func (r *AssetCollectionRepository) GetToolCallsByApplication(appID uuid.UUID) (
 // GetSoftwareAssetsByHost 获取主机的软件资产
 func (r *AssetCollectionRepository) GetSoftwareAssetsByHost(hostID uuid.UUID) ([]model.HostSoftwareAsset, error) {
 	var assets []model.HostSoftwareAsset
-	err := r.db.Where("host_id = ? AND status = ?", hostID, "active").
-		Order("last_seen_at DESC, collected_at DESC").
-		Find(&assets).Error
+	err := r.db.Where("host_id = ? AND status = ?", hostID, "active").Find(&assets).Error
 	return assets, err
 }
 
 // GetApplicationAssetsByHost 获取主机的应用资产
 func (r *AssetCollectionRepository) GetApplicationAssetsByHost(hostID uuid.UUID) ([]model.HostApplicationAsset, error) {
 	var assets []model.HostApplicationAsset
-	base := r.applicationAssetsBaseQuery().
-		Where("host_id = ? AND status IN ?", hostID, []string{"active", "needs_review"})
-	err := dedupedApplicationAssetsQuery(r.db, base).
-		Where("asset_rank = ?", 1).
-		Order("collected_at DESC").
-		Find(&assets).Error
+	err := r.db.Where("host_id = ? AND status IN ?", hostID, []string{"active", "needs_review"}).Find(&assets).Error
 	return assets, err
 }
 
@@ -335,39 +273,21 @@ func (r *AssetCollectionRepository) GetSummary() (*model.AssetSummary, error) {
 	r.db.Model(&model.HostSoftwareAsset{}).Where("status = ?", "active").Count(&summary.SoftwareCount)
 
 	// 应用资产数量
-	summary.ApplicationCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("status IN ?", []string{"active", "needs_review"}),
-	)
+	r.db.Model(&model.HostApplicationAsset{}).Where("status IN ?", []string{"active", "needs_review"}).Count(&summary.ApplicationCount)
 
 	// 各分类数量
-	summary.DatabaseCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "database", "deleted"),
-	)
-	summary.WebServiceCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_service", "deleted"),
-	)
-	summary.WebFrameworkCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_framework", "deleted"),
-	)
-	summary.WebSiteCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "web_site", "deleted"),
-	)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "database", "deleted").Count(&summary.DatabaseCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_service", "deleted").Count(&summary.WebServiceCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_framework", "deleted").Count(&summary.WebFrameworkCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "web_site", "deleted").Count(&summary.WebSiteCount)
 
 	// AI 资产分类数量
-	summary.LLMServiceCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "llm_service", "deleted"),
-	)
-	summary.AIAgentCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "ai_agent", "deleted"),
-	)
-	summary.MCPServerCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("category = ? AND status != ?", "mcp_server", "deleted"),
-	)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "llm_service", "deleted").Count(&summary.LLMServiceCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "ai_agent", "deleted").Count(&summary.AIAgentCount)
+	r.db.Model(&model.HostApplicationAsset{}).Where("category = ? AND status != ?", "mcp_server", "deleted").Count(&summary.MCPServerCount)
 
 	// 待复核数量
-	summary.NeedsReviewCount = r.countDistinctApplications(
-		r.applicationAssetsBaseQuery().Where("review_status = ?", "pending"),
-	)
+	r.db.Model(&model.HostApplicationAsset{}).Where("review_status = ?", "pending").Count(&summary.NeedsReviewCount)
 
 	// 最近采集时间
 	var lastTask model.AssetCollectionTask
@@ -376,14 +296,6 @@ func (r *AssetCollectionRepository) GetSummary() (*model.AssetSummary, error) {
 	}
 
 	return summary, nil
-}
-
-func (r *AssetCollectionRepository) countDistinctApplications(base *gorm.DB) int64 {
-	var count int64
-	deduped := base.Select("host_id, LOWER(name) AS normalized_name").
-		Group("host_id, LOWER(name)")
-	_ = r.db.Table("(?) AS distinct_applications", deduped).Count(&count).Error
-	return count
 }
 
 // GetLatestSoftwareByHost 获取主机最新的软件资产时间
@@ -400,18 +312,18 @@ func (r *AssetCollectionRepository) GetLatestSoftwareByHost(hostID uuid.UUID) (*
 
 // ApplicationAssetWithHost 带主机信息的应用资产
 type ApplicationAssetWithHost struct {
-	ID          uuid.UUID `json:"id"`
-	HostID      uuid.UUID `json:"host_id"`
-	Hostname    string    `json:"hostname"`
-	IPAddress   string    `json:"ip_address"`
-	OsType      string    `json:"os_type"`
-	Name        string    `json:"name"`
-	DisplayName string    `json:"display_name"`
-	Version     string    `json:"version"`
-	Category    string    `json:"category"`
-	ListenPorts string    `json:"listen_ports"`
-	RunUser     string    `json:"run_user"`
-	CollectedAt time.Time `json:"collected_at"`
+	ID          uuid.UUID  `json:"id"`
+	HostID      uuid.UUID  `json:"host_id"`
+	Hostname    string     `json:"hostname"`
+	IPAddress   string     `json:"ip_address"`
+	OsType      string     `json:"os_type"`
+	Name        string     `json:"name"`
+	DisplayName string     `json:"display_name"`
+	Version     string     `json:"version"`
+	Category    string     `json:"category"`
+	ListenPorts string     `json:"listen_ports"`
+	RunUser     string     `json:"run_user"`
+	CollectedAt time.Time  `json:"collected_at"`
 }
 
 // SearchApplicationAssets 按应用名搜索哪些主机安装了该应用（JOIN hosts 表）

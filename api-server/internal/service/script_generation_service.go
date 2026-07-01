@@ -121,7 +121,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 	if task.ScriptType == "CHECK" {
 		prompt = llm.GetCheckScriptGenerationPrompt(rule.CheckContent)
 	} else {
-		prompt = llm.GetFixScriptGenerationPrompt(rule.FixContent)
+		prompt = llm.GetFixScriptGenerationPrompt(rule.CheckContent, rule.FixContent)
 	}
 
 	systemPrompt := "你是一位资深的 Shell 脚本工程师"

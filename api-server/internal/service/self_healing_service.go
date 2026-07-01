@@ -13,13 +13,9 @@ import (
 	"api-server/internal/storage"
 	"api-server/pkg/logger"
 
-	agentruntime "github.com/alex-chenc/agent-runtime"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
-
-const baselineHealingWorkerCount = 3
-const baselineHealingQueueSize = 100
 
 type SelfHealingService struct {
 	healingLogRepo     *repository.HealingLogRepository
@@ -30,9 +26,15 @@ type SelfHealingService struct {
 	minioClient        *storage.MinIOClient
 	redisClient        *storage.RedisClient
 	scriptAuditService *ScriptAuditService
+	taskRedispatcher   HealingTaskRedispatcher
 	healingQueue       chan HealingTask
+	llmTimeout         int
+	llmMaxRetries      int
 	maxRetries         int
-	onHealedScript     func(context.Context, HealingTask, uuid.UUID, string, int) error
+}
+
+type HealingTaskRedispatcher interface {
+	DispatchHealedTask(ctx context.Context, taskID uuid.UUID, scriptContent string, scriptVersion int, healingID uuid.UUID, attemptNo int) error
 }
 
 type HealingTask struct {
@@ -45,7 +47,6 @@ type HealingTask struct {
 	ErrorMessage    string
 	ExitCode        int
 	UserSuggestion  string
-	TaskGroupID     uuid.UUID
 	AttemptNo       int
 	MaxRounds       int
 }
@@ -72,13 +73,15 @@ func NewSelfHealingService(
 		minioClient:        minioClient,
 		redisClient:        redisClient,
 		scriptAuditService: scriptAuditService,
-		healingQueue:       make(chan HealingTask, baselineHealingQueueSize),
+		healingQueue:       make(chan HealingTask, 100),
+		llmTimeout:         llmTimeout,
+		llmMaxRetries:      llmMaxRetries,
 		maxRetries:         maxRetries,
 	}
 }
 
-func (s *SelfHealingService) SetHealedScriptHandler(handler func(context.Context, HealingTask, uuid.UUID, string, int) error) {
-	s.onHealedScript = handler
+func (s *SelfHealingService) SetTaskRedispatcher(redispatcher HealingTaskRedispatcher) {
+	s.taskRedispatcher = redispatcher
 }
 
 func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
@@ -86,33 +89,30 @@ func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
 	if task.RuleID != nil {
 		ruleIDStr = task.RuleID.String()
 	}
+	currentAttempt, maxAttempts := s.healingAttemptBounds(task)
 	logger.Info("triggering self-healing",
 		zap.String("original_task_id", task.OriginalTaskID.String()),
 		zap.String("rule_id", ruleIDStr),
 		zap.String("script_type", task.ScriptType),
 		zap.Int("exit_code", task.ExitCode),
+		zap.Int("attempt_no", currentAttempt),
+		zap.Int("max_attempts", maxAttempts),
 	)
 
-	queuePosition := len(s.healingQueue) + 1
+	if currentAttempt > maxAttempts {
+		return fmt.Errorf("large-model repair attempts exhausted: %d/%d", currentAttempt, maxAttempts)
+	}
 
 	// Store initial status in Redis
 	if s.redisClient != nil {
 		status := &storage.HealingStatus{
-			TaskID:           task.OriginalTaskID.String(),
-			Status:           "queued",
-			StartedAt:        time.Now(),
-			TotalAttempts:    0,
-			MaxAttempts:      s.maxRetries,
-			UserSuggestion:   task.UserSuggestion,
-			ScriptType:       task.ScriptType,
-			QueuePosition:    queuePosition,
-			ConcurrencyLimit: baselineHealingWorkerCount,
-			Steps: []storage.HealingStep{{
-				Phase:     "queue",
-				Status:    "queued",
-				Summary:   fmt.Sprintf("已进入 ReAct 修复队列，当前位置 %d，并发上限 %d", queuePosition, baselineHealingWorkerCount),
-				Timestamp: time.Now(),
-			}},
+			TaskID:         task.OriginalTaskID.String(),
+			Status:         "healing",
+			StartedAt:      time.Now(),
+			TotalAttempts:  currentAttempt - 1,
+			MaxAttempts:    maxAttempts,
+			UserSuggestion: task.UserSuggestion,
+			ScriptType:     task.ScriptType,
 		}
 		if err := s.redisClient.SetHealingStatusStruct(status); err != nil {
 			logger.Error("failed to store healing status in Redis",
@@ -140,10 +140,9 @@ func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
 func (s *SelfHealingService) StartWorkers(ctx context.Context) {
 	logger.Info("starting self-healing workers",
 		zap.Int("max_retries", s.maxRetries),
-		zap.Int("worker_count", baselineHealingWorkerCount),
 	)
 
-	for i := 0; i < baselineHealingWorkerCount; i++ {
+	for i := 0; i < 3; i++ {
 		go s.healingWorker(ctx, i)
 	}
 
@@ -176,8 +175,6 @@ func (s *SelfHealingService) updateHealingStatusInRedis(taskID string, status st
 	existing.Status = status
 	existing.TotalAttempts = attempt
 	existing.LastError = lastError
-	existing.QueuePosition = 0
-	existing.ConcurrencyLimit = baselineHealingWorkerCount
 
 	if err := s.redisClient.SetHealingStatusStruct(existing); err != nil {
 		logger.Error("failed to update healing status in Redis",
@@ -185,94 +182,6 @@ func (s *SelfHealingService) updateHealingStatusInRedis(taskID string, status st
 			zap.String("task_id", taskID),
 		)
 	}
-}
-
-func (s *SelfHealingService) appendHealingStep(taskID string, phase string, status string, summary string) {
-	if s.redisClient == nil {
-		return
-	}
-	existing, err := s.redisClient.GetHealingStatusStruct(taskID)
-	if err != nil || existing == nil {
-		existing = &storage.HealingStatus{
-			TaskID:           taskID,
-			Status:           "healing",
-			StartedAt:        time.Now(),
-			MaxAttempts:      s.maxRetries,
-			ConcurrencyLimit: baselineHealingWorkerCount,
-		}
-	}
-	existing.Steps = append(existing.Steps, storage.HealingStep{
-		Phase:     phase,
-		Status:    status,
-		Summary:   summary,
-		Timestamp: time.Now(),
-	})
-	if err := s.redisClient.SetHealingStatusStruct(existing); err != nil {
-		logger.Error("failed to append healing step", zap.Error(err), zap.String("task_id", taskID))
-	}
-}
-
-func (s *SelfHealingService) AppendHealingStep(taskID string, phase string, status string, summary string) {
-	s.appendHealingStep(taskID, phase, status, summary)
-}
-
-func (s *SelfHealingService) AppendHealingStepByID(healingID uuid.UUID, phase string, status string, summary string) {
-	healingLog, err := s.healingLogRepo.FindByID(healingID)
-	if err != nil {
-		logger.Error("failed to append healing step by healing id",
-			zap.String("healing_id", healingID.String()),
-			zap.Error(err))
-		return
-	}
-	s.appendHealingStep(healingLog.OriginalTaskID.String(), phase, status, summary)
-}
-
-func (s *SelfHealingService) GetHealingOriginTaskID(healingID uuid.UUID) (uuid.UUID, error) {
-	healingLog, err := s.healingLogRepo.FindByID(healingID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return healingLog.OriginalTaskID, nil
-}
-
-func (s *SelfHealingService) MarkHealingSucceededByID(ctx context.Context, healingID uuid.UUID, attempt int, summary string) {
-	healingLog, err := s.healingLogRepo.FindByID(healingID)
-	if err != nil {
-		logger.Error("failed to load healing log for success mark",
-			zap.String("healing_id", healingID.String()),
-			zap.Error(err))
-		return
-	}
-	s.appendHealingStep(healingLog.OriginalTaskID.String(), "verify_check", "success", summary)
-	s.updateHealingStatusInRedis(healingLog.OriginalTaskID.String(), "healed", attempt, "")
-
-	scriptVersionID := uuid.Nil
-	if healingLog.FinalScriptVersionID != nil {
-		scriptVersionID = *healingLog.FinalScriptVersionID
-	}
-	if err := s.healingLogRepo.MarkCompleted(healingID, scriptVersionID); err != nil {
-		logger.Error("failed to mark baseline healing completed",
-			zap.String("healing_id", healingID.String()),
-			zap.Error(err))
-	}
-}
-
-func (s *SelfHealingService) MarkHealingFailedByID(ctx context.Context, healingID uuid.UUID, reason string) {
-	healingLog, err := s.healingLogRepo.FindByID(healingID)
-	if err != nil {
-		logger.Error("failed to load healing log for failed mark",
-			zap.String("healing_id", healingID.String()),
-			zap.Error(err))
-		return
-	}
-	s.appendHealingStep(healingLog.OriginalTaskID.String(), "final", "failed", reason)
-	s.updateHealingStatusInRedis(healingLog.OriginalTaskID.String(), "failed", healingLog.TotalAttempts, reason)
-	if err := s.healingLogRepo.MarkFailed(healingID); err != nil {
-		logger.Error("failed to mark baseline healing failed",
-			zap.String("healing_id", healingID.String()),
-			zap.Error(err))
-	}
-	s.healingLogRepo.UpdateLastError(healingID, reason)
 }
 
 func (s *SelfHealingService) GetHealingStatus(taskID string) *storage.HealingStatus {
@@ -293,6 +202,8 @@ func (s *SelfHealingService) GetHealingStatus(taskID string) *storage.HealingSta
 }
 
 const HealingTimeout = 5 * time.Minute
+const baselineHealingMinLLMTimeoutSeconds = 180
+const redispatchPollInterval = 2 * time.Second
 
 func (s *SelfHealingService) timeoutChecker(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -374,10 +285,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		zap.String("vulnerability_id", vulnIDStr),
 		zap.String("user_suggestion", task.UserSuggestion),
 	)
-	s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "healing", 0, "")
-	s.appendHealingStep(task.OriginalTaskID.String(), "react_start", "running",
-		fmt.Sprintf("Worker %d 开始执行 ReAct 修复循环", workerID))
 
+	currentAttempt, maxAttempts := s.healingAttemptBounds(task)
 	healingLog := &model.HealingLog{
 		OriginalTaskID:  task.OriginalTaskID,
 		RuleID:          task.RuleID,
@@ -385,8 +294,8 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		ScriptType:      task.ScriptType,
 		TriggerError:    task.ErrorMessage,
 		TriggerExitCode: task.ExitCode,
-		TotalAttempts:   0,
-		MaxAttempts:     s.maxRetries,
+		TotalAttempts:   currentAttempt - 1,
+		MaxAttempts:     maxAttempts,
 		Status:          "healing",
 		AttemptsDetail:  make(model.AttemptsDetail, 0),
 		UserSuggestion:  task.UserSuggestion,
@@ -398,6 +307,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Error(err),
 			zap.String("original_task_id", task.OriginalTaskID.String()),
 		)
+		s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "failed", currentAttempt-1, err.Error())
 		return
 	}
 
@@ -407,6 +317,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Error(err),
 			zap.String("original_task_id", task.OriginalTaskID.String()),
 		)
+		s.failHealingLog(healingLog, "LLM配置未设置："+err.Error())
 		return
 	}
 
@@ -416,20 +327,21 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			zap.Error(err),
 			zap.String("original_task_id", task.OriginalTaskID.String()),
 		)
+		s.failHealingLog(healingLog, "API密钥解密失败："+err.Error())
 		return
 	}
 
-	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 120, 3)
+	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, s.effectiveLLMTimeoutSeconds(), s.llmMaxRetries)
 
 	var lastError string
 	var fixedScript string
 	var scriptVersionID uuid.UUID
 
-	for attempt := 1; attempt <= s.maxRetries; attempt++ {
+	for attempt := currentAttempt; attempt <= maxAttempts; attempt++ {
 		logger.Info("healing attempt",
 			zap.Stringer("healing_id", healingLog.ID),
 			zap.Int("attempt", attempt),
-			zap.Int("max_attempts", s.maxRetries),
+			zap.Int("max_attempts", maxAttempts),
 		)
 
 		healingLog.TotalAttempts = attempt
@@ -444,19 +356,13 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 
 		// 构建自愈 Prompt
 		history := s.buildHealingHistory(healingLog.AttemptsDetail)
-		s.appendHealingStep(task.OriginalTaskID.String(), "react_plan", "running",
-			fmt.Sprintf("第 %d 轮：使用 agent-runtime 分析失败原因并生成修复策略", attempt))
-		runtimePlan := s.runBaselineHealingRuntime(ctx, llmClient, task, history, attempt)
-		if runtimePlan != "" {
-			s.appendHealingStep(task.OriginalTaskID.String(), "react_plan", "success", truncateForStep(runtimePlan, 220))
-		}
 		prompt := llm.GetSelfHealingFixPrompt(task.ScriptContent, task.ErrorMessage, task.ExitCode, history)
-		if runtimePlan != "" {
-			prompt = fmt.Sprintf("%s\n\nagent-runtime ReAct 修复策略：\n%s", prompt, runtimePlan)
-		}
 
 		if task.UserSuggestion != "" {
 			prompt = fmt.Sprintf("%s\n\n用户提供的修复建议：%s", prompt, task.UserSuggestion)
+		}
+		if ruleContext := s.buildRuleContext(task.RuleID); ruleContext != "" {
+			prompt = fmt.Sprintf("%s\n\n基线规则上下文：\n%s", prompt, ruleContext)
 		}
 
 		systemPrompt := "你是一位资深的 Shell 脚本调试专家"
@@ -487,7 +393,6 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 				zap.Int("attempt", attempt),
 			)
 			lastError = fmt.Sprintf("脚本审计失败：%v", err)
-			s.appendHealingStep(task.OriginalTaskID.String(), "audit", "failed", lastError)
 			continue
 		}
 		if !auditResult.Passed {
@@ -497,12 +402,10 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 				zap.Int("attempt", attempt),
 			)
 			lastError = fmt.Sprintf("脚本审计未通过：%s", auditResult.ErrorMsg)
-			s.appendHealingStep(task.OriginalTaskID.String(), "audit", "blocked", lastError)
 			continue
 		}
 
 		fixedScript = auditResult.Script
-		s.appendHealingStep(task.OriginalTaskID.String(), "audit", "success", "修复脚本已通过命令审计，准备进入下发流程")
 
 		// 创建脚本版本记录
 		version := attempt // 自愈版本从 1 开始
@@ -526,7 +429,6 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		}
 
 		scriptVersionID = scriptVersion.ID
-		healingLog.FinalScriptVersionID = &scriptVersionID
 
 		// 上传修复后的脚本到 MinIO
 		identifier := "unknown"
@@ -547,34 +449,9 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			continue
 		}
 
-		// 记录尝试详情
-		healingLog.AttemptsDetail = append(healingLog.AttemptsDetail, model.AttemptDetail{
-			Attempt:         attempt,
-			ScriptVersionID: scriptVersionID.String(),
-			ErrorInput:      task.ErrorMessage,
-			LLMFixSummary:   "Script regenerated by LLM",
-			ResultExitCode:  0, // 假设成功，实际执行由 Agent 完成
-			ResultStderr:    "",
-			Timestamp:       time.Now(),
-		})
-
-		// 更新自愈日志
-		if err := s.healingLogRepo.Update(healingLog); err != nil {
-			logger.Error("failed to update healing log",
-				zap.Error(err),
-				zap.Stringer("healing_id", healingLog.ID),
-			)
-		}
-
-		logger.Info("healing attempt completed",
-			zap.Stringer("healing_id", healingLog.ID),
-			zap.Int("attempt", attempt),
-			zap.String("script_version_id", scriptVersionID.String()),
-		)
-
 		// 更新规则的脚本（仅对基线任务）
 		if task.RuleID != nil {
-			if err := s.updateRuleScript(*task.RuleID, task.ScriptType, fixedScript); err != nil {
+			if err := s.updateRuleScript(*task.RuleID, task.ScriptType, fixedScript, version); err != nil {
 				logger.Error("failed to update rule script",
 					zap.Error(err),
 					zap.Stringer("rule_id", task.RuleID),
@@ -587,34 +464,77 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 			}
 		}
 
-		if s.onHealedScript != nil && task.TaskGroupID != uuid.Nil && task.RuleID != nil && strings.EqualFold(task.ScriptType, "FIX") {
-			s.appendHealingStep(task.OriginalTaskID.String(), "dispatch_fix", "running",
-				fmt.Sprintf("第 %d 轮修复脚本已生成，开始创建并下发修复任务", task.AttemptNo))
-			if err := s.onHealedScript(ctx, task, healingLog.ID, fixedScript, attempt); err != nil {
-				lastError = fmt.Sprintf("下发修复任务失败：%v", err)
-				s.appendHealingStep(task.OriginalTaskID.String(), "dispatch_fix", "failed", lastError)
+		resultExitCode := 0
+		resultStderr := ""
+		if s.taskRedispatcher != nil {
+			if err := s.taskRedispatcher.DispatchHealedTask(ctx, task.OriginalTaskID, fixedScript, version, healingLog.ID, attempt); err != nil {
+				logger.Error("failed to redispatch healed task",
+					zap.Error(err),
+					zap.Stringer("healing_id", healingLog.ID),
+					zap.Int("attempt", attempt),
+				)
+				lastError = fmt.Sprintf("重新下发失败：%v", err)
+				s.recordHealingAttempt(healingLog, attempt, scriptVersionID, task.ErrorMessage, resultExitCode, lastError)
 				continue
 			}
-			s.appendHealingStep(task.OriginalTaskID.String(), "dispatch_fix", "success", "修复任务已下发，等待 Agent 返回执行结果")
-			return
+
+			resultTask, err := s.waitForRedispatchedTask(ctx, task, attempt)
+			if err != nil {
+				logger.Error("waiting for redispatched task failed",
+					zap.Error(err),
+					zap.Stringer("healing_id", healingLog.ID),
+					zap.Int("attempt", attempt),
+				)
+				lastError = fmt.Sprintf("等待重新下发结果失败：%v", err)
+				s.recordHealingAttempt(healingLog, attempt, scriptVersionID, task.ErrorMessage, resultExitCode, lastError)
+				continue
+			}
+			if resultTask.ExitCode != nil {
+				resultExitCode = *resultTask.ExitCode
+			}
+			if resultTask.Stderr != nil {
+				resultStderr = *resultTask.Stderr
+			}
+			if IsTaskExecutionSuccessful(resultTask.TaskType, resultTask.Status, resultTask.ExitCode, resultStderr) {
+				s.recordHealingAttempt(healingLog, attempt, scriptVersionID, task.ErrorMessage, resultExitCode, resultStderr)
+				if err := s.healingLogRepo.MarkCompleted(healingLog.ID, scriptVersionID); err != nil {
+					logger.Error("failed to mark healing completed",
+						zap.Error(err),
+						zap.Stringer("healing_id", healingLog.ID),
+					)
+				}
+				logger.Info("self-healing completed successfully after redispatch",
+					zap.Stringer("healing_id", healingLog.ID),
+					zap.Int("total_attempts", attempt),
+					zap.String("script_version_id", scriptVersionID.String()),
+				)
+				s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "healed", attempt, "")
+				return
+			}
+
+			lastError = taskResultErrorMessage(resultTask)
+			s.recordHealingAttempt(healingLog, attempt, scriptVersionID, task.ErrorMessage, resultExitCode, lastError)
+			task.ScriptContent = fixedScript
+			task.ErrorMessage = lastError
+			task.ExitCode = resultExitCode
+			continue
 		}
 
-		// 成功修复，标记为完成
+		s.recordHealingAttempt(healingLog, attempt, scriptVersionID, task.ErrorMessage, resultExitCode, resultStderr)
+
+		// 兼容未接入重新下发器的调用方：只完成脚本生成修复。
 		if err := s.healingLogRepo.MarkCompleted(healingLog.ID, scriptVersionID); err != nil {
 			logger.Error("failed to mark healing completed",
 				zap.Error(err),
 				zap.Stringer("healing_id", healingLog.ID),
 			)
 		}
-
 		logger.Info("self-healing completed successfully",
 			zap.Stringer("healing_id", healingLog.ID),
 			zap.Int("total_attempts", attempt),
 			zap.String("script_version_id", scriptVersionID.String()),
 		)
-
 		s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "healed", attempt, "")
-
 		return
 	}
 
@@ -648,6 +568,80 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 	s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "failed", healingLog.TotalAttempts, lastError)
 }
 
+func (s *SelfHealingService) recordHealingAttempt(healingLog *model.HealingLog, attempt int, scriptVersionID uuid.UUID, errorInput string, resultExitCode int, resultStderr string) {
+	healingLog.AttemptsDetail = append(healingLog.AttemptsDetail, model.AttemptDetail{
+		Attempt:         attempt,
+		ScriptVersionID: scriptVersionID.String(),
+		ErrorInput:      errorInput,
+		LLMFixSummary:   "Script regenerated by LLM",
+		ResultExitCode:  resultExitCode,
+		ResultStderr:    resultStderr,
+		Timestamp:       time.Now(),
+	})
+	healingLog.TotalAttempts = attempt
+
+	if err := s.healingLogRepo.Update(healingLog); err != nil {
+		logger.Error("failed to update healing log",
+			zap.Error(err),
+			zap.Stringer("healing_id", healingLog.ID),
+		)
+	}
+}
+
+func (s *SelfHealingService) waitForRedispatchedTask(ctx context.Context, task HealingTask, attempt int) (*model.TaskLog, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, HealingTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(redispatchPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, waitCtx.Err()
+		case <-ticker.C:
+			current, err := s.taskLogRepo.FindByID(task.OriginalTaskID)
+			if err != nil {
+				return nil, err
+			}
+			if current.AttemptNo != attempt {
+				continue
+			}
+			if IsTerminalTaskStatus(current.Status) {
+				return current, nil
+			}
+		}
+	}
+}
+
+func taskResultErrorMessage(task *model.TaskLog) string {
+	if task == nil {
+		return "任务执行失败"
+	}
+	if task.Stderr != nil && strings.TrimSpace(*task.Stderr) != "" {
+		return strings.TrimSpace(*task.Stderr)
+	}
+	if task.Stdout != nil && strings.TrimSpace(*task.Stdout) != "" {
+		return strings.TrimSpace(*task.Stdout)
+	}
+	exitCode := "unknown"
+	if task.ExitCode != nil {
+		exitCode = fmt.Sprintf("%d", *task.ExitCode)
+	}
+	return fmt.Sprintf("任务状态 %s，退出码 %s", task.Status, exitCode)
+}
+
+func (s *SelfHealingService) buildRuleContext(ruleID *uuid.UUID) string {
+	if ruleID == nil || s.ruleRepo == nil {
+		return ""
+	}
+	rule, err := s.ruleRepo.FindByID(*ruleID)
+	if err != nil || rule == nil {
+		return ""
+	}
+	return fmt.Sprintf("规则标题：%s\n检测内容：%s\n修复建议：%s", rule.Title, rule.CheckContent, rule.FixContent)
+}
+
 func (s *SelfHealingService) buildHealingHistory(attempts model.AttemptsDetail) string {
 	if len(attempts) == 0 {
 		return "无"
@@ -670,211 +664,8 @@ func (s *SelfHealingService) buildHealingHistory(attempts model.AttemptsDetail) 
 	return history.String()
 }
 
-func (s *SelfHealingService) updateRuleScript(ruleID uuid.UUID, scriptType, scriptContent string) error {
-	return s.ruleRepo.UpdateScript(ruleID, scriptType, scriptContent, 0)
-}
-
-func (s *SelfHealingService) runBaselineHealingRuntime(ctx context.Context, llmClient *llm.LLMClient, task HealingTask, history string, attempt int) string {
-	if llmClient == nil {
-		return ""
-	}
-
-	runtimeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	runtime, err := agentruntime.New(
-		agentruntime.WithLLMClient(&baselineHealingLLMAdapter{client: llmClient}),
-		agentruntime.WithPromptProvider(&baselineHealingPromptProvider{}),
-		agentruntime.WithConfig(agentruntime.RuntimeConfig{
-			MaxTotalTurns:         8,
-			MaxPlanSteps:          3,
-			MaxStepReactTurns:     3,
-			MaxToolCalls:          1,
-			MaxToolCallsPerStep:   1,
-			MaxToolFailures:       1,
-			MaxModelFailures:      2,
-			MaxParseFailures:      2,
-			MaxNoProgressTurns:    2,
-			TaskTimeout:           90 * time.Second,
-			ModelTimeout:          60 * time.Second,
-			ToolTimeout:           5 * time.Second,
-			HookTimeout:           5 * time.Second,
-			EnableReflection:      true,
-			EnableAudit:           true,
-			EnableCorrection:      true,
-			MaxAudits:             2,
-			MaxCorrections:        2,
-			MaxReflections:        2,
-			MaxStepRetries:        1,
-			AllowDynamicNewSteps:  false,
-			AllowSkipFailedStep:   false,
-			AllowBestEffortAnswer: true,
-			AllowHighRiskTools:    false,
-			AllowDangerousTools:   false,
-			MaxContextTokens:      32000,
-			ReservedOutputTokens:  2048,
-			RecentTurnsToKeep:     4,
-		}),
-	)
-	if err != nil {
-		logger.Warn("failed to create baseline healing agent-runtime", zap.Error(err))
-		return ""
-	}
-
-	result, err := runtime.Run(runtimeCtx, agentruntime.TaskInput{
-		TaskID: fmt.Sprintf("baseline-healing-%s-%d", task.OriginalTaskID.String(), attempt),
-		UserInput: fmt.Sprintf(`请基于以下上下文输出本轮修复策略：
-- 任务ID：%s
-- 主机ID：%s
-- 规则ID：%s
-- 脚本类型：%s
-- 当前轮次：%d/%d
-- 退出码：%d
-- 错误信息：%s
-- 用户建议：%s
-- 历史尝试：%s
-
-要求：不要直接执行命令；只输出可用于生成 Shell 修复脚本的策略、风险点、验证方式和回滚注意事项。`,
-			task.OriginalTaskID.String(),
-			task.HostID.String(),
-			uuidPtrString(task.RuleID),
-			task.ScriptType,
-			task.AttemptNo,
-			task.MaxRounds,
-			task.ExitCode,
-			task.ErrorMessage,
-			task.UserSuggestion,
-			history,
-		),
-		UserContext: map[string]any{
-			"baseline_healing": true,
-			"host_id":          task.HostID.String(),
-			"rule_id":          uuidPtrString(task.RuleID),
-			"script_type":      task.ScriptType,
-			"attempt_no":       task.AttemptNo,
-			"max_rounds":       task.MaxRounds,
-		},
-		Metadata: map[string]string{
-			"source": "baseline_react_healing",
-		},
-	})
-	if err != nil {
-		logger.Warn("baseline healing agent-runtime failed", zap.Error(err), zap.String("task_id", task.OriginalTaskID.String()))
-		return ""
-	}
-	if result == nil {
-		return ""
-	}
-	return result.FinalAnswer
-}
-
-type baselineHealingPromptProvider struct{}
-
-func (p *baselineHealingPromptProvider) Build(_ context.Context, req agentruntime.PromptRequest) (agentruntime.PromptBundle, error) {
-	switch req.Purpose {
-	case agentruntime.PurposePlan:
-		return agentruntime.PromptBundle{
-			SystemPrompt: baselineHealingPlanPrompt,
-		}, nil
-	case agentruntime.PurposeReact:
-		return agentruntime.PromptBundle{
-			SystemPrompt: baselineHealingReactPrompt,
-		}, nil
-	case agentruntime.PurposeSummarize:
-		return agentruntime.PromptBundle{
-			SystemPrompt: baselineHealingSummarizePrompt,
-		}, nil
-	default:
-		return agentruntime.PromptBundle{}, nil
-	}
-}
-
-const baselineHealingPlanPrompt = `你是 Aegis 基线修复 ReAct 智能体，目标是分析一次基线检测/修复失败并制定下一轮修复策略。
-
-边界：
-- 不直接执行命令。
-- 不绕过命令审计。
-- 不建议破坏性命令，除非给出明确风险和回滚方式。
-- 多条规则并发修复时，必须假设同一主机存在资源竞争，优先建议幂等、可重复执行、带锁或状态判断的脚本。
-
-输出计划必须覆盖：
-1. 失败原因假设。
-2. 修复动作。
-3. 下发前审计关注点。
-4. 修复后检测验证方式。
-5. 并发冲突与回滚注意事项。`
-
-const baselineHealingReactPrompt = `你正在执行基线修复策略生成步骤。必须输出 JSON：
-{"action":"step_result","summary":"一句话总结","step_result":{"result":"修复策略详情","evidence":["依据"],"confidence":"high/medium/low"}}
-
-不要调用工具；不要输出真实执行命令；只给后续脚本生成器使用的策略。`
-
-const baselineHealingSummarizePrompt = `请总结本次基线 ReAct 修复策略，输出中文短文，包含：失败原因、修复思路、审计重点、验证条件、并发注意事项。`
-
-func uuidPtrString(id *uuid.UUID) string {
-	if id == nil {
-		return ""
-	}
-	return id.String()
-}
-
-func truncateForStep(text string, limit int) string {
-	text = strings.TrimSpace(text)
-	if len(text) <= limit {
-		return text
-	}
-	return text[:limit] + "..."
-}
-
-type baselineHealingLLMAdapter struct {
-	client *llm.LLMClient
-}
-
-func (a *baselineHealingLLMAdapter) Complete(ctx context.Context, req agentruntime.LLMRequest) (agentruntime.LLMResponse, error) {
-	if a == nil || a.client == nil {
-		return agentruntime.LLMResponse{}, fmt.Errorf("llm client is nil")
-	}
-
-	messages := make([]llm.Message, 0, len(req.Messages))
-	for _, msg := range req.Messages {
-		messages = append(messages, llm.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	temperature := baselineHealingTemperature(req.Purpose)
-	if req.Temperature != nil {
-		temperature = float64(*req.Temperature)
-	}
-
-	result, err := a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, nil)
-	if err != nil {
-		return agentruntime.LLMResponse{}, err
-	}
-
-	return agentruntime.LLMResponse{
-		Content: result.Content,
-		Model:   result.Model,
-		Usage: agentruntime.LLMUsage{
-			PromptTokens:     result.Usage.PromptTokens,
-			CompletionTokens: result.Usage.CompletionTokens,
-			TotalTokens:      result.Usage.TotalTokens,
-		},
-	}, nil
-}
-
-func baselineHealingTemperature(purpose agentruntime.LLMPurpose) float64 {
-	switch purpose {
-	case agentruntime.PurposePlan:
-		return 0.3
-	case agentruntime.PurposeReact:
-		return 0.2
-	case agentruntime.PurposeAudit, agentruntime.PurposeReflect, agentruntime.PurposeCorrect, agentruntime.PurposeSummarize:
-		return 0.2
-	default:
-		return 0.3
-	}
+func (s *SelfHealingService) updateRuleScript(ruleID uuid.UUID, scriptType, scriptContent string, version int) error {
+	return s.ruleRepo.UpdateScript(ruleID, scriptType, scriptContent, version)
 }
 
 func (s *SelfHealingService) GetHealingLogByTaskID(taskID uuid.UUID) (*model.HealingLog, error) {
@@ -883,13 +674,61 @@ func (s *SelfHealingService) GetHealingLogByTaskID(taskID uuid.UUID) (*model.Hea
 
 // ShouldTriggerHealing 判断是否应该触发自愈
 func (s *SelfHealingService) ShouldTriggerHealing(scriptType string, exitCode int) bool {
-	// 只有 FIX 脚本失败才触发自愈
-	if scriptType != "FIX" {
+	switch strings.ToUpper(strings.TrimSpace(scriptType)) {
+	case "CHECK":
+		return isCheckExecutionError(exitCode, "")
+	case "FIX", "VULNERABILITY_FIX", "POC_VERIFY":
+		return exitCode != 0
+	default:
 		return false
 	}
+}
 
-	// 非 0 退出码才触发
-	return exitCode != 0
+func (s *SelfHealingService) healingAttemptBounds(task HealingTask) (int, int) {
+	maxAttempts := task.MaxRounds
+	if maxAttempts <= 0 {
+		maxAttempts = s.maxRetries
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+
+	currentAttempt := task.AttemptNo
+	if currentAttempt <= 0 {
+		currentAttempt = 1
+	}
+	return currentAttempt, maxAttempts
+}
+
+func (s *SelfHealingService) effectiveLLMTimeoutSeconds() int {
+	timeout := s.llmTimeout
+	if timeout < baselineHealingMinLLMTimeoutSeconds {
+		return baselineHealingMinLLMTimeoutSeconds
+	}
+	return timeout
+}
+
+func (s *SelfHealingService) failHealingLog(healingLog *model.HealingLog, lastError string) {
+	if healingLog == nil {
+		return
+	}
+	healingLog.Status = "failed"
+	healingLog.FinishedAt = pointerToTime(time.Now())
+	healingLog.LastError = lastError
+	if err := s.healingLogRepo.Update(healingLog); err != nil {
+		logger.Error("failed to update failed healing log",
+			zap.Error(err),
+			zap.Stringer("healing_id", healingLog.ID),
+		)
+	}
+	if err := s.healingLogRepo.MarkFailed(healingLog.ID); err != nil {
+		logger.Error("failed to mark healing as failed",
+			zap.Error(err),
+			zap.Stringer("healing_id", healingLog.ID),
+		)
+	}
+	_ = s.healingLogRepo.UpdateLastError(healingLog.ID, lastError)
+	s.updateHealingStatusInRedis(healingLog.OriginalTaskID.String(), "failed", healingLog.TotalAttempts, lastError)
 }
 
 // Helper functions

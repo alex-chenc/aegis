@@ -221,7 +221,6 @@ func containsExplicitToolReference(text string) bool {
 		"baseline.",
 		"task.",
 		"detection.",
-		"credential.",
 		"host.",
 		"agent.",
 		"sigmarule.",

@@ -54,6 +54,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	if err := db.AutoMigrate(
 		&model.AIConfig{},
 		&model.LLMConfig{},
+		&model.ImageModelConfig{},
 		&model.Notification{},
 		&model.AuthUser{},
 		&model.AuthSession{},
@@ -88,21 +89,6 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AssistantInvestigationEvidence{},
 		&model.ExternalMCPSource{},
 		&model.ExternalMCPQueryLog{},
-		// V6.1 Weak password detection tables
-		&model.WeakPasswordScanTask{},
-		&model.WeakPasswordAssetAppAnalysis{},
-		&model.WeakPasswordCandidateApplication{},
-		&model.WeakPasswordCollectionPlan{},
-		&model.WeakPasswordScanHost{},
-		&model.WeakPasswordScanApplication{},
-		&model.WeakPasswordAgentToolCall{},
-		&model.WeakPasswordDictionary{},
-		&model.WeakPasswordDictionaryEntry{},
-		&model.WeakPasswordMatchBatch{},
-		&model.WeakPasswordFinding{},
-		&model.WeakPasswordCollectionError{},
-		&model.WeakPasswordAIReport{},
-		&model.WeakPasswordRevealAudit{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)
@@ -579,15 +565,12 @@ func assetCollectionSchemaStatements() []string {
 			listen_ports       JSONB NOT NULL DEFAULT '[]',
 			run_user           VARCHAR(255),
 			runtime_name       VARCHAR(100),
-				runtime_version    VARCHAR(100),
-				framework_name     VARCHAR(100),
-				framework_version  VARCHAR(100),
-				related_pids       JSONB NOT NULL DEFAULT '[]',
-				is_container       BOOLEAN NOT NULL DEFAULT FALSE,
-				container_id       VARCHAR(128),
-				container_runtime  VARCHAR(64),
-				related_packages   JSONB NOT NULL DEFAULT '[]',
-				ai_confidence      NUMERIC(4,3) NOT NULL DEFAULT 0,
+			runtime_version    VARCHAR(100),
+			framework_name     VARCHAR(100),
+			framework_version  VARCHAR(100),
+			related_pids       JSONB NOT NULL DEFAULT '[]',
+			related_packages   JSONB NOT NULL DEFAULT '[]',
+			ai_confidence      NUMERIC(4,3) NOT NULL DEFAULT 0,
 			ai_evidence        JSONB NOT NULL DEFAULT '[]',
 			ai_raw_output      JSONB NOT NULL DEFAULT '{}',
 			manual_overrides   JSONB NOT NULL DEFAULT '{}',
@@ -599,13 +582,10 @@ func assetCollectionSchemaStatements() []string {
 			collected_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-			)`,
-		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS is_container BOOLEAN NOT NULL DEFAULT FALSE`,
-		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_id VARCHAR(128)`,
-		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_runtime VARCHAR(64)`,
+		)`,
 		`DO $$ BEGIN
-				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fkey') THEN
-					ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fkey
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fkey') THEN
+				ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fkey
 					FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE;
 			END IF;
 		END $$`,
@@ -629,106 +609,15 @@ func assetCollectionSchemaStatements() []string {
 			END IF;
 		END $$`,
 		`DO $$ BEGIN
-				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fingerprint_key') THEN
-					ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fingerprint_key
-						UNIQUE(host_id, fingerprint);
-				END IF;
-			END $$`,
-		`UPDATE host_application_assets AS app
-				SET
-					name = normalized.canonical_name,
-					display_name = normalized.display_name,
-					category = normalized.category,
-					updated_at = NOW()
-				FROM (VALUES
-					('redis', 'redis', 'Redis', 'database'),
-					('redis-server', 'redis', 'Redis', 'database'),
-					('postgres', 'postgresql', 'PostgreSQL', 'database'),
-					('postgresql', 'postgresql', 'PostgreSQL', 'database'),
-					('nginx', 'nginx', 'Nginx', 'web_service'),
-					('openssh', 'openssh', 'OpenSSH', 'other'),
-					('openssh-server', 'openssh', 'OpenSSH', 'other'),
-					('kafka', 'kafka', 'Kafka', 'other'),
-					('zookeeper', 'zookeeper', 'ZooKeeper', 'other'),
-					('minio', 'minio', 'MinIO', 'other'),
-					('cups', 'cups', 'CUPS', 'other'),
-					('cupsd', 'cups', 'CUPS', 'other'),
-					('docker', 'docker', 'Docker Engine', 'other'),
-					('dockerd', 'docker', 'Docker Engine', 'other'),
-					('docker-proxy', 'docker', 'Docker Engine', 'other'),
-					('containerd', 'docker', 'Docker Engine', 'other'),
-					('tailscale', 'tailscale', 'Tailscale', 'other'),
-					('tailscaled', 'tailscale', 'Tailscale', 'other'),
-					('clash-verge', 'clash_verge', 'Clash Verge', 'other'),
-					('clash-verge-mihomo', 'clash_verge', 'Clash Verge', 'other'),
-					('verge-mihomo', 'clash_verge', 'Clash Verge', 'other'),
-					('vscode-server', 'vscode_server', 'VS Code Server', 'other'),
-					('aegis-agent', 'aegis_agent', 'Aegis Agent', 'other'),
-					('aegis-api-server', 'aegis_api_server', 'Aegis API Server', 'web_service'),
-					('api-server', 'aegis_api_server', 'Aegis API Server', 'web_service'),
-					('aegis-server', 'aegis_server', 'Aegis Server', 'other'),
-					('aegis-dc', 'aegis_dc', 'Aegis Data Consumer', 'other'),
-					('aegis-builder', 'aegis_builder', 'Aegis Builder', 'other'),
-					('claude-code', 'claude_code', 'Claude Code', 'ai_agent'),
-					('claude_code', 'claude_code', 'Claude Code', 'ai_agent'),
-					('codex', 'codex', 'OpenAI Codex', 'ai_agent')
-				) AS normalized(raw_name, canonical_name, display_name, category)
-				WHERE LOWER(app.name) = normalized.raw_name
-					AND app.status <> 'deleted'`,
-		`UPDATE host_application_assets
-			SET status = 'deleted', updated_at = NOW()
-			WHERE status <> 'deleted'
-				AND (
-					LOWER(name) IN (
-						'bash','sh','python','python2','python3','node','java','go','ruby','php','sleep',
-						'systemd','systemd-logind','cron','crond','dbus','networkmanager','wpa-supplicant',
-						'accounts-daemon','power-profiles-daemon','switcheroo-control','colord','rtkit',
-						'upower','udisks2','ibus','modemmanager','policykit','polkit','avahi','avahi-daemon',
-						'chrony','snapd','rsyslog','containerd-shim','kubelet','gnome-shell','gnome-desktop',
-						'ptyxis','ptyxis-agent','playwright','playwright-chromium','chromium-headless',
-						'webkit-browser','webkit2gtk','webkit2gtk-4.1','chatgpt-extension',
-						'openai-chatgpt-extension',
-						'cc-switch','postgresql-client','server','dc','builder','custom-server',
-							'aegis-api-server'
-						)
-					)`,
-		`WITH ranked_duplicate_applications AS (
-				SELECT id,
-					ROW_NUMBER() OVER (
-						PARTITION BY host_id, LOWER(name)
-						ORDER BY
-							CASE review_status
-								WHEN 'confirmed' THEN 0
-								WHEN 'auto' THEN 1
-								WHEN 'pending' THEN 2
-								WHEN 'rejected' THEN 3
-								ELSE 4
-							END,
-							CASE status
-								WHEN 'active' THEN 0
-								WHEN 'needs_review' THEN 1
-								WHEN 'inactive' THEN 2
-								ELSE 3
-							END,
-							collected_at DESC,
-							last_seen_at DESC,
-							updated_at DESC,
-							is_container DESC,
-							ai_confidence DESC
-					) AS duplicate_rank
-				FROM host_application_assets
-				WHERE status <> 'deleted'
-			)
-			UPDATE host_application_assets
-			SET status = 'deleted', updated_at = NOW()
-			WHERE id IN (
-				SELECT id FROM ranked_duplicate_applications WHERE duplicate_rank > 1
-			)`,
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fingerprint_key') THEN
+				ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fingerprint_key
+					UNIQUE(host_id, fingerprint);
+			END IF;
+		END $$`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_host ON host_application_assets(host_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_category ON host_application_assets(category)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_name ON host_application_assets(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_version ON host_application_assets(version)`,
-		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_container ON host_application_assets(is_container, container_runtime)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_ports ON host_application_assets USING GIN(listen_ports)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_review ON host_application_assets(review_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_host_application_assets_seen ON host_application_assets(last_seen_at DESC)`,

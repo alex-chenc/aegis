@@ -175,6 +175,15 @@ func (r *HealingLogRepository) DeleteByOriginalTaskIDs(taskIDs []uuid.UUID) erro
 	if len(taskIDs) == 0 {
 		return nil
 	}
+	if err := r.db.Model(&model.TaskLog{}).
+		Where("healing_id IN (SELECT id FROM self_healing_logs WHERE original_task_id IN ?)", taskIDs).
+		Update("healing_id", nil).Error; err != nil {
+		logger.Error("failed to clear task healing references",
+			zap.Error(err),
+			zap.Int("count", len(taskIDs)),
+		)
+		return err
+	}
 	result := r.db.Where("original_task_id IN ?", taskIDs).Delete(&model.HealingLog{})
 	if result.Error != nil {
 		logger.Error("failed to delete healing logs by task_ids",

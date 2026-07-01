@@ -32,7 +32,6 @@ type Router struct {
 	commandAuditHandler    *handler.CommandAuditHandler
 	auditLogHandler        *handler.AuditLogHandler
 	assetHandler           *handler.AssetHandler
-	weakPasswordHandler    *handler.WeakPasswordHandler
 	assistantHandler       *handler.AssistantHandler
 }
 
@@ -56,7 +55,6 @@ func NewRouter(
 	commandAuditHandler *handler.CommandAuditHandler,
 	auditLogHandler *handler.AuditLogHandler,
 	assetHandler *handler.AssetHandler,
-	weakPasswordHandler *handler.WeakPasswordHandler,
 	assistantHandler *handler.AssistantHandler,
 ) *Router {
 	return &Router{
@@ -79,7 +77,6 @@ func NewRouter(
 		commandAuditHandler:    commandAuditHandler,
 		auditLogHandler:        auditLogHandler,
 		assetHandler:           assetHandler,
-		weakPasswordHandler:    weakPasswordHandler,
 		assistantHandler:       assistantHandler,
 	}
 }
@@ -132,6 +129,10 @@ func (r *Router) Setup() {
 			config.POST("/llm", r.configHandler.SaveLLMConfig)
 			config.POST("/llm/test", r.configHandler.TestLLMConnection)
 			config.GET("/llm/full-key", r.configHandler.GetFullAPIKey)
+			config.GET("/image-model", r.configHandler.GetImageModelConfig)
+			config.POST("/image-model", r.configHandler.SaveImageModelConfig)
+			config.POST("/image-model/test", r.configHandler.TestImageModelConnection)
+			config.GET("/image-model/full-key", r.configHandler.GetFullImageModelAPIKey)
 		}
 
 		// 主机接口
@@ -143,11 +144,6 @@ func (r *Router) Setup() {
 
 		// 智能资产采集接口 (V5.8)
 		r.assetHandler.RegisterRoutes(v1)
-
-		// V6.1 弱密码检测接口
-		if r.weakPasswordHandler != nil {
-			r.weakPasswordHandler.RegisterRoutes(v1)
-		}
 
 		// 模板接口
 		templates := v1.Group("/templates")

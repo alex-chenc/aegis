@@ -809,25 +809,15 @@ const HealingStatusTTL = 10 * time.Minute
 const HealingStatusKeyPrefix = "healing:status:"
 
 type HealingStatus struct {
-	TaskID           string        `json:"task_id"`
-	Status           string        `json:"status"` // queued, healing, healed, failed, timeout
-	StartedAt        time.Time     `json:"started_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
-	TotalAttempts    int           `json:"total_attempts"`
-	MaxAttempts      int           `json:"max_attempts"`
-	LastError        string        `json:"last_error,omitempty"`
-	UserSuggestion   string        `json:"user_suggestion,omitempty"`
-	ScriptType       string        `json:"script_type"`
-	QueuePosition    int           `json:"queue_position,omitempty"`
-	ConcurrencyLimit int           `json:"concurrency_limit,omitempty"`
-	Steps            []HealingStep `json:"steps,omitempty"`
-}
-
-type HealingStep struct {
-	Phase     string    `json:"phase"`
-	Status    string    `json:"status"`
-	Summary   string    `json:"summary"`
-	Timestamp time.Time `json:"timestamp"`
+	TaskID         string    `json:"task_id"`
+	Status         string    `json:"status"` // healing, healed, failed, timeout
+	StartedAt      time.Time `json:"started_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	TotalAttempts  int       `json:"total_attempts"`
+	MaxAttempts    int       `json:"max_attempts"`
+	LastError      string    `json:"last_error,omitempty"`
+	UserSuggestion string    `json:"user_suggestion,omitempty"`
+	ScriptType     string    `json:"script_type"`
 }
 
 func healingStatusKey(taskID string) string {

@@ -21,7 +21,6 @@ func TestDetectNaturalOperationShortcut(t *testing.T) {
 		{name: "detection command", message: "异常检测", want: naturalOperationDetectionCheck},
 		{name: "how to question", message: "如何进行资产采集？", want: naturalOperationNone},
 		{name: "explicit tool prompt", message: "请调用 Asset.Collection.Trigger 参数 scope=all_hosts", want: naturalOperationNone},
-		{name: "explicit credential tool prompt", message: "请调用 Credential.WeakPassword.QueryProgress 参数 task_id=abc", want: naturalOperationNone},
 		{name: "collection status", message: "查看资产采集进度", want: naturalOperationNone},
 		{name: "composite asset software vulnerability analysis", message: "进行资产采集任务，并分析那个主机上有 MySQL 软件，并分析此 MySql 软件是否有漏洞", want: naturalOperationNone},
 	}
