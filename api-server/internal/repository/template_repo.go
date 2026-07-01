@@ -166,9 +166,18 @@ func (r *TemplateRepository) DeleteWithRules(id uuid.UUID) error {
 			}
 
 			if len(taskLogIDs) > 0 {
+				// 先清除 task_logs 的 healing_id 外键引用，避免删除 self_healing_logs 时违反约束
+				if err := tx.Model(&model.TaskLog{}).Where("id IN ?", taskLogIDs).Update("healing_id", nil).Error; err != nil {
+					return err
+				}
 				if err := tx.Where("original_task_id IN ?", taskLogIDs).Delete(&model.HealingLog{}).Error; err != nil {
 					return err
 				}
+			}
+
+			// 清除剩余 healing_id 引用（rule_id 维度）
+			if err := tx.Model(&model.TaskLog{}).Where("rule_id IN ? AND healing_id IS NOT NULL", ruleIDs).Update("healing_id", nil).Error; err != nil {
+				return err
 			}
 
 			if err := tx.Where("rule_id IN ?", ruleIDs).Delete(&model.TaskLog{}).Error; err != nil {
