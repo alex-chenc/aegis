@@ -33,6 +33,18 @@ func TestShouldUseLLMForIntentEscalatesLowConfidenceChineseQuery(t *testing.T) {
 	}
 }
 
+func TestShouldUseLLMForIntentSkipsVagueRepairClarification(t *testing.T) {
+	result := IntentResult{
+		Action:     "update",
+		Domains:    []string{"vulnerability"},
+		Confidence: 0.3,
+	}
+
+	if shouldUseLLMForIntent("帮我修复一下", result) {
+		t.Fatal("expected vague repair request to be clarified without LLM classification")
+	}
+}
+
 func TestClassifyByRulesKeepsGreetingAsDirectAnswer(t *testing.T) {
 	router := NewIntentRouter()
 	result := router.classifyByRules(IntentInput{Query: "你好"})

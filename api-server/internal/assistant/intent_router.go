@@ -427,6 +427,9 @@ func shouldUseLLMForIntent(query string, result IntentResult) bool {
 	if result.Action == "answer" {
 		return false
 	}
+	if isVagueRepairRequest(query) {
+		return false
+	}
 
 	// 规则置信度低时，用 LLM 补充分域、动作和对象，避免中文长句被当作一个词后误判。
 	if result.Confidence < 0.45 {

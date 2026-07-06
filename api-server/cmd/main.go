@@ -348,6 +348,13 @@ func main() {
 	})
 	intentRouter := assistant.NewIntentRouter()
 	toolDispatcher := assistant.NewToolDispatcher(toolRegistry, approvalGate, assistantToolCallRepo, assistantSessionRepo, toolPolicyService, assistantLogger)
+	toolCapabilityMapper := assistant.NewToolCapabilityMapper(toolRegistry)
+	toolDecisionEngine := assistant.NewToolDecisionEngine(assistant.ToolDecisionEngineDeps{
+		Registry: toolRegistry,
+		Mapper:   toolCapabilityMapper,
+		Config:   assistant.DefaultToolDecisionConfigFromEnv(),
+		Logger:   assistantLogger,
+	})
 	runtimeFactory := assistant.NewRuntimeFactory(assistant.RuntimeFactoryDeps{
 		ConfigRepo:     configRepo,
 		Catalog:        toolCatalog,
@@ -357,20 +364,27 @@ func main() {
 		MemoryRepo:     assistantMemoryRepo,
 		Logger:         assistantLogger,
 	})
+	intentRouter.SetLLMClientFactory(runtimeFactory.BuildLLMClient)
+	intentDecomposer := assistant.NewIntentDecomposer(assistant.IntentDecomposerDeps{
+		LLMClientFactory: runtimeFactory.BuildLLMClient,
+		Logger:           assistantLogger,
+	})
 	orchestrator := assistant.NewOrchestrator(assistant.OrchestratorDeps{
-		ConfigRepo:     configRepo,
-		MessageRepo:    assistantMessageRepo,
-		ToolCallRepo:   assistantToolCallRepo,
-		SessionRepo:    assistantSessionRepo,
-		ToolRegistry:   toolRegistry,
-		ToolSelector:   toolSelector,
-		ToolDispatcher: toolDispatcher,
-		ApprovalGate:   approvalGate,
-		ContextLoader:  contextLoader,
-		IntentRouter:   intentRouter,
-		RuntimeFactory: runtimeFactory,
-		RunManager:     runManager,
-		Logger:         assistantLogger,
+		ConfigRepo:         configRepo,
+		MessageRepo:        assistantMessageRepo,
+		ToolCallRepo:       assistantToolCallRepo,
+		SessionRepo:        assistantSessionRepo,
+		ToolRegistry:       toolRegistry,
+		ToolSelector:       toolSelector,
+		IntentDecomposer:   intentDecomposer,
+		ToolDecisionEngine: toolDecisionEngine,
+		ToolDispatcher:     toolDispatcher,
+		ApprovalGate:       approvalGate,
+		ContextLoader:      contextLoader,
+		IntentRouter:       intentRouter,
+		RuntimeFactory:     runtimeFactory,
+		RunManager:         runManager,
+		Logger:             assistantLogger,
 	})
 	assistantService := assistant.NewService(assistant.ServiceDeps{
 		SessionRepo:    assistantSessionRepo,

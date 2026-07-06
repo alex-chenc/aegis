@@ -26,6 +26,10 @@ type AssistantToolGatewayAdapter struct {
 	userInput   string
 	contextRefs []ContextRefResult
 
+	// executionPlan 来自 ToolDecisionEngine.Decide()，包含预绑定参数。
+	// 当 LLM 调用工具时，计划中的预绑定参数作为默认值合并（LLM 参数优先）。
+	executionPlan *ToolExecutionPlan
+
 	// 回调函数，用于 SSE 事件推送
 	onToolCall        func(callID, toolName string, args interface{})
 	onToolResult      func(callID string, result interface{})
@@ -51,6 +55,7 @@ type AssistantToolGatewayConfig struct {
 	RunManager        *RunManager
 	UserInput         string
 	ContextRefs       []ContextRefResult
+	ExecutionPlan     *ToolExecutionPlan
 	OnToolCall        func(callID, toolName string, args interface{})
 	OnToolResult      func(callID string, result interface{})
 	OnToolError       func(callID, errMsg string)
@@ -70,6 +75,7 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 		runManager:        cfg.RunManager,
 		userInput:         cfg.UserInput,
 		contextRefs:       cfg.ContextRefs,
+		executionPlan:     cfg.ExecutionPlan,
 		onToolCall:        cfg.OnToolCall,
 		onToolResult:      cfg.OnToolResult,
 		onToolError:       cfg.OnToolError,
@@ -90,6 +96,7 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		}
 	}
 	args = a.normalizeBaselineToolArgs(req.ToolName, args)
+	args = a.applyPlanArgs(req.ToolName, args)
 
 	if !shouldSkipBaselineSequence(ctx) {
 		if autoResp := a.autoAdvanceBaselineSequence(ctx, req.ToolName, args); autoResp != nil && autoResp.Status != agentruntime.ToolCallSuccess {
@@ -1129,6 +1136,26 @@ func (a *AssistantToolGatewayAdapter) waitApprovalAndExecute(ctx context.Context
 		StartedAt:    startedAt,
 		EndedAt:      time.Now(),
 	}, nil
+}
+
+// applyPlanArgs merges pre-bound args from the ToolExecutionPlan as defaults.
+// LLM-provided args take priority; plan args fill in missing keys only.
+func (a *AssistantToolGatewayAdapter) applyPlanArgs(toolName string, args map[string]interface{}) map[string]interface{} {
+	if a.executionPlan == nil || len(a.executionPlan.Steps) == 0 {
+		return args
+	}
+	for _, step := range a.executionPlan.Steps {
+		if step.ToolName != toolName || len(step.Args) == 0 {
+			continue
+		}
+		for k, v := range step.Args {
+			if _, exists := args[k]; !exists {
+				args[k] = v
+			}
+		}
+		break
+	}
+	return args
 }
 
 // Cancel 实现 agentruntime.ToolGateway 接口（同步执行，无需取消）

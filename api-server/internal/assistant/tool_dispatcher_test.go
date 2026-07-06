@@ -716,3 +716,146 @@ func TestToolDispatcher_TimeoutWithSlowDB(t *testing.T) {
 		t.Fatalf("expected MarkFailed NOT to be called for successful execution")
 	}
 }
+
+// --- applyPlanArgs tests ---
+
+func TestGatewayAppliesPlanArgs(t *testing.T) {
+	registry := NewToolRegistry()
+	var receivedArgs map[string]interface{}
+	_ = registry.Register(&ToolSpec{
+		Name:               "Asset.Collection.Trigger",
+		Domain:             DomainAsset,
+		Operation:          OpExecute,
+		Risk:               ToolRiskMedium,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			receivedArgs = args
+			return map[string]interface{}{"task_id": "t-001"}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	plan := &ToolExecutionPlan{
+		Steps: []ToolPlanStep{
+			{
+				ToolName: "Asset.Collection.Trigger",
+				Args:     map[string]interface{}{"scope": "online_hosts", "types": []string{"process"}},
+			},
+		},
+	}
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher:    dispatcher,
+		SessionID:     "test-session",
+		MessageID:     "msg-1",
+		RunID:         "run-1",
+		ExecutionPlan: plan,
+	})
+
+	// LLM provides no args; plan args should fill in
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "call-1",
+		ToolName: "Asset.Collection.Trigger",
+		Args:     map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success, got %s", resp.Status)
+	}
+	if receivedArgs["scope"] != "online_hosts" {
+		t.Fatalf("expected scope from plan, got %v", receivedArgs["scope"])
+	}
+}
+
+func TestGatewayLLMArgsOverridePlanArgs(t *testing.T) {
+	registry := NewToolRegistry()
+	var receivedArgs map[string]interface{}
+	_ = registry.Register(&ToolSpec{
+		Name:               "Asset.Collection.Trigger",
+		Domain:             DomainAsset,
+		Operation:          OpExecute,
+		Risk:               ToolRiskMedium,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			receivedArgs = args
+			return map[string]interface{}{"task_id": "t-001"}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	plan := &ToolExecutionPlan{
+		Steps: []ToolPlanStep{
+			{
+				ToolName: "Asset.Collection.Trigger",
+				Args:     map[string]interface{}{"scope": "online_hosts"},
+			},
+		},
+	}
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher:    dispatcher,
+		SessionID:     "test-session",
+		MessageID:     "msg-1",
+		RunID:         "run-1",
+		ExecutionPlan: plan,
+	})
+
+	// LLM provides scope="all_hosts" which should override plan's "online_hosts"
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "call-2",
+		ToolName: "Asset.Collection.Trigger",
+		Args:     map[string]interface{}{"scope": "all_hosts"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success, got %s", resp.Status)
+	}
+	if receivedArgs["scope"] != "all_hosts" {
+		t.Fatalf("expected LLM arg to override plan arg, got scope=%v", receivedArgs["scope"])
+	}
+}
+
+func TestGatewayNilPlanDoesNotAffectArgs(t *testing.T) {
+	registry := NewToolRegistry()
+	var receivedArgs map[string]interface{}
+	_ = registry.Register(&ToolSpec{
+		Name:               "Host.List",
+		Domain:             DomainHost,
+		Operation:          OpList,
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			receivedArgs = args
+			return map[string]interface{}{"hosts": []string{}}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher:    dispatcher,
+		SessionID:     "test-session",
+		MessageID:     "msg-1",
+		RunID:         "run-1",
+		ExecutionPlan: nil, // no plan
+	})
+
+	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "call-3",
+		ToolName: "Host.List",
+		Args:     map[string]interface{}{"status": "online"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Status != agentruntime.ToolCallSuccess {
+		t.Fatalf("expected success, got %s", resp.Status)
+	}
+	if receivedArgs["status"] != "online" {
+		t.Fatalf("expected status=online from LLM, got %v", receivedArgs["status"])
+	}
+}

@@ -18,54 +18,78 @@ import (
 
 // Orchestrator 编排器（使用 agent-runtime 框架）
 type Orchestrator struct {
-	configRepo     *repository.ConfigRepository
-	messageRepo    repository.AssistantMessageRepository
-	toolCallRepo   repository.AssistantToolCallRepository
-	sessionRepo    repository.AssistantSessionRepository
-	toolRegistry   *ToolRegistry
-	toolSelector   *ToolSelector
-	toolDispatcher *ToolDispatcher
-	approvalGate   *ApprovalGate
-	contextLoader  *ContextLoader
-	intentRouter   *IntentRouter
-	runtimeFactory *RuntimeFactory
-	runManager     *RunManager
-	logger         *zap.Logger
+	configRepo         *repository.ConfigRepository
+	messageRepo        repository.AssistantMessageRepository
+	toolCallRepo       repository.AssistantToolCallRepository
+	sessionRepo        repository.AssistantSessionRepository
+	toolRegistry       *ToolRegistry
+	toolSelector       *ToolSelector
+	intentDecomposer   *IntentDecomposer
+	toolDecisionEngine *ToolDecisionEngine
+	toolDispatcher     *ToolDispatcher
+	approvalGate       *ApprovalGate
+	contextLoader      *ContextLoader
+	intentRouter       *IntentRouter
+	runtimeFactory     *RuntimeFactory
+	runManager         *RunManager
+	clarificationGate  *ClarificationGate
+	decisionRecorder   *ToolDecisionRecorder
+	logger             *zap.Logger
 }
 
 // OrchestratorDeps 编排器依赖
 type OrchestratorDeps struct {
-	ConfigRepo     *repository.ConfigRepository
-	MessageRepo    repository.AssistantMessageRepository
-	ToolCallRepo   repository.AssistantToolCallRepository
-	SessionRepo    repository.AssistantSessionRepository
-	ToolRegistry   *ToolRegistry
-	ToolSelector   *ToolSelector
-	ToolDispatcher *ToolDispatcher
-	ApprovalGate   *ApprovalGate
-	ContextLoader  *ContextLoader
-	IntentRouter   *IntentRouter
-	RuntimeFactory *RuntimeFactory
-	RunManager     *RunManager
-	Logger         *zap.Logger
+	ConfigRepo         *repository.ConfigRepository
+	MessageRepo        repository.AssistantMessageRepository
+	ToolCallRepo       repository.AssistantToolCallRepository
+	SessionRepo        repository.AssistantSessionRepository
+	ToolRegistry       *ToolRegistry
+	ToolSelector       *ToolSelector
+	IntentDecomposer   *IntentDecomposer
+	ToolDecisionEngine *ToolDecisionEngine
+	ToolDispatcher     *ToolDispatcher
+	ApprovalGate       *ApprovalGate
+	ContextLoader      *ContextLoader
+	IntentRouter       *IntentRouter
+	RuntimeFactory     *RuntimeFactory
+	RunManager         *RunManager
+	ClarificationGate  *ClarificationGate
+	DecisionRecorder   *ToolDecisionRecorder
+	Logger             *zap.Logger
 }
 
 // NewOrchestrator 创建编排器
 func NewOrchestrator(deps OrchestratorDeps) *Orchestrator {
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	clarificationGate := deps.ClarificationGate
+	if clarificationGate == nil && deps.ToolDecisionEngine != nil {
+		clarificationGate = NewClarificationGate(deps.ToolDecisionEngine.config, logger)
+	}
+	decisionRecorder := deps.DecisionRecorder
+	if decisionRecorder == nil {
+		decisionRecorder = NewToolDecisionRecorder(deps.SessionRepo, logger)
+	}
 	return &Orchestrator{
-		configRepo:     deps.ConfigRepo,
-		messageRepo:    deps.MessageRepo,
-		toolCallRepo:   deps.ToolCallRepo,
-		sessionRepo:    deps.SessionRepo,
-		toolRegistry:   deps.ToolRegistry,
-		toolSelector:   deps.ToolSelector,
-		toolDispatcher: deps.ToolDispatcher,
-		approvalGate:   deps.ApprovalGate,
-		contextLoader:  deps.ContextLoader,
-		intentRouter:   deps.IntentRouter,
-		runtimeFactory: deps.RuntimeFactory,
-		runManager:     deps.RunManager,
-		logger:         deps.Logger,
+		configRepo:         deps.ConfigRepo,
+		messageRepo:        deps.MessageRepo,
+		toolCallRepo:       deps.ToolCallRepo,
+		sessionRepo:        deps.SessionRepo,
+		toolRegistry:       deps.ToolRegistry,
+		toolSelector:       deps.ToolSelector,
+		intentDecomposer:   deps.IntentDecomposer,
+		toolDecisionEngine: deps.ToolDecisionEngine,
+		toolDispatcher:     deps.ToolDispatcher,
+		approvalGate:       deps.ApprovalGate,
+		contextLoader:      deps.ContextLoader,
+		intentRouter:       deps.IntentRouter,
+		runtimeFactory:     deps.RuntimeFactory,
+		runManager:         deps.RunManager,
+		clarificationGate:  clarificationGate,
+		decisionRecorder:   decisionRecorder,
+		logger:             logger,
 	}
 }
 
@@ -154,6 +178,25 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"confidence": intent.Confidence,
 	}))
 
+	var intentBreakdown *IntentBreakdown
+	if o.intentDecomposer != nil {
+		breakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
+			Query:                  input.UserMessage,
+			Intent:                 intent,
+			ContextRefs:            intentInput.ContextRefs,
+			EnableLLMDecomposition: false,
+		})
+		if err != nil {
+			o.logger.Warn("assistant rule intent decomposition failed",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Error(err),
+			)
+		} else {
+			intentBreakdown = breakdown
+		}
+	}
+
 	// 6. 工具选择：复杂任务优先交给 LLM 根据短目录 + 详情目录选择工具；
 	// 规则选择仅用于短句快捷入口或 LLM 不可用时兜底。
 	var selection *ToolSelectionResult
@@ -163,7 +206,8 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	if naturalShortcut.Kind != naturalOperationNone {
 		selectionMode = "shortcut"
 	}
-	if shouldUseLLMToolSelection(input.UserMessage, intent) {
+	skipLLMToolSelection := intentBreakdown != nil && intentBreakdown.NeedClarification && intentBreakdown.RequiresWrite
+	if shouldUseLLMToolSelection(input.UserMessage, intent) && !skipLLMToolSelection {
 		if llmSelection, err := o.selectToolsWithLLM(ctx, input.UserMessage, intent, intentInput.ContextRefs); err == nil && llmSelection != nil && len(llmSelection.SelectedTools) > 0 {
 			selection = llmSelection
 			llmSelectedTools = true
@@ -189,14 +233,102 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		selection.SelectedTools = o.expandComplexTaskTools(selection.SelectedTools, input.TaskType, input.UserMessage, intent)
 	}
 
+	if o.intentDecomposer != nil && (intentBreakdown == nil || !intentBreakdown.NeedClarification) {
+		breakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
+			Query:                  input.UserMessage,
+			Intent:                 intent,
+			ContextRefs:            intentInput.ContextRefs,
+			CandidateCapabilities:  o.capabilitiesForTools(selection.SelectedTools),
+			EnableLLMDecomposition: envBool("ASSISTANT_INTENT_DECOMPOSE_ENABLED", true),
+		})
+		if err != nil {
+			o.logger.Warn("assistant intent decomposition failed, continuing with selector intent",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Error(err),
+			)
+		} else {
+			intentBreakdown = breakdown
+		}
+	}
+
+	var executionPlan *ToolExecutionPlan
+	if o.toolDecisionEngine != nil && o.toolDecisionEngine.config.Enabled {
+		plan, err := o.toolDecisionEngine.Decide(ctx, ToolDecisionInput{
+			Query:                input.UserMessage,
+			Intent:               intent,
+			Breakdown:            intentBreakdown,
+			ContextRefs:          intentInput.ContextRefs,
+			PreliminarySelection: selection,
+			UseAIAnalysisFlow:    useAIAnalysisFlow,
+		})
+		if err != nil {
+			o.logger.Warn("assistant tool decision failed, falling back to preliminary selection",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Error(err),
+			)
+		} else if plan != nil {
+			executionPlan = plan
+
+			// 使用 ToolDecisionRecorder 持久化裁决记录
+			if o.decisionRecorder != nil {
+				_ = o.decisionRecorder.Record(context.Background(), input.SessionID, plan)
+			}
+
+			// 使用 ClarificationGate 评估是否需要追问
+			clarification := o.clarificationGate.Evaluate(intentBreakdown, plan.ToolNames(), plan.DecisionRecords)
+			if plan.NeedClarification || clarification.Required {
+				o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+					"intent_breakdown":   intentBreakdown,
+					"tool_execution_plan": executionPlan,
+					"current_run_status": "clarification_required",
+				})
+				question := plan.ClarifyingQuestion
+				if question == "" {
+					question = clarification.Question
+				}
+				o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, map[string]interface{}{
+					"selected_tools":        []string{},
+					"candidate_tools":       selection.CandidateTools,
+					"runtime_profile":       runtimeProfileName(false),
+					"max_total_turns":       maxRuntimeTurns(false),
+					"selection_mode":        selectionMode,
+					"decision_trace_id":     plan.DecisionTraceID,
+					"need_clarification":    true,
+					"clarifying_question":   question,
+					"rejected_tool_records": plan.RejectedToolRecords,
+				}))
+				plan.ClarifyingQuestion = question
+				return o.clarificationResponse(ctx, input, plan)
+			}
+			selection.SelectedTools = plan.ToolNames()
+			selection.CandidateTools = dedupeStrings(append(selection.CandidateTools, selection.SelectedTools...))
+			selectionMode = selectionMode + "+decision"
+			useAIAnalysisFlow = o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
+			o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+				"intent_breakdown":    intentBreakdown,
+				"tool_execution_plan": executionPlan,
+			})
+		}
+	}
+
 	// 7. 发布工具选择事件
-	o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, map[string]interface{}{
+	toolSelectionPayload := map[string]interface{}{
 		"selected_tools":  selection.SelectedTools,
 		"candidate_tools": selection.CandidateTools,
 		"runtime_profile": runtimeProfileName(useAIAnalysisFlow),
 		"max_total_turns": maxRuntimeTurns(useAIAnalysisFlow),
 		"selection_mode":  selectionMode,
-	}))
+	}
+	if executionPlan != nil {
+		toolSelectionPayload["decision_trace_id"] = executionPlan.DecisionTraceID
+		toolSelectionPayload["tool_execution_plan"] = executionPlan
+	}
+	if intentBreakdown != nil {
+		toolSelectionPayload["intent_breakdown"] = intentBreakdown
+	}
+	o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, toolSelectionPayload))
 
 	// 8. 构建 agent-runtime 工具描述符
 	toolDescriptors := o.buildAgentToolDescriptors(selection.SelectedTools)
@@ -210,7 +342,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.String("runtime_profile", runtimeProfileName(useAIAnalysisFlow)),
 		zap.Int("tools_count", len(toolDescriptors)),
 	)
-	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow)
+	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, executionPlan)
 }
 
 // fallbackResponse 降级响应
@@ -241,6 +373,65 @@ func (o *Orchestrator) fallbackResponse(ctx context.Context, input RunInput, rea
 		MessageID:   msgID,
 		FinalAnswer: response,
 	}, nil
+}
+
+func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput, plan *ToolExecutionPlan) (*RunResult, error) {
+	_ = ctx
+	msgID := "msg_" + input.RunID
+	response := strings.TrimSpace(plan.ClarifyingQuestion)
+	if response == "" {
+		response = "请补充要操作的对象和范围后再执行。"
+	}
+
+	o.runManager.Publish(input.SessionID, EventMessageDeltaPayload(input.SessionID, input.RunID, msgID, response))
+	o.persistSessionRuntimeEvents(
+		context.Background(),
+		input.SessionID,
+		msgID,
+		compactRuntimeDisplayEvents(o.extractRunHistory(input.SessionID), input.RunID, msgID),
+	)
+
+	saveCtx := context.Background()
+	if err := o.messageRepo.Create(saveCtx, &model.AssistantMessage{
+		ID:        uuid.New(),
+		SessionID: input.SessionID,
+		MessageID: msgID,
+		Role:      "assistant",
+		Content:   response,
+		Thinking:  o.extractThinkingFromHistory(input.SessionID),
+		Plan:      mustMarshalJSON(plan),
+	}); err != nil {
+		o.logger.Error("failed to save assistant clarification message",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Error(err),
+		)
+	}
+
+	o.runManager.Publish(input.SessionID, EventDonePayload(input.SessionID, input.RunID))
+	return &RunResult{
+		MessageID:   msgID,
+		FinalAnswer: response,
+	}, nil
+}
+
+func (o *Orchestrator) capabilitiesForTools(toolNames []string) []string {
+	if o == nil || o.toolRegistry == nil {
+		return nil
+	}
+	capabilities := make([]string, 0, len(toolNames))
+	for _, name := range toolNames {
+		tool, ok := o.toolRegistry.Get(name)
+		if !ok || tool == nil || !tool.Enabled {
+			continue
+		}
+		if strings.TrimSpace(tool.Capability) != "" {
+			capabilities = append(capabilities, tool.Capability)
+			continue
+		}
+		capabilities = append(capabilities, syntheticToolCapability(tool))
+	}
+	return dedupeStrings(capabilities)
 }
 
 // buildAgentToolDescriptors 从工具注册表构建 agent-runtime 工具描述符
@@ -530,7 +721,7 @@ func containsSubstring(s, substr string) bool {
 
 // runAgentRuntime 统一执行入口：使用 agent-runtime Plan → React 流程
 // 使用 RuntimeFactory.Build() 集中创建 runtime（对齐设计文档 4.3 节）
-func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool) (*RunResult, error) {
+func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool, executionPlan *ToolExecutionPlan) (*RunResult, error) {
 	convertedRefs := o.convertContextRefs(contextRefs)
 	msgID := "msg_" + input.RunID
 	maxIterations := 80
@@ -565,6 +756,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		SelectedTools:     selection.SelectedTools,
 		ToolDescriptors:   toolDescriptors,
 		MaxIterations:     maxIterations,
+		ExecutionPlan:     executionPlan,
 		UseAIAnalysisFlow: useAIAnalysisFlow,
 	})
 	if err != nil {

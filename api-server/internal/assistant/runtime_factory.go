@@ -70,6 +70,7 @@ type RuntimeBuildRequest struct {
 	MaxIterations     int                           `json:"max_iterations,omitempty"`
 	SelectedTools     []string                      `json:"selected_tools,omitempty"`
 	ToolDescriptors   []agentruntime.ToolDescriptor `json:"-"`
+	ExecutionPlan     *ToolExecutionPlan            `json:"execution_plan,omitempty"`
 	UseAIAnalysisFlow bool                          `json:"use_ai_analysis_flow,omitempty"`
 }
 
@@ -99,15 +100,16 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 
 	// 4. 创建 ToolGateway（实现 agentruntime.ToolGateway）
 	toolGateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
-		Dispatcher:  f.toolDispatcher,
-		SessionID:   req.SessionID,
-		MessageID:   req.MessageID,
-		RunID:       req.RunID,
-		Operator:    req.Operator,
-		Logger:      f.logger,
-		RunManager:  f.runManager,
-		UserInput:   req.UserInput,
-		ContextRefs: req.ContextRefs,
+		Dispatcher:    f.toolDispatcher,
+		SessionID:     req.SessionID,
+		MessageID:     req.MessageID,
+		RunID:         req.RunID,
+		Operator:      req.Operator,
+		Logger:        f.logger,
+		RunManager:    f.runManager,
+		UserInput:     req.UserInput,
+		ContextRefs:   req.ContextRefs,
+		ExecutionPlan: req.ExecutionPlan,
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
