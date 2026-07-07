@@ -202,7 +202,7 @@
           </div>
 
           <div v-if="templateRuleRows(tpl).length" class="file-rule-list">
-            <article v-for="rule in templateRuleRows(tpl)" :key="rule.id" class="file-rule-item">
+            <article v-for="rule in templateRulePageRows(tpl)" :key="rule.id" class="file-rule-item">
               <el-checkbox
                 :model-value="isRuleSelected(rule.id)"
                 @change="checked => toggleRuleSelection(rule.id, Boolean(checked))"
@@ -221,7 +221,17 @@
               </div>
             </article>
           </div>
-          <el-empty v-else description="该文件下暂无匹配规则" :image-size="72" />
+          <el-pagination
+            v-if="templateRuleRows(tpl).length > fileRulePageSize"
+            class="file-rule-pagination"
+            :current-page="templateRuleCurrentPage(tpl.id)"
+            :page-size="fileRulePageSize"
+            :total="templateRuleRows(tpl).length"
+            layout="total, prev, pager, next"
+            background
+            @current-change="page => setTemplateRulePage(tpl.id, page)"
+          />
+          <el-empty v-if="templateRuleRows(tpl).length === 0" description="该文件下暂无匹配规则" :image-size="72" />
         </section>
 
         <el-empty v-if="filteredTemplateGroups.length === 0" description="暂无匹配文件" />
@@ -455,6 +465,8 @@ import {
 import { useHostStore } from '@/store/hosts'
 import { useTaskStore } from '@/store/tasks'
 import type { BaselineRule, ParseStatus, Template } from '@/types'
+import { paginate } from '@/utils/paginate'
+import { compareRulesByScriptStatus } from '@/utils/ruleSort'
 
 type RuleRow = BaselineRule & {
   template_name: string
@@ -487,6 +499,18 @@ const ruleViewOptions = [
 const ruleCurrentPage = ref(1)
 const rulePageSize = 10
 const rulesTableRef = ref<any>(null)
+
+// 文件视角下，每个规则集合（模板）独立维护当前页码，互不干扰
+const fileRulePageSize = 10
+const templateRulePageMap = reactive<Record<string, number>>({})
+
+function templateRuleCurrentPage(tplId: string): number {
+  return templateRulePageMap[tplId] || 1
+}
+
+function setTemplateRulePage(tplId: string, page: number) {
+  templateRulePageMap[tplId] = page
+}
 const syncingTableSelection = ref(false)
 const selectedRuleIds = ref<string[]>([])
 const selectedHostIds = ref<string[]>([])
@@ -532,6 +556,8 @@ const allRules = computed<RuleRow[]>(() => {
       template_status: tpl.status
     }))
   })
+  // 按脚本就绪度排序：已生成 > 生成中 > 未生成/失败
+  .sort(compareRulesByScriptStatus)
 })
 
 const filteredRules = computed(() => {
@@ -649,6 +675,10 @@ watch([paginatedRules, selectedRuleIds], () => {
 
 watch([ruleSearch, templateFilter], () => {
   ruleCurrentPage.value = 1
+  // 搜索 / 模板筛选变化时，文件视角各规则集合回到第 1 页
+  for (const key of Object.keys(templateRulePageMap)) {
+    delete templateRulePageMap[key]
+  }
 })
 
 watch([scriptDialogVisible, scriptActiveTab], () => {
@@ -679,6 +709,13 @@ function templateRuleRows(tpl: Template): RuleRow[] {
     return [rule.title, rule.check_content, rule.fix_content, rule.template_name]
       .some(value => String(value || '').toLowerCase().includes(keyword))
   })
+    // 按脚本就绪度排序：已生成 > 生成中 > 未生成/失败
+    .sort(compareRulesByScriptStatus)
+}
+
+// 文件视角下，按模板独立分页（每页 fileRulePageSize 条）
+function templateRulePageRows(tpl: Template): RuleRow[] {
+  return paginate(templateRuleRows(tpl), templateRuleCurrentPage(tpl.id), fileRulePageSize)
 }
 
 function isRuleSelected(ruleId: string) {
@@ -1325,6 +1362,12 @@ onBeforeUnmount(() => {
 .file-rule-list {
   display: flex;
   flex-direction: column;
+}
+
+.file-rule-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px 4px;
 }
 
 .file-rule-item {
