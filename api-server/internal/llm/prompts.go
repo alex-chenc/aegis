@@ -104,6 +104,41 @@ func GetRuleExtractionPrompt(documentContent string) string {
 	return fmt.Sprintf(RuleExtractionPrompt, documentContent)
 }
 
+// RuleExtractionPromptStrict is used as a retry prompt when the model returns a
+// response that cannot be parsed as JSON. It is more prescriptive: it demands a
+// single JSON array wrapped in a ```json code block and no explanatory prose.
+// NOTE: Go raw string literals cannot contain backticks, so the fence markers
+// are concatenated as interpreted strings.
+const RuleExtractionPromptStrict = `你是一位资深的安全基线专家。请从下面的文档中提取所有安全基线检查项。
+
+【严格要求】
+1. 你必须且只能输出一个 JSON 数组，不要输出任何解释、前言或总结文字。
+2. 必须用 ` + "```" + `json 代码块包裹整个 JSON 数组。
+3. 每个数组元素包含三个字段：
+   - "title": 规则标题（简洁明了）
+   - "check_content": 检查内容描述
+   - "fix_content": 修复方法描述
+4. 不要使用 Markdown 列表、不要添加注释、不要转义整个 JSON。
+
+【输出示例】
+` + "```json" + `
+[
+  {
+    "title": "SSH 密码复杂度要求",
+    "check_content": "检查 /etc/pam.d/common-password 是否配置了密码复杂度要求",
+    "fix_content": "在 /etc/pam.d/common-password 中添加 pam_pwquality.so 模块配置"
+  }
+]
+` + "```" + `
+
+文档内容：
+%s`
+
+// GetRuleExtractionPromptStrict returns the strict rule extraction prompt.
+func GetRuleExtractionPromptStrict(documentContent string) string {
+	return fmt.Sprintf(RuleExtractionPromptStrict, documentContent)
+}
+
 // GetCheckScriptGenerationPrompt returns the check script generation prompt
 func GetCheckScriptGenerationPrompt(checkContent string) string {
 	return fmt.Sprintf(CheckScriptGenerationPrompt, checkContent)

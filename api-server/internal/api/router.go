@@ -101,6 +101,10 @@ func (r *Router) Setup() {
 		})
 	})
 
+	// 内部端点：Server 服务将 agent 终态结果实时推回，驱动自动验证/自愈。
+	// 注册在鉴权中间件之前，仅允许内网访问。
+	r.engine.POST("/internal/task-result", r.taskHandler.ReportTaskResult)
+
 	// API v1 路由组
 	v1 := r.engine.Group("/api/v1")
 	{

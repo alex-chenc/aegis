@@ -63,6 +63,68 @@ func TestParseScript_AddsShebang(t *testing.T) {
 	}
 }
 
+func TestParseRulesFromFencedJSONBlock(t *testing.T) {
+	// Models sometimes wrap the JSON in a ```json code block, optionally with
+	// leading/trailing prose. This is the exact scenario that previously yielded
+	// "invalid LLM response format".
+	resp := "好的，以下是从文档中提取的基线规则：\n" + "```json" + `
+[
+  {
+    "title": "SSH 密码复杂度要求",
+    "check_content": "检查 /etc/pam.d/common-password",
+    "fix_content": "添加 pam_pwquality.so"
+  }
+]
+` + "```" + "\n如有疑问请继续提问。"
+	rules, err := ParseRules(resp)
+	if err != nil {
+		t.Fatalf("ParseRules returned error for fenced JSON block: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected one rule, got %d", len(rules))
+	}
+	if rules[0].Title != "SSH 密码复杂度要求" {
+		t.Fatalf("unexpected title: %q", rules[0].Title)
+	}
+}
+
+func TestParseRulesFencedBlockOnly(t *testing.T) {
+	// Response that is ONLY a fenced block with no surrounding prose.
+	resp := "```json\n[{\"title\":\"X\",\"check_content\":\"c\",\"fix_content\":\"f\"}]\n```"
+	rules, err := ParseRules(resp)
+	if err != nil {
+		t.Fatalf("ParseRules returned error for fenced-only block: %v", err)
+	}
+	if len(rules) != 1 || rules[0].Title != "X" {
+		t.Fatalf("expected one rule titled X, got %#v", rules)
+	}
+}
+
+func TestParseRulesStillFailsOnNoJSON(t *testing.T) {
+	// Pure prose / refusal with no JSON at all must still surface the error so
+	// the caller can retry or mark the template failed.
+	resp := "抱歉，我无法从这份文档中提取出结构化规则，请提供更有条理的内容。"
+	_, err := ParseRules(resp)
+	if err == nil {
+		t.Fatal("expected error for non-JSON response")
+	}
+	if err.Error() != "invalid LLM response format" {
+		t.Fatalf("expected 'invalid LLM response format', got %q", err.Error())
+	}
+}
+
+func TestExtractJSONFencedFallback(t *testing.T) {
+	// No top-level bracket, but a fenced block exists -> fallback should find it.
+	resp := "说明文字\n```json\n{\"a\":1}\n```"
+	got := extractJSON(resp)
+	if got == "" {
+		t.Fatal("expected extractJSON to fall back to fenced block")
+	}
+	if !strings.Contains(got, `"a":1`) {
+		t.Fatalf("unexpected extracted JSON: %q", got)
+	}
+}
+
 func TestParseRulesRepairsInvalidBackslashEscapes(t *testing.T) {
 	rules, err := ParseRules(`[
   {

@@ -1081,3 +1081,49 @@ func (h *TaskHandler) BatchDeleteTasks(c *gin.Context) {
 		},
 	})
 }
+
+// ReportTaskResultRequest is the payload pushed by the Server service when an
+// agent reports a final task result. It mirrors the server-side
+// TaskResultCallback signature so the Server can notify the API Server in
+// (near) real time instead of relying solely on the 5s auto-verify poll.
+type ReportTaskResultRequest struct {
+	TaskID   string `json:"task_id"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+	Status   string `json:"status"`
+}
+
+// ReportTaskResult is an internal, unauthenticated endpoint used by the Server
+// service to push agent task results back in real time. It feeds the same
+// ProcessTaskResult path used by timeouts and dispatch failures, which then
+// drives auto-verify (and large-model repair) without waiting for the poll.
+//
+// NOTE: this endpoint is registered BEFORE the AuthRequired middleware (same
+// level as /health) and must only be reachable from the internal network.
+func (h *TaskHandler) ReportTaskResult(c *gin.Context) {
+	var req ReportTaskResultRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	taskID, err := uuid.Parse(req.TaskID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "invalid task_id: " + err.Error(),
+		})
+		return
+	}
+
+	h.taskService.ProcessTaskResult(taskID, req.Stdout, req.Stderr, req.ExitCode, req.Status)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "task result processed",
+	})
+}

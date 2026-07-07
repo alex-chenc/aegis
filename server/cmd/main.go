@@ -115,6 +115,16 @@ func main() {
 	apiServerImpl := grpc_server.NewAPIServerToServerImpl(grpcServer, hostRepo, redisClient, apiServerClient)
 	pb.RegisterAPIServerToServerServer(apiServerGRPCServer, apiServerImpl)
 
+	// Real-time task result push to the API Server. When an agent reports a
+	// final result, the Server immediately notifies the API Server so that
+	// auto-verify / large-model repair can trigger without waiting for the
+	// API Server's 5s poll. The poll remains as a fallback.
+	apiServerHTTPAddr := os.Getenv("API_SERVER_HTTP_ADDR")
+	if apiServerHTTPAddr == "" {
+		apiServerHTTPAddr = "http://api-server:8082"
+	}
+	grpcServer.SetTaskResultCallback(grpc_server.NewAPIServerTaskResultPusher(apiServerHTTPAddr))
+
 	go func() {
 		logger.Info("Starting APIServerToServer gRPC server", zap.Int("port", apiServerGRPCPort))
 		if err := apiServerGRPCServer.Serve(apiServerLis); err != nil {

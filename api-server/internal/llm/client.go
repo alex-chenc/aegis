@@ -250,7 +250,7 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt
 		Model:       c.modelName,
 		Messages:    messages,
 		Temperature: temperature,
-		MaxTokens:   4096,
+		MaxTokens:   131072,
 	}
 
 	var lastErr error
@@ -625,7 +625,7 @@ func (c *LLMClient) ChatCompletionWithMessagesFormat(ctx context.Context, messag
 		Model:          c.modelName,
 		Messages:       messages,
 		Temperature:    temperature,
-		MaxTokens:      4096,
+		MaxTokens:      131072,
 		ResponseFormat: responseFormat,
 	}
 
@@ -679,7 +679,7 @@ func (c *LLMClient) ChatCompletionWithMessagesFormatResult(ctx context.Context, 
 		Model:          c.modelName,
 		Messages:       messages,
 		Temperature:    temperature,
-		MaxTokens:      4096,
+		MaxTokens:      131072,
 		ResponseFormat: responseFormat,
 	}
 
@@ -736,7 +736,7 @@ func (c *LLMClient) ChatCompletionStreamWithMessages(ctx context.Context, messag
 		Model:       c.modelName,
 		Messages:    messages,
 		Temperature: temperature,
-		MaxTokens:   4096,
+		MaxTokens:   131072,
 		Stream:      true,
 	})
 

@@ -226,6 +226,18 @@
 
         <el-empty v-if="filteredTemplateGroups.length === 0" description="暂无匹配文件" />
       </div>
+
+      <el-collapse v-if="failedTemplates.length" class="failed-templates">
+        <el-collapse-item name="failed">
+          <template #title>
+            <span class="failed-title">解析失败的文件（{{ failedTemplates.length }}）</span>
+          </template>
+          <div v-for="tpl in failedTemplates" :key="tpl.id" class="failed-item">
+            <span class="failed-name">{{ tpl.display_name || tpl.name }}</span>
+            <el-button link type="danger" @click="confirmDeleteTemplate(tpl)">删除</el-button>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
 
     <el-dialog v-model="parseDialogVisible" title="文件解析" width="560px" :close-on-click-modal="false">
@@ -511,6 +523,8 @@ const onlineHostCount = computed(() => hosts.value.filter(host => host.online).l
 
 const allRules = computed<RuleRow[]>(() => {
   return templates.value.flatMap(tpl => {
+    // 解析失败的模板不进入可用规则集合
+    if (tpl.status === 'failed') return []
     const templateName = tpl.display_name || tpl.name
     return (templateRulesMap[tpl.id] || []).map(rule => ({
       ...rule,
@@ -536,6 +550,8 @@ const filteredRules = computed(() => {
 
 const filteredTemplateGroups = computed(() => {
   return templates.value.filter(tpl => {
+    // 解析失败的文件不应出现在基线工作区
+    if (tpl.status === 'failed') return false
     if (templateFilter.value && tpl.id !== templateFilter.value) return false
     const rows = templateRuleRows(tpl)
     if (!ruleSearch.value.trim()) return true
@@ -543,6 +559,11 @@ const filteredTemplateGroups = computed(() => {
       String(value || '').toLowerCase().includes(ruleSearch.value.trim().toLowerCase())
     )
   })
+})
+
+// 解析失败的文件单独归并，供用户清理（不在工作区展示）
+const failedTemplates = computed(() => {
+  return templates.value.filter(tpl => tpl.status === 'failed')
 })
 
 const paginatedRules = computed(() => {
@@ -1122,6 +1143,31 @@ onBeforeUnmount(() => {
 <style scoped>
 .workbench-hero {
   margin-bottom: 0;
+}
+
+.failed-templates {
+  margin-top: 16px;
+}
+
+.failed-title {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+
+.failed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.failed-item:last-child {
+  border-bottom: none;
+}
+
+.failed-name {
+  color: var(--el-text-color-regular);
 }
 
 .toolbar-card :deep(.el-card__body) {

@@ -176,6 +176,14 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "主机ID列表",
 				},
+				"auto_verify": map[string]interface{}{
+					"type":        "boolean",
+					"description": "是否启用自动验证：检测到不合规项后自动下发修复并复查，直到通过或达到最大轮次。默认 false。",
+				},
+				"max_rounds": map[string]interface{}{
+					"type":        "integer",
+					"description": "自动验证最大轮次（仅 auto_verify=true 时生效），默认 3。",
+				},
 			},
 			"required": []string{"rule_ids", "host_ids"},
 		},
@@ -204,6 +212,14 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
 					"description": "主机ID列表",
+				},
+				"auto_verify": map[string]interface{}{
+					"type":        "boolean",
+					"description": "是否启用自动验证：修复后自动复查，直到通过或达到最大轮次。默认 false。",
+				},
+				"max_rounds": map[string]interface{}{
+					"type":        "integer",
+					"description": "自动验证最大轮次（仅 auto_verify=true 时生效），默认 3。",
 				},
 			},
 			"required": []string{"rule_ids", "host_ids"},
@@ -357,7 +373,12 @@ func makeRunCheckHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			return nil, fmt.Errorf("host_ids: %w", err)
 		}
 
-		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "CHECK", nil)
+		opts := &service.DispatchOptions{
+			AutoVerify: getBoolArg(args, "auto_verify", false),
+			MaxRounds:  getIntArg(args, "max_rounds", 3),
+		}
+
+		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "CHECK", opts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create check tasks: %w", err)
 		}
@@ -389,7 +410,12 @@ func makeRunFixHandler(svc TaskServiceForTools) assistant.ToolHandler {
 			return nil, fmt.Errorf("host_ids: %w", err)
 		}
 
-		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "FIX", nil)
+		opts := &service.DispatchOptions{
+			AutoVerify: getBoolArg(args, "auto_verify", false),
+			MaxRounds:  getIntArg(args, "max_rounds", 3),
+		}
+
+		result, err := svc.CreateAndDispatchTasks(ctx, ruleIDs, hostIDs, "FIX", opts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fix tasks: %w", err)
 		}

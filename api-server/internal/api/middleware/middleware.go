@@ -67,6 +67,12 @@ func isAuthPublicPath(path string) bool {
 	if path == "/health" || strings.HasPrefix(path, "/api/v1/auth/") {
 		return true
 	}
+	// Internal endpoint used by the Server service to push agent task results
+	// back in real time (see TaskHandler.ReportTaskResult). Must be reachable
+	// without a token; only expose it on the internal network.
+	if path == "/internal/task-result" {
+		return true
+	}
 
 	switch path {
 	case "/api/v1/agent/install-command",

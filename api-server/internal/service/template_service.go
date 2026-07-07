@@ -157,32 +157,45 @@ func (s *TemplateService) processTemplate(ctx context.Context, workerID int, tas
 
 	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, s.llmTimeout, s.llmMaxRetries)
 
-	prompt := llm.GetRuleExtractionPrompt(content)
-	llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, 0.1)
-	if err != nil {
-		logger.Error("failed to call LLM",
-			zap.Error(err),
-			zap.String("template_id", task.TemplateID.String()),
-		)
-		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("LLM 调用失败：%v", err))
+	// Split the document into chunks so each LLM call fits within the output
+	// token budget. Large baseline docs (e.g. CIS benchmarks) produce rule
+	// arrays that exceed ChatCompletion's MaxTokens (4096) and get truncated
+	// mid-array, which is the root cause of "invalid LLM response format".
+	// Extracting per chunk and merging avoids the truncation entirely.
+	chunks := splitDocumentForExtraction(content)
+	if len(chunks) == 0 {
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, "文档内容为空，无法提取规则")
 		return
 	}
 
-	s.updateParseStatus(task.TemplateID, "parsing", 80, "解析 LLM 响应...")
+	var allRules []*model.AegisRule
+	anyChunkSucceeded := false
+	for idx, chunk := range chunks {
+		s.updateParseStatus(task.TemplateID, "parsing", 80,
+			fmt.Sprintf("解析文档分块 %d/%d ...", idx+1, len(chunks)))
 
-	// 解析 LLM 响应
-	rules, err := llm.ParseRules(llmResponse)
-	if err != nil {
-		logger.Error("failed to parse rules",
-			zap.Error(err),
-			zap.String("template_id", task.TemplateID.String()),
-		)
-		s.updateParseStatusWithDB(task.TemplateID, "failed", 0, fmt.Sprintf("解析规则失败：%v", err))
+		rules, err := s.extractRulesFromChunk(ctx, llmClient, chunk, idx, len(chunks))
+		if err != nil {
+			logger.Warn("failed to extract rules from document chunk",
+				zap.Error(err),
+				zap.Int("chunk", idx+1),
+				zap.Int("total_chunks", len(chunks)),
+				zap.String("template_id", task.TemplateID.String()),
+			)
+			continue
+		}
+		anyChunkSucceeded = true
+		allRules = append(allRules, rules...)
+	}
+
+	if !anyChunkSucceeded {
+		s.updateParseStatusWithDB(task.TemplateID, "failed", 0,
+			"解析规则失败：LLM 返回格式无法解析，请重试或更换模型")
 		return
 	}
 
-	// 去重
-	rules = llm.ValidateRules(rules)
+	// 去重（跨分块合并后按标题去重）
+	rules := llm.ValidateRules(allRules)
 
 	// 设置 template_id
 	for _, rule := range rules {
@@ -409,4 +422,105 @@ func generateRandomSuffix(length int) string {
 		b[i] = charset[r.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+// ruleExtractChunkChars is the approximate character budget per document chunk
+// sent to the LLM for rule extraction. It is kept well under the
+// ChatCompletion MaxTokens (4096) so the returned JSON array is never
+// truncated. Rule text is mixed CN/EN, so 6000 chars is a safe margin.
+const ruleExtractChunkChars = 6000
+
+// ruleExtractMaxRetries is the number of strict-prompt retries per chunk when
+// the LLM returns an unparseable response.
+const ruleExtractMaxRetries = 2
+
+// extractRulesFromChunk extracts aegis rules from a single document chunk.
+// It retries with a stricter prompt (demanding a single fenced JSON array) when
+// the model returns prose or a non-JSON payload, since ChatCompletion only
+// retries on transport/empty errors.
+func (s *TemplateService) extractRulesFromChunk(ctx context.Context, llmClient *llm.LLMClient, chunk string, idx, total int) ([]*model.AegisRule, error) {
+	for attempt := 0; attempt <= ruleExtractMaxRetries; attempt++ {
+		var prompt string
+		var temperature float64
+		if attempt == 0 {
+			prompt = llm.GetRuleExtractionPrompt(chunk)
+			temperature = 0.1
+		} else {
+			prompt = llm.GetRuleExtractionPromptStrict(chunk)
+			temperature = 0
+			logger.Warn("retrying rule extraction with strict prompt",
+				zap.Int("attempt", attempt),
+				zap.Int("chunk", idx+1),
+				zap.Int("total_chunks", total),
+				zap.String("template_id", "n/a"),
+			)
+		}
+
+		llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, temperature)
+		if err != nil {
+			return nil, fmt.Errorf("LLM 调用失败：%w", err)
+		}
+
+		parsed, perr := llm.ParseRules(llmResponse)
+		if perr == nil {
+			return parsed, nil
+		}
+		logger.Warn("failed to parse rules from chunk, will retry with stricter prompt",
+			zap.Error(perr),
+			zap.Int("chunk", idx+1),
+			zap.Int("total_chunks", total),
+			zap.Int("attempt", attempt),
+		)
+	}
+
+	return nil, fmt.Errorf("invalid LLM response format")
+}
+
+// splitDocumentForExtraction splits a baseline document into chunks small
+// enough to fit the LLM output token budget. It prefers paragraph boundaries
+// to avoid cutting a single rule mid-way; over-long paragraphs are hard-split.
+func splitDocumentForExtraction(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	paragraphs := strings.Split(content, "\n\n")
+	var chunks []string
+	var current strings.Builder
+
+	flush := func() {
+		if current.Len() > 0 {
+			chunks = append(chunks, strings.TrimSpace(current.String()))
+			current.Reset()
+		}
+	}
+
+	for _, p := range paragraphs {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+
+		// A single paragraph longer than the budget: hard-split it.
+		if len(p) > ruleExtractChunkChars {
+			flush()
+			for len(p) > ruleExtractChunkChars {
+				chunks = append(chunks, p[:ruleExtractChunkChars])
+				p = p[ruleExtractChunkChars:]
+			}
+			current.WriteString(p)
+			current.WriteString("\n\n")
+			continue
+		}
+
+		if current.Len() > 0 && current.Len()+len(p)+2 > ruleExtractChunkChars {
+			flush()
+		}
+		current.WriteString(p)
+		current.WriteString("\n\n")
+	}
+	flush()
+
+	return chunks
 }

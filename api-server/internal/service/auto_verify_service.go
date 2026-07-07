@@ -18,6 +18,17 @@ import (
 // AutoVerifyService handles automatic detection-repair-verification loops.
 // Flow for CHECK tasks: CHECK fails → FIX → CHECK → ... until pass or max rounds.
 // Flow for FIX tasks: FIX succeeds → CHECK → if fail → FIX → ... until pass or max rounds.
+//
+// Triggering: auto-verify is driven by two complementary paths:
+//   1. Real-time: TaskService.ProcessTaskResult calls HandleTaskResult right
+//      after a terminal result is persisted. This is reached both for results
+//      the API Server derives itself (dispatch failure, timeout) and for agent
+//      results pushed back by the Server service via the internal
+//      POST /internal/task-result endpoint (SetTaskResultCallback in server).
+//   2. Poll fallback: StartResultScanner polls FindAutoVerifyTerminalTasks
+//      every 5s to catch anything the real-time path missed (e.g. after an
+//      API Server restart). The handledResults map plus HasAutoVerifyFollowup
+//      DB dedup keep re-processing idempotent.
 type AutoVerifyService struct {
 	taskLogRepo    *repository.TaskLogRepository
 	ruleRepo       *repository.RuleRepository
@@ -79,6 +90,12 @@ func (s *AutoVerifyService) scanCompletedTaskResults() {
 			s.handledResults.Delete(key)
 		}
 	}
+	// Note: `handledResults` is in-process memory. After an API Server restart it
+	// is cleared, so the poll may re-evaluate already-processed terminal tasks.
+	// That is safe: triggerFixForVerify/triggerCheckForVerify de-dup via
+	// HasAutoVerifyFollowup (DB), and a CHECK that already passed simply returns
+	// true without creating new tasks. The poll is therefore idempotent and
+	// serves as the fallback for both missed real-time pushes and restarts.
 }
 
 // HandleTaskResult checks if auto-verification should be triggered after a task completes.
@@ -119,9 +136,18 @@ func (s *AutoVerifyService) HandleTaskResult(taskLog *model.TaskLog, normalizedS
 // handleCheckResult handles CHECK task completion in auto-verify mode.
 // If CHECK passed (exit_code=0), verification is complete.
 // If CHECK failed (exit_code=1, non-compliant), trigger FIX and continue.
+//
+// Note on status normalization: for CHECK tasks, NormalizeTaskResultStatus maps
+// a non-compliant result (exit_code=1) to SUCCESS and only maps genuine
+// execution errors (exit_code<0 or >=2, or stderr matching an error pattern)
+// to FAILED. So the `status != "SUCCESS"` branch below is the defensive path
+// for CHECK execution failures (it will not be hit for a merely non-compliant
+// baseline item). Non-compliance is detected via `exitCode == 1` further down.
 func (s *AutoVerifyService) handleCheckResult(taskLog *model.TaskLog, status string, exitCode, currentRound, maxRounds int) bool {
 	if status != "SUCCESS" {
-		// CHECK task itself failed (execution error, timeout, etc.) - stop auto-verify
+		// Defensive branch: CHECK task itself failed (execution error, timeout,
+		// audit-blocked, etc.) - stop auto-verify. A merely non-compliant
+		// baseline item is normalized to SUCCESS with exit_code=1 and handled below.
 		logger.Info("auto-verify stopped: CHECK task execution failed",
 			zap.String("task_id", taskLog.ID.String()),
 			zap.String("status", status),

@@ -142,22 +142,42 @@ func ValidateRules(rules []*model.AegisRule) []*model.AegisRule {
 	return validated
 }
 
-// extractJSON tries to extract JSON array/object from LLM response
+// extractJSON tries to extract JSON array/object from LLM response.
+// It first scans for the first top-level [ or {; if none is found it falls
+// back to extracting the content of a ```json (or plain ```) fenced code block,
+// which models sometimes wrap their JSON in. Leading/trailing whitespace and
+// invisible characters are trimmed before scanning.
 func extractJSON(response string) string {
-	// Find first [ or {
+	trimmed := strings.TrimSpace(response)
+	if trimmed == "" {
+		return ""
+	}
+
+	// Fast path: scan for the first top-level [ or {.
 	start := -1
-	for i, c := range response {
+	for i, c := range trimmed {
 		if c == '[' || c == '{' {
 			start = i
 			break
 		}
 	}
 
-	if start == -1 {
-		return ""
+	if start != -1 {
+		return scanToMatchingBracket(trimmed, start)
 	}
 
-	// Find matching ] or }, ignoring brackets inside JSON strings.
+	// Fallback: try to pull JSON out of a fenced code block (```json ... ```).
+	if fenced := extractFencedJSON(trimmed); fenced != "" {
+		return fenced
+	}
+
+	return ""
+}
+
+// scanToMatchingBracket extracts the substring from start (which must point at a
+// '[' or '{') up to and including its matching closing bracket, honoring strings
+// and escape sequences. Returns "" if no balanced match is found.
+func scanToMatchingBracket(response string, start int) string {
 	bracket := response[start]
 	closeBracket := getCloseBracket(bracket)
 	count := 0
@@ -193,6 +213,36 @@ func extractJSON(response string) string {
 	}
 
 	return ""
+}
+
+// extractFencedJSON tries to extract a JSON payload from a ```json or ```
+// fenced code block. It returns the trimmed inner content (the caller's
+// json.Unmarshal will validate it). Returns "" when no fenced block is found.
+func extractFencedJSON(response string) string {
+	const fence = "```"
+	open := strings.Index(response, fence)
+	if open == -1 {
+		return ""
+	}
+	// Skip the opening fence line (e.g. "```json").
+	afterOpen := open + len(fence)
+	if nl := strings.IndexByte(response[afterOpen:], '\n'); nl != -1 {
+		afterOpen += nl + 1
+	}
+	closeIdx := strings.Index(response[afterOpen:], fence)
+	if closeIdx == -1 {
+		return ""
+	}
+	inner := strings.TrimSpace(response[afterOpen : afterOpen+closeIdx])
+	if inner == "" {
+		return ""
+	}
+	// The fenced content might still be wrapped in [ ] / { }; let the normal
+	// scanner handle bracket balancing.
+	if inner[0] == '[' || inner[0] == '{' {
+		return scanToMatchingBracket(inner, 0)
+	}
+	return inner
 }
 
 func getCloseBracket(b byte) byte {

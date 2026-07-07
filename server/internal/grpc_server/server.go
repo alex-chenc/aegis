@@ -444,9 +444,12 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 					}
 				}
 
-				// Also call callback if set (for real-time notifications)
+				// Also call callback if set (for real-time notifications).
+				// Run async so the HTTP push to the API Server does not block
+				// this result-handling loop; the API Server's 5s poll covers
+				// any push that is missed.
 				if s.taskResultCallback != nil {
-					s.taskResultCallback(
+					go s.taskResultCallback(
 						taskID,
 						result.Stdout,
 						result.Stderr,
