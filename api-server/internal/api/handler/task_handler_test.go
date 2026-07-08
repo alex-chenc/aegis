@@ -122,6 +122,78 @@ func TestGetTaskLogs_NilRuleID(t *testing.T) {
 	}
 }
 
+func TestGetTaskLogs_ReturnsRuleTitleInsteadOfTemplateName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	if logger.Logger == nil {
+		if err := logger.Init(&logger.Config{Level: "error", MaxSize: 10, MaxBackups: 1, MaxAge: 1}); err != nil {
+			t.Fatalf("failed to init logger: %v", err)
+		}
+	}
+	db := setupTaskHandlerTestDB(t)
+	if err := db.Exec(`
+		CREATE TABLE aegis_rules (
+			id TEXT PRIMARY KEY,
+			template_id TEXT NOT NULL,
+			title TEXT NOT NULL
+		)
+	`).Error; err != nil {
+		t.Fatalf("failed to create aegis_rules table: %v", err)
+	}
+
+	taskGroupID := uuid.New()
+	taskID := uuid.New()
+	ruleID := uuid.New()
+	hostID := uuid.New()
+	const ruleTitle = "确保 SSH Root 登录已禁用"
+	const templateName = "CIS_Ubuntu_24.04_LTS_Benchmark.pdf"
+	if err := db.Exec("INSERT INTO aegis_rules (id, template_id, title) VALUES (?, ?, ?)", ruleID.String(), uuid.NewString(), ruleTitle).Error; err != nil {
+		t.Fatalf("failed to insert rule: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO hosts (id, ip_address, hostname, os_type, agent_version, last_heartbeat_at, created_at, updated_at)
+		VALUES (?, '10.0.0.1', 'test-host', 'linux', 'test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, hostID.String()).Error; err != nil {
+		t.Fatalf("failed to insert host: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO task_logs (id, task_group_id, rule_id, host_id, task_type, status, created_at)
+		VALUES (?, ?, ?, ?, 'CHECK', 'SUCCESS', CURRENT_TIMESTAMP)
+	`, taskID.String(), taskGroupID.String(), ruleID.String(), hostID.String()).Error; err != nil {
+		t.Fatalf("failed to insert task log: %v", err)
+	}
+
+	taskLogRepo := repository.NewTaskLogRepository(db)
+	hostRepo := repository.NewHostRepository(db)
+	handler := &TaskHandler{
+		taskService: service.NewTaskService(taskLogRepo, hostRepo, nil, nil, nil, nil),
+		taskLogRepo: taskLogRepo,
+		ruleRepo:    repository.NewRuleRepository(db),
+	}
+	router := gin.New()
+	router.GET("/tasks/:id/logs", handler.GetTaskLogs)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/tasks/"+taskGroupID.String()+"/logs", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Data []TaskLogResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("expected one task log, got %d", len(response.Data))
+	}
+	if response.Data[0].RuleTitle != ruleTitle {
+		t.Fatalf("expected rule title %q, got %q", ruleTitle, response.Data[0].RuleTitle)
+	}
+	if response.Data[0].RuleTitle == templateName {
+		t.Fatalf("task API must not expose template name as rule title")
+	}
+}
+
 func TestGetTaskLogs_AuditBlocked(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

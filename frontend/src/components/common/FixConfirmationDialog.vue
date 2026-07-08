@@ -44,6 +44,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SeverityTag from './SeverityTag.vue'
 import HostScriptStatusList from '@/components/vulnerability/HostScriptStatusList.vue'
@@ -69,6 +70,8 @@ const emit = defineEmits<{
   (e: 'execute', data: { taskId: string; hosts: string[] }): void
 }>()
 
+const router = useRouter()
+
 const dialogVisible = computed({
   get: () => props.visible,
   set: (val) => emit('update:visible', val)
@@ -85,7 +88,7 @@ function handleHostScriptExecute(data: { taskGroupId: string; hosts: string[] })
   emit('execute', { taskId: data.taskGroupId || '', hosts: data.hosts || [] })
   ElMessage.success(props.mode === 'fix' ? '修复任务已创建' : 'POC 验证任务已创建')
   dialogVisible.value = false
-  window.location.href = '/vulnerability/tasks'
+  router.push('/vulnerability/tasks')
 }
 </script>
 

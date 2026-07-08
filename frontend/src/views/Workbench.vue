@@ -304,8 +304,7 @@
               :label="rule.id"
               class="dispatch-check"
             >
-              <strong>{{ rule.title }}</strong>
-              <span>{{ rule.template_name }}</span>
+              <strong :title="rule.title">{{ rule.title }}</strong>
             </el-checkbox>
           </el-checkbox-group>
           <el-pagination
@@ -1498,7 +1497,7 @@ onBeforeUnmount(() => {
 }
 
 .dispatch-check strong {
-  max-width: 250px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
