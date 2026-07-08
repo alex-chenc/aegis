@@ -180,6 +180,7 @@ import {
   normalizeStatus,
   type TaskGroupSummary
 } from '@/api/tasks'
+import { buildCsv, downloadCsv } from '@/utils/csv'
 
 const route = useRoute()
 const router = useRouter()
@@ -362,10 +363,14 @@ const getTaskDisplayStatus = (task: any) => {
 const exportExcelReport = async () => {
   exporting.value = true
   try {
-    // 为每个任务组获取详细任务数据
-    const allRows: string[][] = [
-      ['任务组ID', '规则标题', '主机', '任务类型', '状态', '退出码', '通过', '创建时间']
+    const headers = [
+      '任务组ID', '规则标题', '主机', '主机ID', '任务类型', '状态', '退出码',
+      '通过', '漏洞ID', '自动验证', '验证轮数', '最大轮数',
+      '脚本内容', '标准输出', '错误输出',
+      '创建时间', '开始时间', '结束时间',
     ]
+
+    const allRows: (string | number)[][] = []
 
     for (const group of taskGroups.value) {
       try {
@@ -374,42 +379,49 @@ const exportExcelReport = async () => {
           const passed = normalizeStatus(task.status) === 'success' && (task.exit_code ?? 0) === 0 ? '是' : '否'
           allRows.push([
             group.task_group_id,
-            task.rule_title || task.rule_id || '-',
+            task.rule_title || task.rule_id || task.vulnerability_id || '-',
             task.hostname || task.host_id || '-',
+            task.host_id || '-',
             getTaskTypeLabel(task.task_type),
             getTaskDisplayStatus(task),
-            task.exit_code !== undefined ? String(task.exit_code) : '-',
+            task.exit_code ?? '-',
             passed,
-            formatTime(task.finished_at || task.created_at || group.created_at)
+            task.vulnerability_id || '-',
+            task.auto_verify ? '是' : '否',
+            task.verify_round ?? '-',
+            task.max_rounds ?? '-',
+            task.script_content || '-',
+            task.stdout || '-',
+            task.stderr || '-',
+            formatTime(task.created_at || group.created_at),
+            formatTime(task.started_at),
+            formatTime(task.finished_at),
           ])
         }
       } catch {
-        // 单个任务组获取失败时添加汇总行
         allRows.push([
           group.task_group_id,
           '(获取详情失败)',
-          '-',
+          '-', '-',
           getTaskTypeLabel(group.task_type),
           getStatusText(normalizeStatus(group.status)),
-          '-',
-          '-',
-          formatTime(group.created_at)
+          '-', '-', '-', '-', '-', '-', '-', '-', '-',
+          formatTime(group.created_at),
+          '-', '-',
         ])
       }
     }
 
-    const escapeHtml = (s: string) => String(s).replace(/[<&>]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] || c))
-    const table = allRows
-      .map(cols => `<tr>${cols.map(col => `<td>${escapeHtml(col)}</td>`).join('')}</tr>`)
-      .join('')
-    const blob = new Blob([`<table>${table}</table>`], { type: 'application/vnd.ms-excel;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${isVulnerabilityTask.value ? 'vulnerability' : 'baseline'}-compliance-report.xls`
-    link.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('合规报告已导出')
+    if (allRows.length === 0) {
+      ElMessage.warning('当前没有可导出的任务')
+      return
+    }
+
+    const csv = buildCsv(headers, allRows)
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+    const prefix = isVulnerabilityTask.value ? '漏洞任务详情' : '基线任务详情'
+    downloadCsv(`${prefix}_${ts}.csv`, csv)
+    ElMessage.success(`已导出 ${allRows.length} 条任务详情`)
   } catch (e: any) {
     ElMessage.error(e.message || '导出失败')
   } finally {

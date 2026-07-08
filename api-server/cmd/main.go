@@ -168,6 +168,9 @@ func main() {
 	vulnService := service.NewVulnerabilityService(vulnRepo, hostRepo, taskLogRepo, redisClient, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient, scriptAuditService, assetCollectionRepo)
 	vulnService.SetTaskService(taskService)
 	logger.Info("Vulnerability service initialized with asset repository for V5.8 asset-based scanning")
+	// V6.1: Vulnerability auto fix+verify loop (POC_VERIFY <-> VULNERABILITY_FIX)
+	vulnAutoVerifyService := service.NewVulnerabilityAutoVerifyService(vulnRepo, hostRepo, taskLogRepo, vulnService, taskService)
+	taskService.SetVulnAutoVerifyService(vulnAutoVerifyService)
 	customCVEService := service.NewCustomCVEService(vulnRepo, customCVEQueryRepo, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	hostVulnerabilityScriptService := service.NewHostVulnerabilityScriptService(hostVulnerabilityScriptRepo, vulnRepo, hostRepo, taskLogRepo, configRepo, scriptAuditService, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries, serverClient)
 	alertService := service.NewAlertService(alertRepo, blockPolicyRepo, blockRepo, serverClient)
@@ -218,6 +221,7 @@ func main() {
 	scriptGenService.StartWorkers(ctx)
 	selfHealingService.StartWorkers(ctx)
 	autoVerifyService.StartResultScanner(ctx)
+	vulnAutoVerifyService.StartResultScanner(ctx)
 
 	logger.Info("background workers started")
 
@@ -236,8 +240,8 @@ func main() {
 	configHandler := handler.NewConfigHandler(configRepo, "default-encryption-key")
 	hostHandler := handler.NewHostHandler(hostRepo, redisClient, serverClient)
 	templateHandler := handler.NewTemplateHandler(templateRepo, ruleRepo, minioClient, redisClient, templateService, scriptGenService)
-	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, selfHealingService, auditLogRepo)
-	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, selfHealingService, ruleRepo, auditLogRepo)
+	taskHandler := handler.NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, selfHealingService, auditLogRepo, vulnRepo)
+	taskHandlerWithHealing := handler.NewTaskHandlerWithHealing(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, selfHealingService, ruleRepo, auditLogRepo, vulnRepo)
 	agentHandler := handler.NewAgentHandler(serverClient, minioClient, serverIP, cfg.Server.HTTPPort, cfg.Server.AgentHubPort)
 	ruleHandler := handler.NewRuleHandler(ruleRepo, taskLogRepo, scriptGenService)
 	vulnerabilityHandler := handler.NewVulnerabilityHandler(vulnService, customCVEService, hostVulnerabilityScriptService)

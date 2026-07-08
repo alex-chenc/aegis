@@ -27,6 +27,7 @@ type TaskService struct {
 	scriptGenService *ScriptGenerationService
 	selfHealingSvc   *SelfHealingService
 	autoVerifySvc    *AutoVerifyService
+	vulnAutoVerifySvc *VulnerabilityAutoVerifyService
 	auditService     *ScriptAuditService
 	serverClient     *grpcclient.ServerClient
 }
@@ -64,6 +65,10 @@ func (s *TaskService) SetSelfHealingService(service *SelfHealingService) {
 
 func (s *TaskService) SetAutoVerifyService(service *AutoVerifyService) {
 	s.autoVerifySvc = service
+}
+
+func (s *TaskService) SetVulnAutoVerifyService(service *VulnerabilityAutoVerifyService) {
+	s.vulnAutoVerifySvc = service
 }
 
 func (s *TaskService) SetAuditService(service *ScriptAuditService) {
@@ -363,10 +368,19 @@ func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string,
 	)
 
 	if findErr == nil && IsTerminalTaskStatus(normalizedStatus) {
-		s.maybeTriggerLargeModelRepair(taskLog, normalizedStatus, exitCode, stdout, stderr)
+		// Vulnerability auto fix+verify loop (POC_VERIFY / VULNERABILITY_FIX).
+		// When it handles the task it also owns LLM script repair, so skip the
+		// generic large-model repair for these tasks.
+		handledByVuln := false
+		if s.vulnAutoVerifySvc != nil && taskLog.VulnerabilityID != nil && taskLog.AutoVerify {
+			handledByVuln = s.vulnAutoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode)
+		}
+		if !handledByVuln {
+			s.maybeTriggerLargeModelRepair(taskLog, normalizedStatus, exitCode, stdout, stderr)
+		}
 	}
 
-	// Auto-verify: trigger detection-repair loop if enabled
+	// Baseline auto-verify: trigger detection-repair loop if enabled
 	if findErr == nil && IsTerminalTaskStatus(normalizedStatus) && s.autoVerifySvc != nil {
 		s.autoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode)
 	}

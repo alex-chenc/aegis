@@ -299,7 +299,7 @@
           </el-input>
           <el-checkbox-group v-model="selectedRuleIds" class="dispatch-list">
             <el-checkbox
-              v-for="rule in dispatchFilteredRules"
+              v-for="rule in paginatedDispatchRules"
               :key="rule.id"
               :label="rule.id"
               class="dispatch-check"
@@ -308,6 +308,16 @@
               <span>{{ rule.template_name }}</span>
             </el-checkbox>
           </el-checkbox-group>
+          <el-pagination
+            v-if="dispatchFilteredRules.length > dispatchRulePageSize"
+            v-model:current-page="dispatchRulePage"
+            :page-size="dispatchRulePageSize"
+            :total="dispatchFilteredRules.length"
+            layout="total, prev, pager, next"
+            background
+            small
+            style="margin-top: 8px; justify-content: center;"
+          />
         </section>
 
         <section class="dispatch-panel">
@@ -516,6 +526,8 @@ const selectedRuleIds = ref<string[]>([])
 const selectedHostIds = ref<string[]>([])
 const hostSearch = ref('')
 const dispatchRuleSearch = ref('')
+const dispatchRulePage = ref(1)
+const dispatchRulePageSize = 10
 const dispatchDialogVisible = ref(false)
 const dispatchMaxRounds = ref(1)
 const dispatchAutoVerify = ref(false)
@@ -611,6 +623,11 @@ const dispatchFilteredRules = computed(() => {
   )
 })
 
+const paginatedDispatchRules = computed(() => {
+  const start = (dispatchRulePage.value - 1) * dispatchRulePageSize
+  return dispatchFilteredRules.value.slice(start, start + dispatchRulePageSize)
+})
+
 const filteredHosts = computed(() => {
   const keyword = hostSearch.value.trim().toLowerCase()
   if (!keyword) return hosts.value
@@ -679,6 +696,10 @@ watch([ruleSearch, templateFilter], () => {
   for (const key of Object.keys(templateRulePageMap)) {
     delete templateRulePageMap[key]
   }
+})
+
+watch(dispatchRuleSearch, () => {
+  dispatchRulePage.value = 1
 })
 
 watch([scriptDialogVisible, scriptActiveTab], () => {
@@ -1415,14 +1436,22 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  padding: 16px;
+  background: #f8f9fb;
+  border: 1px solid var(--aegis-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .dispatch-panel {
-  min-height: 420px;
   padding: 14px;
   border: 1px solid var(--aegis-border);
   border-radius: 8px;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .dispatch-panel-header {
@@ -1446,9 +1475,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 340px;
+  flex: 1;
+  min-height: 0;
   margin-top: 12px;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .dispatch-check {

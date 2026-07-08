@@ -56,7 +56,7 @@
         <div class="card-header">
           <span>{{ pageTitle }}</span>
           <div class="header-actions">
-            <el-button type="success" @click="handleExport">
+            <el-button type="success" @click="handleExport" :loading="exporting">
               <el-icon><Download /></el-icon>
               导出 CSV
             </el-button>
@@ -323,7 +323,8 @@ import { Search, RefreshRight, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAssetStore } from '@/store/assets'
 import { storeToRefs } from 'pinia'
-import { getApplicationDetail, reviewApplication, type ApplicationAsset } from '@/api/assets'
+import { getApplicationDetail, reviewApplication, listApplicationAssets, type ApplicationAsset } from '@/api/assets'
+import { buildCsv, downloadCsv } from '@/utils/csv'
 
 const assetStore = useAssetStore()
 const router = useRouter()
@@ -341,6 +342,7 @@ const {
 const showDetailDrawer = ref(false)
 const showReviewDialog = ref(false)
 const submitting = ref(false)
+const exporting = ref(false)
 const selectedApp = ref<ApplicationAsset | null>(null)
 const appDetail = ref<any>(null)
 
@@ -418,9 +420,57 @@ function handlePageChange() {
   assetStore.fetchApplicationAssets()
 }
 
-// 导出 CSV
-function handleExport() {
-  // TODO: 实现 CSV 导出
+// 导出 CSV（导出当前筛选条件下的全部应用资产，不受当前分页限制）
+async function handleExport() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const pageSize = Math.max(applicationTotal.value, applicationAssets.value.length, 1)
+    const result = await listApplicationAssets({
+      ...filters.value,
+      page: 1,
+      page_size: pageSize,
+    })
+    const items = result.items || []
+    if (items.length === 0) {
+      ElMessage.warning('当前筛选条件下没有可导出的应用资产')
+      return
+    }
+
+    const headers = [
+      '主机名称', '主机ID', 'IP地址', '分组名称', '操作系统',
+      '应用名称', '分类', '标签', '安装版本', 'PID',
+      '监听端口', '启动用户', '启动路径', '置信度', '状态', '记录时间',
+    ]
+    const rows = items.map((app: ApplicationAsset) => [
+      app.hostname,
+      app.host_id,
+      app.ip_address,
+      app.group_name,
+      app.os_type,
+      app.display_name || app.name,
+      getCategoryLabel(app.category),
+      applicationRuntimeLabel(app),
+      app.version || 'unknown',
+      displayPids(app).join(';'),
+      (app.listen_ports || []).join(';'),
+      app.run_user,
+      app.start_path,
+      `${Math.round(getConfidence(app) * 100)}%`,
+      getReviewStatusLabel(app.review_status),
+      formatTime(app.collected_at),
+    ])
+
+    const csv = buildCsv(headers, rows)
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+    downloadCsv(`应用资产_${ts}.csv`, csv)
+    ElMessage.success(`已导出 ${items.length} 条应用资产`)
+  } catch (error) {
+    console.error('导出应用资产 CSV 失败', error)
+    ElMessage.error('导出 CSV 失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 // 查看详情

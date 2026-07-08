@@ -24,6 +24,7 @@ type TaskHandler struct {
 	ruleRepo           *repository.RuleRepository
 	selfHealingService *service.SelfHealingService
 	auditLogRepo       *repository.AuditLogRepo
+	vulnRepo           *repository.VulnerabilityRepo
 }
 
 func NewTaskHandler(
@@ -35,6 +36,7 @@ func NewTaskHandler(
 	ruleRepo *repository.RuleRepository,
 	selfHealingService *service.SelfHealingService,
 	auditLogRepo *repository.AuditLogRepo,
+	vulnRepo *repository.VulnerabilityRepo,
 ) *TaskHandler {
 	return &TaskHandler{
 		taskService:        taskService,
@@ -45,6 +47,7 @@ func NewTaskHandler(
 		ruleRepo:           ruleRepo,
 		selfHealingService: selfHealingService,
 		auditLogRepo:       auditLogRepo,
+		vulnRepo:           vulnRepo,
 	}
 }
 
@@ -98,6 +101,7 @@ type TaskLogResponse struct {
 	TaskGroupID   string                 `json:"task_group_id"`
 	RuleID        string                 `json:"rule_id"`
 	HostID        string                 `json:"host_id"`
+	VulnerabilityID string               `json:"vulnerability_id"`
 	RuleTitle     string                 `json:"rule_title"`
 	Hostname      string                 `json:"hostname"`
 	TaskType      string                 `json:"task_type"`
@@ -377,6 +381,10 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		if log.RuleID != nil {
 			ruleID = log.RuleID.String()
 		}
+		vulnID := ""
+		if log.VulnerabilityID != nil {
+			vulnID = log.VulnerabilityID.String()
+		}
 		hostID := log.HostID.String()
 
 		ruleTitle, ok := ruleTitleCache[ruleID]
@@ -386,6 +394,12 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 				rule, findErr := h.ruleRepo.FindByID(*log.RuleID)
 				if findErr == nil {
 					ruleTitle = rule.Title
+				}
+			}
+			// 漏洞任务没有 rule_id，使用 CVE 编号作为规则标题
+			if log.VulnerabilityID != nil {
+				if vuln, findErr := h.vulnRepo.FindByID(*log.VulnerabilityID); findErr == nil {
+					ruleTitle = vuln.CveID
 				}
 			}
 			ruleTitleCache[ruleID] = ruleTitle
@@ -406,6 +420,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 			TaskGroupID:   log.TaskGroupID.String(),
 			RuleID:        ruleID,
 			HostID:        hostID,
+			VulnerabilityID: vulnID,
 			RuleTitle:     ruleTitle,
 			Hostname:      hostname,
 			TaskType:      log.TaskType,
@@ -739,9 +754,10 @@ func NewTaskHandlerWithHealing(
 	healingService *service.SelfHealingService,
 	ruleRepo *repository.RuleRepository,
 	auditLogRepo *repository.AuditLogRepo,
+	vulnRepo *repository.VulnerabilityRepo,
 ) *TaskHandlerWithHealing {
 	return &TaskHandlerWithHealing{
-		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, healingService, auditLogRepo),
+		TaskHandler:    NewTaskHandler(taskService, taskLogRepo, healingLogRepo, scriptGenService, serverClient, ruleRepo, healingService, auditLogRepo, vulnRepo),
 		healingService: healingService,
 		ruleRepo:       ruleRepo,
 		taskLogRepo:    taskLogRepo,

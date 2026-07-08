@@ -490,7 +490,7 @@ const progressStatus = computed(() => {
   return ''
 })
 
-const getRuleTitle = (task: TaskLog) => task.rule_title || task.rule_id.substring(0, 8) + '...'
+const getRuleTitle = (task: TaskLog) => task.rule_title || task.vulnerability_id || task.rule_id?.substring(0, 8) + '...' || ''
 
 const getHostname = (hostId: string) => {
   const host = hostStore.hosts.find(h => h.id === hostId)
