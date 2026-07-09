@@ -3,7 +3,7 @@ module api-server
 go 1.25.0
 
 require (
-	github.com/alex-chenc/agent-runtime v0.0.0-20260606044322-e8b5f2b0c4d0
+	github.com/alex-chenc/agent-runtime v0.0.0-20260709174636-f08aef08f729
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

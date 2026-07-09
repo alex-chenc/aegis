@@ -288,6 +288,18 @@ func TestAssistantToolGatewayAdapterReusesSuccessfulReadonlyToolCall(t *testing.
 	}
 }
 
+func TestAssistantToolGatewayAdapterDoesNotReuseVolatileStatusTool(t *testing.T) {
+	tool := &ToolSpec{
+		Name:       "Vulnerability.Script.Status",
+		Operation:  OpGet,
+		Risk:       ToolRiskReadonly,
+		Idempotent: true,
+	}
+	if canReuseAssistantToolResult(tool) {
+		t.Fatal("volatile status tools must bypass same-message result reuse")
+	}
+}
+
 func TestAssistantToolGatewayAdapterExecutesOnlyRequestedAssetCollectionTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, spec := range []*ToolSpec{
@@ -732,7 +744,7 @@ func TestGatewayAppliesPlanArgs(t *testing.T) {
 	}
 }
 
-func TestGatewayLLMArgsOverridePlanArgs(t *testing.T) {
+func TestGatewayPlanArgsOverrideLLMArgs(t *testing.T) {
 	registry := NewToolRegistry()
 	var receivedArgs map[string]interface{}
 	_ = registry.Register(&ToolSpec{
@@ -765,7 +777,7 @@ func TestGatewayLLMArgsOverridePlanArgs(t *testing.T) {
 		ExecutionPlan: plan,
 	})
 
-	// LLM provides scope="all_hosts" which should override plan's "online_hosts"
+	// Caller-authorized plan scope must override a conflicting model value.
 	resp, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
 		CallID:   "call-2",
 		ToolName: "Asset.Collection.Trigger",
@@ -777,8 +789,58 @@ func TestGatewayLLMArgsOverridePlanArgs(t *testing.T) {
 	if resp.Status != agentruntime.ToolCallSuccess {
 		t.Fatalf("expected success, got %s", resp.Status)
 	}
-	if receivedArgs["scope"] != "all_hosts" {
-		t.Fatalf("expected LLM arg to override plan arg, got scope=%v", receivedArgs["scope"])
+	if receivedArgs["scope"] != "online_hosts" {
+		t.Fatalf("expected plan arg to override model arg, got scope=%v", receivedArgs["scope"])
+	}
+}
+
+func TestGatewayUsesStepIDForRepeatedToolArgs(t *testing.T) {
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		ExecutionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{
+			{StepID: "generate_poc", ToolName: "Vulnerability.Script.Generate", Args: map[string]interface{}{"script_type": "poc", "cve_id": "CVE-2021-45340"}},
+			{StepID: "generate_fix", ToolName: "Vulnerability.Script.Generate", Args: map[string]interface{}{"script_type": "fix", "cve_id": "CVE-2021-45340"}},
+		}},
+	})
+
+	prepared, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "generate_fix",
+		ToolName: "Vulnerability.Script.Generate",
+		Args:     map[string]interface{}{"script_type": "poc"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Args["script_type"] != "fix" {
+		t.Fatalf("prepared script_type = %#v", prepared.Args["script_type"])
+	}
+}
+
+func TestGatewayPrepareDoesNotInferScenarioArgsFromPriorCalls(t *testing.T) {
+	registry := NewToolRegistry()
+	dispatcher, toolRepo := newTestToolDispatcher(t, registry)
+	toolRepo.calls = []model.AssistantToolCall{{
+		SessionID: "session-1", MessageID: "msg-1", ToolName: "Example.Discover",
+		Status: model.ToolCallStatusSuccess,
+		Result: mustMarshalJSON(map[string]interface{}{"resource_id": "resource-from-history"}),
+	}}
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "session-1",
+		MessageID:  "msg-1",
+	})
+
+	prepared, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		ToolName: "Example.Apply",
+		Args:     map[string]interface{}{"resource_id": "resource-from-runtime"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Args["resource_id"] != "resource-from-runtime" {
+		t.Fatalf("gateway must preserve runtime arguments, got %#v", prepared.Args)
+	}
+	if prepared.Context["aegis_prepared"] != "true" {
+		t.Fatalf("expected generic preparer marker, got %#v", prepared.Context)
 	}
 }
 

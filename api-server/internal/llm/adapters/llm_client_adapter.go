@@ -154,7 +154,7 @@ func (a *LLMClientAdapter) injectAlertContext(messages []llm.Message) []llm.Mess
 		return messages
 	}
 
-	suffix := fmt.Sprintf("\n\n## 告警上下文\n%s", string(ctxJSON))
+	suffix := fmt.Sprintf("\n\n## Alert context\n%s", string(ctxJSON))
 
 	for i, m := range messages {
 		if m.Role == "system" {

@@ -8,96 +8,94 @@ import (
 // Prompt templates for LLM interactions
 
 // RuleExtractionPrompt extracts aegis rules from uploaded documents
-const RuleExtractionPrompt = `你是一位资深的安全基线专家，擅长从技术文档中提取安全检查规则。
+const RuleExtractionPrompt = `You are a senior security-baseline expert. Extract every security baseline check from the supplied document.
 
-请从以下文档内容中提取所有的安全基线检查项，并以 JSON 数组格式返回。每个检查项包含：
-- title: 规则标题（简洁明了）
-- check_content: 检查内容描述（详细说明需要检查什么）
-- fix_content: 修复方法描述（如果检查不通过，如何修复）
+Return a JSON array. Each item must contain:
+- title: a concise rule title
+- check_content: a detailed description of what to check
+- fix_content: remediation instructions for a failed check
 
-返回格式示例：
+Example:
 [
   {
-    "title": "SSH 密码复杂度要求",
-    "check_content": "检查/etc/pam.d/common-password 是否配置了密码复杂度要求",
-    "fix_content": "在/etc/pam.d/common-password 中添加 pam_pwquality.so 模块配置"
+    "title": "SSH password complexity requirement",
+    "check_content": "Check whether /etc/pam.d/common-password configures password complexity.",
+    "fix_content": "Add an appropriate pam_pwquality.so configuration to /etc/pam.d/common-password."
   }
 ]
 
-文档内容：
+Document content:
 %s
 
-请只返回 JSON 数组，不要包含其他文字说明。确保 JSON 格式正确，可以直接解析。`
+Return only a directly parseable JSON array. Do not output explanations or Markdown. Preserve the document's language in user-facing rule text when appropriate.`
 
 // CheckScriptGenerationPrompt generates shell check scripts from rule content
-const CheckScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师，擅长编写系统检查和审计脚本。
+const CheckScriptGenerationPrompt = `You are a senior shell engineer who writes system audit and compliance-check scripts.
 
-请根据以下基线规则的检查内容，生成一个 Shell 检查脚本。
+Generate one complete executable Bash check script from the baseline check below.
 
-要求：
-1. 脚本必须是完整的、可执行的 bash 脚本，以#!/bin/bash 开头
-2. 退出码语义必须严格区分：
-   - exit code 0：检查执行成功，且基线项通过
-   - exit code 1：检查执行成功，但基线项未通过（这是业务结果，不是脚本错误）
-   - exit code 2 或更高：脚本执行错误、依赖命令缺失、权限不足、解析失败、环境异常
-3. 脚本应该有清晰的输出，说明检查通过、未通过或执行错误的原因
-4. 使用标准的 bash 命令和工具
-5. 脚本应该健壮，处理可能的异常情况
-6. 不要把合规未通过写成脚本错误；只有脚本无法可靠完成检查时才返回 2 或更高
+Requirements:
+1. Start with #!/bin/bash.
+2. Use these exit codes exactly:
+   - exit code 0: the check completed and the baseline item is compliant.
+   - exit code 1: the check completed and the baseline item is non-compliant; this is a business result, not a script error.
+   - exit code 2 or higher: execution error, missing dependency, insufficient permission, parse failure, or unsupported environment.
+3. Print a clear reason for compliant, non-compliant, or execution-error results.
+4. Use standard Bash commands and tools.
+5. Handle expected failures and environment differences safely.
+6. Never report non-compliance as a script error. Use 2 or higher only when the check cannot be completed reliably.
 
-规则检查内容：
+Baseline check:
 %s
 
-请只返回脚本内容，不要包含其他文字说明。脚本应该可以直接执行。`
+Return only the executable script, without Markdown or explanations.`
 
 // FixScriptGenerationPrompt generates shell fix scripts from rule content
-const FixScriptGenerationPrompt = `你是一位资深的 Shell 脚本工程师，擅长编写系统配置和修复脚本。
+const FixScriptGenerationPrompt = `You are a senior shell engineer who writes safe system-configuration and remediation scripts.
 
-请根据以下基线规则的检测内容和修复建议，生成一个 Shell 修复脚本。
+Generate one complete executable Bash remediation script from the baseline check and remediation guidance below.
 
-要求：
-1. 脚本必须是完整的、可执行的 bash 脚本，以#!/bin/bash 开头
-2. 脚本执行成功返回 exit code 0，失败返回 exit code 1
-3. 脚本应该有清晰的输出，说明修复操作的进度和结果
-4. 使用标准的 bash 命令和工具
-5. 脚本应该健壮，处理可能的异常情况
-6. 对于需要 root 权限的操作，应该有权限检查
-7. 修复动作必须满足检测内容的逆逻辑：修复完成后，同等语义的检测应返回通过
-8. 必须根据检测内容写出修复后的验证步骤；验证不通过时返回非 0
-9. 优先采用修复建议中的方法；如建议不完整，补足必要的幂等检查、备份和验证
-10. 修复脚本必须幂等，多次执行不应破坏已有正确配置
+Requirements:
+1. Start with #!/bin/bash.
+2. Return exit code 0 on success and a non-zero exit code on failure.
+3. Print clear progress and outcome messages.
+4. Use standard Bash commands and tools.
+5. Handle expected failures safely.
+6. Check privileges before operations that require root.
+7. Make the remediation satisfy the inverse of the check: an equivalent check must pass afterward.
+8. Include post-remediation verification derived from the check. Return non-zero when verification fails.
+9. Prefer the supplied remediation guidance and add necessary idempotency checks, backups, and verification when it is incomplete.
+10. Be idempotent and preserve already-correct configuration.
 
-规则检测内容：
+Baseline check:
 %s
 
-规则修复内容：
+Remediation guidance:
 %s
 
-请只返回脚本内容，不要包含其他文字说明。脚本应该可以直接执行。`
+Return only the executable script, without Markdown or explanations.`
 
 // SelfHealingFixPrompt generates fix scripts for failed scripts
-const SelfHealingFixPrompt = `你是一位资深的 Shell 脚本调试专家，擅长分析和修复脚本错误。
+const SelfHealingFixPrompt = `You are a senior shell-script debugging expert. Analyze the failure and generate a corrected script.
 
-有一个脚本执行失败了，请分析错误信息并生成修复后的脚本。
-
-原始脚本：
+Original script:
 %s
 
-执行错误：
+Execution error:
 %s
 
-退出码：%d
+Exit code: %d
 
-历史修复尝试（如果有）：
+Previous remediation attempts, if any:
 %s
 
-请分析失败原因，生成一个修复后的脚本。修复应该：
-1. 针对具体的错误信息进行修复
-2. 保留原始脚本的正确部分
-3. 修复应该是最小化的改动，不要重写整个脚本
-4. 确保修复后的脚本可以正常执行
+Requirements:
+1. Fix the specific observed error.
+2. Preserve correct parts of the original script.
+3. Make the smallest safe change; do not rewrite the entire script unnecessarily.
+4. Produce a complete executable corrected script.
 
-请只返回修复后的完整脚本内容，不要包含其他文字说明。`
+Return only the corrected script, without Markdown or explanations.`
 
 // GetRuleExtractionPrompt returns the rule extraction prompt with document content
 func GetRuleExtractionPrompt(documentContent string) string {
@@ -109,29 +107,26 @@ func GetRuleExtractionPrompt(documentContent string) string {
 // single JSON array wrapped in a ```json code block and no explanatory prose.
 // NOTE: Go raw string literals cannot contain backticks, so the fence markers
 // are concatenated as interpreted strings.
-const RuleExtractionPromptStrict = `你是一位资深的安全基线专家。请从下面的文档中提取所有安全基线检查项。
+const RuleExtractionPromptStrict = `You are a senior security-baseline expert. Extract every security baseline check from the document below.
 
-【严格要求】
-1. 你必须且只能输出一个 JSON 数组，不要输出任何解释、前言或总结文字。
-2. 必须用 ` + "```" + `json 代码块包裹整个 JSON 数组。
-3. 每个数组元素包含三个字段：
-   - "title": 规则标题（简洁明了）
-   - "check_content": 检查内容描述
-   - "fix_content": 修复方法描述
-4. 不要使用 Markdown 列表、不要添加注释、不要转义整个 JSON。
+Strict requirements:
+1. Output exactly one JSON array with no preface, explanation, or summary.
+2. Wrap the entire JSON array in one ` + "```" + `json code fence.
+3. Every item must contain "title", "check_content", and "fix_content".
+4. Do not output Markdown lists, comments, or a JSON-escaped string.
 
-【输出示例】
+Example:
 ` + "```json" + `
 [
   {
-    "title": "SSH 密码复杂度要求",
-    "check_content": "检查 /etc/pam.d/common-password 是否配置了密码复杂度要求",
-    "fix_content": "在 /etc/pam.d/common-password 中添加 pam_pwquality.so 模块配置"
+    "title": "SSH password complexity requirement",
+    "check_content": "Check whether /etc/pam.d/common-password configures password complexity.",
+    "fix_content": "Add an appropriate pam_pwquality.so configuration."
   }
 ]
 ` + "```" + `
 
-文档内容：
+Document content:
 %s`
 
 // GetRuleExtractionPromptStrict returns the strict rule extraction prompt.
@@ -152,7 +147,7 @@ func GetFixScriptGenerationPrompt(checkContent, fixContent string) string {
 // GetSelfHealingFixPrompt returns the self-healing fix prompt
 func GetSelfHealingFixPrompt(originalScript, errorMessage string, exitCode int, history string) string {
 	if history == "" {
-		history = "无"
+		history = "none"
 	}
 	return fmt.Sprintf(SelfHealingFixPrompt, originalScript, errorMessage, exitCode, history)
 }
@@ -197,71 +192,42 @@ Incorrect: CVE-2021-44228
 Incorrect: No vulnerabilities found
 Incorrect: (empty)`
 
-// CVEAnalysisPromptZH is the Chinese version for Chinese model
-const CVEAnalysisPromptZH = `你是一个CVE漏洞分析助手，负责分析软件清单并识别安全漏洞。
+// CVEAnalysisPromptZH retains its public name for compatibility. Its
+// instructions are English while user-facing descriptions may remain Chinese.
+const CVEAnalysisPromptZH = `You are a CVE analysis assistant. Analyze the supplied software inventory and identify security vulnerabilities.
 
-## 强制输出要求（最重要，任何情况下都必须遵守）
-1. 你必须且只能输出一个有效的JSON数组
-2. 禁止输出任何其他文字、解释、说明、注释或空行
-3. 即使发生错误，也必须返回一个JSON数组（空数组[]表示无漏洞）
+Mandatory output requirements:
+1. Output exactly one valid JSON array and nothing else.
+2. Do not output explanations, comments, Markdown, or blank prose.
+3. Return [] when no vulnerability is found or no supported conclusion can be produced.
 
-## JSON数组格式（必须严格遵循）
-[
-  {
-    "cve_id": "CVE-年份-编号",
-    "severity": "Critical|High|Medium|Low",
-    "cvss_score": 分数（0.0-10.0）,
-    "description": "漏洞中文描述，简洁准确",
-    "affected_package": "存在漏洞的软件包名称",
-    "affected_versions": "受影响版本范围",
-    "fix_version": "修复该漏洞的版本",
-    "attack_vector": "攻击向量：Network|Local|Adjacent",
-    "references": ["https://nvd.nist.gov/vuln/detail/CVE-XXXX-XXXXX"]
-  }
-]
+Item schema:
+{"cve_id":"CVE-YYYY-NNNNN","severity":"Critical|High|Medium|Low","cvss_score":0.0,"description":"concise vulnerability description in Simplified Chinese","affected_package":"package name","affected_versions":"affected range","fix_version":"fixed version","attack_vector":"Network|Local|Adjacent","references":["authoritative URL"]}
 
-## 分析规则
-- 如果发现漏洞：返回包含漏洞信息的JSON数组（可能包含1个或多个漏洞）
-- 如果未发现任何漏洞：必须返回空数组 []（不能返回其他任何内容）
-- 如果无法确定：基于软件包名称和已知漏洞模式进行分析，给出最可能的CVE
-
-## 禁止事项
-- 禁止输出任何中文文字（"漏洞"、"分析"等）
-- 禁止输出解释性文字
-- 禁止输出注释
-- 禁止输出空行或空白内容
-- 禁止输出空响应（即使是错误情况也必须返回[]）
-
-## 输出示例
-正确：[]
-正确：[{"cve_id":"CVE-2021-44228","severity":"Critical","cvss_score":10.0,"description":"Log4j远程代码执行漏洞","affected_package":"log4j-core","affected_versions":"2.0-2.14.1","fix_version":"2.17.0","attack_vector":"Network","references":["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"]}]
-错误：CVE-2021-44228
-错误：未发现漏洞
-错误：（无输出）`
+Use authoritative CVE identifiers and references. Never invent a CVE merely from a package-name pattern.`
 
 // VulnerabilityFixPrompt generates secure fix scripts for vulnerabilities
-const VulnerabilityFixPrompt = `你是一位资深的 DevOps 工程师，专门负责编写安全、可靠的服务器运维脚本。
+const VulnerabilityFixPrompt = `You are a senior DevOps engineer who writes safe and reliable server-remediation scripts.
 
-## 脚本编写规范
-1. 必须包含：脚本头部注释、前置检查、备份操作、修复操作、结果验证、错误处理
-2. 禁止：rm -rf /、删除系统关键文件、创建后门账户、关闭防火墙
-3. 安全要求：set -e, set -u, 使用绝对路径, HTTPS下载
+Requirements:
+1. Include a header, preflight checks, backups, remediation, verification, and error handling.
+2. Never delete critical system files, create backdoor accounts, disable the firewall, or use destructive commands such as rm -rf /.
+3. Use set -e, set -u, absolute paths where practical, and HTTPS for downloads.
+4. Make changes idempotent and verify the result locally.
 
-## 输出要求
-只输出完整的 Shell 脚本内容，不需要额外说明。`
+Return only the complete shell script without Markdown or explanations.`
 
 // POCVerificationPrompt generates safe POC verification scripts for vulnerabilities
-const POCVerificationPrompt = `你是一位专业的安全研究员，专门负责编写漏洞验证脚本（POC）。
+const POCVerificationPrompt = `You are a security researcher who writes safe, non-destructive vulnerability verification scripts.
 
-## 绝对禁止
-- 删除文件、修改系统配置、停止服务、创建后门、执行恶意代码
-- 数据篡改、拒绝服务攻击
+Forbidden:
+- Deleting files, changing system configuration, stopping services, creating persistence or backdoors, or executing malicious payloads.
+- Data modification or denial-of-service behavior.
 
-## 允许操作
-- 版本检查、配置检查（只读）、特征检测、日志分析、无害探测
+Allowed:
+- Version checks, read-only configuration checks, signature detection, log analysis, and harmless probes.
 
-## 输出要求
-输出安全的 Shell 验证脚本，退出码规范：0=安全, 1=漏洞存在, 2=验证出错`
+Return only a safe shell verification script. Exit codes: 0=safe or not affected, 1=vulnerability detected, 2=verification error.`
 
 // AIMessage represents a message in the AI conversation history
 type AIMessage struct {
@@ -302,36 +268,36 @@ Final Answer:
 {
   "attack_graph": {
     "graphId": "graph_[timestamp]_[sequence]",
-    "title": "[攻击类型，如：反弹Shell攻击链路溯源]",
-    "summary": "[一句话描述攻击链路]",
+    "title": "[attack type, for example reverse-shell attack path]",
+    "summary": "[one-sentence attack-path summary]",
     "threatLevel": "[critical/high/medium/low]",
     "nodes": [
       {
-        "id": "[唯一ID，如：attacker_1]",
+        "id": "[unique ID, for example attacker_1]",
         "type": "[attacker/victim/process/file/network/command/malware]",
-        "label": "[显示名称]",
-        "detail": "[详细信息]",
+        "label": "[display label]",
+        "detail": "[details]",
         "properties": {},
         "severity": "[critical/high/medium/low/info]"
       }
     ],
     "edges": [
       {
-        "id": "[唯一ID，如：edge_1]",
-        "source": "[源节点ID]",
-        "target": "[目标节点ID]",
+        "id": "[unique ID, for example edge_1]",
+        "source": "[source node ID]",
+        "target": "[target node ID]",
         "type": "[spawns/connects/reads/writes/executes/downloads/encrypts/exfiltrates]",
-        "label": "[边标签，如：外连、spawns]",
+        "label": "[edge label, for example outbound connection or spawns]",
         "properties": {}
       }
     ],
     "timeline": [
-      {"timestamp": "[ISO时间]", "event": "[事件描述]", "nodeIds": ["相关节点ID"]}
+      {"timestamp": "[ISO timestamp]", "event": "[event description]", "nodeIds": ["related node ID"]}
     ],
-    "recommendations": ["[处置建议1]", "[处置建议2]", ...]
+    "recommendations": ["[recommendation 1]", "[recommendation 2]", ...]
   },
   "conclusions": [
-    {"alert_id": "[告警ID]", "action": "[mark_false_positive/confirm_threat/generate_rule]", "summary": "[该告警的中文分析结论]"}
+    {"alert_id": "[alert ID]", "action": "[mark_false_positive/confirm_threat/generate_rule]", "summary": "[analysis conclusion in Simplified Chinese]"}
   ]
 }
 Remember:
@@ -382,98 +348,46 @@ func BuildReActPrompt(userMessage string, history []*AIMessage, context map[stri
 }
 
 // ScriptAuditSystemPrompt is the system prompt for AI script security audit
-const ScriptAuditSystemPrompt = `你是一位资深的Shell脚本安全审计专家。你的任务是审查由AI生成的Shell脚本，判断是否存在安全风险。
+const ScriptAuditSystemPrompt = `You are a senior shell-script security auditor. Review an AI-generated shell script for security risks.
 
-## 审查维度
+Review dimensions:
+1. Privilege escalation: nested sudo, PATH or LD_PRELOAD injection, SUID or SGID abuse, and Linux capability abuse.
+2. Data exfiltration: encoded outbound data, DNS tunneling, and ICMP tunneling.
+3. Conditional malicious behavior: time triggers, sandbox or VM detection, and network-condition triggers.
+4. Intent mismatch: a check script that modifies state, or a remediation script that performs unrelated system operations.
+5. Resource exhaustion: oversized files, unbounded loops, fork bombs, or memory exhaustion.
+6. Backdoors or persistence: SSH key injection, crontab changes, or hidden users.
 
-1. **权限提升**: 是否存在隐蔽的权限提升手段
-   - sudo嵌套使用
-   - 环境变量注入（如PATH劫持、LD_PRELOAD）
-   - 利用SUID/SGID文件
-   - 利用capabilities
+Return JSON only:
+{"passed":true,"risk_level":"safe|low|medium|high|critical","issues":[{"type":"privilege_escalation|data_exfiltration|conditional_malicious|intent_mismatch|resource_exhaustion|backdoor","description":"issue description in Simplified Chinese","line_range":"start-end","suggestion":"remediation in Simplified Chinese"}],"summary":"audit summary in Simplified Chinese"}
 
-2. **数据外泄**: 是否存在数据外泄风险
-   - 将敏感数据编码后外传（base64/hex编码后curl/wget）
-   - DNS隧道（通过DNS查询外传数据）
-   - ICMP隧道
-
-3. **条件性恶意行为**: 是否存在触发条件后才执行的恶意代码
-   - 时间触发（特定日期/时间执行恶意操作）
-   - 环境检测（检测沙箱/虚拟机后改变行为）
-   - 网络条件触发
-
-4. **意图不一致**: 脚本是否与其声明的检查/修复意图不一致
-   - 声称是检查脚本但包含修改操作
-   - 声称是修复脚本但包含无关的系统操作
-
-5. **资源耗尽**: 是否可能导致系统资源耗尽
-   - 创建超大文件、无限循环、内存炸弹
-
-6. **后门植入**: 是否存在后门或持久化机制
-   - 添加SSH公钥、修改crontab、创建隐藏用户
-
-## 输出格式（必须为JSON）
-
-{
-  "passed": true或false,
-  "risk_level": "safe|low|medium|high|critical",
-  "issues": [
-    {
-      "type": "privilege_escalation|data_exfiltration|conditional_malicious|intent_mismatch|resource_exhaustion|backdoor",
-      "description": "问题描述",
-      "line_range": "起始行-结束行",
-      "suggestion": "修复建议"
-    }
-  ],
-  "summary": "审计总结"
-}
-
-## 判断标准
-
-- critical/high级别问题 → passed=false
-- 仅medium级别 → passed=true，记录问题
-- 正常系统管理操作（apt install、systemctl restart）不判为恶意
-- 不确定时倾向通过，但记录疑虑
-- 所有输出使用简体中文`
+Decision criteria:
+- Any critical or high issue means passed=false.
+- Medium-only findings may keep passed=true but must be recorded.
+- Normal administration such as apt install or systemctl restart is not inherently malicious when it matches the declared intent.
+- When uncertain, record the concern and make the most evidence-based decision.`
 
 // DetectionPackageGenerationPrompt generates detection package drafts from CVE information
-const DetectionPackageGenerationPrompt = `你是 Aegis V5.8 的 AI 安全规则生成器。你的输出是人工可修改的草稿，不是最终发布物。
+const DetectionPackageGenerationPrompt = `You are the Aegis V5.8 AI security-rule generator. Produce an editable draft, never a final published artifact.
 
-## 输入
+Input includes a CVE identifier, vulnerability description, prerequisites, exploitation-chain behavior, observable system calls or kernel hooks, false-positive constraints, and current agent capabilities.
 
-你会收到：
-- CVE 编号
-- 漏洞描述
-- 攻击前置条件
-- 利用链行为
-- 可观测系统调用或内核 hook
-- 误报约束
-- 当前 agent 支持能力
+Output these sections with correctly labeled code fences:
+1. HookPlan YAML: collection-only hook, extract, filter, and emit definitions; no alert logic.
+2. eBPF C source draft: event collection and lightweight filtering only.
+3. Sigma atomic rules YAML: single-event atomic detection only.
+4. Correlation DetectionSpec YAML: ordered sequence, window, and by only.
 
-## 输出
+Rules:
+- Use rule_id in package_id.stable_name form.
+- Every Sigma atomic rule must include an attack.txxxx MITRE technique tag. The correlation alert must include the same actionable mitre_id.
+- Do not create cross-package dependencies.
+- Use only explicitly supported hook types; default to tracepoint.
+- Avoid unbounded event volume.
 
-必须输出四段，每段使用对应语言标记的代码块：
+## eBPF source requirements
 
-1. HookPlan YAML - 只描述 hook、extract、filter、emit，不包含告警逻辑
-2. eBPF C 源码草稿 - 只做事件采集和轻量过滤，不做复杂检测
-3. Sigma atomic rules YAML - 只做单事件 atomic detection
-4. Correlation DetectionSpec YAML - 只做 ordered sequence + window + by
-
-## 关键规则
-
-- HookPlan 只描述采集，不描述告警。
-- eBPF 插件只做事件采集和轻量过滤。
-- Sigma 只做单事件 atomic detection。
-- Correlation 只做 ordered sequence + window + by。
-- rule_id 使用 package_id.stable_name 格式。
-- 每条 Sigma atomic rule 的 tags 必须包含 'attack.txxxx' MITRE technique；Correlation alert 必须包含同一可处置 MITRE 'mitre_id'。
-- 不生成跨 package 依赖。
-- 不使用未明确允许的 hook 类型（默认只允许 tracepoint）。
-- 输出必须避免不可控事件风暴。
-
-## eBPF Source 格式要求
-
-eBPF C 源码必须包含以下头文件和定义：
+Include these headers:
 
 #include <linux/bpf.h>
 #include <linux/types.h>
@@ -481,13 +395,13 @@ eBPF C 源码必须包含以下头文件和定义：
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-必须定义以下类型别名：
+Define these aliases:
 typedef __u8 u8;
 typedef __u16 u16;
 typedef __u32 u32;
 typedef __u64 u64;
 
-必须定义 tracepoint 上下文结构体：
+Define this tracepoint context:
 struct trace_event_raw_sys_enter {
     unsigned short common_type;
     unsigned char common_flags;
@@ -497,37 +411,26 @@ struct trace_event_raw_sys_enter {
     unsigned long args[6];
 };
 
-对于 tracepoint 程序，使用以下模式：
+For tracepoint programs:
 - SEC("tracepoint/syscalls/sys_enter_xxx")
-- 函数签名：int tracepoint__syscalls__sys_enter_xxx(struct trace_event_raw_sys_enter *ctx)
-- 访问参数：ctx->args[0], ctx->args[1], etc.
-- 必须同时支持 AEGIS_EVENT_PERF 与 AEGIS_EVENT_RINGBUF 条件编译
-- AEGIS_EVENT_RINGBUF 分支使用 BPF_MAP_TYPE_RINGBUF + bpf_ringbuf_reserve/bpf_ringbuf_submit
-- AEGIS_EVENT_PERF 分支使用 BPF_MAP_TYPE_PERF_EVENT_ARRAY + bpf_perf_event_output
-- perf 分支必须使用栈上 struct event 作为输出缓冲，不调用 bpf_ringbuf_reserve
-- pid/tid 必须使用 bpf_get_current_pid_tgid() 获取
-- 禁止使用 bpf_get_current_task()，禁止直接解引用 struct task_struct
-- 不要直接解引用内核内部结构体指针，如 struct sock、struct file、struct task_struct；需要字段时优先使用 tracepoint 参数或稳定 helper
-- 事件结构必须使用 agent 支持的统一信封：
+- Use int tracepoint__syscalls__sys_enter_xxx(struct trace_event_raw_sys_enter *ctx).
+- Access arguments through ctx->args[0], ctx->args[1], and so on.
+- Support both AEGIS_EVENT_PERF and AEGIS_EVENT_RINGBUF conditional compilation.
+- The ring-buffer branch uses BPF_MAP_TYPE_RINGBUF with bpf_ringbuf_reserve and bpf_ringbuf_submit.
+- The perf branch uses BPF_MAP_TYPE_PERF_EVENT_ARRAY with bpf_perf_event_output and a stack-allocated struct event; it must not call bpf_ringbuf_reserve.
+- Obtain pid and tid with bpf_get_current_pid_tgid().
+- Never use bpf_get_current_task() or directly dereference struct task_struct, struct sock, struct file, or other internal kernel structures. Prefer tracepoint arguments or stable helpers.
+- Use the agent event envelope:
   timestamp_ns, plugin_id_hash, event_type, pid, tid, uid, gid, payload_len, payload[256]
-- payload TLV 格式必须是 field_id(uint16 little-endian) + field_len(uint16 little-endian) + raw value；不要生成 field_type 字节
-- 如果不需要字段，payload_len 必须设为 0，Sigma 规则只匹配 event_type
-- eBPF event_type 数字必须和 HookPlan/package metadata 的 event_schema.events key 一致
+- Encode payload TLV as field_id(uint16 little-endian) + field_len(uint16 little-endian) + raw value, with no field_type byte.
+- Set payload_len=0 when no fields are needed, and match only event_type in Sigma.
+- Keep numeric eBPF event_type values consistent with HookPlan or package metadata event_schema.events keys.
 
-## HookPlan 格式要求
+## HookPlan requirements
 
-HookPlan YAML 必须包含以下元数据字段（在 hooks 之前）：
-- schema_version: 固定值 "aegis.ebpf_plugin.v1"
-- package_id: 使用下方提供的 package_id
-- version: 版本号（如 "1.0.0"）
+Place schema_version, package_id, and version before hooks. Use schema_version "aegis.ebpf_plugin.v1". Every hook must include name, attach_type, attach, and program.
 
-每个 hook 必须包含以下字段：
-- name: hook 名称（如 sys_enter_socket）
-- attach_type: 附加类型，必须是 tracepoint 或 kprobe
-- attach: 附加点路径（如 syscalls/sys_enter_socket）
-- program: 对应的 eBPF 程序段名称（如 tracepoint__syscalls__sys_enter_socket）
-
-示例格式：
+Example:
 schema_version: "aegis.ebpf_plugin.v1"
 package_id: "cve-2026-xxxxx"
 version: "1.0.0"
@@ -537,49 +440,47 @@ hooks:
     attach: syscalls/sys_enter_socket
     program: tracepoint__syscalls__sys_enter_socket
 
-## 输出模板
-
-请按以下章节输出：
+## Output template
 
 ## Package Metadata
 package_id, version, title, description, cve_ids
 
 ## HookPlan
-使用 yaml 代码块，开头必须包含 schema_version、package_id、version 元数据字段，然后是 hooks 列表。每个 hook 必须包含 name, attach_type, attach, program 字段
+Use a yaml code fence containing metadata followed by hooks.
 
 ## eBPF Source Draft
-使用 c 代码块
+Use a c code fence.
 
 ## Sigma Atomic Rules
-使用 yaml 代码块
+Use a yaml code fence.
 
 ## Correlation DetectionSpec
-使用 yaml 代码块
+Use a yaml code fence.
 
-## 风险与限制
-说明检测的边界和潜在误报
+## Risks and Limitations
+Describe detection boundaries and potential false positives.
 
-## 安全边界声明
+## Safety Boundary
 
-请在输出末尾明确写出：
-该输出为草稿，必须经过人工修改、builder 容器编译、人工审核、人工签名发布和页面启用后，才能由 agent 安装。
+End with this statement:
+This output is a draft. It must be edited by a human, compiled in the builder container, reviewed, signed, published, and enabled in the UI before an agent may install it.
 
-Package ID：
+Package ID:
 %s
 
-CVE 信息：
+CVE:
 %s
 
-漏洞描述：
+Vulnerability description:
 %s
 
-攻击前置条件：
+Attack prerequisites:
 %s
 
-利用链行为：
+Exploitation-chain behavior:
 %s
 
-误报约束：
+False-positive constraints:
 %s`
 
 // GetDetectionPackageGenerationPrompt returns the detection package generation prompt

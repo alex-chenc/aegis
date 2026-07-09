@@ -223,7 +223,7 @@ func toRuntimeRisk(risk ToolRisk) agentruntime.RiskLevel {
 func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 	return agentruntime.ToolDescriptor{
 		Name:             s.Name,
-		Description:      s.Description,
+		Description:      modelFacingToolDescription(&s),
 		ArgsSchema:       normalizeRuntimeArgsSchema(s.ArgsSchema),
 		ResultSchema:     s.ResultSchema,
 		RiskLevel:        toRuntimeRisk(s.Risk),
@@ -233,6 +233,28 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 		Idempotent:       s.Idempotent,
 		Tags:             append([]string{string(s.Domain), string(s.Operation)}, s.Tags...),
 	}
+}
+
+func modelFacingToolDescription(tool *ToolSpec) string {
+	if tool == nil {
+		return ""
+	}
+	contract := BuildToolUseContract(tool)
+	parts := []string{
+		"Capability: " + contract.Capability + ".",
+		"Domain: " + contract.Domain + ".",
+		"Operation: " + string(tool.Operation) + ".",
+	}
+	if len(contract.ObjectTypes) > 0 {
+		parts = append(parts, "Objects: "+strings.Join(contract.ObjectTypes, ", ")+".")
+	}
+	if len(contract.Preconditions) > 0 {
+		parts = append(parts, "Preconditions: "+strings.Join(contract.Preconditions, ", ")+".")
+	}
+	if len(contract.Postconditions) > 0 {
+		parts = append(parts, "Postconditions: "+strings.Join(contract.Postconditions, ", ")+".")
+	}
+	return strings.Join(parts, " ")
 }
 
 // normalizeRuntimeArgsSchema 深拷贝参数 schema，并将所有 "integer" 类型放宽为

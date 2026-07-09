@@ -124,7 +124,7 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 		prompt = llm.GetFixScriptGenerationPrompt(rule.CheckContent, rule.FixContent)
 	}
 
-	systemPrompt := "你是一位资深的 Shell 脚本工程师"
+	systemPrompt := "You are a senior shell-script engineer. Return only the requested complete executable script."
 	generator := &scriptGeneratorFunc{fn: func(genCtx context.Context, _ *AuditRequest) (string, error) {
 		return llmClient.ChatCompletion(genCtx, systemPrompt, prompt, 0.1)
 	}}

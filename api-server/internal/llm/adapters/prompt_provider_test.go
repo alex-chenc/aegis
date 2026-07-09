@@ -200,7 +200,7 @@ func TestBuildReactPrompt_IncludesExperience(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(bundle.SystemPrompt, "历史经验参考") {
+	if !strings.Contains(bundle.SystemPrompt, "Relevant historical experience") {
 		t.Error("react prompt should contain historical experience section when experience provider is configured")
 	}
 	if !strings.Contains(bundle.SystemPrompt, "timeout") {
@@ -219,7 +219,7 @@ func TestBuildReactPrompt_NoExperienceWhenProviderNil(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if strings.Contains(bundle.SystemPrompt, "历史经验参考") {
+	if strings.Contains(bundle.SystemPrompt, "Relevant historical experience") {
 		t.Error("react prompt should NOT contain experience section when no provider is configured")
 	}
 }

@@ -66,6 +66,30 @@ func compactRuntimeDisplayPayload(event AssistantEvent) (map[string]interface{},
 			"call_id":   callID,
 			"tool_name": toolName,
 		}, true
+	case EventToolResult:
+		callID, _ := payload["call_id"].(string)
+		if callID == "" {
+			return nil, false
+		}
+		return map[string]interface{}{
+			"call_id": callID,
+			"result":  payload["result"],
+		}, true
+	case EventToolError:
+		callID, _ := payload["call_id"].(string)
+		if callID == "" {
+			return nil, false
+		}
+		result := map[string]interface{}{
+			"call_id": callID,
+			"error":   payload["error"],
+		}
+		for _, key := range []string{"tool_name", "validation_stage"} {
+			if value, exists := payload[key]; exists {
+				result[key] = value
+			}
+		}
+		return result, true
 	case EventPlan:
 		plan := normalizePlanEventPayload(event.Payload)
 		if len(plan) == 0 {

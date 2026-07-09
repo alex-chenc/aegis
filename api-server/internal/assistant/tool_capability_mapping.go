@@ -43,13 +43,6 @@ func (m *ToolCapabilityMapper) ToolNamesForCapabilities(capabilities []string) [
 		contract := BuildToolUseContract(tool)
 		if wanted[strings.ToLower(contract.Capability)] {
 			names = append(names, tool.Name)
-			continue
-		}
-		for _, next := range contract.NextCapabilities {
-			if wanted[strings.ToLower(next)] {
-				names = append(names, tool.Name)
-				break
-			}
 		}
 	}
 	return dedupeStrings(names)
@@ -149,7 +142,7 @@ func requiresExplicitUserIntent(tool *ToolSpec) bool {
 		return true
 	}
 	switch tool.Operation {
-	case OpCreate, OpUpdate, OpDelete, OpExecute, OpDispatch, OpApprove, OpRollback:
+	case OpCreate, OpGenerate, OpUpdate, OpDelete, OpExecute, OpDispatch, OpApprove, OpRollback:
 		return tool.Risk != ToolRiskReadonly
 	default:
 		return false
@@ -189,27 +182,10 @@ func requiredArgsFromToolSchema(schema map[string]interface{}) []string {
 }
 
 func inferEntityFromArgName(argName string) string {
-	lower := strings.ToLower(argName)
-	switch {
-	case strings.Contains(lower, "host"):
-		return "host"
-	case strings.Contains(lower, "alert"):
-		return "alert"
-	case strings.Contains(lower, "task"):
-		return "task"
-	case strings.Contains(lower, "rule"):
-		return "baseline_rule"
-	case strings.Contains(lower, "template"):
-		return "baseline_template"
-	case strings.Contains(lower, "package"):
-		return "package"
-	case strings.Contains(lower, "cve"):
-		return "cve"
-	case strings.Contains(lower, "vulnerability"):
-		return "vulnerability"
-	default:
-		return strings.TrimSuffix(lower, "_id")
-	}
+	lower := strings.ToLower(strings.TrimSpace(argName))
+	lower = strings.TrimSuffix(lower, "_ids")
+	lower = strings.TrimSuffix(lower, "_id")
+	return lower
 }
 
 func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
@@ -231,8 +207,6 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 		}
 		contract.Postconditions = []string{"task_id_created"}
 		contract.ResultValidators = []string{"asset_collection_task_id_present"}
-		contract.NextCapabilities = []string{"get_asset_collection_task", "list_application_assets", "get_asset_summary"}
-		contract.WorkflowHints = []string{"asset_collection_then_analysis"}
 		contract.RequiresExplicitUserIntent = true
 		contract.RequiresApproval = true
 	case "Asset.Collection.Get":
@@ -278,6 +252,11 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 	case "Baseline.Script.Generate":
 		contract.Postconditions = []string{"script_generated"}
 		contract.RequiresExplicitUserIntent = true
+	case "Vulnerability.CustomQuery.Start":
+		contract.Preconditions = []string{"exact_cve_list_result_empty"}
+		contract.RequiresExplicitUserIntent = true
+	case "Vulnerability.CustomQuery.Status":
+		contract.Preconditions = []string{"custom_cve_query_started"}
 	case "Vulnerability.Script.Execute":
 		contract.RequiresExplicitUserIntent = true
 		contract.RequiresApproval = true

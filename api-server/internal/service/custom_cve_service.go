@@ -117,34 +117,35 @@ func (s *CustomCVEService) executeQuery(ctx context.Context, query *model.Custom
 	queryCtx, cancel := context.WithTimeout(ctx, customCVEQueryTimeout)
 	defer cancel()
 
-	userPrompt := fmt.Sprintf(`请查询并返回以下 CVE 的权威漏洞信息：%s
+	userPrompt := fmt.Sprintf(`Return authoritative vulnerability intelligence for this CVE: %s
 
-要求：
-1. 只返回一个 JSON 对象
-2. 如果找到漏洞，found=true，并完整填写字段
-3. 如果未找到漏洞，found=false，其他字段可留空
+Requirements:
+1. Return exactly one JSON object.
+2. If authoritative information is available, set found=true and populate every supported field.
+3. If it is unavailable, set found=false and leave unsupported fields empty.
+4. Never invent references, affected versions, or remediation.
 
-JSON 格式：
+JSON schema:
 {
   "cve_id": "CVE-2024-XXXX",
   "severity": "Critical|High|Medium|Low",
   "cvss_score": 0.0,
-  "description": "漏洞描述",
+  "description": "vulnerability description in Simplified Chinese",
   "affected_products": [
     {
-      "product": "产品名",
-      "vendor": "厂商",
-      "versions": ["受影响版本"],
-      "fixed_versions": ["修复版本"]
+      "product": "product",
+      "vendor": "vendor",
+      "versions": ["affected version"],
+      "fixed_versions": ["fixed version"]
     }
   ],
-  "solution": "修复建议",
+  "solution": "remediation in Simplified Chinese",
   "references": ["https://..."],
   "cwe_id": "CWE-XX",
   "found": true
 }`, query.CveID)
 
-	response, err := llmClient.ChatCompletion(queryCtx, "你是一位资深漏洞情报分析专家", userPrompt, 0.1)
+	response, err := llmClient.ChatCompletion(queryCtx, "You are a senior vulnerability-intelligence analyst. Use only authoritative information and return strict JSON.", userPrompt, 0.1)
 	if err != nil {
 		s.markQueryFailed(query.ID, "LLM查询失败", err.Error())
 		return
@@ -171,6 +172,12 @@ JSON 格式：
 						zap.Error(markErr),
 						zap.String("query_id", query.ID.String()),
 					)
+				} else {
+					logger.Info("custom cve query completed",
+						zap.String("query_id", query.ID.String()),
+						zap.String("cve_id", query.CveID),
+						zap.String("vulnerability_id", existing.ID.String()),
+					)
 				}
 				return
 			}
@@ -186,7 +193,13 @@ JSON 格式：
 			zap.String("vulnerability_id", vuln.ID.String()),
 		)
 		_ = s.customCVEQueryRepo.MarkFailed(query.ID, "状态更新失败", err.Error())
+		return
 	}
+	logger.Info("custom cve query completed",
+		zap.String("query_id", query.ID.String()),
+		zap.String("cve_id", query.CveID),
+		zap.String("vulnerability_id", vuln.ID.String()),
+	)
 }
 
 func (s *CustomCVEService) parseCveQueryResult(response string) (*model.CveQueryResult, error) {
@@ -289,6 +302,10 @@ func (s *CustomCVEService) getLLMClient(ctx context.Context) (*llm.LLMClient, er
 }
 
 func (s *CustomCVEService) markQueryFailed(queryID uuid.UUID, errMsg string, errDetail string) {
+	logger.Warn("custom cve query failed",
+		zap.String("query_id", queryID.String()),
+		zap.String("error_message", errMsg),
+	)
 	if err := s.customCVEQueryRepo.MarkFailed(queryID, errMsg, errDetail); err != nil {
 		logger.Error("failed to mark custom cve query as failed",
 			zap.Error(err),

@@ -112,6 +112,39 @@ func TestAssistantHookSinkDoesNotPublishModelOutputAsMessageDelta(t *testing.T) 
 	}
 }
 
+func TestAssistantHookSinkPublishesPreGatewayValidationFailure(t *testing.T) {
+	manager := NewRunManager()
+	run := manager.Start("session-1")
+	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
+
+	err := sink.Handle(context.Background(), agentruntime.HookEvent{
+		Type: agentruntime.HookToolCallFinished,
+		Payload: map[string]interface{}{
+			"call_id":          "call-invalid",
+			"tool_name":        "Vulnerability.GenerateShell",
+			"status":           string(agentruntime.ToolCallFailed),
+			"error_message":    "tool not found",
+			"validation_stage": "descriptor",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, unsubscribe, err := manager.Subscribe("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unsubscribe()
+	event := receiveEvent(t, ch)
+	if event.Type != EventToolError {
+		t.Fatalf("event type = %q", event.Type)
+	}
+	payload := toMap(event.Payload)
+	if payload["validation_stage"] != "descriptor" {
+		t.Fatalf("validation_stage = %#v", payload["validation_stage"])
+	}
+}
+
 func TestAssistantHookSinkPublishesStepCompletedWithResultSummary(t *testing.T) {
 	manager := NewRunManager()
 	run := manager.Start("session-1")

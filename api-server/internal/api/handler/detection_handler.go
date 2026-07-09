@@ -1159,28 +1159,28 @@ func (h *DetectionHandler) callLLMForAlerts(ctx context.Context, alerts []model.
 		if i >= 10 {
 			break
 		}
-		alertSummaries = append(alertSummaries, fmt.Sprintf("告警ID: %s | MITRE: %s | 严重程度: %s\n描述: %s\n主机: %s | PID: %d",
+		alertSummaries = append(alertSummaries, fmt.Sprintf("Alert ID: %s | MITRE: %s | Severity: %s\nDescription: %s\nHost: %s | PID: %d",
 			a.AlertID, a.MitreID, a.Severity, a.Description, a.Hostname, a.PID))
 	}
 
-	prompt := fmt.Sprintf(`你是安全分析师。请分析以下%d条待处理告警，为每条告警判断是否为真实威胁，并生成独立的摘要和处置建议。
+	prompt := fmt.Sprintf(`You are a security analyst. Analyze these %d pending alerts independently, determine whether each is a real threat, and provide a separate summary and response recommendation.
 
-告警列表：
+Alerts:
 %s
 
-请用JSON格式返回分析结果，为每条告警提供独立分析：
+Return JSON only:
 {
   "alerts": [
     {
-      "alert_id": "告警ID",
-      "is_threat": true/false,
-      "llm_summary": "针对这条告警的安全分析摘要",
-      "recommendation": "针对这条告警的具体处置建议"
+      "alert_id": "alert ID",
+      "is_threat": true,
+      "llm_summary": "independent security summary in Simplified Chinese",
+      "recommendation": "specific response recommendation in Simplified Chinese"
     }
   ]
 }
 
-每条告警的摘要和处置建议必须是独立的，不要混在一起。只返回JSON，不要其他内容。绝对禁止使用markdown代码块标记，直接输出纯JSON字符串。`, len(alerts), strings.Join(alertSummaries, "\n\n"))
+Do not merge summaries across alerts. Do not output Markdown or any text outside the JSON object.`, len(alerts), strings.Join(alertSummaries, "\n\n"))
 
 	response, err := client.ChatCompletion(ctx, "", prompt, 0.7)
 	if err != nil {
@@ -1238,30 +1238,29 @@ func (h *DetectionHandler) GenerateSigmaRule(c *gin.Context) {
 		severity = "medium"
 	}
 
-	prompt := fmt.Sprintf(`你是一个安全规则专家。请根据用户描述生成一个Sigma规则。
+	prompt := fmt.Sprintf(`You are a security-rule expert. Generate one Sigma rule from the user's description.
 
-## 用户需求
-- 检测事件: %s
-- 检测方式: %s
-- MITRE技术ID: %s
-- 严重程度: %s
+## Request
+- Event: %s
+- Detection method: %s
+- MITRE technique ID: %s
+- Severity: %s
 
-## 输出要求
-1. 生成符合Sigma规则格式的YAML内容
-2. 规则必须包含: title, id, status, description, level, logsource, detection
-3. id字段使用uuid格式生成一个新的规则ID
-4. status设为 experimental
-5. 在tags中包含MITRE技术ID（如果有）
-6. detection部分需要包含具体的检测逻辑和条件
+## Requirements
+1. Return valid Sigma YAML.
+2. Include title, id, status, description, level, logsource, and detection.
+3. Generate a new UUID for id.
+4. Set status to experimental.
+5. Include the MITRE technique ID in tags when provided.
+6. Include concrete detection logic and conditions.
 
-## 输出格式
-只输出YAML内容，不要有其他文字说明。
+Return raw YAML only, without Markdown or explanations.
 
-示例格式:
-title: 规则标题
-id: 生成的UUID
+Example:
+title: Rule title
+id: generated UUID
 status: experimental
-description: 规则描述
+description: Rule description
 level: high
 tags:
   - attack.t1059.004
@@ -1275,7 +1274,7 @@ detection:
       - 'nc -e'
   condition: selection
 
-请生成Sigma规则:`, req.Event, req.Method, req.MitreID, severity)
+Generate the Sigma rule now.`, req.Event, req.Method, req.MitreID, severity)
 
 	response, err := client.ChatCompletion(c.Request.Context(), "", prompt, 0.7)
 	if err != nil {

@@ -1,8 +1,6 @@
 package assistant
 
 import (
-	"strings"
-
 	"go.uber.org/zap"
 )
 
@@ -39,7 +37,7 @@ func (g *ClarificationGate) Evaluate(breakdown *IntentBreakdown, accepted []stri
 		return ClarificationDecision{}
 	}
 
-	// 1. 写操作目标缺失时强制追问（来自 inferMissingInfo）
+	// 1. LLM 判断写操作目标缺失时强制追问。
 	if breakdown.NeedClarification && breakdown.RequiresWrite {
 		question := breakdown.ClarifyingQuestion
 		if question == "" {
@@ -68,10 +66,10 @@ func (g *ClarificationGate) Evaluate(breakdown *IntentBreakdown, accepted []stri
 	}
 
 	// 3. 写操作中的必需参数缺失不能被任意已接受的只读工具掩盖。
-	// 前置步骤可动态提供的参数应在裁决阶段标记为 workflowForced，而不会进入此分支。
+	// 可由 Runtime 上下文或前序结果提供的参数已在通用参数来源检查中放行。
 	if breakdown.RequiresWrite || len(accepted) == 0 {
 		for _, record := range records {
-			if record.Decision == toolDecisionClarificationRequired && (len(accepted) == 0 || isWriteDecisionTool(record.ToolName)) {
+			if record.Decision == toolDecisionClarificationRequired && (len(accepted) == 0 || record.RequiresWrite) {
 				return ClarificationDecision{
 					Required: true,
 					Question: record.Reason,
@@ -96,13 +94,4 @@ func (g *ClarificationGate) Evaluate(breakdown *IntentBreakdown, accepted []stri
 	}
 
 	return ClarificationDecision{}
-}
-
-func isWriteDecisionTool(toolName string) bool {
-	for _, marker := range []string{".Trigger", ".Start", ".Stop", ".Execute", ".Generate", ".Run", ".Fix", ".Block", ".Resolve", ".Delete", ".Create", ".Update"} {
-		if strings.Contains(toolName, marker) {
-			return true
-		}
-	}
-	return false
 }

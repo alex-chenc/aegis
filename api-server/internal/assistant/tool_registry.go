@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -131,6 +132,9 @@ func (r *ToolRegistry) Register(spec *ToolSpec) error {
 	}
 	if spec.Handler == nil {
 		return fmt.Errorf("tool handler is required for %s", spec.Name)
+	}
+	if capability := strings.TrimSpace(spec.Capability); capability != "" && !capabilityIdentifierPattern.MatchString(capability) {
+		return fmt.Errorf("tool %s capability %q must be a lowercase English capability identifier", spec.Name, capability)
 	}
 	if _, exists := r.tools[spec.Name]; exists {
 		return fmt.Errorf("tool %s already registered", spec.Name)

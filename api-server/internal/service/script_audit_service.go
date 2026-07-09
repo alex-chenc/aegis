@@ -322,27 +322,27 @@ func (s *ScriptAuditService) getLLMClient(ctx context.Context) (*llm.LLMClient, 
 
 func buildAuditUserPrompt(req *AuditRequest, script string, previousAudits []string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("请审计以下%s脚本的安全性：\n\n", req.ScriptType))
+	sb.WriteString(fmt.Sprintf("Audit the security of this %s script.\n\n", req.ScriptType))
 
 	if req.Context != "" {
-		sb.WriteString("## 脚本上下文\n")
+		sb.WriteString("## Script context\n")
 		sb.WriteString(req.Context)
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString("## 脚本内容\n```bash\n")
+	sb.WriteString("## Script\n```bash\n")
 	sb.WriteString(script)
 	sb.WriteString("\n```\n")
 
 	if len(previousAudits) > 0 {
-		sb.WriteString("\n## 前次审计失败记录\n")
+		sb.WriteString("\n## Previous failed audits\n")
 		for i, audit := range previousAudits {
-			sb.WriteString(fmt.Sprintf("第%d次: %s\n", i+1, audit))
+			sb.WriteString(fmt.Sprintf("Attempt %d: %s\n", i+1, audit))
 		}
-		sb.WriteString("此脚本是根据前次审计反馈重新生成的，请重点检查之前的问题是否已修复。\n")
+		sb.WriteString("The script was regenerated from previous audit feedback. Verify that earlier findings are resolved.\n")
 	}
 
-	sb.WriteString("\n请以JSON格式返回审计结果。")
+	sb.WriteString("\nReturn the audit result as strict JSON.")
 	return sb.String()
 }
 

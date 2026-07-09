@@ -1547,7 +1547,7 @@ func buildFlowchartImagePrompt(finalContent string) string {
 	if len(finalContent) > maxPromptContentBytes {
 		finalContent = finalContent[:maxPromptContentBytes]
 	}
-	return "请根据以下 AI 安全分析最终结论生成一张攻击溯源流程图。要求：白底，清晰的节点和箭头，突出攻击入口、执行过程、横向移动、影响范围和最终处置建议；不要生成写实人物；使用中文标签。\n\n" + finalContent
+	return "Generate an attack-investigation flowchart from the following final AI security-analysis conclusion. Use a white background, clear nodes and arrows, and emphasize initial access, execution, lateral movement, impact scope, and final response recommendations. Do not generate photorealistic people. Use Simplified Chinese labels.\n\n" + finalContent
 }
 
 // SendMessage handles regular (non-streaming) message sending
@@ -1853,15 +1853,15 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	}
 
 	exitReasonMap := map[string]string{
-		"normal_completed":  "正常完成",
-		"max_iterations":    "达到最大轮次",
-		"timeout":           "执行超时",
-		"user_cancelled":    "用户取消",
-		"error":             "执行错误",
-		"audit_rejected":    "审计拒绝",
-		"drift_detected":    "检测到计划漂移",
-		"rate_limit":        "速率限制",
-		"context_overflow":  "上下文窗口溢出",
+		"normal_completed": "正常完成",
+		"max_iterations":   "达到最大轮次",
+		"timeout":          "执行超时",
+		"user_cancelled":   "用户取消",
+		"error":            "执行错误",
+		"audit_rejected":   "审计拒绝",
+		"drift_detected":   "检测到计划漂移",
+		"rate_limit":       "速率限制",
+		"context_overflow": "上下文窗口溢出",
 	}
 
 	statusDisplay := exec.Status
@@ -1931,21 +1931,21 @@ func buildExecutionResultResponse(exec *model.AgentExecution, steps []*model.Age
 	}
 
 	return map[string]interface{}{
-		"execution_id":          exec.ID.String(),
-		"task_id":               exec.TaskID,
-		"session_id":            exec.SessionID,
-		"status":                statusDisplay,
-		"exit_reason":           exitReasonDisplay,
-		"started_at":            exec.StartedAt,
-		"ended_at":              exec.EndedAt,
-		"total_duration_ms":     exec.TotalDurationMs,
-		"steps":                 stepResponses,
-		"errors":                extractErrorsFromExecution(exec),
-		"conclusion":            conclusion,
-		"final_answer":          exec.FinalAnswer,
-		"context_budget":        contextBudget,
-		"compression_records":   compressionRecords,
-		"total_prompt_tokens":   totalPromptTokens,
+		"execution_id":            exec.ID.String(),
+		"task_id":                 exec.TaskID,
+		"session_id":              exec.SessionID,
+		"status":                  statusDisplay,
+		"exit_reason":             exitReasonDisplay,
+		"started_at":              exec.StartedAt,
+		"ended_at":                exec.EndedAt,
+		"total_duration_ms":       exec.TotalDurationMs,
+		"steps":                   stepResponses,
+		"errors":                  extractErrorsFromExecution(exec),
+		"conclusion":              conclusion,
+		"final_answer":            exec.FinalAnswer,
+		"context_budget":          contextBudget,
+		"compression_records":     compressionRecords,
+		"total_prompt_tokens":     totalPromptTokens,
 		"total_completion_tokens": totalCompletionTokens,
 	}
 }
@@ -1987,10 +1987,10 @@ func parseConclusionFromAnswer(finalAnswer string) map[string]interface{} {
 	}
 
 	verdictDisplayMap := map[string]string{
-		"benign":    "良性/误报",
-		"malicious": "恶意",
+		"benign":     "良性/误报",
+		"malicious":  "恶意",
 		"suspicious": "可疑",
-		"unknown":   "未知",
+		"unknown":    "未知",
 	}
 
 	if v, ok := verdictDisplayMap[verdict]; ok {
@@ -2023,9 +2023,9 @@ var actionVerdictMap = map[string]string{
 
 // verdictSeverity ranks verdict severity for "most severe wins" logic.
 var verdictSeverity = map[string]int{
-	"benign":    0,
+	"benign":     0,
 	"suspicious": 1,
-	"malicious": 2,
+	"malicious":  2,
 }
 
 // deriveVerdictFromActions returns the most severe verdict from a list of action strings.

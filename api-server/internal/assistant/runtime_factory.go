@@ -149,6 +149,22 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		runtimeConfig = DefaultAIAnalysisRuntimeConfig(req.MaxIterations)
 		profile = "ai_analysis"
 	}
+	if req.ExecutionPlan != nil && len(req.ExecutionPlan.Steps) > 0 {
+		if len(req.ExecutionPlan.Steps) > runtimeConfig.MaxPlanSteps {
+			runtimeConfig.MaxPlanSteps = len(req.ExecutionPlan.Steps)
+		}
+		runtimeConfig.MaxToolCalls = len(req.ExecutionPlan.Steps)*4 + 4
+		runtimeConfig.MaxToolCallsPerStep = 6
+		runtimeConfig.MaxToolFailures = 3
+		runtimeConfig.EnableAudit = false
+		runtimeConfig.EnableCorrection = false
+		runtimeConfig.AllowDynamicNewSteps = false
+		// ToolDispatcher/ApprovalGate remains the Aegis authority for write
+		// approval. The runtime policy must allow selected calls to reach it.
+		runtimeConfig.AllowHighRiskTools = true
+		runtimeConfig.AllowDangerousTools = true
+		profile += "_fixed_plan"
+	}
 	if f.memoryRepo != nil {
 		runtimeConfig.EnableExperience = true
 	}
@@ -165,6 +181,8 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		zap.String("profile", profile),
 		zap.Int("max_total_turns", runtimeConfig.MaxTotalTurns),
 		zap.Int("tool_count", len(toolDescriptors)),
+		zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
+		zap.Int("plan_step_count", toolExecutionPlanStepCount(req.ExecutionPlan)),
 	)
 
 	// 9. 创建 TaskRouter（智能提示词路由）
@@ -198,6 +216,20 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		Runtime:     runtime,
 		UserContext: userContext,
 	}, nil
+}
+
+func toolExecutionPlanStepCount(plan *ToolExecutionPlan) int {
+	if plan == nil {
+		return 0
+	}
+	return len(plan.Steps)
+}
+
+func toolExecutionPlanID(plan *ToolExecutionPlan) string {
+	if plan == nil {
+		return ""
+	}
+	return plan.DecisionTraceID
 }
 
 func (f *RuntimeFactory) loadReflectionMemories(ctx context.Context, sessionID string, limit int) []string {

@@ -398,13 +398,13 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		prompt := llm.GetSelfHealingFixPrompt(task.ScriptContent, task.ErrorMessage, task.ExitCode, history)
 
 		if task.UserSuggestion != "" {
-			prompt = fmt.Sprintf("%s\n\n用户提供的修复建议：%s", prompt, task.UserSuggestion)
+			prompt = fmt.Sprintf("%s\n\nUser-provided remediation suggestion:\n%s", prompt, task.UserSuggestion)
 		}
 		if ruleContext := s.buildRuleContext(task.RuleID); ruleContext != "" {
-			prompt = fmt.Sprintf("%s\n\n基线规则上下文：\n%s", prompt, ruleContext)
+			prompt = fmt.Sprintf("%s\n\nBaseline-rule context:\n%s", prompt, ruleContext)
 		}
 
-		systemPrompt := "你是一位资深的 Shell 脚本调试专家"
+		systemPrompt := "You are a senior shell-script debugging expert. Return only the complete corrected script."
 		healingPrompt := prompt
 		healingLLMClient := llmClient
 		healingGenerator := &scriptGeneratorFunc{fn: func(genCtx context.Context, _ *AuditRequest) (string, error) {

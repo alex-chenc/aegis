@@ -2,80 +2,154 @@
 
 ## 1. 问题与目标
 
-当前智能体模式存在两类绕过通用 Runtime 的固定业务流程：
+当前智能体链路虽然接入了大模型和 `agent-runtime`，但 Aegis 业务层仍会根据
+资产采集、漏洞扫描、CVE 修复、告警阻断等已知场景扩展工具、绑定参数并生成固定
+执行步骤。这样会产生两个规划器：
 
-1. Orchestrator 根据“资产采集、漏洞扫描、基线扫描、异常检测、CVE 修复”等关键词，直接进入硬编码快捷函数并调用工具。
-2. Tool Gateway 在一次工具调用成功后，根据用户文本暗中补跑资产、漏洞脚本、检测、安装包或基线固定序列。
+1. Aegis 业务层按预置场景生成 `ToolExecutionPlan`；
+2. `agent-runtime` 再根据用户目标执行或修正计划。
 
-这会造成实际执行链与意图拆解、工具映射、工具裁决和 Runtime 计划不一致，也会让会话提前结束、工具不可追踪或参数追问错误。
+双规划器会导致新增场景必须继续写规则、固定计划重复步骤、工具参数与真实返回值
+不一致，以及模型无法根据执行结果选择条件分支。用户给出的 CVE 请求只是暴露该
+架构问题的一个例子，修复不能以 CVE 为中心。
 
-本次目标是删除上述固定执行链，所有请求统一经过：
+本次目标是实现纯智能体模式：任意用户请求都由大模型理解和拆解，唯一的执行规划器
+是 `agent-runtime`。Aegis 业务层只负责提供上下文、动态工具目录、工具授权、安全
+审批、调用隔离和证据记录，不再生成任何业务场景的执行流程。
+
+## 2. 目标数据流
 
 ```text
-IntentRouter
-  -> IntentDecomposer
-  -> LLM Tool Selection
-  -> ToolDecisionEngine
-  -> RuntimeFactory.Build
-  -> agent-runtime Plan / React
-  -> ToolGateway 单次工具调用
+User Request
+  -> LLM IntentRouter（通用意图）
+  -> LLM IntentDecomposer（目标/对象/范围/约束/候选能力）
+  -> LLM ToolSelector（从实时工具目录选择候选工具）
+  -> ToolDecisionEngine（只做授权和风险硬门）
+  -> RuntimeFactory（动态规划模式）
+  -> agent-runtime Planner / ReAct / Correct / Reflect
+  -> ToolGateway（一次只执行 Runtime 明确请求的一个工具）
+  -> Evidence / Final Answer
 ```
 
-## 2. 设计约束
+关键约束：
 
-- Orchestrator 不再识别或执行 natural-operation shortcut。
-- Tool Gateway 只执行 Runtime 当前明确发出的工具调用，不自动补跑其他工具。
-- 不允许工具选择、意图拆解或 Runtime 失败后降级到规则快捷执行；错误直接返回。
-- `Tool.Search` 不作为业务工具不足时的自动兜底，只有用户明确要求调用时才允许出现。
-- 通用工具裁决以 `IntentBreakdown.CandidateCapabilities` 映射结果为主，不把粗召回的全部 `CandidateTools` 直接当作可执行候选。
-- 业务多步骤需求通过能力映射、工具契约和 Runtime 动态规划实现；后端只提供允许工具集合、依赖顺序和可确定参数，不代替 Runtime 执行固定步骤。
+- Aegis 不把工具授权结果转换为 `agent-runtime.InitialPlan`。
+- ToolDecisionEngine 不扩展、排序、重复或条件编排工具，不按工具名绑定业务参数。
+- IntentDecomposer 使用开放对象、范围和参数结构，不包含 CVE、主机、基线等固定枚举。
+- ToolSelector 只依据用户目标和实时工具目录选择工具，不写任何命名业务场景。
+- Planner 根据工具 schema、说明、前后置语义和每次真实返回值决定顺序、参数、
+  重复调用、轮询、跳过、重试和结束。
+- ToolGateway 不暗中补跑工具。领域接口必要的参数校验、幂等、状态机校验和安全
+  保护仍留在工具适配层，它们是执行边界，不是业务规划器。
 
-## 3. 通用规划修正
+## 3. 通用中间契约
 
-### 3.1 漏洞扫描
+### 3.1 意图拆解
 
-当意图包含漏洞扫描时，候选能力应包含：
+`IntentBreakdown` 只表达通用信息：
 
-- `list_hosts`
-- `start_vulnerability_scan`
-- `get_vulnerability_scan_status`
+- `goal`：用户最终目标；
+- `domains`、`actions`：开放字符串数组；
+- `objects`：开放类型的对象和可选 ID；
+- `scope`：开放的范围类型和对象 ID；
+- `parameters`：任意 JSON 参数，不限定为某种业务；
+- `constraints`、`missing_info`；
+- `requires_write`、`risk_hint`；
+- `candidate_capabilities`；
+- `need_clarification`、`clarifying_question`。
 
-“在线主机”范围由 `Host.List(status=online)` 提供，`Vulnerability.Scan.Start.host_ids` 由前一步结果动态绑定，不要求用户提供 task ID。
+业务层只校验 JSON 结构、安全必需字段和一致性，不校验 CVE 脚本类型、固定主机范围
+或某个工作流必须包含哪些能力。
 
-### 3.2 CVE POC / 修复
+### 3.2 工具授权
 
-通用候选能力包含：
+ToolDecisionEngine 的输出是授权审计结果，不是执行计划。为保持当前接口兼容，
+结构暂时仍使用 `ToolExecutionPlan`，但其中每个 step 仅代表一个被授权的工具：
 
-- `list_vulnerabilities`
-- `get_vulnerability_affected_hosts`
-- `generate_vulnerability_script`
-- `get_vulnerability_script_status`
-- `execute_vulnerability_host_scripts`
+- 候选工具来自 LLM 明确选择、能力映射、用户明确指定，以及根据结构化
+  `domains`、`objects`、页面上下文与工具 descriptor 进行的通用契约召回；
+- 通用契约召回不解析用户原文关键词、不识别命名业务场景、不展开工作流，只用于
+  避免首次 LLM 预选偏差把 Runtime 需要的正确工具挡在授权目录之外；
+- 不自动增加前置、状态、详情或后续工具；
+- 不决定执行顺序；
+- 不为同一工具复制多个业务步骤；
+- 不使用场景规则生成参数；
+- 仅记录从页面上下文或通用对象契约中可以确定的参数来源。
 
-CVE ID 从用户文本绑定；`vulnerability_id`、`host_ids` 允许由前序工具结果提供；`script_type` 由 Runtime 根据用户明确要求分别规划 `poc` 和 `fix` 调用；`max_rounds` 从用户约束传给执行工具。Gateway 不再自动生成或下发第二类脚本。
+后续接口演进可将该结构重命名为 `ToolAuthorization`，但运行时行为不得依赖旧名称。
 
-### 3.3 候选工具收敛
+### 3.3 动态执行计划
 
-ToolDecisionEngine 只召回以下来源：
+`agent-runtime` 收到：
 
-- 意图能力到工具的映射；
-- LLM 明确选择且与候选能力一致的工具；
-- 用户明确写出的工具名；
-- 通用工作流依赖（例如扫描前的主机列表、扫描后的状态查询）。
+- 原始用户消息；
+- 页面/会话上下文；
+- 被授权工具的实时 descriptor；
+- `InitialPlan = nil`。
 
-不得把粗选阶段的全部 `CandidateTools` 直接加入执行计划，以避免“漏洞扫描任务”误选 `Task.GetDetail` 并询问 task ID。
+Planner 是唯一执行计划来源。它可根据任务复杂度生成任意数量和顺序的步骤，并由
+ReAct 在真实结果后继续选工具或修正计划。工具目录未提供的能力必须作为证据缺口
+报告，不得发明工具。
 
-## 4. 测试用例
+## 4. 安全与可观测性
 
-1. “进行资产采集”“进行基线扫描”等自然语言操作仍启用 LLM 工具选择，不存在 shortcut bypass。
-2. Tool Gateway 调用一个工具时只产生一次该工具调用，不自动调用同一业务序列中的其他工具。
-3. “帮我进行一次在线主机的漏洞扫描任务”计划包含 `Host.List`、`Vulnerability.Scan.Start`、`Vulnerability.Scan.Status`，不包含 `Task.GetDetail`，且不询问任务 ID。
-4. CVE POC / 修复请求计划包含漏洞查询、受影响主机、脚本生成/状态/执行工具，并正确保留最大修复轮数约束。
-5. 意图、选工具、裁决或 Runtime 出错时直接返回错误，不进入任何固定或降级流程。
+- 写操作仍要求用户原文存在明确写意图，并按工具风险触发审批。
+- 禁用、未注册、未授权工具在 ToolGateway 和 Dispatcher 双重拒绝。
+- 必填参数如果可由前一步结果获得，不在授权阶段追问；由 Runtime 在执行阶段绑定。
+- 只有缺失信息会改变目标或导致写操作对象不明确时才向用户追问。
+- 日志记录 `planning_mode=agent_runtime_dynamic`、授权工具、拒绝工具、决策 trace、
+  Runtime 最终计划和工具证据。
+- 不记录密钥、脚本正文或其他敏感参数。
 
-## 5. 日志与验证
+## 5. 模型提示词与能力标识语言
 
-- Orchestrator 记录请求进入统一通用 Runtime 的 session、run、selection mode 和最终工具集合。
-- 执行 assistant 包定向测试和 api-server 构建。
-- 重建并重启 `api-server`，检查健康状态。
-- 通过真实 Assistant API 创建会话并验证元数据、工具裁决记录和事件中不存在 shortcut/自动补跑标记。
+所有由 Aegis 或 `agent-runtime` 生成并发送给大模型的静态指令、字段说明、目录标签、
+纠错信息和输出示例统一使用英文。用户原文、上传内容、页面上下文、历史工具结果等
+动态业务数据保持原始语言；模型面向用户的最终回答应跟随用户语言。
+
+`candidate_capabilities` 是机器契约，不是自然语言摘要，必须满足：
+
+- 只包含小写英文字母、数字、下划线、连字符或点；
+- 首字符必须是英文字母；
+- 优先直接使用实时工具目录声明的 capability，不翻译为中文；
+- 不得写工具名、中文能力描述或自由文本；
+- 服务端对格式进行确定性校验，首次不合规时要求模型纠正，纠正后仍不合规则终止
+  当前意图拆解，不得把无效 capability 交给 mapping。
+
+工具的中文 UI 描述不直接拼入模型提示词。模型侧工具目录根据英文
+`capability/domain/operation/object_types`、参数名、类型、枚举和授权契约生成，避免
+界面语言影响 capability mapping。
+
+## 6. 测试用例
+
+- 中文用户请求可以产生英文 `candidate_capabilities`，例如
+  `generate_vulnerability_script`。
+- `candidate_capabilities=["生成漏洞脚本"]` 必须触发契约纠正；纠正后仍为中文时返回
+  契约错误。
+- capability 中包含空格、中文、emoji 或以数字开头时必须拒绝。
+- Assistant 的 intent、tool selection、plan、ReAct、summarize 提示词静态部分均为英文。
+- `agent-runtime` 的 assess、route、plan、ReAct、correct、reflect、audit、summarize
+  提示词静态部分均为英文。
+- 工具拥有中文 UI 描述和中文参数说明时，模型侧工具目录仍只包含英文契约元数据。
+
+1. IntentDecomposer 接受任意 `scope.kind` 和任意 `parameters`，核心提示词不出现
+   CVE 或命名工具工作流。
+2. LLM 只选择一个工具时，ToolDecisionEngine 只授权这一个工具，不补充任何
+   前置、状态或分析工具。
+3. 任意工具的必填参数声明可从 `previous_step` 获取时，授权阶段不追问具体 ID。
+4. 工具授权结果不会写入 `agent-runtime.InitialPlan`，Runtime 使用动态规划配置。
+5. 同一工具需要按不同参数多次调用时，由 Planner 生成唯一标题的步骤；Aegis
+   授权层不复制步骤，因此不会产生固定计划重复标题。
+6. 写操作缺少明确写意图、工具被禁用、工具未注册或未授权时仍被硬门拒绝。
+7. 工具调用失败、结果为空或状态未终止时，Runtime 能基于真实结果重试、改参、
+   选择已授权替代工具或报告证据缺口。
+8. 当 LLM 首次预选了错误工具时，通用契约召回可将结构化意图匹配的正确工具加入
+   授权候选，且不生成执行步骤；Runtime 最终只调用完成目标所需的工具。
+9. Assistant 包测试、api-server 构建、服务健康检查和真实 API 冒烟通过。
+
+## 6. 回滚策略
+
+- 本次不删除 `agent-runtime` 的 caller-supplied plan 兼容能力，只让 Assistant
+  纯智能体入口不再使用它；其他调用方可独立迁移。
+- 如果动态规划出现运行问题，可回滚 Aegis 提交恢复旧行为，无需回滚数据库。
+- 回滚不得重新启用 ToolGateway 的隐式多工具补跑。

@@ -334,6 +334,7 @@ func main() {
 		assetCollectionService,
 		assetQueryService,
 		vulnService,
+		customCVEService,
 		hostVulnerabilityScriptService,
 		weakPasswordService,
 	)
@@ -563,6 +564,7 @@ func registerAssistantTools(
 	assetCollectionService *service.AssetCollectionService,
 	assetQueryService *service.AssetQueryService,
 	vulnService *service.VulnerabilityService,
+	customCVEService *service.CustomCVEService,
 	hostVulnerabilityScriptService *service.HostVulnerabilityScriptService,
 	weakPasswordService *service.WeakPasswordService,
 ) {
@@ -584,6 +586,7 @@ func registerAssistantTools(
 		AssetRepo:         assetCollectionRepo,
 		VulnService:       vulnService,
 		HostScriptService: hostVulnerabilityScriptService,
+		CustomCVEService:  customCVEService,
 	}); err != nil {
 		logger.Warn("failed to register vulnerability tools", zap.Error(err))
 	}

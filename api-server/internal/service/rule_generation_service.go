@@ -231,42 +231,38 @@ func (s *RuleGenerationService) callLLMForAnalysis(ctx context.Context, rule *mo
 
 	alertSamples := s.buildAlertSamples(stats.Alerts)
 
-	prompt := fmt.Sprintf(`你是安全分析师。以下规则在%s内触发了%d条告警，需要判断是否为误报。
+	prompt := fmt.Sprintf(`You are a security analyst. This rule triggered %d alerts during %s. Determine whether the alerts are false positives.
 
-## 规则信息
-- 规则ID: %s
-- 规则名称: %s
-- MITRE技术: %s
-- 当前规则内容:
+## Rule
+- Rule ID: %s
+- Title: %s
+- MITRE technique: %s
+- Content:
 %s
 
-## 告警样本（前%d条）
+## Alert samples (first %d)
 %s
 
-## 分析要求
-请判断这些告警是否为误报，并提供以下信息：
-1. 是否为误报？给出置信度(0-1)
-2. 如果是误报，原因是什么？
-3. 如何修改规则来减少误报？
+Determine whether these alerts are false positives, give confidence from 0 to 1, explain the evidence, and propose precise rule changes when needed.
 
-## 返回格式（JSON）
+Return JSON only:
 {
-  "is_false_positive": true/false,
-  "confidence": 0.0-1.0,
-  "reason": "判断原因的详细说明",
+  "is_false_positive": true,
+  "confidence": 0.9,
+  "reason": "detailed rationale in Simplified Chinese",
   "rule_adjustments": {
     "rule_id": "%s",
     "action": "tighten",
-    "reason": "调整原因",
-    "add_conditions": ["新条件1"],
-    "exclude_patterns": ["排除模式1"],
+    "reason": "adjustment rationale in Simplified Chinese",
+    "add_conditions": ["new condition"],
+    "exclude_patterns": ["excluded pattern"],
     "severity_change": ""
   }
 }
 
-只返回JSON，不要其他内容。`,
-		timeWindow,
+Do not output Markdown or any text outside the JSON object.`,
 		stats.AlertCount,
+		timeWindow,
 		rule.RuleID,
 		rule.Title,
 		rule.MitreID,
@@ -306,7 +302,7 @@ func (s *RuleGenerationService) buildAlertSamples(alerts []model.Alert) string {
 		if i >= s.sampleSize {
 			break
 		}
-		sample := fmt.Sprintf("告警%d:\n- 主机: %s\n- PID: %d\n- 命令: %s\n- 严重程度: %s",
+		sample := fmt.Sprintf("Alert %d:\n- Host: %s\n- PID: %d\n- Command: %s\n- Severity: %s",
 			i+1,
 			alert.Hostname,
 			alert.PID,
@@ -765,7 +761,7 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 		} else {
 			for _, a := range alerts {
 				alertDetails = append(alertDetails, fmt.Sprintf(
-					"告警ID: %s | MITRE: %s | 严重程度: %s | 命令行: %s | 主机: %s",
+					"Alert ID: %s | MITRE: %s | Severity: %s | Command line: %s | Host: %s",
 					a.AlertID, a.MitreID, a.Severity, a.CommandLine, a.Hostname,
 				))
 			}
@@ -843,55 +839,54 @@ func (s *RuleGenerationService) applyGeneratedRuleMode(rule *model.SigmaRule) {
 // buildRuleGenerationPrompt 构建规则生成提示词
 func (s *RuleGenerationService) buildRuleGenerationPrompt(mitreID string, alertDetails []string, conservatism float64) string {
 	// 根据保守度调整提示词
-	conditionDetail := "具体的、精确的检测条件"
+	conditionDetail := "specific and precise detection conditions"
 	if conservatism > 0.6 {
-		conditionDetail = "包含更多检测模式的宽泛条件"
+		conditionDetail = "broader conditions covering more detection patterns"
 	} else if conservatism < 0.4 {
-		conditionDetail = "严格的、误报率低的精确条件"
+		conditionDetail = "strict precise conditions with a low false-positive rate"
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`你是一个安全规则专家。请根据以下信息生成一个Sigma规则。
+	sb.WriteString(fmt.Sprintf(`You are a security-rule expert. Generate one Sigma rule from this evidence.
 
-## 检测目标
-- MITRE技术ID: %s
-- 生成策略: %.0f%% (越低越保守，越高越激进)
+## Detection target
+- MITRE technique ID: %s
+- Generation strategy: %.0f%% (lower is more conservative, higher is broader)
 
-## 样本告警信息
+## Alert samples
 `, mitreID, conservatism*100))
 
 	if len(alertDetails) > 0 {
 		sb.WriteString(strings.Join(alertDetails, "\n\n"))
 	} else {
-		sb.WriteString("(无样本告警，请基于MITRE ID生成通用规则)")
+		sb.WriteString("(No alert sample is available. Generate a generic rule from the MITRE ID.)")
 	}
 
 	sb.WriteString(fmt.Sprintf(`
 
-## 输出要求
-1. 生成符合Sigma规则格式的YAML内容
-2. 规则必须包含: title, id, status, description, level, logsource, detection
-3. id字段使用新的UUID格式
-4. status设为 experimental
-5. 在tags中包含MITRE技术ID (格式: attack.txxxx.xxx)
-6. detection部分需要包含具体的检测逻辑和条件，要求: %s
-7. level设为 high 或 critical (根据告警严重程度)
+## Requirements
+1. Return valid Sigma YAML.
+2. Include title, id, status, description, level, logsource, and detection.
+3. Generate a new UUID for id.
+4. Set status to experimental.
+5. Include the MITRE technique tag in attack.txxxx.xxx form.
+6. Use %s.
+7. Set level to high or critical according to evidence.
 
-## 输出格式
-只输出YAML内容，不要有其他文字说明。绝对禁止使用markdown代码块标记，直接输出纯YAML字符串。
+Return raw YAML only. Do not output Markdown or explanations.
 
 `, conditionDetail))
 
 	sb.WriteString(fmt.Sprintf(`
 
-## 生成策略说明
-- 保守模式(0-0.4): 只检测明确的恶意行为特征，误报率低
-- 平衡模式(0.4-0.6): 在准确率和覆盖率之间取得平衡
-- 激进模式(0.6-1.0): 检测更多可能的威胁模式，覆盖率高但可能有更多误报
+## Strategy
+- Conservative (0-0.4): explicit malicious features and lower false positives.
+- Balanced (0.4-0.6): balance precision and coverage.
+- Broad (0.6-1.0): more possible threat patterns with higher false-positive risk.
 
-当前模式: %.0f%% 保守度
+Current value: %.0f%%
 
-请生成Sigma规则:`, conservatism*100))
+Generate the Sigma rule now.`, conservatism*100))
 
 	return sb.String()
 }
@@ -1088,7 +1083,7 @@ func (s *RuleGenerationService) GenerateTestRule(ctx context.Context, req *Gener
 		} else {
 			for _, a := range alerts {
 				alertDetails = append(alertDetails, fmt.Sprintf(
-					"告警ID: %s | MITRE: %s | 严重程度: %s | 命令行: %s | 主机: %s",
+					"Alert ID: %s | MITRE: %s | Severity: %s | Command line: %s | Host: %s",
 					a.AlertID, a.MitreID, a.Severity, a.CommandLine, a.Hostname,
 				))
 			}

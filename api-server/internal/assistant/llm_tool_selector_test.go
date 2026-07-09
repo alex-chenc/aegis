@@ -7,28 +7,28 @@ import (
 
 func TestShortToolBriefLimitsDescription(t *testing.T) {
 	brief := shortToolBrief(&ToolSpec{
+		Name:        "Asset.Collection.Trigger",
+		Capability:  "trigger_asset_collection",
 		Description: "触发资产采集任务，复用运维模式的资产采集服务采集进程、应用和 AI 资产，并返回采集进度引用",
 	})
 	if brief == "" {
 		t.Fatal("expected non-empty brief")
 	}
-	if len([]rune(brief)) > 30 {
-		t.Fatalf("brief too long: %q", brief)
+	if brief != "capability=trigger_asset_collection" {
+		t.Fatalf("brief must use the English capability contract, got %q", brief)
 	}
 }
 
 func TestShortToolBriefExpandsVeryShortDescription(t *testing.T) {
 	brief := shortToolBrief(&ToolSpec{
+		Name:        "Host.List",
 		Description: "列出主机",
 		Capability:  "list_hosts",
 		Aliases:     []string{"主机列表", "资产列表"},
 		Tags:        []string{"host"},
 	})
-	if len([]rune(brief)) < 20 {
-		t.Fatalf("brief too short: %q", brief)
-	}
-	if len([]rune(brief)) > 30 {
-		t.Fatalf("brief too long: %q", brief)
+	if brief != "capability=list_hosts" {
+		t.Fatalf("brief must use the English capability contract, got %q", brief)
 	}
 }
 

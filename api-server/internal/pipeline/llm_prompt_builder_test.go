@@ -29,7 +29,7 @@ func TestBuildAnalysisPrompt(t *testing.T) {
 	}
 
 	// Verify prompt contains key elements
-	if !strings.Contains(prompt, "主机安全分析专家") {
+	if !strings.Contains(prompt, "host-security analyst") {
 		t.Error("prompt should contain system role description")
 	}
 	if !strings.Contains(prompt, "test-host-001") {

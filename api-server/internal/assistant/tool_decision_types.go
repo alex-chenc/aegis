@@ -34,11 +34,6 @@ func (o *IntentObject) UnmarshalJSON(data []byte) error {
 			return nil
 		}
 		o.Source = "llm"
-		if cveIDPattern.MatchString(s) {
-			o.Type = "cve"
-			o.ID = strings.ToUpper(cveIDPattern.FindString(s))
-			return nil
-		}
 		o.Type = s
 		return nil
 	}
@@ -97,6 +92,7 @@ type IntentBreakdown struct {
 	Actions               []string               `json:"actions"`
 	Objects               []IntentObject         `json:"objects"`
 	Scope                 IntentScope            `json:"scope"`
+	Parameters            IntentParameters       `json:"parameters,omitempty"`
 	Constraints           []string               `json:"constraints,omitempty"`
 	MissingInfo           []MissingInfo          `json:"missing_info,omitempty"`
 	RequiresWrite         bool                   `json:"requires_write"`
@@ -108,6 +104,11 @@ type IntentBreakdown struct {
 	Confidence            float64                `json:"confidence"`
 	Raw                   map[string]interface{} `json:"raw,omitempty"`
 }
+
+// IntentParameters preserves arbitrary parameters explicitly extracted by the
+// LLM. Business-specific schemas belong to tool descriptors, not the shared
+// intent model.
+type IntentParameters map[string]interface{}
 
 // ToolUseContract captures the backend constraints for using a tool.
 type ToolUseContract struct {
@@ -172,6 +173,7 @@ type ToolDecisionRecord struct {
 	Capability      string                 `json:"capability"`
 	Decision        string                 `json:"decision"`
 	Score           float64                `json:"score"`
+	RequiresWrite   bool                   `json:"requires_write"`
 	HardGateResults []HardGateResult       `json:"hard_gate_results"`
 	ArgSources      map[string]ArgSource   `json:"arg_sources,omitempty"`
 	ApprovalState   string                 `json:"approval_state,omitempty"`
@@ -185,6 +187,9 @@ type EvidencePolicy struct {
 	MissingEvidenceBehavior string `json:"missing_evidence_behavior"`
 }
 
+// ToolExecutionPlan is a legacy type name. In the Assistant pure-agent flow it
+// is an authorization artifact only; its steps describe allowed tools and are
+// never forwarded as agent-runtime execution steps.
 type ToolExecutionPlan struct {
 	Goal                string               `json:"goal"`
 	NeedClarification   bool                 `json:"need_clarification"`
@@ -208,6 +213,7 @@ type ToolPlanStep struct {
 	Preconditions    []string               `json:"preconditions,omitempty"`
 	Postconditions   []string               `json:"postconditions,omitempty"`
 	OnSuccess        []string               `json:"on_success,omitempty"`
+	Condition        string                 `json:"condition,omitempty"`
 }
 
 func (p ToolExecutionPlan) ToolNames() []string {

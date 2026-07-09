@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -16,18 +15,16 @@ import (
 // AssistantToolGatewayAdapter 适配 agent-runtime ToolGateway 接口
 // 将 agent-runtime 的工具调用桥接到 assistant 的 ToolDispatcher
 type AssistantToolGatewayAdapter struct {
-	dispatcher  *ToolDispatcher
-	sessionID   string
-	messageID   string
-	runID       string
-	operator    string
-	logger      *zap.Logger
-	runManager  *RunManager
-	userInput   string
-	contextRefs []ContextRefResult
+	dispatcher *ToolDispatcher
+	sessionID  string
+	messageID  string
+	runID      string
+	operator   string
+	logger     *zap.Logger
+	runManager *RunManager
 
-	// executionPlan 来自 ToolDecisionEngine.Decide()，包含预绑定参数。
-	// 当 LLM 调用工具时，计划中的预绑定参数作为默认值合并（LLM 参数优先）。
+	// executionPlan is retained for non-Assistant compatibility callers that
+	// explicitly supply a fixed plan. Pure-agent Assistant runs always leave it nil.
 	executionPlan *ToolExecutionPlan
 
 	// 回调函数，用于 SSE 事件推送
@@ -67,8 +64,6 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 		operator:          cfg.Operator,
 		logger:            cfg.Logger,
 		runManager:        cfg.RunManager,
-		userInput:         cfg.UserInput,
-		contextRefs:       cfg.ContextRefs,
 		executionPlan:     cfg.ExecutionPlan,
 		onToolCall:        cfg.OnToolCall,
 		onToolResult:      cfg.OnToolResult,
@@ -82,15 +77,14 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime.ToolRequest) (agentruntime.ToolResponse, error) {
 	startedAt := time.Now()
 
-	// 解析参数
-	args := make(map[string]interface{})
-	if req.Args != nil {
-		for k, v := range req.Args {
-			args[k] = v
+	if req.Context == nil || req.Context["aegis_prepared"] != "true" {
+		prepared, err := a.Prepare(ctx, req)
+		if err != nil {
+			return agentruntime.ToolResponse{}, err
 		}
+		req = prepared
 	}
-	args = a.normalizeBaselineToolArgs(req.ToolName, args)
-	args = a.applyPlanArgs(req.ToolName, args)
+	args := req.Args
 
 	if cachedResp, ok := a.reuseSuccessfulReadonlyToolCall(ctx, req, args, startedAt); ok {
 		return cachedResp, nil
@@ -192,6 +186,26 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 	}, nil
 }
 
+// Prepare implements agentruntime.ToolRequestPreparer. It only applies
+// caller-supplied compatibility plan args before schema validation. Pure-agent
+// mode does not pass such a plan, so Runtime remains responsible for deriving
+// every business argument from user context and observed tool results.
+func (a *AssistantToolGatewayAdapter) Prepare(ctx context.Context, req agentruntime.ToolRequest) (agentruntime.ToolRequest, error) {
+	_ = ctx
+	args := make(map[string]interface{}, len(req.Args)+4)
+	for key, value := range req.Args {
+		args[key] = value
+	}
+	args = a.applyPlanArgs(req.StepID, req.ToolName, args)
+
+	if req.Context == nil {
+		req.Context = make(map[string]string)
+	}
+	req.Context["aegis_prepared"] = "true"
+	req.Args = args
+	return req, nil
+}
+
 func (a *AssistantToolGatewayAdapter) reuseSuccessfulReadonlyToolCall(ctx context.Context, req agentruntime.ToolRequest, args map[string]interface{}, startedAt time.Time) (agentruntime.ToolResponse, bool) {
 	if a.dispatcher == nil || a.dispatcher.toolCallRepo == nil || a.dispatcher.registry == nil {
 		return agentruntime.ToolResponse{}, false
@@ -247,6 +261,12 @@ func canReuseAssistantToolResult(tool *ToolSpec) bool {
 	if tool == nil {
 		return false
 	}
+	// 状态工具的返回值会随后台任务推进而变化，同一轮内也不能复用旧结果。
+	// 固定执行计划允许一个状态步骤多次轮询，因此所有 *.Status* 工具都
+	// 必须直达真实处理器，不能被同消息内的成功缓存短路。
+	if strings.Contains(strings.ToLower(tool.Name), ".status") {
+		return false
+	}
 	if tool.Risk == ToolRiskReadonly {
 		return true
 	}
@@ -262,135 +282,6 @@ func canonicalToolArgs(args map[string]interface{}) string {
 		return "{}"
 	}
 	return string(b)
-}
-
-func (a *AssistantToolGatewayAdapter) normalizeBaselineToolArgs(toolName string, args map[string]interface{}) map[string]interface{} {
-	normalized := make(map[string]interface{}, len(args)+3)
-	for k, v := range args {
-		normalized[k] = v
-	}
-
-	defaults := a.baselineDefaults()
-	switch toolName {
-	case "Baseline.Template.Status.Get", "Baseline.Template.Rules.List":
-		if getStringArgFromMap(normalized, "template_id") == "" && defaults["template_id"] != "" {
-			normalized["template_id"] = defaults["template_id"]
-		}
-	case "Baseline.Script.Generate":
-		if getStringArgFromMap(normalized, "template_id") == "" && defaults["template_id"] != "" {
-			normalized["template_id"] = defaults["template_id"]
-		}
-		if _, ok := normalized["rule_ids"]; !ok {
-			if ruleID := getStringArgFromMap(normalized, "rule_id"); ruleID != "" {
-				normalized["rule_ids"] = []string{ruleID}
-			} else if defaults["rule_id"] != "" && getStringArgFromMap(normalized, "template_id") == "" {
-				normalized["rule_ids"] = []string{defaults["rule_id"]}
-			}
-		}
-	case "Task.RunCheck", "Task.RunFix":
-		if _, ok := normalized["rule_ids"]; !ok {
-			if ruleID := getStringArgFromMap(normalized, "rule_id"); ruleID != "" {
-				normalized["rule_ids"] = []string{ruleID}
-			} else if defaults["rule_id"] != "" {
-				normalized["rule_ids"] = []string{defaults["rule_id"]}
-			}
-		}
-		if _, ok := normalized["host_ids"]; !ok {
-			if hostID := getStringArgFromMap(normalized, "host_id"); hostID != "" {
-				normalized["host_ids"] = []string{hostID}
-			} else if defaults["host_id"] != "" {
-				normalized["host_ids"] = []string{defaults["host_id"]}
-			}
-		}
-	}
-	return normalized
-}
-
-func (a *AssistantToolGatewayAdapter) baselineDefaults() map[string]string {
-	defaults := map[string]string{
-		"template_id": extractNamedID(a.userInput, "template_id"),
-		"rule_id":     extractNamedID(a.userInput, "rule_id"),
-		"host_id":     extractNamedID(a.userInput, "host_id"),
-	}
-	for _, ref := range a.contextRefs {
-		if defaults["template_id"] == "" && ref.ObjectType == "baseline_template" {
-			defaults["template_id"] = strings.TrimSpace(ref.ObjectID)
-		}
-		if defaults["rule_id"] == "" && ref.ObjectType == "baseline_rule" {
-			defaults["rule_id"] = strings.TrimSpace(ref.ObjectID)
-		}
-		if defaults["host_id"] == "" && ref.ObjectType == "host" {
-			defaults["host_id"] = strings.TrimSpace(ref.ObjectID)
-		}
-	}
-	return defaults
-}
-
-func extractNamedID(message, key string) string {
-	re := regexp.MustCompile(regexp.QuoteMeta(key) + `\s*=\s*([0-9a-fA-F-]{36}|[^\s，,。；;]+)`)
-	match := re.FindStringSubmatch(message)
-	if len(match) < 2 {
-		return ""
-	}
-	return strings.Trim(match[1], " \t\r\n，,。；;\"'")
-}
-
-func extractNamedValues(message, key string) []string {
-	re := regexp.MustCompile(regexp.QuoteMeta(key) + `\s*=\s*([0-9a-fA-F-]{36}|[^\s，,。；;]+)`)
-	matches := re.FindAllStringSubmatch(message, -1)
-	values := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		value := strings.Trim(match[1], " \t\r\n，,。；;\"'")
-		if value != "" {
-			values = append(values, value)
-		}
-	}
-	return values
-}
-
-func getStringArgFromMap(args map[string]interface{}, key string) string {
-	if args == nil {
-		return ""
-	}
-	switch v := args[key].(type) {
-	case string:
-		return strings.TrimSpace(v)
-	default:
-		return ""
-	}
-}
-
-func getStringSliceArgFromMap(args map[string]interface{}, key string) []string {
-	if args == nil {
-		return nil
-	}
-	switch v := args[key].(type) {
-	case []string:
-		return cleanStringSlice(v)
-	case []interface{}:
-		result := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				result = append(result, strings.TrimSpace(s))
-			}
-		}
-		return result
-	default:
-		return nil
-	}
-}
-
-func cleanStringSlice(values []string) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			result = append(result, strings.TrimSpace(value))
-		}
-	}
-	return result
 }
 
 func (a *AssistantToolGatewayAdapter) waitApprovalAndExecute(ctx context.Context, req agentruntime.ToolRequest, approval *model.AssistantApproval, startedAt time.Time) (agentruntime.ToolResponse, error) {
@@ -517,24 +408,75 @@ func (a *AssistantToolGatewayAdapter) waitApprovalAndExecute(ctx context.Context
 	}, nil
 }
 
-// applyPlanArgs merges pre-bound args from the ToolExecutionPlan as defaults.
-// LLM-provided args take priority; plan args fill in missing keys only.
-func (a *AssistantToolGatewayAdapter) applyPlanArgs(toolName string, args map[string]interface{}) map[string]interface{} {
+// applyPlanArgs applies caller-authorized args. The exact step_id is preferred
+// so repeated calls to the same tool keep independent values.
+func (a *AssistantToolGatewayAdapter) applyPlanArgs(stepID, toolName string, args map[string]interface{}) map[string]interface{} {
 	if a.executionPlan == nil || len(a.executionPlan.Steps) == 0 {
 		return args
 	}
+	var matched *ToolPlanStep
 	for _, step := range a.executionPlan.Steps {
 		if step.ToolName != toolName || len(step.Args) == 0 {
 			continue
 		}
-		for k, v := range step.Args {
-			if _, exists := args[k]; !exists {
-				args[k] = v
-			}
+		if stepID != "" && step.StepID == stepID {
+			stepCopy := step
+			matched = &stepCopy
+			break
 		}
-		break
+		if stepID == "" {
+			if matched != nil {
+				// Ambiguous legacy request: do not select an arbitrary repeated
+				// step. agent-runtime always supplies step_id for fixed plans.
+				return args
+			}
+			stepCopy := step
+			matched = &stepCopy
+		}
+	}
+	if matched == nil {
+		return args
+	}
+	for key, value := range matched.Args {
+		args[key] = value
 	}
 	return args
+}
+
+func resultDataItems(result map[string]interface{}) []map[string]interface{} {
+	raw, ok := result["data"].([]interface{})
+	if !ok {
+		return nil
+	}
+	items := make([]map[string]interface{}, 0, len(raw))
+	for _, value := range raw {
+		if item, ok := value.(map[string]interface{}); ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func numericValue(value interface{}) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func stringValue(value interface{}) string {
+	if typed, ok := value.(string); ok {
+		return strings.TrimSpace(typed)
+	}
+	return ""
 }
 
 // Cancel 实现 agentruntime.ToolGateway 接口（同步执行，无需取消）

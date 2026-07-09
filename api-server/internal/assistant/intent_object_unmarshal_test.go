@@ -17,8 +17,8 @@ func TestIntentBreakdownUnmarshalTolerantOfStringObjects(t *testing.T) {
 	if breakdown.Objects[0].Type != "cve" {
 		t.Fatalf("expected first object type cve, got %#v", breakdown.Objects[0])
 	}
-	if breakdown.Objects[1].Type != "cve" || breakdown.Objects[1].ID != "CVE-2024-1234" {
-		t.Fatalf("expected cve id extracted from string, got %#v", breakdown.Objects[1])
+	if breakdown.Objects[1].Type != "CVE-2024-1234" || breakdown.Objects[1].ID != "" {
+		t.Fatalf("expected bare string preserved without domain parsing, got %#v", breakdown.Objects[1])
 	}
 	if breakdown.Objects[2].Type != "这个告警" {
 		t.Fatalf("expected reference string preserved as type, got %#v", breakdown.Objects[2])

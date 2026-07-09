@@ -172,17 +172,17 @@ func (s *AssetAnalysisService) AnalyzeHostApplications(ctx context.Context, task
 func (s *AssetAnalysisService) buildAnalysisPrompt(snapshot HostAssetSnapshot, batchIndex int, batchTotal int) string {
 	var sb strings.Builder
 
-	sb.WriteString("## 主机信息\n")
-	sb.WriteString(fmt.Sprintf("- 主机名: %s\n", snapshot.Hostname))
+	sb.WriteString("## Host information\n")
+	sb.WriteString(fmt.Sprintf("- Hostname: %s\n", snapshot.Hostname))
 	sb.WriteString(fmt.Sprintf("- IP: %s\n", snapshot.IPAddress))
-	sb.WriteString(fmt.Sprintf("- 操作系统: %s %s\n", snapshot.OSType, snapshot.OSVersion))
-	sb.WriteString(fmt.Sprintf("- 架构: %s\n", snapshot.Arch))
+	sb.WriteString(fmt.Sprintf("- Operating system: %s %s\n", snapshot.OSType, snapshot.OSVersion))
+	sb.WriteString(fmt.Sprintf("- Architecture: %s\n", snapshot.Arch))
 
-	sb.WriteString("\n## 进程快照分片\n")
-	sb.WriteString(fmt.Sprintf("- 当前分片: %d/%d\n", batchIndex, batchTotal))
-	sb.WriteString(fmt.Sprintf("- 本分片进程数: %d\n", len(snapshot.Processes)))
+	sb.WriteString("\n## Process snapshot chunk\n")
+	sb.WriteString(fmt.Sprintf("- Chunk: %d/%d\n", batchIndex, batchTotal))
+	sb.WriteString(fmt.Sprintf("- Processes in this chunk: %d\n", len(snapshot.Processes)))
 
-	sb.WriteString("\n## 进程列表\n")
+	sb.WriteString("\n## Processes\n")
 	for _, proc := range snapshot.Processes {
 		sb.WriteString(fmt.Sprintf("- PID: %d, Comm: %s, Exe: %s, Cwd: %s, User: %s, Ports: %v\n",
 			proc.PID, proc.Comm, truncateForPrompt(proc.ExePath, 200), truncateForPrompt(proc.Cwd, 200), proc.Username, proc.ListenPorts))
@@ -246,7 +246,7 @@ func (s *AssetAnalysisService) analyzeWithReAct(ctx context.Context, llmClient *
 		toolCall, err := parseToolCall(response)
 		if err != nil {
 			messages = append(messages, llm.Message{Role: "assistant", Content: response})
-			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Observation: 工具调用格式错误: %v。请使用指定资产工具和合法 JSON 参数，或输出 Final Answer。", err)})
+			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Observation: invalid tool-call format: %v. Use one listed asset tool with valid JSON arguments, or output Final Answer.", err)})
 			continue
 		}
 		if toolCall == nil {
@@ -257,7 +257,7 @@ func (s *AssetAnalysisService) analyzeWithReAct(ctx context.Context, llmClient *
 			}
 			// 将响应加入历史继续
 			messages = append(messages, llm.Message{Role: "assistant", Content: response})
-			messages = append(messages, llm.Message{Role: "user", Content: "请继续分析，或者输出 Final Answer。"})
+			messages = append(messages, llm.Message{Role: "user", Content: "Continue the analysis or output Final Answer."})
 			continue
 		}
 
@@ -266,7 +266,7 @@ func (s *AssetAnalysisService) analyzeWithReAct(ctx context.Context, llmClient *
 		if calledTools[callKey] {
 			// 已调用过，告诉 LLM
 			messages = append(messages, llm.Message{Role: "assistant", Content: response})
-			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Observation: 工具 %s 对该进程已经调用过，请尝试其他工具或直接输出 Final Answer。", toolCall.Tool)})
+			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Observation: tool %s was already called for this process. Use another relevant tool or output Final Answer.", toolCall.Tool)})
 			continue
 		}
 		calledTools[callKey] = true
@@ -300,7 +300,7 @@ func (s *AssetAnalysisService) analyzeWithReAct(ctx context.Context, llmClient *
 	}
 
 	// 达到最大迭代次数，强制请求 Final Answer
-	messages = append(messages, llm.Message{Role: "user", Content: "已达到工具调用次数上限，请立即输出 Final Answer。"})
+	messages = append(messages, llm.Message{Role: "user", Content: "The tool-call limit has been reached. Output Final Answer now."})
 	response, err := llmClient.ChatCompletionWithMessages(ctx, messages, 0.1)
 	if err != nil {
 		return "", fmt.Errorf("final LLM call failed: %w", err)
@@ -884,71 +884,62 @@ func generateAppFingerprint(hostID, category, name, installPath string, listenPo
 }
 
 // applicationAnalysisSystemPrompt 应用分析系统提示
-const applicationAnalysisSystemPrompt = `你是主机应用识别专家。根据进程快照识别主机上运行的应用程序。
+const applicationAnalysisSystemPrompt = `You are a host-application identification expert. Identify applications running on the host from the process snapshot.
 
-## 任务
-1. 识别每个应用的名称、类型和版本
-2. 将应用分类为：database, web_service, web_framework, web_site, other, unknown
-3. 评估识别置信度（0-1）
-4. 提供识别证据
+## Task
+1. Identify each application's name, category, and version.
+2. Use one category: database, web_service, web_framework, web_site, other, or unknown.
+3. Assign confidence from 0 to 1.
+4. Provide concrete identification evidence.
 
-## 可用工具
-当无法从进程快照确定版本或需要更多信息时，可以调用以下工具：
+## Available tools
+Use these tools only when the snapshot does not establish a version or other required detail:
+- AssetGetProcessVersion: pid (int), exe_path (string), hint (string)
+- AssetResolvePackageByFile: path (string)
+- AssetReadConfigSummary: path (string), max_size (int)
+- AssetListDirectoryHints: path (string), max_entries (int)
+- AssetReadProcFile: pid (int), file_name (string)
 
-- AssetGetProcessVersion: 获取进程版本。参数: pid (int), exe_path (string), hint (string)
-- AssetResolvePackageByFile: 通过文件路径查找所属软件包。参数: path (string)
-- AssetReadConfigSummary: 读取配置文件摘要。参数: path (string), max_size (int)
-- AssetListDirectoryHints: 列出目录文件。参数: path (string), max_entries (int)
-- AssetReadProcFile: 读取 /proc/{pid}/ 下的文件。参数: pid (int), file_name (string)
+## ReAct tool format
+Thought: [why additional evidence is needed]
+Action: [exact tool name]
+Action Input: [JSON arguments]
 
-## 工具调用格式（ReAct）
-Thought: [你的推理，说明为什么要调用工具]
-Action: [工具名]
-Action Input: [JSON 格式参数]
+## Tool limits
+- Call a given tool at most once per process.
+- Prefer AssetGetProcessVersion for version evidence, then AssetResolvePackageByFile when needed.
+- AssetReadProcFile may read at most 10 KB and must never read environ or mem.
+- Use at most ten total tool calls, then produce Final Answer.
 
-## 工具调用限制（重要）
-- 每个进程的每个工具只能调用一次，请合理规划调用顺序
-- 优先调用 AssetGetProcessVersion 获取版本
-- 如果版本工具失败，再尝试 AssetResolvePackageByFile
-- AssetReadProcFile 最大读取 10KB，禁止读取 environ 和 mem
-- 总工具调用次数最多 10 次，之后必须输出 Final Answer
+## Categories
+- database: MySQL, MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, and similar systems.
+- web_service: Nginx, Apache, Tomcat, Jetty, and similar servers.
+- web_framework: Spring Boot, Django, Flask, Laravel, Express, and similar frameworks.
+- web_site: a concrete site with a domain or document root.
+- other: another identifiable application category.
+- unknown: insufficient evidence.
 
-## 分类规则
-- database: MySQL, MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch 等
-- web_service: Nginx, Apache, Tomcat, Jetty 等 Web 服务器
-- web_framework: Spring Boot, Django, Flask, Laravel, Express 等框架应用
-- web_site: 具体的网站站点，有域名、根目录等
-- other: 其他类型应用
-- unknown: 无法确定的应用
+## Process correlation and deduplication
+One application may own multiple related processes. Merge processes when supported by matching executable path, parent-child relationships, shared function and user, shared listening endpoints, or application-specific evidence.
 
-## 进程关联性分析（重要）
-一个应用可能启动多个相关进程，你必须识别并合并它们：
+Typical patterns:
+- Merge Nginx master and workers into one application.
+- Merge PostgreSQL server-related processes when they belong to the same installation.
+- Distinguish Redis server and sentinel according to deployment evidence.
+- Use classpath or JAR names to group Java processes.
+- Merge dockerd, containerd, and relevant shims into one Docker installation when evidence supports it.
+- Treat distinct systemd services separately.
 
-### 常见多进程应用模式
-1. **Nginx**: 1个 master 进程 + N个 worker 进程 → 合并为1个应用
-2. **PostgreSQL**: postgres, postmaster, pg_dump, postgres stats → 合并为1个应用
-3. **Redis**: redis-server, redis-sentinel → 根据实际部署分别识别
-4. **Java 应用**: 可能有多个 JVM 进程，通过 classpath/jar 名称判断是否同一应用
-5. **Docker**: dockerd, containerd, containerd-shim → 合并为 Docker 1个应用
-6. **Systemd**: systemd, systemd-journald, systemd-resolved → 分别识别为不同服务
+Before output:
+- Emit each application name once.
+- Do not place one PID in multiple applications.
+- Merge processes with the same installation path when they represent the same application.
 
-### 合并规则
-- 相同 exe_path 的进程 → 同一应用，PID 列入 related_pids
-- 父子进程关系（PPID 关联）→ 同一应用
-- 相同 run_user 且相同功能的进程 → 同一应用
-- 相同监听端口的进程 → 同一应用
-
-### 去重检查
-输出前检查：
-- 同一个 name 只能出现一次
-- related_pids 不能重复出现在不同应用中
-- 相同 install_path 的进程必须合并
-
-## 最终输出格式
-当收集到足够信息后，输出 Final Answer：
+## Final output
+When evidence is sufficient, output:
 Final Answer: {"applications": [...]}
 
-每个应用包含：
+Each application has:
 {
   "name": "nginx",
   "display_name": "Nginx",
@@ -966,12 +957,12 @@ Final Answer: {"applications": [...]}
   "status": "active"
 }
 
-## 约束
-- 不要编造不存在的应用
-- 版本号优先来自工具调用结果，其次来自进程快照证据
-- 置信度低于 0.3 的标记为 needs_review
-- 如果本分片没有可识别应用，输出 Final Answer: {"applications":[]}
-- **必须合并相关进程，避免重复应用**`
+## Constraints
+- Never invent an application.
+- Prefer version evidence from tools, then from the process snapshot.
+- Mark confidence below 0.3 as needs_review.
+- If this chunk has no identifiable application, output Final Answer: {"applications":[]}.
+- Merge related processes and avoid duplicate applications.`
 
 // Container-related helpers for weak password detection
 

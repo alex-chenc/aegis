@@ -23,8 +23,37 @@ const (
 )
 
 // jsonOnlyRetryReminder 在重试时追加，强制模型只输出可解析的 JSON。
-const jsonOnlyRetryReminder = "上一次没有返回可解析的 JSON。严格要求：本次只输出一个 JSON 对象，" +
-	"不要输出任何思考过程、解释文字或 Markdown 代码块，直接以 { 开始、以 } 结束。"
+const jsonOnlyRetryReminder = "The previous response was not valid parseable JSON. Return exactly one JSON object this time. " +
+	"Do not output reasoning, explanations, or Markdown fences. Start with { and end with }."
+
+const toolSelectionDraftSystemPrompt = `You are the tool selector for the Aegis agent. Select potentially useful tools from the short catalog based on the user intent. Do not execute the task.
+
+Requirements:
+1. Understand the user's goal, objects, constraints, and missing information before selecting tools.
+2. Select semantically. Do not rely on keyword matching alone. A task may span multiple open domains.
+3. If the short catalog is insufficient, put tool names or English capability identifiers in detail_requests so the system can provide details for the final selection.
+4. selected_tools may contain only exact tool names present in the short catalog. Never invent a tool.
+5. Select write or high-risk tools only when the user explicitly asks to execute, collect, scan, repair, generate, dispatch, or otherwise change state.
+6. If required information is unavailable and cannot be safely defaulted or discovered, set need_clarification=true and provide one concise question. Read-only context tools may still be selected.
+7. For multi-stage, asynchronous, conditional, or verification goals, select relevant trigger, status, result, validation, or alternative tools based on their contracts. Do not determine a fixed execution order; Runtime will plan from actual results.
+8. Natural-language fields may follow the user's language. Tool names and capability identifiers must remain exact English catalog values.
+
+Return JSON only:
+{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"detail_requests":[],"reason":""}`
+
+const toolSelectionFinalSystemPrompt = `You are the final tool selector for the Aegis agent. Use the detailed tool contracts to choose the bounded tool set that the planner and executor may need.
+
+Requirements:
+1. Keep only tools that may be needed for the user's goal. Do not fill the set with unrelated tools.
+2. Include relevant read, detail, and status tools as well as write tools explicitly requested by the user.
+3. For an asynchronous task, include both a relevant trigger tool and relevant status or result tools when their contracts support the goal.
+4. If required arguments cannot be supplied by user input, context, or a preceding tool result, select a read-only discovery tool or set need_clarification=true.
+5. selected_tools may contain only exact names present in the detailed or short catalog.
+6. Select conditional and asynchronous tools only when their contracts are relevant. Runtime decides the actual order and calls from real results.
+7. Natural-language fields may follow the user's language. Tool names and capability identifiers must remain exact English catalog values.
+
+Return JSON only:
+{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"reason":""}`
 
 // jsonObjectResponseFormat 返回 OpenAI 兼容的 JSON 模式（response_format={"type":"json_object"}），
 // 让小米 MiMo 等模型强制输出合法 JSON，从根本上减少“只返回思考正文、没有 JSON”的情况；
@@ -156,21 +185,9 @@ func filterResidentToolsForIntent(names []string, query, explicitToolName string
 }
 
 func requestLLMToolSelectionDraft(ctx context.Context, client *llm.LLMClient, userMessage string, intent IntentResult, contextRefs []ContextRefInput, briefCatalog string) (llmToolSelectionDraft, error) {
-	systemPrompt := `你是 Aegis 智能体的工具选择器。你只负责根据用户意图从工具短目录中挑选可能需要的工具，不执行任务。
-
-要求：
-1. 先理解用户目标、对象、约束和缺失信息，再选择工具。
-2. 不要只按关键词机械匹配；同一任务可跨资产、主机、漏洞、基线、告警、任务等域。
-3. 如果短目录信息不足，可以在 detail_requests 中写工具名或能力关键词，系统会提供详情后再让你最终选择。
-4. selected_tools 只能填写短目录中存在的工具名，不得发明工具。
-5. 高风险/写操作只有用户明确要求执行、采集、扫描、修复、生成、下发时才选择。
-6. 如果用户信息不足且无法安全默认，need_clarification=true 并给出一个简短追问；仍可选择用于澄清前查询上下文的只读工具。
-
-只输出 JSON：{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"detail_requests":[],"reason":""}`
-
-	userPrompt := fmt.Sprintf("用户消息：%s\n\n规则意图：%s\n\n上下文引用：%s\n\n工具短目录：\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), briefCatalog)
+	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nShort tool catalog:\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), briefCatalog)
 	baseMessages := []llm.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: toolSelectionDraftSystemPrompt},
 		{Role: "user", Content: userPrompt},
 	}
 	var draft llmToolSelectionDraft
@@ -184,20 +201,9 @@ func requestLLMToolSelectionDraft(ctx context.Context, client *llm.LLMClient, us
 }
 
 func requestLLMToolSelectionFinal(ctx context.Context, client *llm.LLMClient, userMessage string, intent IntentResult, contextRefs []ContextRefInput, briefCatalog, details string, draft llmToolSelectionDraft) (llmToolSelectionFinal, error) {
-	systemPrompt := `你是 Aegis 智能体的最终工具选择器。现在你拿到了工具详情，请选出计划阶段和执行阶段大概需要注入给模型的工具集合。
-
-要求：
-1. selected_tools 只保留完成用户目标可能需要的工具，不要塞满无关工具。
-2. 选择查询/详情/状态工具，也要选择用户明确要求的执行类工具。
-3. 如果任务需要先执行任务再查看结果，同时选择触发工具和状态/结果查询工具。
-4. 如果工具详情显示参数无法满足，改为选择可查询上下文的工具或设置 need_clarification=true。
-5. selected_tools 只能填写工具详情或短目录中存在的工具名。
-
-只输出 JSON：{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"reason":""}`
-
-	userPrompt := fmt.Sprintf("用户消息：%s\n\n规则意图：%s\n\n上下文引用：%s\n\n第一轮选择：%s\n\n工具详情：\n%s\n\n工具短目录备用：\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), encodeJSON(draft), details, briefCatalog)
+	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nDraft selection:\n%s\n\nDetailed tool contracts:\n%s\n\nShort catalog fallback:\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), encodeJSON(draft), details, briefCatalog)
 	baseMessages := []llm.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: toolSelectionFinalSystemPrompt},
 		{Role: "user", Content: userPrompt},
 	}
 	var final llmToolSelectionFinal
@@ -321,45 +327,27 @@ func shortToolBrief(tool *ToolSpec) string {
 	if tool == nil {
 		return ""
 	}
-	text := strings.TrimSpace(tool.Description)
-	if text == "" {
-		text = strings.TrimSpace(tool.Capability)
+	contract := BuildToolUseContract(tool)
+	parts := []string{"capability=" + contract.Capability}
+	if len(contract.ObjectTypes) > 0 {
+		parts = append(parts, "objects="+strings.Join(contract.ObjectTypes, ","))
 	}
-	if text == "" && len(tool.Aliases) > 0 {
-		text = strings.TrimSpace(tool.Aliases[0])
-	}
-	if utf8.RuneCountInString(text) < 20 {
-		extras := make([]string, 0, 3)
-		if len(tool.Aliases) > 0 {
-			limit := len(tool.Aliases)
-			if limit > 2 {
-				limit = 2
-			}
-			extras = append(extras, "用于"+strings.Join(tool.Aliases[:limit], "、"))
-		}
-		if tool.Capability != "" {
-			extras = append(extras, "能力"+strings.ReplaceAll(tool.Capability, "_", " "))
-		}
-		if len(tool.Tags) > 0 {
-			extras = append(extras, "标签"+tool.Tags[0])
-		}
-		if len(extras) > 0 {
-			text = text + "，" + strings.Join(extras, "，")
-		}
-	}
-	return limitRunes(strings.Join(strings.Fields(text), " "), 30)
+	return strings.Join(parts, " ")
 }
 
 func formatToolDetailForLLM(tool *ToolSpec) string {
-	return fmt.Sprintf("- %s\n  domain=%s operation=%s risk=%s approval=%v\n  description=%s\n  aliases=%s\n  tags=%s\n  args=%s",
+	contract := BuildToolUseContract(tool)
+	return fmt.Sprintf("- %s\n  capability=%s domain=%s operation=%s risk=%s approval=%v\n  objects=%s\n  allowed_actions=%s\n  preconditions=%s\n  postconditions=%s\n  args=%s",
 		tool.Name,
+		contract.Capability,
 		tool.Domain,
 		tool.Operation,
 		tool.Risk,
 		tool.RequiresApproval || !tool.DefaultWhitelisted,
-		tool.Description,
-		strings.Join(tool.Aliases, ","),
-		strings.Join(tool.Tags, ","),
+		strings.Join(contract.ObjectTypes, ","),
+		strings.Join(contract.Actions, ","),
+		strings.Join(contract.Preconditions, ","),
+		strings.Join(contract.Postconditions, ","),
 		summarizeToolArgsForLLM(tool.ArgsSchema),
 	)
 }
@@ -381,16 +369,21 @@ func summarizeToolArgsForLLM(schema map[string]interface{}) string {
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		prop, _ := props[key].(map[string]interface{})
-		desc, _ := prop["description"].(string)
 		flag := "optional"
 		if required[key] {
 			flag = "required"
 		}
-		if desc != "" {
-			parts = append(parts, fmt.Sprintf("%s(%s:%s)", key, flag, desc))
-		} else {
-			parts = append(parts, fmt.Sprintf("%s(%s)", key, flag))
+		dataType, _ := prop["type"].(string)
+		if dataType == "" {
+			dataType = "any"
 		}
+		item := fmt.Sprintf("%s(%s,type=%s", key, flag, dataType)
+		if values, ok := prop["enum"]; ok {
+			if encoded, err := json.Marshal(values); err == nil {
+				item += ",enum=" + string(encoded)
+			}
+		}
+		parts = append(parts, item+")")
 	}
 	return strings.Join(parts, "; ")
 }

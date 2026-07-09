@@ -11,12 +11,12 @@ import (
 var AegisTools = []agentruntime.ToolDescriptor{
 	{
 		Name:        "GetProcessTree",
-		Description: "获取指定主机上指定进程的完整进程树；pid 可选，默认 PID 1",
+		Description: "Retrieve the complete process tree for a process on a host; pid is optional and defaults to 1.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]any{"type": "string", "description": "主机ID"},
-				"pid":     map[string]any{"type": "number", "description": "进程PID（可选，默认 1）"},
+				"host_id": map[string]any{"type": "string", "description": "Host ID."},
+				"pid":     map[string]any{"type": "number", "description": "Optional process PID; defaults to 1."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -29,12 +29,12 @@ var AegisTools = []agentruntime.ToolDescriptor{
 	},
 	{
 		Name:        "GetNetworkConnections",
-		Description: "获取指定主机的网络连接信息",
+		Description: "Retrieve network connections for a host, optionally filtered by process.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]any{"type": "string", "description": "主机ID"},
-				"pid":     map[string]any{"type": "number", "description": "进程PID（可选，按进程过滤）"},
+				"host_id": map[string]any{"type": "string", "description": "Host ID."},
+				"pid":     map[string]any{"type": "number", "description": "Optional process PID filter."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -47,12 +47,12 @@ var AegisTools = []agentruntime.ToolDescriptor{
 	},
 	{
 		Name:        "GetOpenFiles",
-		Description: "获取指定进程打开的文件列表",
+		Description: "Retrieve files opened by a process on a host.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]any{"type": "string", "description": "主机ID"},
-				"pid":     map[string]any{"type": "number", "description": "进程PID"},
+				"host_id": map[string]any{"type": "string", "description": "Host ID."},
+				"pid":     map[string]any{"type": "number", "description": "Process PID."},
 			},
 			"required": []string{"host_id", "pid"},
 		},
@@ -65,12 +65,12 @@ var AegisTools = []agentruntime.ToolDescriptor{
 	},
 	{
 		Name:        "GetRunningProcesses",
-		Description: "获取指定主机上正在运行的进程列表",
+		Description: "Retrieve running processes for a host.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]any{"type": "string", "description": "主机ID"},
-				"filter":  map[string]any{"type": "string", "description": "进程名过滤条件（可选）"},
+				"host_id": map[string]any{"type": "string", "description": "Host ID."},
+				"filter":  map[string]any{"type": "string", "description": "Optional process-name filter."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -83,11 +83,11 @@ var AegisTools = []agentruntime.ToolDescriptor{
 	},
 	{
 		Name:        "GetUserSessions",
-		Description: "获取指定主机上的用户会话信息",
+		Description: "Retrieve active user sessions for a host.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id": map[string]any{"type": "string", "description": "主机ID"},
+				"host_id": map[string]any{"type": "string", "description": "Host ID."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -100,14 +100,14 @@ var AegisTools = []agentruntime.ToolDescriptor{
 	},
 	{
 		Name:        "QueryHistoricalLogs",
-		Description: "查询指定主机的历史日志",
+		Description: "Query historical logs for a host within an explicit time range.",
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"host_id":    map[string]any{"type": "string", "description": "主机ID"},
-				"start_time": map[string]any{"type": "string", "description": "查询起始时间"},
-				"end_time":   map[string]any{"type": "string", "description": "查询结束时间"},
-				"filter":     map[string]any{"type": "string", "description": "日志过滤条件（可选）"},
+				"host_id":    map[string]any{"type": "string", "description": "Host ID."},
+				"start_time": map[string]any{"type": "string", "description": "Query start time."},
+				"end_time":   map[string]any{"type": "string", "description": "Query end time."},
+				"filter":     map[string]any{"type": "string", "description": "Optional log filter."},
 			},
 			"required": []string{"host_id", "start_time", "end_time"},
 		},

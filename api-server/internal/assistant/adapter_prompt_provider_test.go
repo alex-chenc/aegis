@@ -8,7 +8,7 @@ import (
 	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
-func TestAssistantPromptProviderIncludesHostSecurityAnalysisGuide(t *testing.T) {
+func TestAssistantPromptProviderIncludesGenericAgentReasoningGuide(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{
 			Name:        "Host.List",
@@ -30,7 +30,6 @@ func TestAssistantPromptProviderIncludesHostSecurityAnalysisGuide(t *testing.T) 
 	}{
 		{name: "plan", purpose: agentruntime.PurposePlan},
 		{name: "react", purpose: agentruntime.PurposeReact},
-		{name: "summarize", purpose: agentruntime.PurposeSummarize},
 	}
 
 	for _, tc := range cases {
@@ -41,10 +40,10 @@ func TestAssistantPromptProviderIncludesHostSecurityAnalysisGuide(t *testing.T) 
 			}
 			prompt := bundle.SystemPrompt
 			for _, want := range []string{
-				"主机安全整体分析准则",
-				"每台目标主机给出清晰风险等级",
-				"Host.List 返回 N 台目标主机后必须覆盖全部 N 台",
-				"不要因为“没有告警”就直接判定安全",
+				"Generic agent reasoning",
+				"dynamic tool catalog is the capability boundary",
+				"actual prior results",
+				"never apply a fixed workflow",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Fatalf("prompt for %s missing %q\n%s", tc.name, want, prompt)
@@ -54,7 +53,7 @@ func TestAssistantPromptProviderIncludesHostSecurityAnalysisGuide(t *testing.T) 
 	}
 }
 
-func TestAssistantSummarizePromptRequiresClearHostSecurityResult(t *testing.T) {
+func TestAssistantSummarizePromptRequiresEvidenceGroundedResult(t *testing.T) {
 	provider := NewAssistantPromptProvider(nil, nil, "analysis", "分析主机安全")
 	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeSummarize})
 	if err != nil {
@@ -62,10 +61,10 @@ func TestAssistantSummarizePromptRequiresClearHostSecurityResult(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"安全结论：是否存在安全问题、最高风险等级、最需要立即处理的问题",
-		"每台主机分析：主机名/IP、在线状态、风险等级",
-		"不得把“没有告警”写成“没有风险”",
-		"先给最清晰结论，再给证据",
+		"Answer the final goal directly",
+		"Never report task creation as task completion",
+		"Never generalize a partial result",
+		"Never invent IDs, status, counts, impact scope, or execution results",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("summarize prompt missing %q\n%s", want, bundle.SystemPrompt)
@@ -73,7 +72,7 @@ func TestAssistantSummarizePromptRequiresClearHostSecurityResult(t *testing.T) {
 	}
 }
 
-func TestAssistantPromptProviderIncludesMandatoryToolSequenceGuide(t *testing.T) {
+func TestAssistantPromptProviderDoesNotBuildSequenceFromUserText(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Baseline.Template.Status.Get", Description: "查询基线模板解析状态"},
 		{Name: "Baseline.Template.Rules.List", Description: "查询基线规则"},
@@ -92,18 +91,20 @@ func TestAssistantPromptProviderIncludesMandatoryToolSequenceGuide(t *testing.T)
 	}
 
 	for _, want := range []string{
-		"用户指定工具执行约束",
-		"1. Baseline.Template.Status.Get",
-		"2. Baseline.Template.Rules.List",
-		"3. Baseline.Script.Generate",
-		"4. Baseline.Script.Generate",
-		"5. Task.RunCheck",
-		"6. Task.RunFix",
-		"7. Task.List",
-		"每一次调用都必须由 Runtime 明确发起",
+		"Generic agent reasoning",
+		"Re-evaluate the next action after every result",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+	for _, forbidden := range []string{
+		"User-specified tool execution sequence",
+		"must call in the order listed",
+		"1. Baseline.Template.Status.Get",
+	} {
+		if strings.Contains(bundle.SystemPrompt, forbidden) {
+			t.Fatalf("react prompt must not synthesize a fixed sequence %q\n%s", forbidden, bundle.SystemPrompt)
 		}
 	}
 }
@@ -152,16 +153,14 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 	}
 
 	for _, want := range []string{
-		"自然语言工具使用推理原则",
-		"先理解业务目标",
-		"先抽取：目标对象",
-		"信息不足时先判断能否安全默认",
-		"工具选择应覆盖用户最终目标",
-		"采集只是证据来源之一",
-		"当前工具集合不足时直接报告缺少的能力",
-		"同一工具用同一参数已成功时，直接复用已有结果",
-		"汇总、总结、输出结论、整理结果",
-		"中间步骤的 step_result 只写该步骤产物",
+		"Generic agent reasoning",
+		"Understand the final goal",
+		"dynamic tool catalog is the capability boundary",
+		"actual prior results",
+		"If authorized tools cannot complete the goal",
+		"Reuse a successful result for the same tool and arguments",
+		"only summarizes or organizes existing results",
+		"An intermediate step_result contains only that step's output",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
@@ -169,7 +168,7 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 	}
 	for _, forbidden := range []string{
 		"package_name=\"mysql\"",
-		"必须按以下顺序执行",
+		"must execute in this order",
 	} {
 		if strings.Contains(bundle.SystemPrompt, forbidden) {
 			t.Fatalf("react prompt should not contain fixed workflow %q\n%s", forbidden, bundle.SystemPrompt)
@@ -188,8 +187,8 @@ func TestAssistantPlanAndSummarizePromptsAvoidDuplicateFinalReports(t *testing.T
 		t.Fatalf("Build(plan) error = %v", err)
 	}
 	for _, want := range []string{
-		"不要把“汇总分析结果/输出最终结论”规划成需要再次调用工具的独立步骤",
-		"不得重复查询已成功获取的数据",
+		"Do not create a separate tool step merely to summarize",
+		"must reuse successful evidence",
 	} {
 		if !strings.Contains(plan.SystemPrompt, want) {
 			t.Fatalf("plan prompt missing %q\n%s", want, plan.SystemPrompt)
@@ -200,12 +199,12 @@ func TestAssistantPlanAndSummarizePromptsAvoidDuplicateFinalReports(t *testing.T
 	if err != nil {
 		t.Fatalf("Build(summarize) error = %v", err)
 	}
-	if !strings.Contains(summarize.SystemPrompt, "合并去重后只给一次最终结论") {
+	if !strings.Contains(summarize.SystemPrompt, "provide the final conclusion only once") {
 		t.Fatalf("summarize prompt missing duplicate-final-report guard\n%s", summarize.SystemPrompt)
 	}
 }
 
-func TestAssistantPromptProviderUsesGenericVulnerabilityPlanningGuide(t *testing.T) {
+func TestAssistantPromptProviderDoesNotInjectVulnerabilityWorkflow(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Vulnerability.Script.Status", Description: "查询漏洞脚本状态"},
 		{Name: "Vulnerability.Script.Execute", Description: "执行漏洞脚本"},
@@ -221,14 +220,20 @@ func TestAssistantPromptProviderUsesGenericVulnerabilityPlanningGuide(t *testing
 	}
 
 	for _, want := range []string{
-		"漏洞 POC 与修复任务由你显式规划",
-		"max_rounds",
+		"Generic agent reasoning",
+		"Re-evaluate the next action after every result",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
 		}
 	}
-	if strings.Contains(bundle.SystemPrompt, "vulnerability_script_sequence_complete=true") {
-		t.Fatalf("react prompt must not depend on hidden vulnerability sequence markers\n%s", bundle.SystemPrompt)
+	for _, forbidden := range []string{
+		"explicitly plan the vulnerability POC and remediation workflow",
+		"vulnerability_script_sequence_complete=true",
+		"Vulnerability.CustomQuery.Start",
+	} {
+		if strings.Contains(bundle.SystemPrompt, forbidden) {
+			t.Fatalf("react prompt must not inject a vulnerability workflow %q\n%s", forbidden, bundle.SystemPrompt)
+		}
 	}
 }

@@ -456,7 +456,7 @@ func (s *TemplateService) extractRulesFromChunk(ctx context.Context, llmClient *
 			)
 		}
 
-		llmResponse, err := llmClient.ChatCompletion(ctx, "你是一位安全基线专家", prompt, temperature)
+		llmResponse, err := llmClient.ChatCompletion(ctx, "You are a security-baseline expert. Follow the output contract exactly.", prompt, temperature)
 		if err != nil {
 			return nil, fmt.Errorf("LLM 调用失败：%w", err)
 		}

@@ -554,40 +554,24 @@ func (s *WeakPasswordService) analyzeApplicationsWithAI(ctx context.Context, ass
 
 // analyzeApplicationBatch analyzes a batch of application types with AI
 func (s *WeakPasswordService) analyzeApplicationBatch(ctx context.Context, appTypeList []string) (map[string]bool, error) {
-	systemPrompt := `你是安全专家，筛选需要弱密码检测的应用。
+	systemPrompt := `You are a security expert classifying applications for weak-password testing.
 
-## 核心规则
-只返回**同时满足**以下**所有**条件的应用：
-1. 市面已知的公开软件（非自研/内部工具/自定义脚本）
-2. 有账户密码登录机制（非纯命令行/系统服务/监控代理）
-3. 同一应用类型只返回一次（已自动去重）
+Put an application in needs only when all conditions hold:
+1. It is a known public software product, not an internal application, custom tool, or script.
+2. It has an account-and-password authentication mechanism.
+3. The application type appears only once.
 
-## 需要检测的应用类型（必须有账号密码机制）
-数据库: MySQL, PostgreSQL, Redis, MongoDB, MariaDB, Elasticsearch, Oracle, SQL Server
-中间件: Tomcat, WebLogic, JBoss, WildFly, RabbitMQ, Kafka, ZooKeeper
-Web服务: Nginx(htpasswd), Apache(htpasswd), IIS
-管理工具: phpMyAdmin, Grafana, Kibana, Jenkins, GitLab, Harbor, SonarQube, Nexus
-LDAP: OpenLDAP, Active Directory
-AI服务: Ollama, LocalAI, vLLM
+Common candidates include databases, middleware, password-protected web services, administration products, LDAP services, and AI services that expose password authentication.
+Skip operating-system utilities, monitoring or logging agents, unauthenticated proxies, load balancers without password protection, and custom applications.
 
-## 不需要检测的应用类型
-系统工具: bash, sh, cron, systemd, docker, containerd, kubelet
-监控代理: node_exporter, prometheus, telegraf, collectd, zabbix_agent
-日志代理: rsyslog, fluentd, filebeat, logstash
-纯代理/负载均衡: haproxy, squid, nginx(无htpasswd), envoy, traefik
-自研应用: 业务系统、内部工具、自定义脚本、go程序、python脚本
+Return strict JSON:
+{"needs":{"app_type1":"concise reason"},"skip":{"app_type2":"concise reason"}}
 
-## 输出格式
-严格按JSON格式返回，reason必须简短（10字以内）：
-{"needs":{"app_type1":"原因","app_type2":"原因"},"skip":{"app_type3":"原因"}}
-
-重要：
-- 必须覆盖输入中的每一个 app_type
-- needs中只放需要检测的应用类型
-- skip中放不需要检测的应用类型
-- 每个应用类型只能出现在needs或skip中的一个
-- key 必须使用输入中的标准 app_type，不要翻译、不要新增不存在的类型
-- reason必须简短！`
+Rules:
+- Cover every input app_type.
+- Put each app_type in exactly one of needs or skip.
+- Use the exact input app_type as the key. Never translate or invent a type.
+- Keep each reason concise and in the user's language.`
 
 	// Deduplicate app types for prompt
 	seenTypes := make(map[string]bool)
@@ -599,7 +583,7 @@ AI服务: Ollama, LocalAI, vLLM
 		}
 	}
 
-	userPrompt := fmt.Sprintf("筛选以下应用类型中需要弱密码检测的应用（每种类型只分析一次）：\n%s", strings.Join(uniqueTypes, ","))
+	userPrompt := fmt.Sprintf("Classify these application types for weak-password testing. Analyze each type once:\n%s", strings.Join(uniqueTypes, ","))
 
 	// Get LLM client
 	llmClient, err := s.getLLMClient(ctx)
@@ -1322,89 +1306,65 @@ func (s *WeakPasswordService) attemptCollectionRepair(ctx context.Context, task 
 	})
 
 	// Build system prompt for repair
-	systemPrompt := `你是弱密码模块的配置定位专家。你的任务不是项目自测，而是根据应用资产、采集错误和受控 Agent 工具，修复 CredentialCollectionPlan 中的配置文件路径和账号/密码字段提取器。
+	systemPrompt := `You are the configuration-location specialist for the weak-password module. Repair file paths and account/password extractors in a CredentialCollectionPlan from application assets, collection errors, and controlled Agent tools.
 
-## 重要提示
+Container rules:
+- Many applications run in containers and have no systemd unit. Do not use WeakPassword.ServiceUnitInspect for a confirmed container.
+- Prefer WeakPassword.ProcessConfigHints for process-derived paths, or WeakPassword.ProbePath to verify a known path.
+- related_pids is the only trusted PID list. Never use pid=1 unless it appears there.
+- For an application with related_pids, include a trusted pid in WeakPassword.ProbePath, WeakPassword.ListConfigDir, and WeakPassword.ReadConfigSlice. The Agent resolves container files through /proc/<pid>/root.
+- If is_container=true, treat it as a container and use collected container environment evidence before reading container files through a trusted pid.
+- new_paths must use application-visible absolute paths such as /etc/redis/redis.conf, never /proc/<pid>/root/....
+- For Redis command-line --requirepass or --masterauth, rely on controlled process-argument collection rather than recursively searching host /etc.
 
-很多应用运行在 Docker 容器中，没有 systemd service 文件。在这种情况下：
-- **不要使用** WeakPassword.ServiceUnitInspect（查找 systemd service 文件）
-- **优先使用** WeakPassword.ProcessConfigHints（从进程获取配置路径）
-- **或者使用** WeakPassword.ProbePath（检查路径是否存在）
+Available auxiliary tools:
+1. WeakPassword.ProbePath: verify path existence, type, size, and permissions.
+2. WeakPassword.ListConfigDir: list one configuration directory non-recursively.
+3. WeakPassword.ServiceUnitInspect: read systemd ExecStart and EnvironmentFile for non-container deployments only.
+4. WeakPassword.ProcessConfigHints: inspect trusted process arguments and open files; prefer this for containers.
 
-容器/非容器路径规则：
-- 当前计划里的 related_pids 是唯一可信 PID 列表；不要使用 pid=1，除非它明确出现在 related_pids。
-	- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
-	- 如果当前计划 is_container=true，必须视为容器应用：先利用 Agent 容器环境变量采集结果，再通过带 pid 的工具读取 /proc/<pid>/root 下的容器内文件。
-	- 对有 related_pids 的应用，WeakPassword.ProbePath、WeakPassword.ListConfigDir、WeakPassword.ReadConfigSlice 参数必须带 pid。Agent 会先判断该 PID 是否容器进程；容器进程读取 /proc/<pid>/root 下的容器内文件，非容器进程读取宿主机文件。
-- new_paths 必须填写应用视角的绝对路径，例如 /etc/redis/redis.conf；不要返回 /proc/<pid>/root/...。
-- Redis 若通过 redis-server --requirepass/--masterauth 启动，凭据由受控采集工具从进程参数提取，不要为了这种情况递归搜索宿主机 /etc。
+new_extractors fields:
+- type: line_key_value, ini, properties, yaml, json, shadow, htpasswd, or tomcat_users_xml
+- section: optional section for formats such as ini
+- account_selector: optional account field
+- password_selector: password, token, or hash field
+- format_hint: plaintext, auth_string, hash, salted_hash, or unknown
+- source_kind: optional source such as system_account
 
-## 可用辅助工具
+For field_not_found or unsupported_credential_format, determine whether a new extractor is required. Never treat ports, logs, bind addresses, data directories, or tuning parameters as password fields.
 
-1. **WeakPassword.ProbePath** - 检查指定路径是否存在、类型、大小、权限
-   - 参数: {"path": "/path/to/file"}
-   - 用途: 验证文件是否存在
-
-2. **WeakPassword.ListConfigDir** - 非递归列出指定目录下的文件
-   - 参数: {"dir": "/path/to/dir", "pid": 1234, "max_entries": 50, "recursive": false}
-   - 用途: 发现配置目录中的其他文件
-
-3. **WeakPassword.ServiceUnitInspect** - 读取 systemd service 的 ExecStart、EnvironmentFile
-   - 参数: {"service_name": "redis-server"}
-   - 用途: 从服务配置中发现实际路径
-   - 注意: 仅适用于非容器化部署的应用
-
-4. **WeakPassword.ProcessConfigHints** - 根据 pid 获取启动参数和打开的文件
-   - 参数: {"pid": 1234, "include_open_files": true}
-   - 用途: 从运行进程中发现配置文件路径
-   - **推荐**: 对于容器化应用，优先使用此工具
-
-## 提取器格式
-
-new_extractors 必须使用以下字段：
-- type: line_key_value / ini / properties / yaml / json / shadow / htpasswd / tomcat_users_xml
-- section: 可选，仅 ini 等格式需要
-- account_selector: 可选账号字段
-- password_selector: 密码、token 或 hash 字段
-- format_hint: plaintext / auth_string / hash / salted_hash / unknown
-- source_kind: 可选来源类型，如 system_account
-
-当错误是 field_not_found 或 unsupported_credential_format 时，优先判断是否需要新增 new_extractors。不要把端口、日志、bind、datadir、调优参数当成密码字段。
-
-## 输出格式
-
-严格按JSON格式返回：
+Return strict JSON:
 {
-  "tool": "工具名",
-  "arguments": {参数},
-  "reason": "选择原因",
-  "new_paths": [发现的新路径列表],
+  "tool": "exact tool name",
+  "arguments": {},
+  "reason": "selection reason",
+  "new_paths": ["/absolute/application/path"],
   "new_extractors": [
     {"type":"line_key_value","password_selector":"requirepass","format_hint":"plaintext"}
   ]
 }
 
-注意：
-- 只能选择一个工具
-- new_paths 是从证据或工具结果推断出的明确绝对路径，禁止递归搜索、通配符、shell 元字符
-- new_extractors 是从错误和应用类型推断出的账号/密码字段，最多5个
-- 如果无法修复，返回 {"tool": "none", "reason": "无法修复原因"}`
+Rules:
+- Select at most one tool.
+- Derive new_paths from evidence or tool results. Do not use recursive searches, wildcards, or shell metacharacters.
+- Return at most five new_extractors.
+- If repair is impossible, return {"tool":"none","reason":"why repair is impossible"}.`
 
 	// Build user prompt with error context
-	userPrompt := fmt.Sprintf(`## 当前采集计划
+	userPrompt := fmt.Sprintf(`## Current collection plan
 %s
 
-## 采集失败信息
+## Collection failure
 
-应用类型: %s
-任务ID: %s
-已尝试路径和错误:
+Application type: %s
+Task ID: %s
+Attempted paths and errors:
 %s
 
-## 可用辅助工具
+## Available auxiliary tools
 %s
 
-请选择一个辅助工具，并返回需要合并到采集计划里的 new_paths 和/或 new_extractors。`, string(currentPlanSummary), application, task.ID.String(), formatErrorDetails(errorDetails), strings.Join(allowedTools, ", "))
+Select one auxiliary tool and return any new_paths or new_extractors that should be merged into the collection plan.`, string(currentPlanSummary), application, task.ID.String(), formatErrorDetails(errorDetails), strings.Join(allowedTools, ", "))
 
 	// Call LLM
 	response, err := llmClient.ChatCompletion(ctx, systemPrompt, userPrompt, 0.3)
@@ -2722,19 +2682,11 @@ func (s *WeakPasswordService) GenerateAIDictionary(ctx context.Context, req mode
 
 // generateDictionaryWithAI uses LLM to generate weak password candidates based on user input
 func (s *WeakPasswordService) generateDictionaryWithAI(ctx context.Context, req model.AIGenerateDictionaryRequest, seedWords []string) ([]string, error) {
-	systemPrompt := `你是一个安全专家，负责生成弱密码字典用于安全检测。
-你的任务是根据用户提供的信息，生成一组可能被用作弱密码的候选密码。
+	systemPrompt := `You are a security expert generating weak-password candidates for authorized security testing.
 
-生成规则：
-1. 基于用户提供的关键词、组织名称、账号名称等信息
-2. 结合常见的弱密码模式（如：密码+年份、密码+特殊字符等）
-3. 考虑应用类型的特点（如数据库默认密码、中间件默认密码等）
-4. 生成的密码应该多样化，包含不同长度和复杂度
-5. 每个密码应该是一个可能被实际使用的弱密码
+Generate plausible weak passwords from user-provided keywords, organization names, account names, application type, seed words, common default credentials, year suffixes, and common symbol variants. Keep candidates diverse in length and pattern. Do not generate unrelated prose.
 
-重要：只返回密码列表，不要返回其他解释信息。
-
-请以JSON格式返回结果：
+Return strict JSON:
 {
   "passwords": ["password1", "password2", ...]
 }`
@@ -2742,21 +2694,21 @@ func (s *WeakPasswordService) generateDictionaryWithAI(ctx context.Context, req 
 	// Build user prompt from request
 	var userPromptParts []string
 	if req.NaturalLanguage != "" {
-		userPromptParts = append(userPromptParts, "用户描述："+req.NaturalLanguage)
+		userPromptParts = append(userPromptParts, "User description: "+req.NaturalLanguage)
 	}
 	if len(req.OrganizationKeywords) > 0 {
-		userPromptParts = append(userPromptParts, "组织关键词："+strings.Join(req.OrganizationKeywords, ", "))
+		userPromptParts = append(userPromptParts, "Organization keywords: "+strings.Join(req.OrganizationKeywords, ", "))
 	}
 	if len(req.AccountKeywords) > 0 {
-		userPromptParts = append(userPromptParts, "账号关键词："+strings.Join(req.AccountKeywords, ", "))
+		userPromptParts = append(userPromptParts, "Account keywords: "+strings.Join(req.AccountKeywords, ", "))
 	}
 	if req.ApplicationType != "" {
-		userPromptParts = append(userPromptParts, "应用类型："+req.ApplicationType)
+		userPromptParts = append(userPromptParts, "Application type: "+req.ApplicationType)
 	}
 	if len(seedWords) > 0 {
-		userPromptParts = append(userPromptParts, "种子词："+strings.Join(seedWords, ", "))
+		userPromptParts = append(userPromptParts, "Seed words: "+strings.Join(seedWords, ", "))
 	}
-	userPromptParts = append(userPromptParts, fmt.Sprintf("需要生成 %d 个弱密码候选", req.Count))
+	userPromptParts = append(userPromptParts, fmt.Sprintf("Required candidate count: %d", req.Count))
 
 	userPrompt := strings.Join(userPromptParts, "\n")
 

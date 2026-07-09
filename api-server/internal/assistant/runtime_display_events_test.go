@@ -71,3 +71,21 @@ func TestCompactRuntimeDisplayEventsKeepsPlanAndStepEvents(t *testing.T) {
 		t.Fatalf("step result summary = %#v", compacted[2].Payload["result_summary"])
 	}
 }
+
+func TestCompactRuntimeDisplayEventsKeepsPreGatewayToolError(t *testing.T) {
+	events := []AssistantEvent{
+		withMessageID(NewEvent(EventToolError, "session-1", "run-1", map[string]interface{}{
+			"call_id":          "call-invalid",
+			"tool_name":        "Vulnerability.GenerateShell",
+			"error":            "tool not found",
+			"validation_stage": "descriptor",
+		}), "msg-1"),
+	}
+	compacted := compactRuntimeDisplayEvents(events, "run-1", "msg-1")
+	if len(compacted) != 1 || compacted[0].Type != EventToolError {
+		t.Fatalf("compacted events = %#v", compacted)
+	}
+	if compacted[0].Payload["validation_stage"] != "descriptor" {
+		t.Fatalf("validation_stage = %#v", compacted[0].Payload["validation_stage"])
+	}
+}

@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -178,34 +181,34 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"object":     intent.Object,
 		"confidence": intent.Confidence,
 	}))
-	var intentBreakdown *IntentBreakdown
-	if o.intentDecomposer != nil {
-		breakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
-			Query:                  input.UserMessage,
-			Intent:                 intent,
-			ContextRefs:            intentInput.ContextRefs,
-			EnableLLMDecomposition: false,
-		})
-		if err != nil {
-			o.logger.Error("assistant rule intent decomposition failed",
-				zap.String("session_id", input.SessionID),
-				zap.String("run_id", input.RunID),
-				zap.Error(err),
-			)
-			return nil, fmt.Errorf("decompose assistant intent by rules: %w", err)
-		}
-		intentBreakdown = breakdown
+	if o.intentDecomposer == nil {
+		return nil, fmt.Errorf("assistant intent decomposer unavailable")
+	}
+	intentBreakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
+		Query:                  input.UserMessage,
+		Intent:                 intent,
+		ContextRefs:            intentInput.ContextRefs,
+		EnableLLMDecomposition: true,
+	})
+	if err != nil {
+		o.logger.Error("assistant llm intent decomposition failed",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("decompose assistant intent with llm: %w", err)
 	}
 
-	// 6. 工具选择：操作请求统一交给 LLM 根据短目录 + 详情目录选择工具；
-	// 任一 LLM 阶段失败时直接返回错误，不进入业务快捷或规则降级流程。
-	var selection *ToolSelectionResult
-	selectionMode := "rules"
-	skipLLMToolSelection := intentBreakdown != nil && intentBreakdown.NeedClarification && intentBreakdown.RequiresWrite
-	if shouldUseLLMToolSelection(input.UserMessage, intent) && !skipLLMToolSelection {
+	// 6. 工具选择：业务语义和工具集合均由 LLM 产生，后端只做工具契约裁决。
+	// 问答和明确需要追问的请求不注入业务工具；LLM 失败时不进入规则降级。
+	selection := &ToolSelectionResult{
+		Query:  input.UserMessage,
+		Intent: intent,
+	}
+	selectionMode := "llm"
+	if intent.Action != "answer" && !intentBreakdown.NeedClarification {
 		if llmSelection, err := o.selectToolsWithLLM(ctx, input.UserMessage, intent, intentInput.ContextRefs); err == nil && llmSelection != nil && len(llmSelection.SelectedTools) > 0 {
 			selection = llmSelection
-			selectionMode = "llm"
 		} else if err != nil {
 			o.logger.Error("llm tool selection failed",
 				zap.String("session_id", input.SessionID),
@@ -217,40 +220,9 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			return nil, fmt.Errorf("select tools with llm: no executable tools selected")
 		}
 	}
-	if selection == nil {
-		selection = o.toolSelector.Select(ToolSelectionInput{
-			Query:       input.UserMessage,
-			ContextRefs: intentInput.ContextRefs,
-			Intent:      intent,
-			MaxTools:    24,
-		})
-	}
 	useAIAnalysisFlow := o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
 
-	if o.intentDecomposer != nil && (intentBreakdown == nil || !intentBreakdown.NeedClarification) {
-		candidateCapabilities := []string(nil)
-		if intentBreakdown != nil {
-			candidateCapabilities = append(candidateCapabilities, intentBreakdown.CandidateCapabilities...)
-		}
-		breakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
-			Query:                  input.UserMessage,
-			Intent:                 intent,
-			ContextRefs:            intentInput.ContextRefs,
-			CandidateCapabilities:  candidateCapabilities,
-			EnableLLMDecomposition: envBool("ASSISTANT_INTENT_DECOMPOSE_ENABLED", true),
-		})
-		if err != nil {
-			o.logger.Error("assistant intent decomposition failed",
-				zap.String("session_id", input.SessionID),
-				zap.String("run_id", input.RunID),
-				zap.Error(err),
-			)
-			return nil, fmt.Errorf("decompose assistant intent: %w", err)
-		}
-		intentBreakdown = breakdown
-	}
-
-	var executionPlan *ToolExecutionPlan
+	var authorization *ToolExecutionPlan
 	if o.toolDecisionEngine != nil && o.toolDecisionEngine.config.Enabled {
 		plan, err := o.toolDecisionEngine.Decide(ctx, ToolDecisionInput{
 			Query:                input.UserMessage,
@@ -268,7 +240,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			)
 			return nil, fmt.Errorf("decide assistant tools: %w", err)
 		} else if plan != nil {
-			executionPlan = plan
+			authorization = plan
 
 			// 使用 ToolDecisionRecorder 持久化裁决记录
 			if o.decisionRecorder != nil {
@@ -279,9 +251,9 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			clarification := o.clarificationGate.Evaluate(intentBreakdown, plan.ToolNames(), plan.DecisionRecords)
 			if plan.NeedClarification || clarification.Required {
 				o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
-					"intent_breakdown":    intentBreakdown,
-					"tool_execution_plan": executionPlan,
-					"current_run_status":  "clarification_required",
+					"intent_breakdown":   intentBreakdown,
+					"tool_authorization": authorization,
+					"current_run_status": "clarification_required",
 				})
 				question := plan.ClarifyingQuestion
 				if question == "" {
@@ -306,8 +278,8 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			selectionMode = selectionMode + "+decision"
 			useAIAnalysisFlow = o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
 			o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
-				"intent_breakdown":    intentBreakdown,
-				"tool_execution_plan": executionPlan,
+				"intent_breakdown":   intentBreakdown,
+				"tool_authorization": authorization,
 			})
 		}
 	}
@@ -320,9 +292,9 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"max_total_turns": maxRuntimeTurns(useAIAnalysisFlow),
 		"selection_mode":  selectionMode,
 	}
-	if executionPlan != nil {
-		toolSelectionPayload["decision_trace_id"] = executionPlan.DecisionTraceID
-		toolSelectionPayload["tool_execution_plan"] = executionPlan
+	if authorization != nil {
+		toolSelectionPayload["decision_trace_id"] = authorization.DecisionTraceID
+		toolSelectionPayload["tool_authorization"] = authorization
 	}
 	if intentBreakdown != nil {
 		toolSelectionPayload["intent_breakdown"] = intentBreakdown
@@ -340,11 +312,12 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.String("session_id", input.SessionID),
 		zap.String("run_id", input.RunID),
 		zap.String("runtime_profile", runtimeProfileName(useAIAnalysisFlow)),
+		zap.String("planning_mode", "agent_runtime_dynamic"),
 		zap.String("selection_mode", selectionMode),
 		zap.Strings("selected_tools", selection.SelectedTools),
 		zap.Int("tools_count", len(toolDescriptors)),
 	)
-	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, executionPlan)
+	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, authorization)
 }
 
 func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput, plan *ToolExecutionPlan) (*RunResult, error) {
@@ -402,7 +375,7 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 		descriptors = append(descriptors, agentruntime.ToolDescriptor{
 			Name:             tool.Name,
 			Description:      tool.Description,
-			ArgsSchema:       tool.ArgsSchema,
+			ArgsSchema:       normalizeRuntimeArgsSchema(tool.ArgsSchema),
 			RiskLevel:        riskLevel,
 			AutoCallable:     tool.DefaultWhitelisted,
 			RequiresApproval: !tool.DefaultWhitelisted,
@@ -457,59 +430,16 @@ func normalizeContextData(data interface{}) map[string]interface{} {
 // 简单任务：问候、闲聊、不需要工具调用的通用问题
 // 复杂任务：需要工具调用的数据查询、安全分析、调查、多步骤任务
 func (o *Orchestrator) isComplexTask(taskType, userMessage string, intent IntentResult, selectedTools []string) bool {
-	// 1. 任务类型明确为复杂任务
-	complexTaskTypes := map[string]bool{
-		"investigation":             true,
-		"host_attack_investigation": true,
-		"remediation":               true,
-	}
-	if complexTaskTypes[taskType] {
-		return true
-	}
-
-	// 2. 意图识别为分析类操作
-	if intent.Action == "analyze" || intent.Action == "investigate" {
-		return true
-	}
-
-	// 3. 用户消息包含复杂任务关键词
-	complexKeywords := []string{
-		"分析", "调查", "研判", "攻击", "入侵", "溯源",
-		"漏洞", "风险", "威胁", "安全事件", "告警处理",
-		"制定计划", "执行计划", "修复方案", "整改措施",
-		"全面检查", "安全评估", "渗透测试",
-	}
-	for _, keyword := range complexKeywords {
-		if contains(userMessage, keyword) {
+	_ = taskType
+	_ = userMessage
+	_ = intent
+	// Profile selection only allocates a larger execution budget. Task
+	// complexity and plan shape are decided by agent-runtime's LLM router.
+	for _, name := range selectedTools {
+		if !isResidentTool(name) {
 			return true
 		}
 	}
-
-	// 4. 消息长度超过 100 字符，可能是复杂任务
-	if len(userMessage) > 100 {
-		return true
-	}
-
-	// 5. 如果选中了业务工具（排除 resident 辅助工具），说明需要工具调用，必须走 agent-runtime
-	// runDirectLLM 无法执行工具，只能返回文字描述
-	// 注意：resident 工具（Tool.Search, Context.Get, Session.Summarize）是无条件追加的辅助工具，
-	// 不代表任务本身复杂，不应参与复杂度判断
-	residentTools := map[string]bool{
-		"Tool.Search":       true,
-		"Context.Get":       true,
-		"Session.Summarize": true,
-	}
-	businessToolCount := 0
-	for _, name := range selectedTools {
-		if !residentTools[name] {
-			businessToolCount++
-		}
-	}
-	if businessToolCount > 0 {
-		return true
-	}
-
-	// 6. 默认为简单任务（问候、闲聊等不需要工具的场景）
 	return false
 }
 
@@ -529,7 +459,7 @@ func containsSubstring(s, substr string) bool {
 
 // runAgentRuntime 统一执行入口：使用 agent-runtime Plan → React 流程
 // 使用 RuntimeFactory.Build() 集中创建 runtime（对齐设计文档 4.3 节）
-func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool, executionPlan *ToolExecutionPlan) (*RunResult, error) {
+func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool, authorization *ToolExecutionPlan) (*RunResult, error) {
 	msgID := "msg_" + input.RunID
 	maxIterations := 80
 	if useAIAnalysisFlow {
@@ -537,6 +467,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	}
 	o.mergeSessionMetadata(ctx, input.SessionID, map[string]interface{}{
 		"runtime_profile":    runtimeProfileName(useAIAnalysisFlow),
+		"planning_mode":      "agent_runtime_dynamic",
 		"max_total_turns":    maxIterations,
 		"current_run_id":     input.RunID,
 		"current_message_id": msgID,
@@ -556,7 +487,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		SelectedTools:     selection.SelectedTools,
 		ToolDescriptors:   toolDescriptors,
 		MaxIterations:     maxIterations,
-		ExecutionPlan:     executionPlan,
+		ExecutionPlan:     nil,
 		UseAIAnalysisFlow: useAIAnalysisFlow,
 	})
 	if err != nil {
@@ -568,6 +499,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	taskResult, err := buildResult.Runtime.Run(ctx, agentruntime.TaskInput{
 		UserInput:   input.UserMessage,
 		UserContext: buildResult.UserContext,
+		InitialPlan: runtimeInitialPlanForAssistant(authorization),
 		Metadata: map[string]string{
 			"session_id": input.SessionID,
 			"run_id":     input.RunID,
@@ -599,10 +531,24 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	if taskResult == nil {
 		return nil, fmt.Errorf("agent runtime returned no result")
 	}
+	saveCtx := context.Background()
+	o.persistRuntimeToolCallRecords(saveCtx, input.SessionID, msgID, taskResult)
 	if err := validateRuntimeFinalAnswer(taskResult.FinalAnswer); err != nil {
 		return nil, err
 	}
+
+	evidence := buildRuntimeEvidenceLedger(taskResult)
 	response := taskResult.FinalAnswer
+	evidenceConflicts := validateRuntimeEvidenceConsistency(response, evidence)
+	if len(evidenceConflicts) > 0 {
+		o.logger.Warn("assistant final answer contradicted runtime tool evidence",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("message_id", msgID),
+			zap.Strings("conflict_codes", evidenceConflicts),
+		)
+		response = buildEvidenceGroundedFallback(evidence)
+	}
 	contextBudget := effectiveRuntimeContextBudget(taskResult)
 	metadata := map[string]interface{}{
 		"runtime_profile":         runtimeProfileName(useAIAnalysisFlow),
@@ -617,6 +563,8 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		"compression_count":       len(taskResult.CompressionRecords),
 		"context_budget":          contextBudget,
 		"compression_records":     taskResult.CompressionRecords,
+		"runtime_evidence":        evidence,
+		"evidence_conflicts":      evidenceConflicts,
 	}
 	o.mergeSessionMetadata(context.Background(), input.SessionID, metadata)
 	if contextBudget != nil {
@@ -637,7 +585,6 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	)
 
 	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
-	saveCtx := context.Background()
 	if err := o.messageRepo.Create(saveCtx, &model.AssistantMessage{
 		ID:        uuid.New(),
 		SessionID: input.SessionID,
@@ -646,6 +593,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		Content:   response,
 		Thinking:  thinkingContent,
 		Plan:      planData,
+		ToolCalls: o.toolCallsForMessage(saveCtx, input.SessionID, msgID),
 	}); err != nil {
 		o.logger.Error("failed to save assistant message", zap.Error(err))
 	}
@@ -724,6 +672,126 @@ func validateRuntimeFinalAnswer(answer string) error {
 		return fmt.Errorf("agent runtime ended with unfinished control action %q", action)
 	}
 	return nil
+}
+
+func (o *Orchestrator) persistRuntimeToolCallRecords(
+	ctx context.Context,
+	sessionID string,
+	messageID string,
+	result *agentruntime.TaskResult,
+) {
+	if o.toolCallRepo == nil || result == nil {
+		return
+	}
+
+	for _, runtimeCall := range result.ToolCalls {
+		if strings.TrimSpace(runtimeCall.CallID) == "" || strings.TrimSpace(runtimeCall.ToolName) == "" {
+			continue
+		}
+
+		existing, err := o.toolCallRepo.FindByCallID(ctx, runtimeCall.CallID)
+		if err == nil && existing != nil {
+			continue
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			o.logger.Warn("failed to check runtime tool call persistence",
+				zap.String("session_id", sessionID),
+				zap.String("message_id", messageID),
+				zap.String("call_id", runtimeCall.CallID),
+				zap.String("tool_name", runtimeCall.ToolName),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		domain := string(DomainSystem)
+		riskLevel := string(runtimeCall.RiskLevel)
+		if o.toolRegistry != nil {
+			if spec, ok := o.toolRegistry.Get(runtimeCall.ToolName); ok {
+				domain = string(spec.Domain)
+				riskLevel = string(spec.Risk)
+			}
+		}
+		if riskLevel == "" {
+			riskLevel = string(ToolRiskReadonly)
+		}
+
+		status := model.ToolCallStatusFailed
+		if runtimeCall.Status == agentruntime.ToolCallSuccess {
+			status = model.ToolCallStatusSuccess
+		}
+		durationMs := runtimeCall.EndedAt.Sub(runtimeCall.StartedAt).Milliseconds()
+		if runtimeCall.EndedAt.IsZero() || runtimeCall.StartedAt.IsZero() || durationMs < 0 {
+			durationMs = 0
+		}
+		createdAt := runtimeCall.StartedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		argsSummary := strings.TrimSpace(runtimeCall.ArgsSummary)
+		if runtimeCall.ValidationStage != "" {
+			if argsSummary != "" {
+				argsSummary += " "
+			}
+			argsSummary += "[validation_stage=" + runtimeCall.ValidationStage + "]"
+		}
+
+		call := &model.AssistantToolCall{
+			ID:            uuid.New(),
+			SessionID:     sessionID,
+			MessageID:     messageID,
+			CallID:        runtimeCall.CallID,
+			ToolName:      runtimeCall.ToolName,
+			Domain:        domain,
+			RiskLevel:     riskLevel,
+			Status:        status,
+			Args:          mustMarshalJSON(map[string]interface{}{}),
+			ArgsSummary:   argsSummary,
+			ResultSummary: runtimeCall.ResultSummary,
+			ErrorMessage:  runtimeCall.ErrorMessage,
+			DurationMs:    durationMs,
+			CreatedAt:     createdAt,
+			UpdatedAt:     createdAt,
+		}
+		if err := o.toolCallRepo.Create(ctx, call); err != nil {
+			o.logger.Warn("failed to persist runtime tool call record",
+				zap.String("session_id", sessionID),
+				zap.String("message_id", messageID),
+				zap.String("call_id", runtimeCall.CallID),
+				zap.String("tool_name", runtimeCall.ToolName),
+				zap.String("validation_stage", runtimeCall.ValidationStage),
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+func (o *Orchestrator) toolCallsForMessage(ctx context.Context, sessionID, messageID string) datatypes.JSON {
+	if o.toolCallRepo == nil || sessionID == "" || messageID == "" {
+		return nil
+	}
+	calls, _, err := o.toolCallRepo.ListBySession(ctx, sessionID, 1, 100)
+	if err != nil {
+		o.logger.Warn("failed to load assistant tool calls for message",
+			zap.String("session_id", sessionID),
+			zap.String("message_id", messageID),
+			zap.Error(err),
+		)
+		return nil
+	}
+	filtered := make([]model.AssistantToolCall, 0, len(calls))
+	for _, call := range calls {
+		if call.MessageID == messageID {
+			filtered = append(filtered, call)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.Before(filtered[j].CreatedAt)
+	})
+	if len(filtered) == 0 {
+		return nil
+	}
+	return mustMarshalJSON(filtered)
 }
 
 func (o *Orchestrator) mergeSessionMetadata(ctx context.Context, sessionID string, updates map[string]interface{}) {

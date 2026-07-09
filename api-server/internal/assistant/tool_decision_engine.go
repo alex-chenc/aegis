@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -93,16 +92,12 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	if e == nil || e.registry == nil || e.mapper == nil {
 		return nil, fmt.Errorf("tool decision engine dependencies unavailable")
 	}
-	if _, _, err := parseMaxRepairRounds(input.Query); err != nil {
-		return nil, err
-	}
 	breakdown := input.Breakdown
 	if breakdown == nil {
-		breakdown = (&IntentDecomposer{}).decomposeByRules(IntentDecomposeInput{
-			Query:       input.Query,
-			Intent:      input.Intent,
-			ContextRefs: input.ContextRefs,
-		})
+		return nil, fmt.Errorf("llm intent breakdown is required")
+	}
+	if err := validateIntentBreakdown(breakdown); err != nil {
+		return nil, fmt.Errorf("invalid llm intent breakdown: %w", err)
 	}
 
 	traceID := "td_" + strings.ReplaceAll(uuid.New().String()[:13], "-", "")
@@ -127,18 +122,16 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	}
 
 	accepted := make([]string, 0, len(candidateNames))
-	acceptedSet := make(map[string]bool)
 	clarificationQuestion := ""
 	if breakdown.NeedClarification {
 		clarificationQuestion = breakdown.ClarifyingQuestion
 	}
 	for _, name := range candidateNames {
-		record, accept := e.evaluateCandidate(name, input, breakdown, false)
+		record, accept := e.evaluateCandidate(name, input, breakdown)
 		record.TraceID = traceID
 		records = append(records, record)
 		if accept {
 			accepted = append(accepted, name)
-			acceptedSet[name] = true
 			continue
 		}
 		rejectedRecords = append(rejectedRecords, record)
@@ -157,7 +150,7 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 		if question == "" {
 			question = clarification.Question
 		}
-		e.logger.Info("assistant tool decision requires clarification",
+		e.logger.Info("assistant tool authorization requires clarification",
 			zap.String("trace_id", traceID),
 			zap.String("action", input.Intent.Action),
 			zap.Strings("domains", input.Intent.Domains),
@@ -175,55 +168,15 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 		}, nil
 	}
 
-	finalNames := e.expandWorkflowTools(accepted, input, breakdown)
-	for _, name := range finalNames {
-		if acceptedSet[name] {
-			continue
-		}
-		record, accept := e.evaluateCandidate(name, input, breakdown, true)
-		record.TraceID = traceID
-		records = append(records, record)
-		if accept {
-			acceptedSet[name] = true
-			continue
-		}
-		rejectedRecords = append(rejectedRecords, record)
-	}
-	filteredNames := make([]string, 0, len(finalNames))
-	for _, name := range finalNames {
-		if acceptedSet[name] {
-			filteredNames = append(filteredNames, name)
-		}
-	}
-	finalNames = e.orderToolPlanNames(filteredNames)
+	// This layer is an authorization boundary, not a workflow planner. Preserve
+	// the LLM-selected set exactly; agent-runtime is the only component allowed
+	// to order, repeat or conditionally execute these tools.
+	steps := e.buildPlanSteps(dedupeStrings(accepted), input, breakdown)
 
-	steps := make([]ToolPlanStep, 0, len(finalNames))
-	for _, name := range finalNames {
-		contract, ok := e.mapper.ContractForToolName(name)
-		if !ok {
-			continue
-		}
-		tool, _ := e.registry.Get(name)
-		args, argSources := bindPlanArgs(contract, input, breakdown)
-		steps = append(steps, ToolPlanStep{
-			StepID:           fmt.Sprintf("step_%02d", len(steps)+1),
-			ToolName:         name,
-			Capability:       contract.Capability,
-			Args:             args,
-			Risk:             contract.Risk,
-			RequiresApproval: contract.RequiresApproval,
-			Reason:           decisionStepReason(tool, contract, input, breakdown),
-			ArgSources:       argSources,
-			Preconditions:    contract.Preconditions,
-			Postconditions:   contract.Postconditions,
-			OnSuccess:        contract.NextCapabilities,
-		})
-	}
-
-	e.logger.Info("assistant tool decision completed",
+	e.logger.Info("assistant tool authorization completed",
 		zap.String("trace_id", traceID),
 		zap.Int("candidate_count", len(candidateNames)),
-		zap.Int("selected_count", len(steps)),
+		zap.Int("authorized_count", len(steps)),
 		zap.Bool("need_clarification", false),
 	)
 	return &ToolExecutionPlan{
@@ -237,6 +190,38 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	}, nil
 }
 
+func (e *ToolDecisionEngine) buildPlanSteps(names []string, input ToolDecisionInput, breakdown *IntentBreakdown) []ToolPlanStep {
+	steps := make([]ToolPlanStep, 0, len(names))
+	for _, name := range names {
+		if step, ok := e.newToolPlanStep(name, input, breakdown); ok {
+			step.StepID = fmt.Sprintf("authorized_%02d", len(steps)+1)
+			steps = append(steps, step)
+		}
+	}
+	return steps
+}
+
+func (e *ToolDecisionEngine) newToolPlanStep(name string, input ToolDecisionInput, breakdown *IntentBreakdown) (ToolPlanStep, bool) {
+	contract, ok := e.mapper.ContractForToolName(name)
+	if !ok {
+		return ToolPlanStep{}, false
+	}
+	tool, _ := e.registry.Get(name)
+	args, argSources := bindPlanArgs(contract, input, breakdown)
+	reason := decisionStepReason(tool, contract, input, breakdown)
+	return ToolPlanStep{
+		ToolName:         name,
+		Capability:       contract.Capability,
+		Args:             args,
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           reason,
+		ArgSources:       argSources,
+		Preconditions:    contract.Preconditions,
+		Postconditions:   contract.Postconditions,
+	}, true
+}
+
 func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, breakdown *IntentBreakdown) ([]string, []string) {
 	names := make([]string, 0, 32)
 	if input.Intent.ExplicitToolName != "" {
@@ -245,11 +230,21 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 	mapped := e.mapper.ToolNamesForCapabilities(breakdown.CandidateCapabilities)
 	names = append(names, mapped...)
 	if sel := input.PreliminarySelection; sel != nil {
-		for _, name := range sel.SelectedTools {
-			contract, ok := e.mapper.ContractForToolName(name)
-			if len(mapped) == 0 || (ok && hasCapability(breakdown, contract.Capability)) || strings.EqualFold(name, input.Intent.ExplicitToolName) {
-				names = append(names, name)
-			}
+		names = append(names, sel.SelectedTools...)
+	}
+	// A single LLM preselection must not permanently hide another relevant
+	// tool. Recall enabled tools through generic contracts derived from the
+	// LLM's structured domains and objects; scoring and hard gates below still
+	// decide which tools are authorized.
+	for _, tool := range e.registry.List() {
+		if tool == nil || !tool.Enabled || isResidentTool(tool.Name) {
+			continue
+		}
+		if containsDecisionString(breakdown.Domains, string(tool.Domain)) ||
+			containsDecisionString(input.Intent.Domains, string(tool.Domain)) ||
+			objectMatchesTool(breakdown.Objects, tool) ||
+			contextMatchesTool(input.ContextRefs, tool) {
+			names = append(names, tool.Name)
 		}
 	}
 
@@ -267,25 +262,10 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 		}
 	}
 
-	if hasCapability(breakdown, "trigger_asset_collection") {
-		names = append(names, "Host.List", "Asset.Collection.Trigger", "Asset.Collection.Get")
-	}
-	if shouldIncludeAssetAnalysisTools(input.Query, input.Intent, breakdown) {
-		names = append(names,
-			"Asset.Application.List",
-			"Asset.Summary.Get",
-			"Software.Installed.Search",
-			"Vulnerability.List",
-			"Vulnerability.AffectedHosts",
-		)
-	}
-	if input.Intent.Action == "block" || hasCapability(breakdown, "block_detection_alert") {
-		names = append(names, "Detection.Alert.Get", "Detection.Alert.Block")
-	}
 	return dedupeStrings(names), dedupeStrings(unmatched)
 }
 
-func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionInput, breakdown *IntentBreakdown, workflowForced bool) (ToolDecisionRecord, bool) {
+func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionInput, breakdown *IntentBreakdown) (ToolDecisionRecord, bool) {
 	tool, ok := e.registry.Get(name)
 	if !ok || tool == nil {
 		return ToolDecisionRecord{
@@ -301,10 +281,11 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	}
 	contract := BuildToolUseContract(tool)
 	record := ToolDecisionRecord{
-		ToolName:   name,
-		Capability: contract.Capability,
-		Score:      e.scoreToolDecision(tool, contract, input, breakdown, workflowForced),
-		ArgSources: map[string]ArgSource{},
+		ToolName:      name,
+		Capability:    contract.Capability,
+		Score:         e.scoreToolDecision(tool, contract, input, breakdown),
+		RequiresWrite: contract.RequiresExplicitUserIntent || tool.Risk != ToolRiskReadonly,
+		ArgSources:    map[string]ArgSource{},
 	}
 	gates := []HardGateResult{
 		{Name: "tool_registered", Passed: true},
@@ -316,25 +297,8 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 		record.HardGateResults = gates
 		return record, false
 	}
-	if strings.HasPrefix(contract.ToolName, "Vulnerability.Script.") && !hasVulnerabilityScriptOperationIntent(input.Query) {
-		gates = append(gates, HardGateResult{Name: "explicit_script_intent", Passed: false, Reason: "vulnerability script tools require explicit POC or remediation intent"})
-		record.Decision = toolDecisionRejected
-		record.Reason = "vulnerability script tools require explicit POC or remediation intent"
-		record.HardGateResults = gates
-		return record, false
-	}
-
-	if isConceptQuestion(input.Query) && contract.RequiresExplicitUserIntent {
-		gates = append(gates, HardGateResult{Name: "denied_intent", Passed: false, Reason: "concept explanation request must not trigger write tools"})
-		record.Decision = toolDecisionRejected
-		record.Reason = "concept explanation request must not trigger write tools"
-		record.HardGateResults = gates
-		return record, false
-	}
-	gates = append(gates, HardGateResult{Name: "denied_intent", Passed: true})
-
 	// 检查 denied_intents：LLM 候选能力命中 denied_intents 时拒绝
-	if denied, reason := e.checkDeniedIntents(contract, breakdown, input.Query); denied {
+	if denied, reason := e.checkDeniedIntents(contract, breakdown); denied {
 		gates = append(gates, HardGateResult{Name: "denied_capability", Passed: false, Reason: reason})
 		record.Decision = toolDecisionRejected
 		record.Reason = reason
@@ -343,7 +307,7 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	}
 	gates = append(gates, HardGateResult{Name: "denied_capability", Passed: true})
 
-	if contract.RequiresExplicitUserIntent && !breakdown.RequiresWrite && !hasExplicitWriteIntent(input.Query) {
+	if contract.RequiresExplicitUserIntent && !breakdown.RequiresWrite {
 		gates = append(gates, HardGateResult{Name: "explicit_write_intent", Passed: false, Reason: "write tool requires explicit user intent"})
 		record.Decision = toolDecisionRejected
 		record.Reason = "write tool requires explicit user intent"
@@ -352,7 +316,7 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	}
 	gates = append(gates, HardGateResult{Name: "explicit_write_intent", Passed: true})
 
-	if missing, question := e.missingRequiredEntity(contract, input, breakdown, workflowForced); missing {
+	if missing, question := e.missingRequiredEntity(contract, input, breakdown); missing {
 		gates = append(gates, HardGateResult{Name: "required_entities", Passed: false, Reason: question})
 		record.Decision = toolDecisionClarificationRequired
 		record.Reason = question
@@ -365,7 +329,7 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	if tool.Risk == ToolRiskReadonly || tool.Risk == ToolRiskLow {
 		threshold = e.config.ReadonlyMinScore
 	}
-	if isResidentTool(name) || workflowForced || record.Score >= threshold || preliminarySelected(input.PreliminarySelection, name) {
+	if isResidentTool(name) || record.Score >= threshold || preliminarySelected(input.PreliminarySelection, name) {
 		record.Decision = toolDecisionAccepted
 		record.Reason = "tool contract matched intent and passed hard gates"
 		record.HardGateResults = gates
@@ -384,7 +348,7 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 
 // checkDeniedIntents 检查 LLM 候选能力是否命中工具的 denied_intents 或 negative_cases。
 // 返回 (是否拒绝, 拒绝原因)。
-func (e *ToolDecisionEngine) checkDeniedIntents(contract ToolUseContract, breakdown *IntentBreakdown, query string) (bool, string) {
+func (e *ToolDecisionEngine) checkDeniedIntents(contract ToolUseContract, breakdown *IntentBreakdown) (bool, string) {
 	if breakdown == nil {
 		return false, ""
 	}
@@ -406,68 +370,67 @@ func (e *ToolDecisionEngine) checkDeniedIntents(contract ToolUseContract, breakd
 			}
 		}
 	}
-	// 检查 negative_cases：概念解释类查询不应触发写工具
-	if len(contract.NegativeCases) > 0 && isConceptQuestion(query) && contract.RequiresExplicitUserIntent {
-		return true, "概念解释类查询不应触发写操作工具（命中 negative_cases）"
-	}
 	return false, ""
 }
 
-func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown, workflowForced bool) (bool, string) {
+func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown) (bool, string) {
 	if len(contract.RequiredEntities) == 0 {
 		return false, ""
 	}
 	for _, entity := range contract.RequiredEntities {
-		switch entity {
-		case "scope|host_ids":
-			if breakdown.Scope.Kind != "" && breakdown.Scope.Kind != "unspecified" {
-				continue
+		satisfied := false
+		for _, alternative := range strings.Split(entity, "|") {
+			alternative = strings.TrimSpace(alternative)
+			binding, ok := bindingForEntity(contract.ArgBindings, alternative)
+			if !ok {
+				binding = ArgBindingRule{
+					ArgName:     alternative,
+					Entity:      inferEntityFromArgName(alternative),
+					SourceOrder: []string{"user_message", "page_context", "session_context", "previous_step"},
+					Required:    true,
+				}
 			}
-			if hasContextRef(input.ContextRefs, "host") {
-				continue
+			if value, _ := resolveArgBySourceOrderWithoutPreviousStep(binding, input, breakdown); value != nil ||
+				canResolveDuringRuntime(binding, input) {
+				satisfied = true
+				break
 			}
-			return true, "请确认资产采集范围，例如全部主机、在线主机或指定主机。"
-		case "alert_id":
-			if hasContextRef(input.ContextRefs, "alert") || looksLikeIDInText(input.Query) {
-				continue
-			}
-			return true, "请确认要操作的告警 ID，或先在告警详情页引用这个告警。"
-		case "host_ids":
-			if hasContextRef(input.ContextRefs, "host") || breakdown.Scope.Kind == "online_hosts" || breakdown.Scope.Kind == "all" || workflowForced || isCVERemediationIntent(input.Query) {
-				continue
-			}
-			return true, "请确认要操作的主机范围或主机 ID。"
-		case "script_type":
-			if containsAnyFold(input.Query, "poc", "修复脚本", "检测脚本", "script_type") {
-				continue
-			}
-			return true, "请确认脚本类型，例如 POC 检测脚本或修复脚本。"
-		case "vulnerability_id":
-			if hasContextRef(input.ContextRefs, "vulnerability") || cveIDPattern.MatchString(input.Query) || workflowForced {
-				continue
-			}
-			return true, "请确认要操作的漏洞或 CVE。"
-		case "rule_ids":
-			if hasContextRef(input.ContextRefs, "baseline_rule") || hasContextRef(input.ContextRefs, "baseline_template") || workflowForced {
-				continue
-			}
-			return true, "请确认要执行的基线规则或模板。"
-		case "task_id":
-			if workflowForced || hasContextRef(input.ContextRefs, "task") || hasBreakdownEntity(breakdown, "task_id") || strings.Contains(strings.ToLower(input.Query), "task_id=") {
-				continue
-			}
-			return true, "请确认要查询的任务 ID。"
-		default:
-			if workflowForced || hasContextForEntity(input.ContextRefs, entity) || hasBreakdownEntity(breakdown, entity) {
-				continue
-			}
-			if isResidentTool(contract.ToolName) || contract.Risk == string(ToolRiskReadonly) {
-				continue
-			}
-			return true, fmt.Sprintf("请补充参数 %s 后再执行。", entity)
 		}
+		if satisfied || isResidentTool(contract.ToolName) {
+			continue
+		}
+		return true, fmt.Sprintf("请补充执行所需参数 %s，或提供可用于查询该参数的上下文。", entity)
 	}
 	return false, ""
+}
+
+func bindingForEntity(bindings []ArgBindingRule, entity string) (ArgBindingRule, bool) {
+	for _, binding := range bindings {
+		if strings.EqualFold(binding.ArgName, entity) || strings.EqualFold(binding.Entity, entity) {
+			return binding, true
+		}
+	}
+	return ArgBindingRule{}, false
+}
+
+func canResolveDuringRuntime(binding ArgBindingRule, input ToolDecisionInput) bool {
+	hasPreviousStepSource := false
+	hasSessionSource := false
+	for _, source := range binding.SourceOrder {
+		switch strings.ToLower(strings.TrimSpace(source)) {
+		case "previous_step":
+			hasPreviousStepSource = true
+		case "session_context":
+			hasSessionSource = true
+		}
+	}
+	if hasSessionSource && len(input.ContextRefs) > 0 {
+		return true
+	}
+	if !hasPreviousStepSource || input.PreliminarySelection == nil {
+		return false
+	}
+	return len(dedupeStrings(input.PreliminarySelection.SelectedTools)) > 1
 }
 
 func hasBreakdownEntity(breakdown *IntentBreakdown, entity string) bool {
@@ -483,15 +446,12 @@ func hasBreakdownEntity(breakdown *IntentBreakdown, entity string) bool {
 	return false
 }
 
-func (e *ToolDecisionEngine) scoreToolDecision(tool *ToolSpec, contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown, workflowForced bool) float64 {
+func (e *ToolDecisionEngine) scoreToolDecision(tool *ToolSpec, contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown) float64 {
 	if tool == nil {
 		return 0
 	}
 	if isResidentTool(tool.Name) {
 		return 1
-	}
-	if workflowForced {
-		return 0.9
 	}
 	score := 0.0
 	if containsDecisionString(input.Intent.Domains, string(tool.Domain)) || containsDecisionString(breakdown.Domains, string(tool.Domain)) {
@@ -519,81 +479,6 @@ func (e *ToolDecisionEngine) scoreToolDecision(tool *ToolSpec, contract ToolUseC
 	return score
 }
 
-func (e *ToolDecisionEngine) expandWorkflowTools(accepted []string, input ToolDecisionInput, breakdown *IntentBreakdown) []string {
-	names := append([]string{}, accepted...)
-	if containsDecisionString(names, "Asset.Collection.Trigger") {
-		names = append(names, "Host.List", "Asset.Collection.Get")
-		if shouldIncludeAssetAnalysisTools(input.Query, input.Intent, breakdown) {
-			names = append(names,
-				"Asset.Application.List",
-				"Asset.Summary.Get",
-				"Software.Installed.Search",
-				"Vulnerability.List",
-				"Vulnerability.AffectedHosts",
-			)
-		}
-	}
-	if containsDecisionString(names, "Vulnerability.Scan.Start") || hasCapability(breakdown, "start_vulnerability_scan") {
-		names = append(names, "Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status")
-	}
-	if isCVERemediationIntent(input.Query) {
-		names = append(names,
-			"Vulnerability.List",
-			"Vulnerability.AffectedHosts",
-			"Vulnerability.Script.Generate",
-			"Vulnerability.Script.Status",
-			"Vulnerability.Script.Execute",
-		)
-	}
-	return dedupeStrings(names)
-}
-
-func (e *ToolDecisionEngine) orderToolPlanNames(names []string) []string {
-	preferred := []string{
-		"Host.List",
-		"Host.Get",
-		"Host.AgentStatus.Get",
-		"Asset.Collection.Trigger",
-		"Asset.Collection.Get",
-		"Asset.Application.List",
-		"Asset.Summary.Get",
-		"Software.Installed.Search",
-		"Vulnerability.List",
-		"Vulnerability.AffectedHosts",
-		"Vulnerability.Scan.Start",
-		"Vulnerability.Scan.Status",
-		"Vulnerability.Script.Generate",
-		"Vulnerability.Script.Status",
-		"Vulnerability.Script.Execute",
-		"Detection.Alert.Get",
-		"Detection.Alert.Block",
-		"Baseline.Template.List",
-		"Baseline.Template.Status.Get",
-		"Baseline.Template.Rules.List",
-		"Baseline.Script.Generate",
-		"Task.RunCheck",
-		"Task.RunFix",
-	}
-	set := make(map[string]bool, len(names))
-	for _, name := range names {
-		set[name] = true
-	}
-	ordered := make([]string, 0, len(names))
-	for _, name := range preferred {
-		if set[name] {
-			ordered = append(ordered, name)
-			delete(set, name)
-		}
-	}
-	rest := make([]string, 0, len(set))
-	for name := range set {
-		rest = append(rest, name)
-	}
-	sort.Strings(rest)
-	ordered = append(ordered, rest...)
-	return ordered
-}
-
 func defaultEvidencePolicy(enabled bool) EvidencePolicy {
 	return EvidencePolicy{
 		RequireToolEvidence:     true,
@@ -606,56 +491,13 @@ func bindPlanArgs(contract ToolUseContract, input ToolDecisionInput, breakdown *
 	args := make(map[string]interface{})
 	sources := make(map[string]ArgSource)
 
-	// 特定工具的参数绑定（高优先级，处理无法用通用规则表达的逻辑）
-	switch contract.ToolName {
-	case "Host.List":
-		if breakdown.Scope.Kind == "online_hosts" {
-			args["status"] = "online"
-			sources["status"] = ArgSource{SourceType: "user_message", SourceRef: "online", Confidence: 0.9}
-		}
-	case "Asset.Collection.Trigger":
-		if ids := contextRefIDs(input.ContextRefs, "host"); len(ids) > 0 {
-			args["host_ids"] = ids
-			sources["host_ids"] = ArgSource{SourceType: "page_context", SourceRef: "host", Confidence: 0.95}
-		} else if breakdown.Scope.Kind == "all" {
-			args["scope"] = "all_hosts"
-			sources["scope"] = ArgSource{SourceType: "user_message", SourceRef: "all", Confidence: 0.85}
-		} else if breakdown.Scope.Kind == "online_hosts" {
-			args["scope"] = "online_hosts"
-			sources["scope"] = ArgSource{SourceType: "user_message", SourceRef: "online_hosts", Confidence: 0.85}
-		}
-	case "Detection.Alert.Block", "Detection.Alert.Resolve", "Detection.Alert.Get":
-		if ids := contextRefIDs(input.ContextRefs, "alert"); len(ids) > 0 {
-			args["alert_id"] = ids[0]
-			sources["alert_id"] = ArgSource{SourceType: "page_context", SourceRef: ids[0], Confidence: 0.95}
-		}
-	case "Asset.Collection.Get":
-		sources["task_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Asset.Collection.Trigger", Confidence: 0.8}
-	case "Vulnerability.Scan.Start":
-		sources["host_ids"] = ArgSource{SourceType: "previous_step", SourceRef: "Host.List", Confidence: 0.8}
-	case "Vulnerability.Scan.Status":
-		sources["scan_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.Scan.Start", Confidence: 0.8}
-	case "Vulnerability.AffectedHosts":
-		sources["vulnerability_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.List", Confidence: 0.8}
-	case "Vulnerability.Script.Execute":
-		sources["host_ids"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.AffectedHosts", Confidence: 0.8}
-		if rounds, specified, _ := parseMaxRepairRounds(input.Query); specified {
-			args["max_rounds"] = rounds
-			sources["max_rounds"] = ArgSource{SourceType: "user_message", SourceRef: fmt.Sprintf("%d rounds", rounds), Confidence: 0.95}
-		}
-	}
-
-	// 通用 ArgBindingRule 驱动的参数绑定（补充特定工具未覆盖的参数）
+	// Parameter binding is driven only by the tool's generic contract.
 	for _, binding := range contract.ArgBindings {
-		if _, alreadyBound := args[binding.ArgName]; alreadyBound {
-			continue
-		}
-		if _, dynamicallyBound := sources[binding.ArgName]; dynamicallyBound {
-			continue
-		}
 		value, source := resolveArgBySourceOrder(binding, input, breakdown)
 		if value != nil {
 			args[binding.ArgName] = value
+		}
+		if source.SourceType != "" {
 			sources[binding.ArgName] = source
 		}
 	}
@@ -689,12 +531,29 @@ func resolveArgBySourceOrder(binding ArgBindingRule, input ToolDecisionInput, br
 	return nil, ArgSource{}
 }
 
+func resolveArgBySourceOrderWithoutPreviousStep(binding ArgBindingRule, input ToolDecisionInput, breakdown *IntentBreakdown) (interface{}, ArgSource) {
+	filtered := binding
+	filtered.SourceOrder = make([]string, 0, len(binding.SourceOrder))
+	for _, source := range binding.SourceOrder {
+		if strings.EqualFold(strings.TrimSpace(source), "previous_step") {
+			continue
+		}
+		filtered.SourceOrder = append(filtered.SourceOrder, source)
+	}
+	return resolveArgBySourceOrder(filtered, input, breakdown)
+}
+
 // extractArgFromBreakdown 从 IntentBreakdown 中提取与 binding 匹配的参数值。
 func extractArgFromBreakdown(binding ArgBindingRule, breakdown *IntentBreakdown) (interface{}, string) {
 	if breakdown == nil {
 		return nil, ""
 	}
 	entity := strings.ToLower(binding.Entity)
+	for _, key := range []string{binding.ArgName, binding.Entity} {
+		if value, ok := breakdown.Parameters[key]; ok && value != nil {
+			return value, "parameter:" + key
+		}
+	}
 	// 从 Objects 中匹配
 	for _, obj := range breakdown.Objects {
 		if strings.EqualFold(obj.Type, entity) || strings.Contains(strings.ToLower(obj.Type), entity) {
@@ -706,6 +565,12 @@ func extractArgFromBreakdown(binding ArgBindingRule, breakdown *IntentBreakdown)
 	// 从 Scope 中推断
 	if breakdown.Scope.Kind != "" && breakdown.Scope.Kind != "unspecified" {
 		if entity == "host" || entity == "scope" {
+			if len(breakdown.Scope.ObjectIDs) == 1 {
+				return breakdown.Scope.ObjectIDs[0], "scope:object_ids"
+			}
+			if len(breakdown.Scope.ObjectIDs) > 1 {
+				return append([]string{}, breakdown.Scope.ObjectIDs...), "scope:object_ids"
+			}
 			return breakdown.Scope.Kind, "scope:" + breakdown.Scope.Kind
 		}
 	}
@@ -725,7 +590,7 @@ func decisionStepReason(tool *ToolSpec, contract ToolUseContract, input ToolDeci
 	if hasCapability(breakdown, contract.Capability) {
 		return "意图拆解候选能力映射到该工具并通过后端裁决"
 	}
-	return "后端根据工作流契约补充的工具"
+	return "用户明确指定的工具通过后端授权裁决"
 }
 
 func shouldStopForClarification(breakdown *IntentBreakdown, accepted []string, registry *ToolRegistry) bool {
@@ -747,17 +612,6 @@ func approvalStateForContract(contract ToolUseContract) string {
 		return "required"
 	}
 	return "not_required"
-}
-
-func shouldIncludeAssetAnalysisTools(query string, intent IntentResult, breakdown *IntentBreakdown) bool {
-	normalized := strings.ToLower(query)
-	if containsAnyFold(normalized, "mysql", "软件", "应用", "漏洞", "cve", "ai agent", "ai资产", "llm", "mcp") {
-		return true
-	}
-	if containsDecisionString(intent.Domains, "vulnerability") {
-		return true
-	}
-	return hasCapability(breakdown, "list_vulnerabilities") || hasCapability(breakdown, "search_installed_software")
 }
 
 func preliminarySelected(selection *ToolSelectionResult, name string) bool {

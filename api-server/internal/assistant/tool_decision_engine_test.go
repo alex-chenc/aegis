@@ -19,7 +19,7 @@ func TestToolDecisionEngineRejectsConceptWriteTool(t *testing.T) {
 	})
 
 	intent := IntentResult{Domains: []string{"asset"}, Action: "query", Object: "asset", RiskHint: ToolRiskReadonly, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, "资产采集是什么", intent, nil, []string{"trigger_asset_collection"})
+	breakdown := makeDecisionBreakdown(t, "资产采集是什么", intent, nil, []string{"trigger_asset_collection"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -41,24 +41,19 @@ func TestToolDecisionEngineRejectsConceptWriteTool(t *testing.T) {
 	}
 }
 
-func TestToolDecisionEngineBuildsAssetCollectionWorkflow(t *testing.T) {
+func TestToolDecisionEngineAuthorizesOnlySelectedToolsWithoutWorkflowExpansion(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, spec := range []*ToolSpec{
-		{Name: "Host.List", Domain: DomainHost, Operation: OpList, Capability: "list_hosts", Description: "查询主机", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
 		{Name: "Asset.Collection.Trigger", Domain: DomainAsset, Operation: OpExecute, Capability: "trigger_asset_collection", Description: "触发资产采集", ObjectTypes: []string{"asset", "host"}, Risk: ToolRiskMedium, DefaultWhitelisted: false},
-		{Name: "Asset.Collection.Get", Domain: DomainAsset, Operation: OpGet, Capability: "get_asset_collection_task", Description: "查询采集任务", ObjectTypes: []string{"asset_collection"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("task_id")},
-		{Name: "Asset.Application.List", Domain: DomainAsset, Operation: OpList, Capability: "list_application_assets", Description: "查询应用资产", ObjectTypes: []string{"asset"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Asset.Summary.Get", Domain: DomainAsset, Operation: OpGet, Capability: "get_asset_summary", Description: "资产概览", ObjectTypes: []string{"asset"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Software.Installed.Search", Domain: DomainVulnerability, Operation: OpSearch, Capability: "search_installed_software", Description: "搜索已安装软件", ObjectTypes: []string{"asset", "software"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Vulnerability.List", Domain: DomainVulnerability, Operation: OpList, Capability: "list_vulnerabilities", Description: "查询漏洞", ObjectTypes: []string{"vulnerability"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Vulnerability.AffectedHosts", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_affected_hosts", Description: "查询漏洞影响主机", ObjectTypes: []string{"vulnerability", "host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Unrelated.Task.Get", Domain: DomainTask, Operation: OpGet, Capability: "get_unrelated_task", Description: "查询无关任务", ObjectTypes: []string{"task"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
 	} {
 		registerDecisionTestTool(t, registry, spec)
 	}
 
 	query := "对全部在线主机做资产采集并分析 MySQL 漏洞"
 	intent := IntentResult{Domains: []string{"asset", "vulnerability"}, Action: "analyze", Object: "asset", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, query, intent, nil, []string{"trigger_asset_collection"})
+	breakdown := makeDecisionBreakdown(t, query, intent, nil, []string{"trigger_asset_collection"})
+	breakdown.Scope = IntentScope{Kind: "online_hosts", Source: "llm"}
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -73,17 +68,8 @@ func TestToolDecisionEngineBuildsAssetCollectionWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	for _, want := range []string{
-		"Host.List",
-		"Asset.Collection.Trigger",
-		"Asset.Collection.Get",
-		"Asset.Application.List",
-		"Asset.Summary.Get",
-		"Software.Installed.Search",
-		"Vulnerability.List",
-		"Vulnerability.AffectedHosts",
-	} {
-		assertContainsTool(t, plan.ToolNames(), want)
+	if got := plan.ToolNames(); len(got) != 1 || got[0] != "Asset.Collection.Trigger" {
+		t.Fatalf("authorization layer must not expand a scenario workflow, got %v", got)
 	}
 	step := findPlanStep(plan, "Asset.Collection.Trigger")
 	if step == nil || !step.RequiresApproval {
@@ -91,21 +77,43 @@ func TestToolDecisionEngineBuildsAssetCollectionWorkflow(t *testing.T) {
 	}
 }
 
-func TestToolDecisionEngineBuildsGenericOnlineVulnerabilityScanWithoutTaskDetail(t *testing.T) {
+func TestToolDecisionEngineRecallsRelevantContractBeyondWrongPreselection(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, spec := range []*ToolSpec{
-		{Name: "Host.List", Domain: DomainHost, Operation: OpList, Capability: "list_hosts", Description: "查询在线主机", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Vulnerability.Scan.Start", Domain: DomainVulnerability, Operation: OpExecute, Capability: "start_vulnerability_scan", Description: "启动漏洞扫描", ObjectTypes: []string{"vulnerability", "host"}, Risk: ToolRiskMedium, DefaultWhitelisted: false, ArgsSchema: requiredSchema("host_ids")},
-		{Name: "Vulnerability.Scan.Status", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_scan_status", Description: "查询漏洞扫描状态", ObjectTypes: []string{"vulnerability_scan"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("scan_id")},
-		{Name: "Vulnerability.Script.Execute", Domain: DomainVulnerability, Operation: OpExecute, Capability: "execute_vulnerability_host_scripts", Description: "执行漏洞脚本", ObjectTypes: []string{"vulnerability", "host"}, Risk: ToolRiskHigh, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type", "host_ids")},
-		{Name: "Task.GetDetail", Domain: DomainTask, Operation: OpGet, Capability: "get_task_detail", Description: "查询运维任务详情", ObjectTypes: []string{"task"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("task_id")},
+		{Name: "Host.List", Domain: DomainHost, Operation: OpList, Capability: "list_hosts", Description: "list hosts", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Host.AgentStatus.Get", Domain: DomainHost, Operation: OpGet, Capability: "get_agent_status", Description: "agent status statistics", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+	intent := IntentResult{Domains: []string{"host"}, Action: "list", Object: "host", RiskHint: ToolRiskReadonly, Confidence: 0.9}
+	breakdown := makeDecisionBreakdown(t, "list online hosts", intent, nil, []string{"query_host_list"})
+
+	authorization, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:     "list online hosts",
+		Intent:    intent,
+		Breakdown: breakdown,
+		PreliminarySelection: &ToolSelectionResult{
+			SelectedTools: []string{"Host.AgentStatus.Get"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContainsTool(t, authorization.ToolNames(), "Host.List")
+}
+
+func TestToolDecisionEngineAllowsRequiredArgFromPreviousStepForAnyTool(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Example.Discover", Domain: DomainSystem, Operation: OpGet, Capability: "discover_resource", Description: "discover a resource", ObjectTypes: []string{"resource"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Example.Apply", Domain: DomainSystem, Operation: OpExecute, Capability: "apply_resource", Description: "apply the discovered resource", ObjectTypes: []string{"resource"}, Risk: ToolRiskMedium, DefaultWhitelisted: false, ArgsSchema: requiredSchema("resource_id")},
 	} {
 		registerDecisionTestTool(t, registry, spec)
 	}
 
-	query := "帮我进行一次在线主机的漏洞扫描任务"
-	intent := IntentResult{Domains: []string{"vulnerability", "host", "task"}, Action: "execute", Object: "vulnerability", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, query, intent, nil, []string{"list_hosts", "start_vulnerability_scan", "get_vulnerability_scan_status", "execute_vulnerability_host_scripts"})
+	query := "发现资源并应用它"
+	intent := IntentResult{Domains: []string{"system"}, Action: "execute", Object: "resource", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.8}
+	breakdown := makeDecisionBreakdown(t, query, intent, nil, []string{"discover_resource", "apply_resource"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -113,69 +121,22 @@ func TestToolDecisionEngineBuildsGenericOnlineVulnerabilityScanWithoutTaskDetail
 		Intent:    intent,
 		Breakdown: breakdown,
 		PreliminarySelection: &ToolSelectionResult{
-			SelectedTools:  []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Script.Execute", "Task.GetDetail"},
-			CandidateTools: []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status", "Vulnerability.Script.Execute", "Task.GetDetail"},
+			SelectedTools:  []string{"Example.Discover", "Example.Apply"},
+			CandidateTools: []string{"Example.Discover", "Example.Apply"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
 	if plan.NeedClarification {
-		t.Fatalf("online vulnerability scan should use previous-step bindings, got clarification %q", plan.ClarifyingQuestion)
+		t.Fatalf("runtime can resolve resource_id from the previous result, got clarification %q", plan.ClarifyingQuestion)
 	}
-	for _, want := range []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status"} {
+	for _, want := range []string{"Example.Discover", "Example.Apply"} {
 		assertContainsTool(t, plan.ToolNames(), want)
 	}
-	assertNotContainsTool(t, plan.ToolNames(), "Task.GetDetail")
-	assertNotContainsTool(t, plan.ToolNames(), "Vulnerability.Script.Execute")
-	start := findPlanStep(plan, "Vulnerability.Scan.Start")
-	if start == nil {
-		t.Fatal("expected vulnerability scan start step")
-	}
-	if _, exists := start.Args["host_ids"]; exists {
-		t.Fatalf("host_ids must come from Host.List at runtime, got static args %#v", start.Args)
-	}
-	if start.ArgSources["host_ids"].SourceType != "previous_step" {
-		t.Fatalf("expected previous_step host binding, got %#v", start.ArgSources["host_ids"])
-	}
-}
-
-func TestToolDecisionEngineBuildsGenericCVERemediationPlanWithMaxRounds(t *testing.T) {
-	registry := newDecisionTestRegistry(t)
-	for _, spec := range []*ToolSpec{
-		{Name: "Vulnerability.List", Domain: DomainVulnerability, Operation: OpList, Capability: "list_vulnerabilities", Risk: ToolRiskReadonly, DefaultWhitelisted: true},
-		{Name: "Vulnerability.AffectedHosts", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_affected_hosts", Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("vulnerability_id")},
-		{Name: "Vulnerability.Script.Generate", Domain: DomainVulnerability, Operation: OpGenerate, Capability: "generate_vulnerability_script", Risk: ToolRiskMedium, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type")},
-		{Name: "Vulnerability.Script.Status", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_script_status", Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("cve_id", "script_type")},
-		{Name: "Vulnerability.Script.Execute", Domain: DomainVulnerability, Operation: OpExecute, Capability: "execute_vulnerability_host_scripts", Risk: ToolRiskHigh, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type", "host_ids")},
-	} {
-		registerDecisionTestTool(t, registry, spec)
-	}
-
-	query := "针对漏洞 CVE-2023-43641 生成 POC 和修复脚本，并对受影响主机下发，最多 5 轮自动修复"
-	intent := IntentResult{Domains: []string{"vulnerability"}, Action: "execute", Object: "vulnerability", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.9}
-	breakdown := mustRuleBreakdown(t, query, intent, nil, []string{
-		"list_vulnerabilities", "get_vulnerability_affected_hosts", "generate_vulnerability_script",
-		"get_vulnerability_script_status", "execute_vulnerability_host_scripts",
-	})
-	engine := newDecisionTestEngine(registry)
-	plan, err := engine.Decide(context.Background(), ToolDecisionInput{Query: query, Intent: intent, Breakdown: breakdown})
-	if err != nil {
-		t.Fatalf("Decide returned error: %v", err)
-	}
-	if plan.NeedClarification {
-		t.Fatalf("explicit CVE workflow should use runtime/previous-step bindings, got %q", plan.ClarifyingQuestion)
-	}
-	for _, want := range []string{
-		"Vulnerability.List", "Vulnerability.AffectedHosts", "Vulnerability.Script.Generate",
-		"Vulnerability.Script.Status", "Vulnerability.Script.Execute",
-	} {
-		assertContainsTool(t, plan.ToolNames(), want)
-	}
-	assertNotContainsTool(t, plan.ToolNames(), "Tool.Search")
-	execute := findPlanStep(plan, "Vulnerability.Script.Execute")
-	if execute == nil || execute.Args["max_rounds"] != 5 {
-		t.Fatalf("expected max_rounds=5 on execute step, got %#v", execute)
+	apply := findPlanStep(plan, "Example.Apply")
+	if apply == nil || apply.ArgSources["resource_id"].SourceType != "previous_step" {
+		t.Fatalf("expected generic previous-step binding, got %#v", apply)
 	}
 }
 
@@ -192,7 +153,10 @@ func TestToolDecisionEngineClarifiesVagueRepair(t *testing.T) {
 		ArgsSchema:         requiredSchema("rule_ids", "host_ids"),
 	})
 	intent := IntentResult{Domains: []string{"baseline"}, Action: "execute", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.5}
-	breakdown := mustRuleBreakdown(t, "帮我修复一下", intent, nil, nil)
+	breakdown := makeDecisionBreakdown(t, "帮我修复一下", intent, nil, nil)
+	breakdown.NeedClarification = true
+	breakdown.MissingInfo = []MissingInfo{{Field: "target", Reason: "repair target is missing", Question: "请确认要修复的对象和范围。"}}
+	breakdown.ClarifyingQuestion = "请确认要修复的对象和范围。"
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -230,7 +194,7 @@ func TestToolDecisionEngineClarifiesBlockWithoutAlert(t *testing.T) {
 		ArgsSchema:         requiredSchema("alert_id"),
 	})
 	intent := IntentResult{Domains: []string{"detection"}, Action: "block", Object: "alert", NeedWrite: true, RiskHint: ToolRiskCritical, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, "阻断这个告警", intent, nil, []string{"block_detection_alert"})
+	breakdown := makeDecisionBreakdown(t, "阻断这个告警", intent, nil, []string{"block_detection_alert"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -260,7 +224,7 @@ func TestToolDecisionEngineAllowsBlockWithAlertContext(t *testing.T) {
 	}
 	refs := []ContextRefInput{{ObjectType: "alert", ObjectID: "alert-001"}}
 	intent := IntentResult{Domains: []string{"detection"}, Action: "block", Object: "alert", NeedWrite: true, RiskHint: ToolRiskCritical, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, "阻断这个告警", intent, refs, []string{"block_detection_alert"})
+	breakdown := makeDecisionBreakdown(t, "阻断这个告警", intent, refs, []string{"block_detection_alert"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -294,7 +258,7 @@ func TestToolDecisionEngineAllowsBlockWithAlertContext(t *testing.T) {
 func TestToolDecisionEngineRecordsUnmappedCapability(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	intent := IntentResult{Domains: []string{"host"}, Action: "query", Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, "查询主机", intent, nil, []string{"delete_everything"})
+	breakdown := makeDecisionBreakdown(t, "查询主机", intent, nil, []string{"delete_everything"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -351,19 +315,33 @@ func newDecisionTestEngine(registry *ToolRegistry) *ToolDecisionEngine {
 	})
 }
 
-func mustRuleBreakdown(t *testing.T, query string, intent IntentResult, refs []ContextRefInput, capabilities []string) *IntentBreakdown {
+func makeDecisionBreakdown(t *testing.T, query string, intent IntentResult, refs []ContextRefInput, capabilities []string) *IntentBreakdown {
 	t.Helper()
-	decomposer := NewIntentDecomposer(IntentDecomposerDeps{})
-	breakdown, err := decomposer.Decompose(context.Background(), IntentDecomposeInput{
-		Query:                 query,
-		Intent:                intent,
-		ContextRefs:           refs,
-		CandidateCapabilities: capabilities,
-	})
-	if err != nil {
-		t.Fatalf("Decompose returned error: %v", err)
+	action := intent.Action
+	if action == "" {
+		action = "query"
 	}
-	return breakdown
+	objects := make([]IntentObject, 0, len(refs)+2)
+	if intent.Object != "" {
+		objects = append(objects, IntentObject{Type: intent.Object, Source: "llm"})
+	}
+	for _, ref := range refs {
+		objects = append(objects, IntentObject{Type: ref.ObjectType, ID: ref.ObjectID, Source: "context_ref"})
+	}
+	scope := IntentScope{Kind: "unspecified"}
+	normalizedCapabilities := append([]string{}, capabilities...)
+	return &IntentBreakdown{
+		Goal:                  query,
+		Domains:               append([]string{}, intent.Domains...),
+		Actions:               []string{action},
+		Objects:               objects,
+		Scope:                 scope,
+		RequiresWrite:         intent.NeedWrite,
+		RiskHint:              string(intent.RiskHint),
+		CandidateCapabilities: normalizedCapabilities,
+		Reason:                intent.Reason,
+		Confidence:            intent.Confidence,
+	}
 }
 
 func requiredSchema(args ...string) map[string]interface{} {
@@ -413,6 +391,19 @@ func findPlanStep(plan *ToolExecutionPlan, toolName string) *ToolPlanStep {
 	return nil
 }
 
+func findPlanSteps(plan *ToolExecutionPlan, toolName string) []ToolPlanStep {
+	if plan == nil {
+		return nil
+	}
+	steps := make([]ToolPlanStep, 0, 2)
+	for _, step := range plan.Steps {
+		if step.ToolName == toolName {
+			steps = append(steps, step)
+		}
+	}
+	return steps
+}
+
 // ---- 设计文档 11.1 节补充测试用例 ----
 
 // 只读主机查询：应命中 Host.List，无审批
@@ -430,7 +421,7 @@ func TestToolDecisionEngineReadOnlyHostQuery(t *testing.T) {
 	})
 
 	intent := IntentResult{Domains: []string{"host"}, Action: "query", Object: "host", RiskHint: ToolRiskReadonly, Confidence: 0.9}
-	breakdown := mustRuleBreakdown(t, "有哪些在线主机", intent, nil, []string{"list_hosts"})
+	breakdown := makeDecisionBreakdown(t, "有哪些在线主机", intent, nil, []string{"list_hosts"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -477,7 +468,7 @@ func TestToolDecisionEngineRejectsLowScoreMismatch(t *testing.T) {
 
 	// 查询主机，但候选工具是告警阻断（对象不匹配）
 	intent := IntentResult{Domains: []string{"host"}, Action: "query", Object: "host", RiskHint: ToolRiskReadonly, Confidence: 0.8}
-	breakdown := mustRuleBreakdown(t, "查询主机列表", intent, nil, []string{"list_hosts"})
+	breakdown := makeDecisionBreakdown(t, "查询主机列表", intent, nil, []string{"list_hosts"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -513,7 +504,7 @@ func TestToolDecisionEngineDeniedIntentMatch(t *testing.T) {
 
 	intent := IntentResult{Domains: []string{"asset"}, Action: "query", Object: "asset", RiskHint: ToolRiskReadonly, Confidence: 0.8}
 	// 明确的候选能力命中 denied_intents（explain_asset_collection 不在 denied 中，但 query_asset_collection_history 在）
-	breakdown := mustRuleBreakdown(t, "资产采集的历史记录", intent, nil, []string{"query_asset_collection_history"})
+	breakdown := makeDecisionBreakdown(t, "资产采集的历史记录", intent, nil, []string{"query_asset_collection_history"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
@@ -543,7 +534,7 @@ func TestToolDecisionEngineStateMachineViolation(t *testing.T) {
 
 	intent := IntentResult{Domains: []string{"asset"}, Action: "query", Object: "asset", RiskHint: ToolRiskReadonly, Confidence: 0.8}
 	// 不提供 task_id 上下文，也没有前置步骤
-	breakdown := mustRuleBreakdown(t, "查看采集任务结果", intent, nil, []string{"get_asset_collection_task"})
+	breakdown := makeDecisionBreakdown(t, "查看采集任务结果", intent, nil, []string{"get_asset_collection_task"})
 	engine := newDecisionTestEngine(registry)
 
 	plan, err := engine.Decide(context.Background(), ToolDecisionInput{

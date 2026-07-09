@@ -1,10 +1,12 @@
 package assistant
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
+	runtimeplan "github.com/alex-chenc/agent-runtime/plan"
 )
 
 func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
@@ -60,5 +62,89 @@ func TestEffectiveRuntimeContextBudgetUsesObservedPromptTokens(t *testing.T) {
 	}
 	if budget.ContextRatio <= 0.09 {
 		t.Fatalf("context ratio was not recomputed from observed prompt tokens: %f", budget.ContextRatio)
+	}
+}
+
+func TestRuntimePlanFromToolExecutionPlanKeepsRepeatedToolArgs(t *testing.T) {
+	plan := &ToolExecutionPlan{
+		Goal:            "generate poc and fix",
+		DecisionTraceID: "td-1",
+		Steps: []ToolPlanStep{
+			{StepID: "step_01", ToolName: "Vulnerability.Script.Generate", Reason: "generate poc", Risk: string(ToolRiskMedium), Args: map[string]interface{}{"cve_id": "CVE-2021-45340", "script_type": "poc"}},
+			{StepID: "step_02", ToolName: "Vulnerability.Script.Generate", Reason: "generate fix", Risk: string(ToolRiskMedium), Args: map[string]interface{}{"cve_id": "CVE-2021-45340", "script_type": "fix"}},
+			{StepID: "step_03", ToolName: "Vulnerability.Script.Status", Reason: "wait for poc", Risk: string(ToolRiskReadonly), Args: map[string]interface{}{"cve_id": "CVE-2021-45340", "script_type": "poc"}},
+			{StepID: "step_04", ToolName: "Vulnerability.Script.Status", Reason: "wait for fix", Risk: string(ToolRiskReadonly), Args: map[string]interface{}{"cve_id": "CVE-2021-45340", "script_type": "fix"}},
+		},
+	}
+	runtimePlan := runtimePlanFromToolExecutionPlan(plan)
+	if runtimePlan == nil || len(runtimePlan.Steps) != 4 {
+		t.Fatalf("runtime plan = %#v", runtimePlan)
+	}
+	if runtimePlan.Steps[0].ToolArgs["script_type"] != "poc" {
+		t.Fatalf("first script_type = %#v", runtimePlan.Steps[0].ToolArgs["script_type"])
+	}
+	if runtimePlan.Steps[1].ToolArgs["script_type"] != "fix" {
+		t.Fatalf("second script_type = %#v", runtimePlan.Steps[1].ToolArgs["script_type"])
+	}
+	if len(runtimePlan.Steps[1].Dependencies) != 1 || runtimePlan.Steps[1].Dependencies[0] != "step_01" {
+		t.Fatalf("second step dependencies = %#v", runtimePlan.Steps[1].Dependencies)
+	}
+	for index, step := range runtimePlan.Steps {
+		expectedTool := plan.Steps[index].ToolName
+		if len(step.AllowedTools) != 1 || step.AllowedTools[0] != expectedTool {
+			t.Fatalf("step tool scope = %#v", step.AllowedTools)
+		}
+	}
+	validation := runtimeplan.NewValidator(10, []agentruntime.ToolDescriptor{
+		{Name: "Vulnerability.Script.Generate"},
+		{Name: "Vulnerability.Script.Status"},
+	}, nil).Validate(runtimePlan)
+	if !validation.Valid {
+		t.Fatalf("runtime plan must satisfy agent-runtime validation: %#v", validation.Errors)
+	}
+}
+
+func TestAssistantRuntimeDoesNotUseAuthorizationAsInitialPlan(t *testing.T) {
+	authorization := &ToolExecutionPlan{
+		Goal: "arbitrary user goal",
+		Steps: []ToolPlanStep{{
+			StepID:   "authorized_01",
+			ToolName: "Example.Apply",
+		}},
+	}
+	if plan := runtimeInitialPlanForAssistant(authorization); plan != nil {
+		t.Fatalf("pure agent mode must let agent-runtime create the only plan, got %#v", plan)
+	}
+}
+
+func TestBuildAgentToolDescriptorsUsesRuntimeCompatibleNumberSchema(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.Register(&ToolSpec{
+		Name:      "Example.List",
+		Domain:    DomainSystem,
+		Operation: OpList,
+		Risk:      ToolRiskReadonly,
+		Enabled:   true,
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"page": map[string]interface{}{"type": "integer"},
+			},
+		},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			return nil, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	orchestrator := &Orchestrator{toolRegistry: registry}
+	descriptors := orchestrator.buildAgentToolDescriptors([]string{"Example.List"})
+	if len(descriptors) != 1 {
+		t.Fatalf("descriptors = %d, want 1", len(descriptors))
+	}
+	properties := descriptors[0].ArgsSchema["properties"].(map[string]interface{})
+	if got := properties["page"].(map[string]interface{})["type"]; got != "number" {
+		t.Fatalf("runtime page schema type = %v, want number", got)
 	}
 }

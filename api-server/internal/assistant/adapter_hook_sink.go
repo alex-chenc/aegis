@@ -148,7 +148,30 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		})
 
 	case agentruntime.HookToolCallFinished:
-		// 工具调用完成事件已由 ToolGatewayAdapter 回调处理
+		// 正常网关结果由 ToolGatewayAdapter 发布。只有在进入网关前发生
+		// 的 descriptor/args/policy/step scope 校验失败需要在这里补发。
+		payload := toMap(event.Payload)
+		validationStage, _ := payload["validation_stage"].(string)
+		if validationStage != "" {
+			if s.logger != nil {
+				toolName, _ := payload["tool_name"].(string)
+				callID, _ := payload["call_id"].(string)
+				s.logger.Warn("assistant runtime tool call rejected before gateway",
+					zap.String("session_id", s.sessionID),
+					zap.String("run_id", s.runID),
+					zap.String("step_id", event.StepID),
+					zap.String("call_id", callID),
+					zap.String("tool_name", toolName),
+					zap.String("validation_stage", validationStage),
+				)
+			}
+			s.publish(EventToolError, map[string]interface{}{
+				"call_id":          payload["call_id"],
+				"tool_name":        payload["tool_name"],
+				"error":            payload["error_message"],
+				"validation_stage": validationStage,
+			})
+		}
 
 	// --- 审计 ---
 
