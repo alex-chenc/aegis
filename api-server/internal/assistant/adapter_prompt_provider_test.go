@@ -65,9 +65,57 @@ func TestAssistantSummarizePromptRequiresEvidenceGroundedResult(t *testing.T) {
 		"Never report task creation as task completion",
 		"Never generalize a partial result",
 		"Never invent IDs, status, counts, impact scope, or execution results",
+		"descriptor validation failure",
+		"arguments validation failure",
+		"must not be described as a missing platform capability",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("summarize prompt missing %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+}
+
+func TestAssistantReactPromptIncludesExactEnglishArgumentSchema(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{{
+		Name:        "Example.Execute",
+		Description: "Execute an example operation.",
+		ArgsSchema: map[string]interface{}{
+			"type":     "object",
+			"required": []interface{}{"host_ids", "max_rounds"},
+			"properties": map[string]interface{}{
+				"host_ids": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "目标主机列表",
+				},
+				"max_rounds": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"maximum":     10,
+					"description": "自动修复轮数",
+				},
+			},
+		},
+	}}, nil, "operations", "execute the operation")
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, want := range []string{
+		`"host_ids"`,
+		`"type":"array"`,
+		`"max_rounds"`,
+		`"type":"integer"`,
+		`"required":["host_ids","max_rounds"]`,
+	} {
+		if !strings.Contains(bundle.SystemPrompt, want) {
+			t.Fatalf("react prompt missing exact argument schema %q\n%s", want, bundle.SystemPrompt)
+		}
+	}
+	for _, forbidden := range []string{"目标主机列表", "自动修复轮数"} {
+		if strings.Contains(bundle.SystemPrompt, forbidden) {
+			t.Fatalf("react prompt leaked localized schema description %q\n%s", forbidden, bundle.SystemPrompt)
 		}
 	}
 }

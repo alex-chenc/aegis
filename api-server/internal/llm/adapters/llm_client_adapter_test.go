@@ -1,12 +1,85 @@
 package adapters
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
+	"go.uber.org/zap"
 
 	"api-server/internal/llm"
+	applogger "api-server/pkg/logger"
 )
+
+func TestCompleteForwardsRuntimeJSONSchemaAndFallsBackOnce(t *testing.T) {
+	previousLogger := applogger.Logger
+	applogger.Logger = zap.NewNop()
+	defer func() { applogger.Logger = previousLogger }()
+
+	var mu sync.Mutex
+	requests := make([]llm.ChatCompletionRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request llm.ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, request)
+		mu.Unlock()
+		if request.ResponseFormat != nil {
+			http.Error(w, "json_schema is not supported by this model", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"fail_step\",\"summary\":\"stop\",\"failure\":{\"reason\":\"test\",\"recoverable\":false}}"}}]}`))
+	}))
+	defer server.Close()
+
+	client := llm.NewLLMClient("test-key", server.URL+"/v1", "test-model", 30, 1)
+	adapter := NewLLMClientAdapter(client, nil)
+	response, err := adapter.Complete(context.Background(), agentruntime.LLMRequest{
+		TaskID:  "task-1",
+		StepID:  "step-1",
+		Purpose: agentruntime.PurposeReact,
+		Messages: []agentruntime.LLMMessage{
+			{Role: "system", Content: "Return exactly one JSON object."},
+			{Role: "user", Content: "test"},
+		},
+		ResponseFormat: &agentruntime.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &agentruntime.ResponseFormatSchema{
+				Name:   "react_action",
+				Schema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"}}}`),
+				Strict: false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if response.Content == "" {
+		t.Fatal("Complete() returned empty content")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want schema request plus one fallback", len(requests))
+	}
+	if requests[0].ResponseFormat == nil || requests[0].ResponseFormat.Type != "json_schema" {
+		t.Fatalf("first response_format = %#v, want json_schema", requests[0].ResponseFormat)
+	}
+	if requests[0].ResponseFormat.JSONSchema == nil || requests[0].ResponseFormat.JSONSchema.Name != "react_action" {
+		t.Fatalf("first JSON schema = %#v", requests[0].ResponseFormat.JSONSchema)
+	}
+	if requests[1].ResponseFormat != nil {
+		t.Fatalf("fallback response_format = %#v, want nil", requests[1].ResponseFormat)
+	}
+}
 
 func TestInjectAlertContext_WithEmptyMessages(t *testing.T) {
 	alertCtx := map[string]interface{}{

@@ -24,8 +24,11 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if !cfg.EnableReflection || !cfg.EnableAudit || !cfg.EnableCorrection {
 		t.Fatalf("expected reflection, audit, and correction to be enabled")
 	}
-	if cfg.MaxToolCalls != 100 || cfg.MaxToolCallsPerStep != 10 {
+	if cfg.MaxToolCalls != 160 || cfg.MaxToolCallsPerStep != 16 {
 		t.Fatalf("expected AI analysis tool limits, got total=%d per_step=%d", cfg.MaxToolCalls, cfg.MaxToolCallsPerStep)
+	}
+	if cfg.AsyncPollInitialBackoff != 2*time.Second || cfg.AsyncPollMaxBackoff != 10*time.Second {
+		t.Fatalf("expected bounded async polling backoff, got initial=%s max=%s", cfg.AsyncPollInitialBackoff, cfg.AsyncPollMaxBackoff)
 	}
 }
 
