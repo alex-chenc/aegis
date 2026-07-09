@@ -62,19 +62,26 @@ func (r *assistantToolPolicyRepo) Upsert(ctx context.Context, policy *model.Assi
 		return err
 	}
 
-	// 存在，更新记录
+	// Existing built-in policies without an operator marker have never been
+	// customized. Keep their effective whitelist aligned with code defaults
+	// during upgrades, while preserving every explicit administrator override.
+	updates := map[string]interface{}{
+		"domain":              policy.Domain,
+		"operation":           policy.Operation,
+		"risk_level":          policy.RiskLevel,
+		"description":         policy.Description,
+		"args_summary":        policy.ArgsSummary,
+		"default_whitelisted": policy.DefaultWhitelisted,
+		"enabled":             policy.Enabled,
+		"updated_at":          time.Now(),
+	}
+	if existing.Source == "builtin" && existing.UpdatedBy == "" {
+		updates["whitelisted"] = policy.DefaultWhitelisted
+	}
+
 	return r.db.WithContext(ctx).
 		Model(&existing).
-		Updates(map[string]interface{}{
-			"domain":              policy.Domain,
-			"operation":           policy.Operation,
-			"risk_level":          policy.RiskLevel,
-			"description":         policy.Description,
-			"args_summary":        policy.ArgsSummary,
-			"default_whitelisted": policy.DefaultWhitelisted,
-			"enabled":             policy.Enabled,
-			"updated_at":          time.Now(),
-		}).Error
+		Updates(updates).Error
 }
 
 func (r *assistantToolPolicyRepo) BatchUpsert(ctx context.Context, policies []model.AssistantToolPolicy) error {
