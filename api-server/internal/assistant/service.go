@@ -353,7 +353,6 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 	if err != nil {
 		s.logger.Error("run failed", zap.String("session_id", sessionID), zap.Error(err))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
-		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, err.Error()))
 
 		// 错误时也保存一条助手消息，避免用户看到空白
 		errMsg := fmt.Sprintf("抱歉，执行过程中出现错误: %s", err.Error())
@@ -374,7 +373,11 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 			Thinking:  thinkingContent,
 			Plan:      planData,
 		})
+
+		// 先推送错误消息内容，再推送错误事件：Stream 收到 EventError 会立即结束，
+		// 若顺序颠倒，前端将只收到失败状态而收不到错误正文，只能刷新后才从库里加载。
 		s.runManager.Publish(sessionID, EventMessageDeltaPayload(sessionID, runID, msgID, errMsg))
+		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, err.Error()))
 	} else {
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCompleted)
 		s.runManager.Publish(sessionID, EventDonePayload(sessionID, runID))

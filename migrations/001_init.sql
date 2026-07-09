@@ -459,7 +459,28 @@ CREATE TABLE IF NOT EXISTS host_vulnerability_scripts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_host_vuln_scripts_unique ON host_vulnerability_scripts (cve_id, host_id, script_type);
 CREATE INDEX IF NOT EXISTS idx_host_vuln_scripts_cve_id ON host_vulnerability_scripts(cve_id);
 CREATE INDEX IF NOT EXISTS idx_host_vuln_scripts_gen_status ON host_vulnerability_scripts(generation_status);
-COMMENT ON TABLE host_vulnerability_scripts IS '主机漏洞脚本状态表';
+COMMENT ON TABLE host_vulnerability_scripts IS '主机漏洞脚本状态表（V6.1后已迁移到 vulnerability_scripts）';
+
+-- V6.1: CVE级通用漏洞脚本表（同一CVE+脚本类型只有一条记录）
+CREATE TABLE IF NOT EXISTS vulnerability_scripts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cve_id VARCHAR(20) NOT NULL,
+    script_type VARCHAR(20) NOT NULL,
+    script_content TEXT,
+    script_version INT NOT NULL DEFAULT 1,
+    generation_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    generation_started_at TIMESTAMPTZ,
+    generation_completed_at TIMESTAMPTZ,
+    generation_error TEXT,
+    generation_error_detail TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vulnerability_scripts_unique ON vulnerability_scripts (cve_id, script_type);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_scripts_cve_id ON vulnerability_scripts(cve_id);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_scripts_gen_status ON vulnerability_scripts(generation_status);
+COMMENT ON TABLE vulnerability_scripts IS 'CVE级通用漏洞脚本表';
 
 -- 更新 vulnerabilities 表的 source 字段注释
 COMMENT ON COLUMN vulnerabilities.source IS '数据来源: llm_analysis(扫描分析)/nvd_import(NVD导入)/custom_query(自定义查询)';

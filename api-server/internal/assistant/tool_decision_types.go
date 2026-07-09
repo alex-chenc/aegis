@@ -1,5 +1,11 @@
 package assistant
 
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
+
 // IntentObject describes a business object extracted from a user request.
 type IntentObject struct {
 	Type     string `json:"type"`
@@ -7,6 +13,42 @@ type IntentObject struct {
 	Selector string `json:"selector,omitempty"`
 	Category string `json:"category,omitempty"`
 	Source   string `json:"source,omitempty"`
+}
+
+// UnmarshalJSON accepts both the structured object form and the bare string
+// form (e.g. "cve" or "CVE-2024-1234") that LLMs frequently emit for intent
+// objects. Without this tolerance a string element aborts the whole intent
+// decomposition with a json unmarshal error.
+func (o *IntentObject) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		o.Source = "llm"
+		if cveIDPattern.MatchString(s) {
+			o.Type = "cve"
+			o.ID = strings.ToUpper(cveIDPattern.FindString(s))
+			return nil
+		}
+		o.Type = s
+		return nil
+	}
+	type intentObjectAlias IntentObject
+	var alias intentObjectAlias
+	if err := json.Unmarshal(trimmed, &alias); err != nil {
+		return err
+	}
+	*o = IntentObject(alias)
+	return nil
 }
 
 // IntentScope describes the execution or query scope of a request.
@@ -21,6 +63,31 @@ type MissingInfo struct {
 	Field    string `json:"field"`
 	Reason   string `json:"reason"`
 	Question string `json:"question,omitempty"`
+}
+
+// UnmarshalJSON accepts both the structured object form and the bare string
+// form that LLMs frequently emit for missing_info entries, keeping intent
+// decomposition resilient to loosely-typed model output.
+func (m *MissingInfo) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		m.Field = strings.TrimSpace(s)
+		return nil
+	}
+	type missingInfoAlias MissingInfo
+	var alias missingInfoAlias
+	if err := json.Unmarshal(trimmed, &alias); err != nil {
+		return err
+	}
+	*m = MissingInfo(alias)
+	return nil
 }
 
 // IntentBreakdown is the stable intermediate intent model used before tool decisions.

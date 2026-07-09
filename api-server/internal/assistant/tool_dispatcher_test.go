@@ -288,7 +288,7 @@ func TestAssistantToolGatewayAdapterReusesSuccessfulReadonlyToolCall(t *testing.
 	}
 }
 
-func TestAssistantToolGatewayAdapterAutoCompletesAssetCollectionSequence(t *testing.T) {
+func TestAssistantToolGatewayAdapterExecutesOnlyRequestedAssetCollectionTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, spec := range []*ToolSpec{
 		{
@@ -357,22 +357,15 @@ func TestAssistantToolGatewayAdapterAutoCompletesAssetCollectionSequence(t *test
 	if resp.Status != agentruntime.ToolCallSuccess {
 		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
 	}
-	if !strings.Contains(resp.Content, `"asset_collection_sequence_complete":true`) {
-		t.Fatalf("expected enriched asset collection result, got %s", resp.Content)
+	if strings.Contains(resp.Content, `"asset_collection_sequence_complete":true`) {
+		t.Fatalf("gateway must not synthesize asset collection sequence result, got %s", resp.Content)
 	}
-	for _, want := range []string{
-		"Asset.Collection.Trigger",
-		"Asset.Collection.Get",
-		"Asset.Application.List",
-		"Asset.Summary.Get",
-	} {
-		if !containsString(started, want) {
-			t.Fatalf("expected %s to be called, got %v", want, started)
-		}
+	if len(started) != 1 || started[0] != "Asset.Collection.Trigger" {
+		t.Fatalf("expected only runtime-requested tool call, got %v", started)
 	}
 }
 
-func TestAssistantToolGatewayAdapterAutoCompletesVulnerabilityScriptExecuteSequence(t *testing.T) {
+func TestAssistantToolGatewayAdapterExecutesOnlyRequestedVulnerabilityTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, spec := range []*ToolSpec{
 		{
@@ -427,15 +420,15 @@ func TestAssistantToolGatewayAdapterAutoCompletesVulnerabilityScriptExecuteSeque
 	if resp.Status != agentruntime.ToolCallSuccess {
 		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
 	}
-	if !strings.Contains(resp.Content, `"vulnerability_script_sequence_complete":true`) {
-		t.Fatalf("expected enriched vulnerability result, got %s", resp.Content)
+	if strings.Contains(resp.Content, `"vulnerability_script_sequence_complete":true`) {
+		t.Fatalf("gateway must not synthesize vulnerability sequence result, got %s", resp.Content)
 	}
-	if countString(started, "Vulnerability.Script.Execute") != 2 {
-		t.Fatalf("expected two execute calls, got %v", started)
+	if len(started) != 1 || started[0] != "Vulnerability.Script.Status" {
+		t.Fatalf("expected only runtime-requested tool call, got %v", started)
 	}
 }
 
-func TestAssistantToolGatewayAdapterAutoCompletesDetectionSequence(t *testing.T) {
+func TestAssistantToolGatewayAdapterExecutesOnlyRequestedDetectionTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, name := range []string{
 		"Detection.Alert.List",
@@ -490,24 +483,15 @@ func TestAssistantToolGatewayAdapterAutoCompletesDetectionSequence(t *testing.T)
 	if resp.Status != agentruntime.ToolCallSuccess {
 		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
 	}
-	if !strings.Contains(resp.Content, `"detection_sequence_complete":true`) {
-		t.Fatalf("expected enriched detection result, got %s", resp.Content)
+	if strings.Contains(resp.Content, `"detection_sequence_complete":true`) {
+		t.Fatalf("gateway must not synthesize detection sequence result, got %s", resp.Content)
 	}
-	for _, want := range []string{
-		"Detection.Alert.List",
-		"Detection.Alert.Get",
-		"Detection.Statistics.Get",
-		"Detection.Trend.Get",
-		"SigmaRule.List",
-		"Investigation.HostAttack.Analyze",
-	} {
-		if !containsString(started, want) {
-			t.Fatalf("expected %s to be called, got %v", want, started)
-		}
+	if len(started) != 1 || started[0] != "Detection.Alert.Get" {
+		t.Fatalf("expected only runtime-requested tool call, got %v", started)
 	}
 }
 
-func TestAssistantToolGatewayAdapterAutoCompletesPackageSequence(t *testing.T) {
+func TestAssistantToolGatewayAdapterExecutesOnlyRequestedPackageTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, name := range []string{"Package.List", "Package.Get", "Package.Build.Start"} {
 		toolName := name
@@ -552,13 +536,11 @@ func TestAssistantToolGatewayAdapterAutoCompletesPackageSequence(t *testing.T) {
 	if resp.Status != agentruntime.ToolCallSuccess {
 		t.Fatalf("expected success response, got %s: %s", resp.Status, resp.ErrorMessage)
 	}
-	if !strings.Contains(resp.Content, `"package_sequence_complete":true`) {
-		t.Fatalf("expected enriched package result, got %s", resp.Content)
+	if strings.Contains(resp.Content, `"package_sequence_complete":true`) {
+		t.Fatalf("gateway must not synthesize package sequence result, got %s", resp.Content)
 	}
-	for _, want := range []string{"Package.List", "Package.Get", "Package.Build.Start"} {
-		if !containsString(started, want) {
-			t.Fatalf("expected %s to be called, got %v", want, started)
-		}
+	if len(started) != 1 || started[0] != "Package.List" {
+		t.Fatalf("expected only runtime-requested tool call, got %v", started)
 	}
 }
 
@@ -610,25 +592,6 @@ func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 	if toolCallRepo.markFailedCall.ErrorMsg == "" {
 		t.Fatalf("expected non-empty error message in MarkFailed call")
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func countString(values []string, want string) int {
-	count := 0
-	for _, value := range values {
-		if value == want {
-			count++
-		}
-	}
-	return count
 }
 
 func TestToolDispatcher_ToolHandlerError(t *testing.T) {

@@ -11,14 +11,14 @@ func NormalizeTaskResultStatus(taskType, status string, exitCode int, stderr str
 		return normalizedStatus
 	}
 
-	if normalizedType == "CHECK" {
+	if normalizedType == "CHECK" || normalizedType == "POC_VERIFY" {
 		if isCheckExecutionError(exitCode, stderr) {
 			return "FAILED"
 		}
 		return "SUCCESS"
 	}
 
-	if (normalizedType == "FIX" || normalizedType == "VULNERABILITY_FIX" || normalizedType == "POC_VERIFY") && exitCode != 0 {
+	if (normalizedType == "FIX" || normalizedType == "VULNERABILITY_FIX") && exitCode != 0 {
 		return "FAILED"
 	}
 
@@ -39,6 +39,11 @@ func IsLLMRepairableTask(taskType, status string, exitCode *int, stderr string) 
 		// CHECK exit_code=1 means the baseline item is not compliant. It is a
 		// valid detection result, not a broken task that needs script repair.
 		if normalizedType == "CHECK" && exitCode != nil && *exitCode == 1 && !looksLikeExecutionError(stderr) {
+			return false
+		}
+		// POC exit_code=1 means the script ran successfully and confirmed the
+		// vulnerability. It is a business result, not a broken script.
+		if normalizedType == "POC_VERIFY" && exitCode != nil && *exitCode == 1 && !looksLikeExecutionError(stderr) {
 			return false
 		}
 		return true
@@ -62,7 +67,7 @@ func IsTaskExecutionSuccessful(taskType, status string, exitCode *int, stderr st
 	}
 
 	normalizedType := strings.ToUpper(strings.TrimSpace(taskType))
-	if normalizedType == "CHECK" {
+	if normalizedType == "CHECK" || normalizedType == "POC_VERIFY" {
 		if exitCode == nil {
 			return true
 		}

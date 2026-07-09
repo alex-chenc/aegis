@@ -65,11 +65,11 @@ func (p *AssistantToolPolicy) Evaluate(ctx context.Context, req agentruntime.Too
 
 	// 4. 使用 RiskPolicy 评估
 	riskResult := p.riskPolicy.Evaluate(ctx, RiskEvaluateRequest{
-		ToolName:       req.ToolName,
-		ToolRiskLevel:  string(spec.Risk),
-		Mode:           approvalMode,
-		Whitelisted:    spec.DefaultWhitelisted,
-		Operator:       p.operator,
+		ToolName:      req.ToolName,
+		ToolRiskLevel: string(spec.Risk),
+		Mode:          approvalMode,
+		Whitelisted:   spec.DefaultWhitelisted,
+		Operator:      p.operator,
 	})
 
 	// 5. 映射到 agent-runtime 策略决策

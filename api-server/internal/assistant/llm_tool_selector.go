@@ -10,12 +10,60 @@ import (
 	"unicode/utf8"
 
 	"api-server/internal/llm"
+	"go.uber.org/zap"
 )
 
 const (
-	llmToolSelectionTimeout = 75 * time.Second
-	llmToolSelectionMax     = 24
+	// 推理模型会把 max_tokens 预算分给“思考”与最终文本，预算过小会导致思考耗尽预算、
+	// 正文（JSON）被截断为空，客户端回退返回纯思考正文而没有 JSON。放宽到 8192 留足空间。
+	llmToolSelectionMaxTokens = 8192
+	llmToolSelectionMax       = 24
+	// 结构化 JSON 调用在解析失败时的最大重试次数（推理模型偶发只返回没有 JSON 的思考正文）。
+	llmJSONParseMaxAttempts = 3
 )
+
+// jsonOnlyRetryReminder 在重试时追加，强制模型只输出可解析的 JSON。
+const jsonOnlyRetryReminder = "上一次没有返回可解析的 JSON。严格要求：本次只输出一个 JSON 对象，" +
+	"不要输出任何思考过程、解释文字或 Markdown 代码块，直接以 { 开始、以 } 结束。"
+
+// jsonObjectResponseFormat 返回 OpenAI 兼容的 JSON 模式（response_format={"type":"json_object"}），
+// 让小米 MiMo 等模型强制输出合法 JSON，从根本上减少“只返回思考正文、没有 JSON”的情况；
+// 若端点走 Anthropic 协议（会忽略 response_format），则返回 nil 交由提示词与重试兜底。
+func jsonObjectResponseFormat(client *llm.LLMClient) *llm.ResponseFormat {
+	if client != nil && client.SupportsJSONObjectResponseFormat() {
+		return &llm.ResponseFormat{Type: "json_object"}
+	}
+	return nil
+}
+
+// requestLLMJSONWithRetry 调用 LLM 并解析首个 JSON 对象；推理模型偶尔会把 token 预算耗在思考上、
+// 只返回没有 JSON 的推理正文，导致 "no json object found"。这里在解析失败时有限次重试，
+// 并逐步加强“只输出 JSON”的提示与温度，提升结构化输出的鲁棒性。网络/超时类错误由
+// llm.LLMClient 内部统一重试，这里遇到即直接返回。
+func requestLLMJSONWithRetry(ctx context.Context, target interface{}, baseMessages []llm.Message, call func(ctx context.Context, messages []llm.Message, temperature float64) (string, error)) error {
+	var lastErr error
+	for attempt := 0; attempt < llmJSONParseMaxAttempts; attempt++ {
+		messages := baseMessages
+		temperature := 0.1
+		if attempt > 0 {
+			messages = append(append([]llm.Message{}, baseMessages...), llm.Message{
+				Role:    "user",
+				Content: jsonOnlyRetryReminder,
+			})
+			temperature = 0.35
+		}
+		resp, err := call(ctx, messages, temperature)
+		if err != nil {
+			return err
+		}
+		if perr := unmarshalFirstJSONObject(resp, target); perr != nil {
+			lastErr = perr
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
 
 type llmToolSelectionDraft struct {
 	IntentSummary      string   `json:"intent_summary"`
@@ -43,28 +91,45 @@ func (o *Orchestrator) selectToolsWithLLM(ctx context.Context, userMessage strin
 		return nil, err
 	}
 
-	selectCtx, cancel := context.WithTimeout(ctx, llmToolSelectionTimeout)
-	defer cancel()
-
 	briefCatalog := o.buildLLMToolBriefCatalog()
 	if len(briefCatalog) == 0 {
 		return nil, fmt.Errorf("tool catalog is empty")
 	}
 
-	draft, err := requestLLMToolSelectionDraft(selectCtx, client, userMessage, intent, contextRefs, briefCatalog)
+	draftStartedAt := time.Now()
+	// 每次 LLM 调用的超时与重试由 llm.LLMClient 统一控制（平台标准 1200s / 5 次重试），
+	// 此处不再叠加更短的阶段级超时，避免在慢速推理模型下过早触发 context deadline exceeded。
+	draft, err := requestLLMToolSelectionDraft(ctx, client, userMessage, intent, contextRefs, briefCatalog)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("draft tool selection: %w", err)
+	}
+	if o.logger != nil {
+		o.logger.Info("assistant llm draft tool selection completed",
+			zap.Duration("duration", time.Since(draftStartedAt)),
+			zap.Int("catalog_bytes", len(briefCatalog)),
+			zap.Int("selected_count", len(draft.SelectedTools)),
+		)
 	}
 
 	details := o.buildLLMToolDetailCatalog(draft.SelectedTools, draft.DetailRequests)
-	final, err := requestLLMToolSelectionFinal(selectCtx, client, userMessage, intent, contextRefs, briefCatalog, details, draft)
+	finalStartedAt := time.Now()
+	final, err := requestLLMToolSelectionFinal(ctx, client, userMessage, intent, contextRefs, briefCatalog, details, draft)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("final tool selection: %w", err)
+	}
+	if o.logger != nil {
+		o.logger.Info("assistant llm final tool selection completed",
+			zap.Duration("duration", time.Since(finalStartedAt)),
+			zap.Int("details_bytes", len(details)),
+			zap.Int("selected_count", len(final.SelectedTools)),
+		)
 	}
 
 	selected := o.normalizeLLMSelectedTools(final.SelectedTools)
+	selected = filterResidentToolsForIntent(selected, userMessage, intent.ExplicitToolName)
 	if len(selected) == 0 && !final.NeedClarification {
 		selected = o.normalizeLLMSelectedTools(draft.SelectedTools)
+		selected = filterResidentToolsForIntent(selected, userMessage, intent.ExplicitToolName)
 	}
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("llm selected no executable tools")
@@ -77,6 +142,17 @@ func (o *Orchestrator) selectToolsWithLLM(ctx context.Context, userMessage strin
 		Intent:         intent,
 		MaxTools:       llmToolSelectionMax,
 	}, nil
+}
+
+func filterResidentToolsForIntent(names []string, query, explicitToolName string) []string {
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if isResidentTool(name) && !residentToolExplicitlyRequested(name, query, explicitToolName) {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered
 }
 
 func requestLLMToolSelectionDraft(ctx context.Context, client *llm.LLMClient, userMessage string, intent IntentResult, contextRefs []ContextRefInput, briefCatalog string) (llmToolSelectionDraft, error) {
@@ -93,15 +169,15 @@ func requestLLMToolSelectionDraft(ctx context.Context, client *llm.LLMClient, us
 只输出 JSON：{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"detail_requests":[],"reason":""}`
 
 	userPrompt := fmt.Sprintf("用户消息：%s\n\n规则意图：%s\n\n上下文引用：%s\n\n工具短目录：\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), briefCatalog)
-	resp, err := client.ChatCompletionWithMessages(ctx, []llm.Message{
+	baseMessages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, 0.1)
-	if err != nil {
-		return llmToolSelectionDraft{}, err
 	}
 	var draft llmToolSelectionDraft
-	if err := unmarshalFirstJSONObject(resp, &draft); err != nil {
+	respFormat := jsonObjectResponseFormat(client)
+	if err := requestLLMJSONWithRetry(ctx, &draft, baseMessages, func(ctx context.Context, messages []llm.Message, temperature float64) (string, error) {
+		return client.ChatCompletionWithMessagesMaxTokensFormat(ctx, messages, temperature, llmToolSelectionMaxTokens, respFormat)
+	}); err != nil {
 		return llmToolSelectionDraft{}, err
 	}
 	return draft, nil
@@ -120,15 +196,15 @@ func requestLLMToolSelectionFinal(ctx context.Context, client *llm.LLMClient, us
 只输出 JSON：{"intent_summary":"","need_clarification":false,"clarifying_question":"","selected_tools":[],"reason":""}`
 
 	userPrompt := fmt.Sprintf("用户消息：%s\n\n规则意图：%s\n\n上下文引用：%s\n\n第一轮选择：%s\n\n工具详情：\n%s\n\n工具短目录备用：\n%s", userMessage, encodeJSON(intent), encodeJSON(contextRefs), encodeJSON(draft), details, briefCatalog)
-	resp, err := client.ChatCompletionWithMessages(ctx, []llm.Message{
+	baseMessages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, 0.1)
-	if err != nil {
-		return llmToolSelectionFinal{}, err
 	}
 	var final llmToolSelectionFinal
-	if err := unmarshalFirstJSONObject(resp, &final); err != nil {
+	respFormat := jsonObjectResponseFormat(client)
+	if err := requestLLMJSONWithRetry(ctx, &final, baseMessages, func(ctx context.Context, messages []llm.Message, temperature float64) (string, error) {
+		return client.ChatCompletionWithMessagesMaxTokensFormat(ctx, messages, temperature, llmToolSelectionMaxTokens, respFormat)
+	}); err != nil {
 		return llmToolSelectionFinal{}, err
 	}
 	return final, nil
@@ -207,7 +283,7 @@ func (o *Orchestrator) buildLLMToolDetailCatalog(selectedTools, detailRequests [
 }
 
 func (o *Orchestrator) normalizeLLMSelectedTools(names []string) []string {
-	result := make([]string, 0, len(names)+3)
+	result := make([]string, 0, len(names))
 	seen := map[string]bool{}
 	writeCount := 0
 	for _, name := range names {
@@ -231,30 +307,14 @@ func (o *Orchestrator) normalizeLLMSelectedTools(names []string) []string {
 			break
 		}
 	}
-	for _, name := range []string{"Tool.Search", "Context.Get", "Session.Summarize"} {
-		if len(result) >= llmToolSelectionMax {
-			break
-		}
-		if seen[name] {
-			continue
-		}
-		if tool, ok := o.toolRegistry.Get(name); ok && tool != nil && tool.Enabled {
-			seen[name] = true
-			result = append(result, name)
-		}
-	}
 	return result
 }
 
 func shouldUseLLMToolSelection(message string, intent IntentResult) bool {
-	if strings.TrimSpace(message) == "" || intent.Action == "answer" || shouldBypassLLMToolSelection(message) {
+	if strings.TrimSpace(message) == "" || intent.Action == "answer" {
 		return false
 	}
 	return true
-}
-
-func shouldBypassLLMToolSelection(message string) bool {
-	return detectNaturalOperationShortcut(message).Kind != naturalOperationNone
 }
 
 func shortToolBrief(tool *ToolSpec) string {

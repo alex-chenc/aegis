@@ -1,6 +1,8 @@
 package assistant
 
 import (
+	"strings"
+
 	"go.uber.org/zap"
 )
 
@@ -65,12 +67,11 @@ func (g *ClarificationGate) Evaluate(breakdown *IntentBreakdown, accepted []stri
 		}
 	}
 
-	// 3. 检查 decision records 中是否有 clarification_required 的记录
-	// 仅在无已接受工具时触发——有已接受工具时，缺失实体（如 task_id）
-	// 可能由前置步骤在执行时动态提供，不应阻断整个计划。
-	if len(accepted) == 0 {
+	// 3. 写操作中的必需参数缺失不能被任意已接受的只读工具掩盖。
+	// 前置步骤可动态提供的参数应在裁决阶段标记为 workflowForced，而不会进入此分支。
+	if breakdown.RequiresWrite || len(accepted) == 0 {
 		for _, record := range records {
-			if record.Decision == toolDecisionClarificationRequired {
+			if record.Decision == toolDecisionClarificationRequired && (len(accepted) == 0 || isWriteDecisionTool(record.ToolName)) {
 				return ClarificationDecision{
 					Required: true,
 					Question: record.Reason,
@@ -95,4 +96,13 @@ func (g *ClarificationGate) Evaluate(breakdown *IntentBreakdown, accepted []stri
 	}
 
 	return ClarificationDecision{}
+}
+
+func isWriteDecisionTool(toolName string) bool {
+	for _, marker := range []string{".Trigger", ".Start", ".Stop", ".Execute", ".Generate", ".Run", ".Fix", ".Block", ".Resolve", ".Delete", ".Create", ".Update"} {
+		if strings.Contains(toolName, marker) {
+			return true
+		}
+	}
+	return false
 }

@@ -89,6 +89,10 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AssistantInvestigationEvidence{},
 		&model.ExternalMCPSource{},
 		&model.ExternalMCPQueryLog{},
+		// V6.1 CVE-level generic vulnerability scripts. Keep this in startup
+		// migration so existing persistent volumes do not depend on replaying
+		// migrations/001_init.sql.
+		&model.VulnerabilityScript{},
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

@@ -43,7 +43,7 @@ func TestUnmarshalFirstJSONObjectParsesFencedResponse(t *testing.T) {
 	}
 }
 
-func TestNormalizeLLMSelectedToolsFiltersUnknownCriticalAndAddsResident(t *testing.T) {
+func TestNormalizeLLMSelectedToolsFiltersUnknownCriticalWithoutResidentInjection(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, spec := range []*ToolSpec{
 		{Name: "Host.List", Risk: ToolRiskReadonly, Enabled: true, Handler: noopToolHandler},
@@ -60,9 +60,9 @@ func TestNormalizeLLMSelectedToolsFiltersUnknownCriticalAndAddsResident(t *testi
 
 	selected := o.normalizeLLMSelectedTools([]string{"Host.List", "Missing.Tool", "Danger.Delete"})
 	assertContainsTool(t, selected, "Host.List")
-	assertContainsTool(t, selected, "Tool.Search")
-	assertContainsTool(t, selected, "Context.Get")
-	assertContainsTool(t, selected, "Session.Summarize")
+	assertNotContainsTool(t, selected, "Tool.Search")
+	assertNotContainsTool(t, selected, "Context.Get")
+	assertNotContainsTool(t, selected, "Session.Summarize")
 	for _, name := range selected {
 		if name == "Danger.Delete" || name == "Missing.Tool" {
 			t.Fatalf("unexpected selected tools: %v", selected)
@@ -70,12 +70,12 @@ func TestNormalizeLLMSelectedToolsFiltersUnknownCriticalAndAddsResident(t *testi
 	}
 }
 
-func TestShouldUseLLMToolSelectionBypassesPureNaturalShortcuts(t *testing.T) {
-	if shouldUseLLMToolSelection("进行资产采集", IntentResult{Action: "execute"}) {
-		t.Fatal("expected pure asset collection shortcut to bypass llm tool selection")
+func TestShouldUseLLMToolSelectionForAllOperationalRequests(t *testing.T) {
+	if !shouldUseLLMToolSelection("进行资产采集", IntentResult{Action: "execute"}) {
+		t.Fatal("expected asset collection to use generic llm tool selection")
 	}
-	if shouldUseLLMToolSelection("进行基线扫描", IntentResult{Action: "execute"}) {
-		t.Fatal("expected underspecified baseline scan shortcut to bypass llm tool selection")
+	if !shouldUseLLMToolSelection("进行基线扫描", IntentResult{Action: "execute"}) {
+		t.Fatal("expected baseline scan to use generic llm tool selection")
 	}
 	if !shouldUseLLMToolSelection("进行资产采集任务，并分析那个主机上有 MySQL 软件，并分析此 MySql 软件是否有漏洞", IntentResult{Action: "analyze"}) {
 		t.Fatal("expected composite asset and vulnerability analysis to use llm tool selection")

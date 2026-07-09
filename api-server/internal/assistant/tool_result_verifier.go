@@ -9,10 +9,10 @@ import (
 
 // ToolResultVerifyResult holds the outcome of a postcondition verification.
 type ToolResultVerifyResult struct {
-	Passed      bool                   `json:"passed"`
-	Violations  []PostconditionViolation `json:"violations,omitempty"`
-	Evidence    map[string]interface{}  `json:"evidence,omitempty"`
-	Reason      string                  `json:"reason,omitempty"`
+	Passed     bool                     `json:"passed"`
+	Violations []PostconditionViolation `json:"violations,omitempty"`
+	Evidence   map[string]interface{}   `json:"evidence,omitempty"`
+	Reason     string                   `json:"reason,omitempty"`
 }
 
 // PostconditionViolation describes a single postcondition that was not met.
@@ -101,12 +101,11 @@ func (v *ToolResultVerifier) checkPostcondition(postcondition string, step ToolP
 		}
 		return false, "no script data in result"
 	default:
-		// 未知后置条件默认通过，不阻断执行
-		v.logger.Debug("unknown postcondition, defaulting to passed",
+		v.logger.Error("unknown postcondition rejected",
 			zap.String("postcondition", postcondition),
 			zap.String("tool_name", step.ToolName),
 		)
-		return true, ""
+		return false, fmt.Sprintf("unknown postcondition %q", postcondition)
 	}
 }
 

@@ -72,8 +72,21 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 		return agentruntime.LLMResponse{}, fmt.Errorf("llm completion failed: %w", err)
 	}
 
+	// Summarize/Compress produce free-form prose (or a {"final_answer":...} wrapper),
+	// never a control action. Running them through cleanLLMResponse +
+	// normalizeToolCallFormat can rewrite a legitimate summary that merely mentions a
+	// known tool name (e.g. "Vulnerability.List") into a bogus {"action":"tool_call"}
+	// blob, which the runtime then surfaces as an "unfinished control action" error.
+	// Only normalize purposes that are expected to emit JSON control actions.
+	content := result.Content
+	if isFreeformTextPurpose(req.Purpose) {
+		content = strings.TrimSpace(content)
+	} else {
+		content = normalizeToolCallFormat(cleanLLMResponse(content))
+	}
+
 	return agentruntime.LLMResponse{
-		Content: normalizeToolCallFormat(cleanLLMResponse(result.Content)),
+		Content: content,
 		Model:   result.Model,
 		Usage: agentruntime.LLMUsage{
 			PromptTokens:     result.Usage.PromptTokens,
@@ -102,6 +115,19 @@ func (a *LLMClientAdapter) temperatureForPurpose(purpose agentruntime.LLMPurpose
 		return 0.3
 	default:
 		return 0.7
+	}
+}
+
+// isFreeformTextPurpose reports whether the purpose expects natural-language
+// output rather than a JSON control action. Such responses must not be run
+// through tool-call normalization, otherwise a summary that merely references a
+// known tool name would be rewritten into a spurious tool_call.
+func isFreeformTextPurpose(purpose agentruntime.LLMPurpose) bool {
+	switch purpose {
+	case agentruntime.PurposeSummarize, agentruntime.PurposeCompress:
+		return true
+	default:
+		return false
 	}
 }
 

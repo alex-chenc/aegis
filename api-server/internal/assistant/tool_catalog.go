@@ -224,7 +224,7 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 	return agentruntime.ToolDescriptor{
 		Name:             s.Name,
 		Description:      s.Description,
-		ArgsSchema:       s.ArgsSchema,
+		ArgsSchema:       normalizeRuntimeArgsSchema(s.ArgsSchema),
 		ResultSchema:     s.ResultSchema,
 		RiskLevel:        toRuntimeRisk(s.Risk),
 		AutoCallable:     s.AutoCallable,
@@ -232,6 +232,43 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 		DefaultTimeout:   s.DefaultTimeout,
 		Idempotent:       s.Idempotent,
 		Tags:             append([]string{string(s.Domain), string(s.Operation)}, s.Tags...),
+	}
+}
+
+// normalizeRuntimeArgsSchema 深拷贝参数 schema，并将所有 "integer" 类型放宽为
+// "number"。LLM 返回的 JSON 数字经 encoding/json 解析后一律是 float64，而
+// agent-runtime 的参数校验器对 "integer" 类型拒绝 float64，会报出诸如
+// `$.page has type number, want integer` 的错误，导致模型给出的任何整数参数都无法通过。
+// 只放宽提交给 runtime 的 schema 副本，源工具定义与提示词仍保留 integer 语义；
+// 下游工具处理器自身会把浮点数转换为 int。
+func normalizeRuntimeArgsSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	out := make(map[string]any, len(schema))
+	for k, v := range schema {
+		out[k] = normalizeRuntimeSchemaValue(k, v)
+	}
+	return out
+}
+
+func normalizeRuntimeSchemaValue(key string, v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return normalizeRuntimeArgsSchema(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = normalizeRuntimeSchemaValue(key, item)
+		}
+		return out
+	case string:
+		if key == "type" && val == "integer" {
+			return "number"
+		}
+		return val
+	default:
+		return v
 	}
 }
 

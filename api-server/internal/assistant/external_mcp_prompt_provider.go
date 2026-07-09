@@ -183,10 +183,10 @@ type MCPQueryPlanningInput struct {
 
 // MCPResultAnalysisInput 结果分析输入
 type MCPResultAnalysisInput struct {
-	UserMessage              string `json:"user_message"`
-	AegisEvidenceJSON        string `json:"aegis_evidence_json"`
-	ExternalMCPEvidenceJSON  string `json:"external_mcp_evidence_json"`
-	QueryLimitationsJSON     string `json:"query_limitations_json"`
+	UserMessage             string `json:"user_message"`
+	AegisEvidenceJSON       string `json:"aegis_evidence_json"`
+	ExternalMCPEvidenceJSON string `json:"external_mcp_evidence_json"`
+	QueryLimitationsJSON    string `json:"query_limitations_json"`
 }
 
 // WrapExternalDataForPrompt 将外部数据包装为不可信数据格式

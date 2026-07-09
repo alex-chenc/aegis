@@ -207,9 +207,9 @@ func (s *HostAttackInvestigationService) CreateInvestigation(ctx context.Context
 	}
 
 	result := &model.HostAttackInvestigationResult{
-		InvestigationID: investigationID,
-		Host:            hostSnapshot,
-		TimeRange:       input.TimeRange,
+		InvestigationID:      investigationID,
+		Host:                 hostSnapshot,
+		TimeRange:            input.TimeRange,
 		CompromiseAssessment: assessment,
 		EntryPointCandidates: entryCandidates,
 		AttackTimeline:       attackTimeline,

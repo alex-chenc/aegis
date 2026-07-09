@@ -124,37 +124,8 @@
             <span v-else style="color: #999">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="320">
+        <el-table-column label="操作" width="90">
           <template #default="{ row }">
-            <el-button
-              v-if="canShowScriptRepair(row)"
-              link
-              type="warning"
-              size="small"
-              @click="triggerScriptRepair(row)"
-              :loading="repairingTask === row.id"
-            >
-              大模型修复
-            </el-button>
-            <el-button
-              v-if="canReExecute(row)"
-              link
-              type="primary"
-              size="small"
-              @click="reExecute(row)"
-              :loading="reexecutingTask === row.id"
-            >
-              重新下发
-            </el-button>
-            <el-button
-              v-if="canShowSuggestion(row)"
-              link
-              type="info"
-              size="small"
-              @click="openSuggestionDialog(row)"
-            >
-              修复建议
-            </el-button>
             <el-button
               link
               type="danger"
@@ -171,7 +142,7 @@
 
     <el-card v-if="healingProcessTasks.length" style="margin-top: 20px">
       <template #header>
-        <span>大模型修复过程</span>
+        <span>自动修复过程</span>
       </template>
       <div class="healing-process-list">
         <section v-for="task in healingProcessTasks" :key="task.id" class="healing-process-item">
@@ -193,7 +164,7 @@
             <li v-for="(step, index) in task.healingStatus.steps" :key="index">
               <strong>{{ step.phase }}</strong>
               <span>{{ step.summary }}</span>
-              <em>{{ step.status }}</em>
+              <em>{{ healingStepStatusText(step.status) }}</em>
             </li>
           </ol>
           <p v-if="task.healingStatus?.last_error" class="healing-error">{{ task.healingStatus.last_error }}</p>
@@ -233,24 +204,6 @@
       </div>
     </el-dialog>
 
-    <el-dialog v-model="suggestionDialogVisible" title="修复建议" width="500px">
-      <el-form>
-        <el-form-item label="修复建议">
-          <el-input
-            v-model="suggestionText"
-            type="textarea"
-            :rows="4"
-            placeholder="请输入您的修复建议，系统会将建议发送给大模型进行修复脚本生成"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="suggestionDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitSuggestion" :loading="submittingSuggestion">
-          提交修复
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -261,9 +214,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getTaskLogs,
   getTaskStatus,
-  triggerSelfHealing,
-  getHealingStatus,
-  redispatchTask,
   deleteTask as deleteTaskApi,
   normalizeType,
   normalizeStatus,
@@ -288,13 +238,7 @@ const status = ref<TaskGroupStatus | null>(null)
 const scriptDialogVisible = ref(false)
 const scriptDialogTitle = ref('')
 const currentScript = ref('')
-const reexecutingTask = ref<string | null>(null)
-const repairingTask = ref<string | null>(null)
 const typeFilter = ref<string>('all')
-const suggestionDialogVisible = ref(false)
-const suggestionText = ref('')
-const selectedTask = ref<TaskLog | null>(null)
-const submittingSuggestion = ref(false)
 let pollTimer: number | null = null
 
 const isVulnerabilityTask = computed(() => route.path.startsWith('/vulnerability/tasks'))
@@ -420,34 +364,6 @@ function getStateTagType(state: DisplayState): string {
   }
 }
 
-function canShowScriptRepair(row: any): boolean {
-  const taskType = normalizeType(row.task_type)
-  if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
-    return row.displayState === '检测失败' || row.displayState === 'POC验证失败' || row.displayState === '大模型修复失败' || row.displayState === '大模型修复超时'
-  } else {
-    return row.displayState === '修复失败' || row.displayState === '漏洞修复失败' || row.displayState === '大模型修复失败' || row.displayState === '大模型修复超时'
-  }
-}
-
-function canReExecute(row: any): boolean {
-  const taskType = normalizeType(row.task_type)
-  // 检测类型任务不允许手动重新下发，通过自动验证流程处理
-  if (taskType === 'CHECK') return false
-  return row.displayState === '修复失败' ||
-         row.displayState === 'POC验证失败' ||
-         row.displayState === '漏洞修复失败' ||
-         row.displayState === '大模型修复成功' ||
-         row.displayState === '修复超时'
-}
-
-function canShowSuggestion(row: any): boolean {
-  return row.displayState === '检测失败' ||
-         row.displayState === '修复失败' ||
-         row.displayState === 'POC验证失败' ||
-         row.displayState === '漏洞修复失败' ||
-         row.displayState === '大模型修复失败'
-}
-
 function isTaskTerminal(task: TaskLog) {
   const status = normalizeStatus(task.status)
   return status === 'success' || status === 'failed' || status === 'timeout' || status === 'audit_blocked'
@@ -474,6 +390,16 @@ function healingStatusText(status?: string) {
     case 'queued': return '排队中'
     case 'healing': return '修复中'
     default: return '未知'
+  }
+}
+
+function healingStepStatusText(status?: string) {
+  switch (status) {
+    case 'completed': return '已完成'
+    case 'failed': return '失败'
+    case 'running': return '进行中'
+    case 'queued': return '排队中'
+    default: return status || '未知'
   }
 }
 
@@ -512,55 +438,6 @@ const showScript = (task: TaskLog, type: 'script' | 'result') => {
   scriptDialogVisible.value = true
 }
 
-const triggerScriptRepair = async (task: TaskLog) => {
-  repairingTask.value = task.id
-  try {
-    await triggerSelfHealing(task.id, '')
-    ElMessage.success('大模型修复已触发，正在生成并下发修复脚本...')
-    // 获取单个任务的 healing status
-    await fetchSingleHealingStatus(task.id)
-  } catch (e: any) {
-    ElMessage.error(e.message || '大模型修复失败')
-    repairingTask.value = null
-  }
-}
-
-const openSuggestionDialog = (task: TaskLog) => {
-  selectedTask.value = task
-  suggestionText.value = ''
-  suggestionDialogVisible.value = true
-}
-
-const submitSuggestion = async () => {
-  if (!selectedTask.value) return
-  submittingSuggestion.value = true
-  try {
-    await triggerSelfHealing(selectedTask.value.id, suggestionText.value)
-    ElMessage.success('修复建议已提交，系统正在进行大模型修复')
-    suggestionDialogVisible.value = false
-    repairingTask.value = selectedTask.value.id
-    // 获取单个任务的 healing status
-    await fetchSingleHealingStatus(selectedTask.value.id)
-  } catch (e: any) {
-    ElMessage.error(e.message || '提交失败')
-    submittingSuggestion.value = false
-  }
-}
-
-const reExecute = async (task: TaskLog) => {
-  reexecutingTask.value = task.id
-  try {
-    await redispatchTask(task.id)
-    ElMessage.success('重新下发成功')
-    delete healingStatusMap.value[task.id]
-    await refresh()
-  } catch (e: any) {
-    ElMessage.error(e.message || '重新下发失败')
-  } finally {
-    reexecutingTask.value = null
-  }
-}
-
 const deleteTask = async (task: TaskLog) => {
   try {
     await ElMessageBox.confirm('确定要删除该任务吗？', '删除确认', {
@@ -579,22 +456,6 @@ const deleteTask = async (task: TaskLog) => {
   }
 }
 
-const fetchSingleHealingStatus = async (taskId: string) => {
-  try {
-    const healingStatus = await getHealingStatus(taskId)
-    if (healingStatus) {
-      healingStatusMap.value[taskId] = healingStatus
-      
-      // 如果修复完成（成功、失败或超时），清除 repairingTask
-      if (healingStatus.status === 'healed' || healingStatus.status === 'failed' || healingStatus.status === 'timeout') {
-        if (repairingTask.value === taskId) {
-          repairingTask.value = null
-        }
-      }
-    }
-  } catch { }
-}
-
 const refresh = async () => {
   refreshing.value = true
   try {
@@ -606,12 +467,6 @@ const refresh = async () => {
     for (const task of tasks.value) {
       if (task.healing_status) {
         healingStatusMap.value[task.id] = task.healing_status
-        
-        if (task.healing_status.status === 'healed' || task.healing_status.status === 'failed' || task.healing_status.status === 'timeout') {
-          if (repairingTask.value === task.id) {
-            repairingTask.value = null
-          }
-        }
       }
     }
   } catch (e: any) {

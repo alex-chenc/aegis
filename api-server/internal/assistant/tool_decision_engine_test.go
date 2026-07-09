@@ -91,6 +91,94 @@ func TestToolDecisionEngineBuildsAssetCollectionWorkflow(t *testing.T) {
 	}
 }
 
+func TestToolDecisionEngineBuildsGenericOnlineVulnerabilityScanWithoutTaskDetail(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Host.List", Domain: DomainHost, Operation: OpList, Capability: "list_hosts", Description: "查询在线主机", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Vulnerability.Scan.Start", Domain: DomainVulnerability, Operation: OpExecute, Capability: "start_vulnerability_scan", Description: "启动漏洞扫描", ObjectTypes: []string{"vulnerability", "host"}, Risk: ToolRiskMedium, DefaultWhitelisted: false, ArgsSchema: requiredSchema("host_ids")},
+		{Name: "Vulnerability.Scan.Status", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_scan_status", Description: "查询漏洞扫描状态", ObjectTypes: []string{"vulnerability_scan"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("scan_id")},
+		{Name: "Vulnerability.Script.Execute", Domain: DomainVulnerability, Operation: OpExecute, Capability: "execute_vulnerability_host_scripts", Description: "执行漏洞脚本", ObjectTypes: []string{"vulnerability", "host"}, Risk: ToolRiskHigh, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type", "host_ids")},
+		{Name: "Task.GetDetail", Domain: DomainTask, Operation: OpGet, Capability: "get_task_detail", Description: "查询运维任务详情", ObjectTypes: []string{"task"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("task_id")},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+
+	query := "帮我进行一次在线主机的漏洞扫描任务"
+	intent := IntentResult{Domains: []string{"vulnerability", "host", "task"}, Action: "execute", Object: "vulnerability", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.8}
+	breakdown := mustRuleBreakdown(t, query, intent, nil, []string{"list_hosts", "start_vulnerability_scan", "get_vulnerability_scan_status", "execute_vulnerability_host_scripts"})
+	engine := newDecisionTestEngine(registry)
+
+	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
+		Query:     query,
+		Intent:    intent,
+		Breakdown: breakdown,
+		PreliminarySelection: &ToolSelectionResult{
+			SelectedTools:  []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Script.Execute", "Task.GetDetail"},
+			CandidateTools: []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status", "Vulnerability.Script.Execute", "Task.GetDetail"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if plan.NeedClarification {
+		t.Fatalf("online vulnerability scan should use previous-step bindings, got clarification %q", plan.ClarifyingQuestion)
+	}
+	for _, want := range []string{"Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status"} {
+		assertContainsTool(t, plan.ToolNames(), want)
+	}
+	assertNotContainsTool(t, plan.ToolNames(), "Task.GetDetail")
+	assertNotContainsTool(t, plan.ToolNames(), "Vulnerability.Script.Execute")
+	start := findPlanStep(plan, "Vulnerability.Scan.Start")
+	if start == nil {
+		t.Fatal("expected vulnerability scan start step")
+	}
+	if _, exists := start.Args["host_ids"]; exists {
+		t.Fatalf("host_ids must come from Host.List at runtime, got static args %#v", start.Args)
+	}
+	if start.ArgSources["host_ids"].SourceType != "previous_step" {
+		t.Fatalf("expected previous_step host binding, got %#v", start.ArgSources["host_ids"])
+	}
+}
+
+func TestToolDecisionEngineBuildsGenericCVERemediationPlanWithMaxRounds(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Vulnerability.List", Domain: DomainVulnerability, Operation: OpList, Capability: "list_vulnerabilities", Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Vulnerability.AffectedHosts", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_affected_hosts", Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("vulnerability_id")},
+		{Name: "Vulnerability.Script.Generate", Domain: DomainVulnerability, Operation: OpGenerate, Capability: "generate_vulnerability_script", Risk: ToolRiskMedium, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type")},
+		{Name: "Vulnerability.Script.Status", Domain: DomainVulnerability, Operation: OpGet, Capability: "get_vulnerability_script_status", Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("cve_id", "script_type")},
+		{Name: "Vulnerability.Script.Execute", Domain: DomainVulnerability, Operation: OpExecute, Capability: "execute_vulnerability_host_scripts", Risk: ToolRiskHigh, DefaultWhitelisted: false, ArgsSchema: requiredSchema("cve_id", "script_type", "host_ids")},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+
+	query := "针对漏洞 CVE-2023-43641 生成 POC 和修复脚本，并对受影响主机下发，最多 5 轮自动修复"
+	intent := IntentResult{Domains: []string{"vulnerability"}, Action: "execute", Object: "vulnerability", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.9}
+	breakdown := mustRuleBreakdown(t, query, intent, nil, []string{
+		"list_vulnerabilities", "get_vulnerability_affected_hosts", "generate_vulnerability_script",
+		"get_vulnerability_script_status", "execute_vulnerability_host_scripts",
+	})
+	engine := newDecisionTestEngine(registry)
+	plan, err := engine.Decide(context.Background(), ToolDecisionInput{Query: query, Intent: intent, Breakdown: breakdown})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if plan.NeedClarification {
+		t.Fatalf("explicit CVE workflow should use runtime/previous-step bindings, got %q", plan.ClarifyingQuestion)
+	}
+	for _, want := range []string{
+		"Vulnerability.List", "Vulnerability.AffectedHosts", "Vulnerability.Script.Generate",
+		"Vulnerability.Script.Status", "Vulnerability.Script.Execute",
+	} {
+		assertContainsTool(t, plan.ToolNames(), want)
+	}
+	assertNotContainsTool(t, plan.ToolNames(), "Tool.Search")
+	execute := findPlanStep(plan, "Vulnerability.Script.Execute")
+	if execute == nil || execute.Args["max_rounds"] != 5 {
+		t.Fatalf("expected max_rounds=5 on execute step, got %#v", execute)
+	}
+}
+
 func TestToolDecisionEngineClarifiesVagueRepair(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	registerDecisionTestTool(t, registry, &ToolSpec{
@@ -303,6 +391,16 @@ func assertNotContainsTool(t *testing.T, names []string, unwanted string) {
 	}
 }
 
+func assertContainsTool(t *testing.T, names []string, want string) {
+	t.Helper()
+	for _, name := range names {
+		if name == want {
+			return
+		}
+	}
+	t.Fatalf("expected tools to contain %s, got %v", want, names)
+}
+
 func findPlanStep(plan *ToolExecutionPlan, toolName string) *ToolPlanStep {
 	if plan == nil {
 		return nil
@@ -466,7 +564,7 @@ func TestToolDecisionEngineStateMachineViolation(t *testing.T) {
 func TestToolResultVerifierPassesWithValidResult(t *testing.T) {
 	verifier := NewToolResultVerifier(nil)
 	step := ToolPlanStep{
-		ToolName:      "Asset.Collection.Trigger",
+		ToolName:       "Asset.Collection.Trigger",
 		Postconditions: []string{"task_id_created"},
 	}
 	result := ToolExecutionResult{
@@ -482,7 +580,7 @@ func TestToolResultVerifierPassesWithValidResult(t *testing.T) {
 func TestToolResultVerifierFailsWithMissingTaskID(t *testing.T) {
 	verifier := NewToolResultVerifier(nil)
 	step := ToolPlanStep{
-		ToolName:      "Asset.Collection.Trigger",
+		ToolName:       "Asset.Collection.Trigger",
 		Postconditions: []string{"task_id_created"},
 	}
 	result := ToolExecutionResult{
@@ -501,7 +599,7 @@ func TestToolResultVerifierFailsWithMissingTaskID(t *testing.T) {
 func TestToolResultVerifierFailsWithExecutionError(t *testing.T) {
 	verifier := NewToolResultVerifier(nil)
 	step := ToolPlanStep{
-		ToolName:      "Asset.Collection.Trigger",
+		ToolName:       "Asset.Collection.Trigger",
 		Postconditions: []string{"task_id_created"},
 	}
 	result := ToolExecutionResult{
@@ -529,3 +627,12 @@ func TestToolResultVerifierPassesWithNoPostconditions(t *testing.T) {
 	}
 }
 
+func TestToolResultVerifierRejectsUnknownPostcondition(t *testing.T) {
+	verifier := NewToolResultVerifier(nil)
+	result := verifier.Verify(context.Background(), ToolPlanStep{
+		StepID: "step-unknown", ToolName: "Example.Tool", Postconditions: []string{"unknown_condition"},
+	}, ToolExecutionResult{Success: true, Data: map[string]interface{}{"ok": true}})
+	if result.Passed {
+		t.Fatalf("expected unknown postcondition to fail: %#v", result)
+	}
+}

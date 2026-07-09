@@ -100,8 +100,7 @@ func TestAssistantPromptProviderIncludesMandatoryToolSequenceGuide(t *testing.T)
 		"5. Task.RunCheck",
 		"6. Task.RunFix",
 		"7. Task.List",
-		"Task.List 只能在 Task.RunCheck/Task.RunFix 下发后用于查询进度或结果",
-		"完成检测脚本和修复脚本生成后，下一步必须下发 Task.RunCheck",
+		"每一次调用都必须由 Runtime 明确发起",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
@@ -109,7 +108,7 @@ func TestAssistantPromptProviderIncludesMandatoryToolSequenceGuide(t *testing.T)
 	}
 }
 
-func TestAssistantPromptProviderIncludesAssetCollectionSequenceCompletionGuide(t *testing.T) {
+func TestAssistantPromptProviderDoesNotDescribeHiddenAssetCollectionSequence(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Asset.Collection.Trigger", Description: "触发资产采集"},
 		{Name: "Asset.Collection.Get", Description: "查询采集详情"},
@@ -125,15 +124,13 @@ func TestAssistantPromptProviderIncludesAssetCollectionSequenceCompletionGuide(t
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	for _, want := range []string{
-		"资产采集闭环",
+	for _, forbidden := range []string{
 		"asset_collection_sequence_complete=true",
 		"all_requested_tools_success=true",
 		"verified_result_summary",
-		"不要再调用 Task.GetDetail、Tool.Search",
 	} {
-		if !strings.Contains(bundle.SystemPrompt, want) {
-			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
+		if strings.Contains(bundle.SystemPrompt, forbidden) {
+			t.Fatalf("react prompt must not contain hidden sequence marker %q\n%s", forbidden, bundle.SystemPrompt)
 		}
 	}
 }
@@ -161,7 +158,7 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 		"信息不足时先判断能否安全默认",
 		"工具选择应覆盖用户最终目标",
 		"采集只是证据来源之一",
-		"当前工具不足时使用 Tool.Search",
+		"当前工具集合不足时直接报告缺少的能力",
 		"同一工具用同一参数已成功时，直接复用已有结果",
 		"汇总、总结、输出结论、整理结果",
 		"中间步骤的 step_result 只写该步骤产物",
@@ -208,11 +205,12 @@ func TestAssistantPlanAndSummarizePromptsAvoidDuplicateFinalReports(t *testing.T
 	}
 }
 
-func TestAssistantPromptProviderIncludesVulnerabilityExecuteSequenceGuide(t *testing.T) {
+func TestAssistantPromptProviderUsesGenericVulnerabilityPlanningGuide(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Vulnerability.Script.Status", Description: "查询漏洞脚本状态"},
 		{Name: "Vulnerability.Script.Execute", Description: "执行漏洞脚本"},
 	}, nil, "operations", strings.Join([]string{
+		"请生成并下发漏洞 POC 与修复脚本，最大自动修复轮数 max_rounds=5。",
 		"请严格按顺序调用工具：Vulnerability.Script.Status、Vulnerability.Script.Execute。",
 		`Vulnerability.Script.Execute 参数 cve_id="CVE-2023-50495", script_type="fix", host_ids=["host-1"]。`,
 	}, "\n"))
@@ -223,12 +221,14 @@ func TestAssistantPromptProviderIncludesVulnerabilityExecuteSequenceGuide(t *tes
 	}
 
 	for _, want := range []string{
-		"漏洞 POC/FIX 闭环",
-		"vulnerability_script_sequence_complete=true",
-		"executions 中的 task_group_id",
+		"漏洞 POC 与修复任务由你显式规划",
+		"max_rounds",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing %q\n%s", want, bundle.SystemPrompt)
 		}
+	}
+	if strings.Contains(bundle.SystemPrompt, "vulnerability_script_sequence_complete=true") {
+		t.Fatalf("react prompt must not depend on hidden vulnerability sequence markers\n%s", bundle.SystemPrompt)
 	}
 }

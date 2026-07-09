@@ -1,10 +1,37 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestChatCompletionWithMessagesMaxTokensUsesBoundedOutputBudget(t *testing.T) {
+	var captured ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewLLMClient("test-key", server.URL+"/v1", "test-model", 30, 1)
+	result, err := client.ChatCompletionWithMessagesMaxTokens(context.Background(), []Message{{Role: "user", Content: "select tools"}}, 0.1, 4096)
+	if err != nil {
+		t.Fatalf("completion failed: %v", err)
+	}
+	if result != "{}" {
+		t.Fatalf("unexpected result %q", result)
+	}
+	if captured.MaxTokens != 4096 {
+		t.Fatalf("max_tokens = %d, want 4096", captured.MaxTokens)
+	}
+}
 
 func TestMiniMaxM2UsesAnthropicEndpointFromOpenAIBaseURL(t *testing.T) {
 	client := NewLLMClient("test-key", "https://api.minimaxi.com/v1", "MiniMax-M2.7", 30, 1)
@@ -62,8 +89,8 @@ func TestIsDashScope_OpenAI(t *testing.T) {
 
 func TestChatCompletionRequest_ResponseFormatMarshal(t *testing.T) {
 	req := ChatCompletionRequest{
-		Model:    "qwen-plus",
-		Messages: []Message{{Role: "user", Content: "test json output"}},
+		Model:          "qwen-plus",
+		Messages:       []Message{{Role: "user", Content: "test json output"}},
 		ResponseFormat: &ResponseFormat{Type: "json_object"},
 	}
 	data, err := json.Marshal(req)

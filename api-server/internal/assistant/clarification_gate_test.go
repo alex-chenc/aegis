@@ -7,10 +7,10 @@ import (
 func TestClarificationGateVagueRepair(t *testing.T) {
 	gate := NewClarificationGate(ToolDecisionConfig{ClarificationRequiredWrite: true}, nil)
 	breakdown := &IntentBreakdown{
-		Goal:              "帮我修复一下",
-		Actions:           []string{"execute"},
-		RequiresWrite:     true,
-		NeedClarification: true,
+		Goal:               "帮我修复一下",
+		Actions:            []string{"execute"},
+		RequiresWrite:      true,
+		NeedClarification:  true,
 		ClarifyingQuestion: "请确认要修复的对象，是基线规则、漏洞 CVE、弱密码任务还是检测包？",
 	}
 	decision := gate.Evaluate(breakdown, nil, nil)
@@ -28,10 +28,10 @@ func TestClarificationGateVagueRepair(t *testing.T) {
 func TestClarificationGateBlockWithoutAlert(t *testing.T) {
 	gate := NewClarificationGate(ToolDecisionConfig{ClarificationRequiredWrite: true}, nil)
 	breakdown := &IntentBreakdown{
-		Goal:              "阻断这个告警",
-		Actions:           []string{"block"},
-		RequiresWrite:     true,
-		NeedClarification: true,
+		Goal:               "阻断这个告警",
+		Actions:            []string{"block"},
+		RequiresWrite:      true,
+		NeedClarification:  true,
 		ClarifyingQuestion: "请确认要阻断的告警 ID。",
 	}
 	decision := gate.Evaluate(breakdown, nil, nil)
@@ -43,10 +43,10 @@ func TestClarificationGateBlockWithoutAlert(t *testing.T) {
 func TestClarificationGateWriteWithMissingScope(t *testing.T) {
 	gate := NewClarificationGate(ToolDecisionConfig{ClarificationRequiredWrite: true}, nil)
 	breakdown := &IntentBreakdown{
-		Goal:              "采集资产",
-		Actions:           []string{"collect"},
-		RequiresWrite:     true,
-		NeedClarification: true,
+		Goal:               "采集资产",
+		Actions:            []string{"collect"},
+		RequiresWrite:      true,
+		NeedClarification:  true,
 		ClarifyingQuestion: "请补充要操作的对象和范围。",
 	}
 	decision := gate.Evaluate(breakdown, nil, nil)

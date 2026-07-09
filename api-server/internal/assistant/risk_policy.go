@@ -74,11 +74,11 @@ func (p *RiskPolicy) Evaluate(ctx context.Context, req RiskEvaluateRequest) Risk
 
 // RiskEvaluateRequest 风险评估请求
 type RiskEvaluateRequest struct {
-	ToolName     string `json:"tool_name"`
+	ToolName      string `json:"tool_name"`
 	ToolRiskLevel string `json:"tool_risk_level"`
-	Mode         string `json:"mode"`          // request_approval, whitelist, full_access
-	Whitelisted  bool   `json:"whitelisted"`   // whether tool is in whitelist
-	Operator     string `json:"operator"`
+	Mode          string `json:"mode"`        // request_approval, whitelist, full_access
+	Whitelisted   bool   `json:"whitelisted"` // whether tool is in whitelist
+	Operator      string `json:"operator"`
 }
 
 // RiskEvaluateResult 风险评估结果

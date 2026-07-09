@@ -198,8 +198,8 @@ type ExternalMCPEvidence struct {
 
 // MCPClientQueryResponse MCP 客户端查询响应
 type MCPClientQueryResponse struct {
-	Fields   []ExternalMCPField   `json:"fields,omitempty"`
-	Rows     []map[string]any     `json:"rows"`
+	Fields   []ExternalMCPField     `json:"fields,omitempty"`
+	Rows     []map[string]any       `json:"rows"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
-	Version  string               `json:"version,omitempty"`
+	Version  string                 `json:"version,omitempty"`
 }

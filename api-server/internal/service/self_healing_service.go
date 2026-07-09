@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ type SelfHealingService struct {
 	scriptVersionRepo  *repository.ScriptVersionRepository
 	configRepo         *repository.ConfigRepository
 	ruleRepo           *repository.RuleRepository
+	vulnRepo           *repository.VulnerabilityRepo
+	vulnScriptRepo     *repository.VulnerabilityScriptRepository
 	taskLogRepo        *repository.TaskLogRepository
 	minioClient        *storage.MinIOClient
 	redisClient        *storage.RedisClient
@@ -82,6 +85,11 @@ func NewSelfHealingService(
 
 func (s *SelfHealingService) SetTaskRedispatcher(redispatcher HealingTaskRedispatcher) {
 	s.taskRedispatcher = redispatcher
+}
+
+func (s *SelfHealingService) SetVulnerabilityScriptRepositories(vulnRepo *repository.VulnerabilityRepo, vulnScriptRepo *repository.VulnerabilityScriptRepository) {
+	s.vulnRepo = vulnRepo
+	s.vulnScriptRepo = vulnScriptRepo
 }
 
 func (s *SelfHealingService) TriggerHealing(task HealingTask) error {
@@ -185,19 +193,49 @@ func (s *SelfHealingService) updateHealingStatusInRedis(taskID string, status st
 }
 
 func (s *SelfHealingService) GetHealingStatus(taskID string) *storage.HealingStatus {
-	if s.redisClient == nil {
-		return nil
+	if s.redisClient != nil {
+		status, err := s.redisClient.GetHealingStatusStruct(taskID)
+		if err != nil {
+			logger.Error("failed to get healing status from Redis",
+				zap.Error(err),
+				zap.String("task_id", taskID),
+			)
+		} else if status != nil {
+			return status
+		}
 	}
 
-	status, err := s.redisClient.GetHealingStatusStruct(taskID)
+	// Redis status is intentionally short-lived. Fall back to the persistent
+	// healing log so task details still show the automatic repair process after
+	// refresh, service restart, or TTL expiry.
+	parsedTaskID, err := uuid.Parse(taskID)
+	if err != nil || s.healingLogRepo == nil {
+		return nil
+	}
+	healingLog, err := s.healingLogRepo.GetLatestByOriginalTaskID(parsedTaskID)
 	if err != nil {
-		logger.Error("failed to get healing status from Redis",
+		logger.Warn("failed to restore healing status from database",
 			zap.Error(err),
 			zap.String("task_id", taskID),
 		)
 		return nil
 	}
-
+	if healingLog == nil {
+		return nil
+	}
+	status := &storage.HealingStatus{
+		TaskID:         taskID,
+		Status:         healingLog.Status,
+		StartedAt:      healingLog.StartedAt,
+		TotalAttempts:  healingLog.TotalAttempts,
+		MaxAttempts:    healingLog.MaxAttempts,
+		LastError:      healingLog.LastError,
+		UserSuggestion: healingLog.UserSuggestion,
+		ScriptType:     healingLog.ScriptType,
+	}
+	if healingLog.FinishedAt != nil {
+		status.UpdatedAt = *healingLog.FinishedAt
+	}
 	return status
 }
 
@@ -290,6 +328,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 	healingLog := &model.HealingLog{
 		OriginalTaskID:  task.OriginalTaskID,
 		RuleID:          task.RuleID,
+		VulnerabilityID: task.VulnerabilityID,
 		HostID:          task.HostID,
 		ScriptType:      task.ScriptType,
 		TriggerError:    task.ErrorMessage,
@@ -411,6 +450,7 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 		version := attempt // 自愈版本从 1 开始
 		scriptVersion := &model.ScriptVersion{
 			RuleID:           task.RuleID,
+			VulnerabilityID:  task.VulnerabilityID,
 			ScriptType:       task.ScriptType,
 			Version:          version,
 			ScriptContent:    fixedScript,
@@ -462,6 +502,12 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 					zap.String("script_type", task.ScriptType),
 				)
 			}
+		}
+		// Keep the CVE-level generic script aligned with the healed task, just as
+		// baseline healing updates the rule script. The repository compares the
+		// failed content first so a newer manual regeneration is never overwritten.
+		if task.VulnerabilityID != nil {
+			s.persistHealedVulnerabilityScript(task, fixedScript)
 		}
 
 		resultExitCode := 0
@@ -566,6 +612,40 @@ func (s *SelfHealingService) processHealing(ctx context.Context, workerID int, t
 	)
 
 	s.updateHealingStatusInRedis(task.OriginalTaskID.String(), "failed", healingLog.TotalAttempts, lastError)
+}
+
+func (s *SelfHealingService) persistHealedVulnerabilityScript(task HealingTask, fixedScript string) {
+	if task.VulnerabilityID == nil || s.vulnRepo == nil || s.vulnScriptRepo == nil {
+		return
+	}
+	vuln, err := s.vulnRepo.FindByID(*task.VulnerabilityID)
+	if err != nil {
+		logger.Warn("failed to find vulnerability while persisting healed script",
+			zap.Error(err),
+			zap.String("vulnerability_id", task.VulnerabilityID.String()),
+		)
+		return
+	}
+	scriptType := model.ScriptTypeFix
+	if strings.EqualFold(task.ScriptType, "POC") || strings.EqualFold(task.ScriptType, "POC_VERIFY") {
+		scriptType = model.ScriptTypePoc
+	}
+	if err := s.vulnScriptRepo.UpdateHealedContent(vuln.CveID, scriptType, task.ScriptContent, fixedScript); err != nil {
+		if errors.Is(err, repository.ErrStaleVulnerabilityScriptGeneration) {
+			logger.Warn("healed generic vulnerability script not persisted because source changed",
+				zap.String("vulnerability_id", task.VulnerabilityID.String()),
+				zap.String("cve_id", vuln.CveID),
+				zap.String("script_type", scriptType),
+			)
+			return
+		}
+		logger.Warn("failed to persist healed generic vulnerability script",
+			zap.Error(err),
+			zap.String("vulnerability_id", task.VulnerabilityID.String()),
+			zap.String("cve_id", vuln.CveID),
+			zap.String("script_type", scriptType),
+		)
+	}
 }
 
 func (s *SelfHealingService) recordHealingAttempt(healingLog *model.HealingLog, attempt int, scriptVersionID uuid.UUID, errorInput string, resultExitCode int, resultStderr string) {

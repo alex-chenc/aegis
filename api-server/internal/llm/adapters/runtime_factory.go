@@ -59,7 +59,7 @@ func NewAegisRuntime(
 		MaxParseFailures:      3,
 		MaxNoProgressTurns:    3,
 		TaskTimeout:           2 * time.Hour,
-		ModelTimeout:          60 * time.Second,
+		ModelTimeout:          1200 * time.Second,
 		ToolTimeout:           60 * time.Second,
 		HookTimeout:           10 * time.Second,
 		EnableReflection:      true,

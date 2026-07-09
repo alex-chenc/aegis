@@ -19,17 +19,17 @@ import (
 )
 
 type TaskService struct {
-	taskLogRepo      *repository.TaskLogRepository
-	hostRepo         *repository.HostRepository
-	ruleRepo         *repository.RuleRepository
-	healingLogRepo   *repository.HealingLogRepository
-	redisClient      *storage.RedisClient
-	scriptGenService *ScriptGenerationService
-	selfHealingSvc   *SelfHealingService
-	autoVerifySvc    *AutoVerifyService
+	taskLogRepo       *repository.TaskLogRepository
+	hostRepo          *repository.HostRepository
+	ruleRepo          *repository.RuleRepository
+	healingLogRepo    *repository.HealingLogRepository
+	redisClient       *storage.RedisClient
+	scriptGenService  *ScriptGenerationService
+	selfHealingSvc    *SelfHealingService
+	autoVerifySvc     *AutoVerifyService
 	vulnAutoVerifySvc *VulnerabilityAutoVerifyService
-	auditService     *ScriptAuditService
-	serverClient     *grpcclient.ServerClient
+	auditService      *ScriptAuditService
+	serverClient      *grpcclient.ServerClient
 }
 
 type TaskCreateResult struct {
@@ -373,7 +373,7 @@ func (s *TaskService) ProcessTaskResult(taskID uuid.UUID, stdout, stderr string,
 		// generic large-model repair for these tasks.
 		handledByVuln := false
 		if s.vulnAutoVerifySvc != nil && taskLog.VulnerabilityID != nil && taskLog.AutoVerify {
-			handledByVuln = s.vulnAutoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode)
+			handledByVuln = s.vulnAutoVerifySvc.HandleTaskResult(taskLog, normalizedStatus, exitCode, stdout, stderr)
 		}
 		if !handledByVuln {
 			s.maybeTriggerLargeModelRepair(taskLog, normalizedStatus, exitCode, stdout, stderr)

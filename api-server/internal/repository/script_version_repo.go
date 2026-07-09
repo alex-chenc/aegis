@@ -18,11 +18,20 @@ func NewScriptVersionRepository(db *gorm.DB) *ScriptVersionRepository {
 }
 
 func (r *ScriptVersionRepository) Create(version *model.ScriptVersion) error {
+	ruleID := ""
+	if version.RuleID != nil {
+		ruleID = version.RuleID.String()
+	}
+	vulnerabilityID := ""
+	if version.VulnerabilityID != nil {
+		vulnerabilityID = version.VulnerabilityID.String()
+	}
 	result := r.db.Create(version)
 	if result.Error != nil {
 		logger.Error("failed to create script version",
 			zap.Error(result.Error),
-			zap.String("rule_id", version.RuleID.String()),
+			zap.String("rule_id", ruleID),
+			zap.String("vulnerability_id", vulnerabilityID),
 			zap.String("script_type", version.ScriptType),
 		)
 		return result.Error
@@ -30,7 +39,8 @@ func (r *ScriptVersionRepository) Create(version *model.ScriptVersion) error {
 
 	logger.Info("script version created",
 		zap.String("id", version.ID.String()),
-		zap.String("rule_id", version.RuleID.String()),
+		zap.String("rule_id", ruleID),
+		zap.String("vulnerability_id", vulnerabilityID),
 		zap.String("script_type", version.ScriptType),
 		zap.Int("version", version.Version),
 	)

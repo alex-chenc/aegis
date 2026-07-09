@@ -153,10 +153,12 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		runtimeConfig.EnableExperience = true
 	}
 	if len(req.SelectedTools) > 0 && len(toolDescriptors) < len(req.SelectedTools) {
-		f.logger.Warn("assistant runtime built with missing selected tools",
+		missing := missingSelectedTools(req.SelectedTools, toolDescriptors)
+		f.logger.Error("assistant runtime missing selected tools",
 			zap.String("session_id", req.SessionID),
-			zap.Strings("missing_tools", missingSelectedTools(req.SelectedTools, toolDescriptors)),
+			zap.Strings("missing_tools", missing),
 		)
+		return nil, fmt.Errorf("selected tools are unavailable: %s", strings.Join(missing, ", "))
 	}
 	f.logger.Info("assistant runtime config selected",
 		zap.String("session_id", req.SessionID),
@@ -237,7 +239,7 @@ func (f *RuntimeFactory) BuildLLMClient(ctx context.Context) (*llm.LLMClient, er
 		return nil, fmt.Errorf("LLM API key not configured")
 	}
 
-	client := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, 60, 3)
+	client := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, llm.DefaultTimeoutSeconds, llm.DefaultMaxRetries)
 	return client, nil
 }
 
@@ -279,7 +281,7 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		MaxParseFailures:      3,
 		MaxNoProgressTurns:    3,
 		TaskTimeout:           30 * time.Minute,
-		ModelTimeout:          60 * time.Second,
+		ModelTimeout:          1200 * time.Second,
 		ToolTimeout:           60 * time.Second,
 		HookTimeout:           10 * time.Second,
 		EnableReflection:      true,
@@ -292,8 +294,8 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		MaxStepRetries:        1,
 		MaxCorrections:        2,
 		AllowDynamicNewSteps:  true,
-		AllowSkipFailedStep:   true,
-		AllowBestEffortAnswer: true,
+		AllowSkipFailedStep:   false,
+		AllowBestEffortAnswer: false,
 		AllowHighRiskTools:    false,
 		AllowDangerousTools:   false,
 		MaxContextTokens:      256000,
@@ -324,7 +326,7 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 		MaxParseFailures:      3,
 		MaxNoProgressTurns:    3,
 		TaskTimeout:           2 * time.Hour,
-		ModelTimeout:          60 * time.Second,
+		ModelTimeout:          1200 * time.Second,
 		ToolTimeout:           60 * time.Second,
 		HookTimeout:           10 * time.Second,
 		EnableReflection:      true,
@@ -337,8 +339,8 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 		MaxStepRetries:        1,
 		MaxCorrections:        2,
 		AllowDynamicNewSteps:  true,
-		AllowSkipFailedStep:   true,
-		AllowBestEffortAnswer: true,
+		AllowSkipFailedStep:   false,
+		AllowBestEffortAnswer: false,
 		AllowHighRiskTools:    false,
 		AllowDangerousTools:   false,
 		MaxContextTokens:      256000,

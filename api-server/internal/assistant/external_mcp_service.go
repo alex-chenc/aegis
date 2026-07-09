@@ -249,11 +249,11 @@ type ExternalMCPQueryRequest struct {
 
 // ExternalMCPQueryResultWithRows 带行数据的查询结果
 type ExternalMCPQueryResultWithRows struct {
-	QueryID    string           `json:"query_id"`
-	SourceID   string           `json:"source_id"`
-	Rows       []map[string]any `json:"rows"`
-	RowCount   int              `json:"row_count"`
-	Truncated  bool             `json:"truncated"`
+	QueryID   string           `json:"query_id"`
+	SourceID  string           `json:"source_id"`
+	Rows      []map[string]any `json:"rows"`
+	RowCount  int              `json:"row_count"`
+	Truncated bool             `json:"truncated"`
 }
 
 // Query queries an external MCP source
@@ -278,12 +278,12 @@ func (s *ExternalMCPSourceService) Query(ctx context.Context, req ExternalMCPQue
 	// 记录查询日志
 	queryID := "mcpq_" + uuid.New().String()[:8]
 	queryLog := &model.ExternalMCPQueryLog{
-		QueryID:   queryID,
-		SourceID:  req.SourceID,
+		QueryID:    queryID,
+		SourceID:   req.SourceID,
 		SourceName: source.Name,
-		QueryGoal: req.QueryGoal,
-		Status:    model.MCPQueryStatusSuccess,
-		CreatedBy: "system",
+		QueryGoal:  req.QueryGoal,
+		Status:     model.MCPQueryStatusSuccess,
+		CreatedBy:  "system",
 	}
 
 	// 简化实现：返回空结果，实际应该调用 MCP Client

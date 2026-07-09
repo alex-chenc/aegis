@@ -42,9 +42,9 @@ func NewApprovalGate(deps ApprovalGateDeps) *ApprovalGate {
 
 // ApprovalEvaluateRequest 审批评估请求
 type ApprovalEvaluateRequest struct {
-	Operator  string `json:"operator"`
-	SessionID string `json:"session_id"`
-	ToolName  string `json:"tool_name"`
+	Operator  string                 `json:"operator"`
+	SessionID string                 `json:"session_id"`
+	ToolName  string                 `json:"tool_name"`
 	Args      map[string]interface{} `json:"args"`
 }
 
@@ -233,7 +233,9 @@ func (g *ApprovalGate) ExecuteApprovedTool(ctx context.Context, approval *model.
 	}
 
 	// 查找工具规格
-	tool, ok := g.toolCallRepo.(interface{ Get(string) (*ToolSpec, bool) })
+	tool, ok := g.toolCallRepo.(interface {
+		Get(string) (*ToolSpec, bool)
+	})
 	_ = tool
 	_ = ok
 
@@ -294,9 +296,9 @@ func isSensitiveField(key string) bool {
 
 // Errors
 var (
-	ErrApprovalNotFound  = &ApprovalError{Message: "approval not found"}
+	ErrApprovalNotFound   = &ApprovalError{Message: "approval not found"}
 	ErrApprovalNotPending = &ApprovalError{Message: "approval is not pending"}
-	ErrApprovalExpired   = &ApprovalError{Message: "approval has expired"}
+	ErrApprovalExpired    = &ApprovalError{Message: "approval has expired"}
 )
 
 type ApprovalError struct {

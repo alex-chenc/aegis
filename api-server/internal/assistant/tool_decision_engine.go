@@ -93,6 +93,9 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	if e == nil || e.registry == nil || e.mapper == nil {
 		return nil, fmt.Errorf("tool decision engine dependencies unavailable")
 	}
+	if _, _, err := parseMaxRepairRounds(input.Query); err != nil {
+		return nil, err
+	}
 	breakdown := input.Breakdown
 	if breakdown == nil {
 		breakdown = (&IntentDecomposer{}).decomposeByRules(IntentDecomposeInput{
@@ -186,8 +189,13 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 		}
 		rejectedRecords = append(rejectedRecords, record)
 	}
-	finalNames = e.orderToolPlanNames(finalNames)
-	finalNames = e.ensureResidentTools(finalNames)
+	filteredNames := make([]string, 0, len(finalNames))
+	for _, name := range finalNames {
+		if acceptedSet[name] {
+			filteredNames = append(filteredNames, name)
+		}
+	}
+	finalNames = e.orderToolPlanNames(filteredNames)
 
 	steps := make([]ToolPlanStep, 0, len(finalNames))
 	for _, name := range finalNames {
@@ -231,15 +239,19 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 
 func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, breakdown *IntentBreakdown) ([]string, []string) {
 	names := make([]string, 0, 32)
-	if sel := input.PreliminarySelection; sel != nil {
-		names = append(names, sel.SelectedTools...)
-		names = append(names, sel.CandidateTools...)
-	}
 	if input.Intent.ExplicitToolName != "" {
 		names = append(names, input.Intent.ExplicitToolName)
 	}
 	mapped := e.mapper.ToolNamesForCapabilities(breakdown.CandidateCapabilities)
 	names = append(names, mapped...)
+	if sel := input.PreliminarySelection; sel != nil {
+		for _, name := range sel.SelectedTools {
+			contract, ok := e.mapper.ContractForToolName(name)
+			if len(mapped) == 0 || (ok && hasCapability(breakdown, contract.Capability)) || strings.EqualFold(name, input.Intent.ExplicitToolName) {
+				names = append(names, name)
+			}
+		}
+	}
 
 	capabilityMatched := make(map[string]bool, len(breakdown.CandidateCapabilities))
 	for _, name := range mapped {
@@ -255,7 +267,7 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 		}
 	}
 
-	if hasAssetCollectionIntent(input.Query) || hasCapability(breakdown, "trigger_asset_collection") {
+	if hasCapability(breakdown, "trigger_asset_collection") {
 		names = append(names, "Host.List", "Asset.Collection.Trigger", "Asset.Collection.Get")
 	}
 	if shouldIncludeAssetAnalysisTools(input.Query, input.Intent, breakdown) {
@@ -301,6 +313,13 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	if !tool.Enabled {
 		record.Decision = toolDecisionRejected
 		record.Reason = "tool is disabled"
+		record.HardGateResults = gates
+		return record, false
+	}
+	if strings.HasPrefix(contract.ToolName, "Vulnerability.Script.") && !hasVulnerabilityScriptOperationIntent(input.Query) {
+		gates = append(gates, HardGateResult{Name: "explicit_script_intent", Passed: false, Reason: "vulnerability script tools require explicit POC or remediation intent"})
+		record.Decision = toolDecisionRejected
+		record.Reason = "vulnerability script tools require explicit POC or remediation intent"
 		record.HardGateResults = gates
 		return record, false
 	}
@@ -414,22 +433,32 @@ func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, inp
 			}
 			return true, "请确认要操作的告警 ID，或先在告警详情页引用这个告警。"
 		case "host_ids":
-			if hasContextRef(input.ContextRefs, "host") || breakdown.Scope.Kind == "online_hosts" || breakdown.Scope.Kind == "all" || workflowForced {
+			if hasContextRef(input.ContextRefs, "host") || breakdown.Scope.Kind == "online_hosts" || breakdown.Scope.Kind == "all" || workflowForced || isCVERemediationIntent(input.Query) {
 				continue
 			}
 			return true, "请确认要操作的主机范围或主机 ID。"
+		case "script_type":
+			if containsAnyFold(input.Query, "poc", "修复脚本", "检测脚本", "script_type") {
+				continue
+			}
+			return true, "请确认脚本类型，例如 POC 检测脚本或修复脚本。"
+		case "vulnerability_id":
+			if hasContextRef(input.ContextRefs, "vulnerability") || cveIDPattern.MatchString(input.Query) || workflowForced {
+				continue
+			}
+			return true, "请确认要操作的漏洞或 CVE。"
 		case "rule_ids":
 			if hasContextRef(input.ContextRefs, "baseline_rule") || hasContextRef(input.ContextRefs, "baseline_template") || workflowForced {
 				continue
 			}
 			return true, "请确认要执行的基线规则或模板。"
 		case "task_id":
-			if workflowForced || hasContextRef(input.ContextRefs, "task") || strings.Contains(strings.ToLower(input.Query), "task") {
+			if workflowForced || hasContextRef(input.ContextRefs, "task") || hasBreakdownEntity(breakdown, "task_id") || strings.Contains(strings.ToLower(input.Query), "task_id=") {
 				continue
 			}
 			return true, "请确认要查询的任务 ID。"
 		default:
-			if workflowForced || hasContextForEntity(input.ContextRefs, entity) {
+			if workflowForced || hasContextForEntity(input.ContextRefs, entity) || hasBreakdownEntity(breakdown, entity) {
 				continue
 			}
 			if isResidentTool(contract.ToolName) || contract.Risk == string(ToolRiskReadonly) {
@@ -439,6 +468,19 @@ func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, inp
 		}
 	}
 	return false, ""
+}
+
+func hasBreakdownEntity(breakdown *IntentBreakdown, entity string) bool {
+	if breakdown == nil {
+		return false
+	}
+	objectType := strings.TrimSuffix(strings.TrimSpace(entity), "_id")
+	for _, object := range breakdown.Objects {
+		if strings.EqualFold(object.Type, objectType) && strings.TrimSpace(object.ID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *ToolDecisionEngine) scoreToolDecision(tool *ToolSpec, contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown, workflowForced bool) float64 {
@@ -491,6 +533,18 @@ func (e *ToolDecisionEngine) expandWorkflowTools(accepted []string, input ToolDe
 			)
 		}
 	}
+	if containsDecisionString(names, "Vulnerability.Scan.Start") || hasCapability(breakdown, "start_vulnerability_scan") {
+		names = append(names, "Host.List", "Vulnerability.Scan.Start", "Vulnerability.Scan.Status")
+	}
+	if isCVERemediationIntent(input.Query) {
+		names = append(names,
+			"Vulnerability.List",
+			"Vulnerability.AffectedHosts",
+			"Vulnerability.Script.Generate",
+			"Vulnerability.Script.Status",
+			"Vulnerability.Script.Execute",
+		)
+	}
 	return dedupeStrings(names)
 }
 
@@ -506,6 +560,11 @@ func (e *ToolDecisionEngine) orderToolPlanNames(names []string) []string {
 		"Software.Installed.Search",
 		"Vulnerability.List",
 		"Vulnerability.AffectedHosts",
+		"Vulnerability.Scan.Start",
+		"Vulnerability.Scan.Status",
+		"Vulnerability.Script.Generate",
+		"Vulnerability.Script.Status",
+		"Vulnerability.Script.Execute",
 		"Detection.Alert.Get",
 		"Detection.Alert.Block",
 		"Baseline.Template.List",
@@ -533,16 +592,6 @@ func (e *ToolDecisionEngine) orderToolPlanNames(names []string) []string {
 	sort.Strings(rest)
 	ordered = append(ordered, rest...)
 	return ordered
-}
-
-func (e *ToolDecisionEngine) ensureResidentTools(names []string) []string {
-	result := append([]string{}, names...)
-	for _, name := range []string{"Tool.Search", "Context.Get", "Session.Summarize"} {
-		if _, ok := e.registry.Get(name); ok {
-			result = append(result, name)
-		}
-	}
-	return dedupeStrings(result)
 }
 
 func defaultEvidencePolicy(enabled bool) EvidencePolicy {
@@ -582,11 +631,26 @@ func bindPlanArgs(contract ToolUseContract, input ToolDecisionInput, breakdown *
 		}
 	case "Asset.Collection.Get":
 		sources["task_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Asset.Collection.Trigger", Confidence: 0.8}
+	case "Vulnerability.Scan.Start":
+		sources["host_ids"] = ArgSource{SourceType: "previous_step", SourceRef: "Host.List", Confidence: 0.8}
+	case "Vulnerability.Scan.Status":
+		sources["scan_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.Scan.Start", Confidence: 0.8}
+	case "Vulnerability.AffectedHosts":
+		sources["vulnerability_id"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.List", Confidence: 0.8}
+	case "Vulnerability.Script.Execute":
+		sources["host_ids"] = ArgSource{SourceType: "previous_step", SourceRef: "Vulnerability.AffectedHosts", Confidence: 0.8}
+		if rounds, specified, _ := parseMaxRepairRounds(input.Query); specified {
+			args["max_rounds"] = rounds
+			sources["max_rounds"] = ArgSource{SourceType: "user_message", SourceRef: fmt.Sprintf("%d rounds", rounds), Confidence: 0.95}
+		}
 	}
 
 	// 通用 ArgBindingRule 驱动的参数绑定（补充特定工具未覆盖的参数）
 	for _, binding := range contract.ArgBindings {
 		if _, alreadyBound := args[binding.ArgName]; alreadyBound {
+			continue
+		}
+		if _, dynamicallyBound := sources[binding.ArgName]; dynamicallyBound {
 			continue
 		}
 		value, source := resolveArgBySourceOrder(binding, input, breakdown)

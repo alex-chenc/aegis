@@ -34,6 +34,9 @@ func (s *ToolSelector) Select(input ToolSelectionInput) *ToolSelectionResult {
 		if !tool.Enabled {
 			continue
 		}
+		if isResidentTool(tool.Name) && !residentToolExplicitlyRequested(tool.Name, input.Query, input.Intent.ExplicitToolName) {
+			continue
+		}
 
 		score := s.scoreTool(tool, input)
 
@@ -92,23 +95,6 @@ func (s *ToolSelector) Select(input ToolSelectionInput) *ToolSelectionResult {
 		selected = append(selected, st.tool)
 	}
 
-	// Always include resident tools
-	residentTools := []string{"Tool.Search", "Context.Get", "Session.Summarize"}
-	for _, name := range residentTools {
-		found := false
-		for _, t := range selected {
-			if t.Name == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			if tool, ok := s.registry.Get(name); ok {
-				selected = append(selected, tool)
-			}
-		}
-	}
-
 	// Build result
 	var selectedNames []string
 	var candidateNames []string
@@ -125,6 +111,23 @@ func (s *ToolSelector) Select(input ToolSelectionInput) *ToolSelectionResult {
 		Query:          input.Query,
 		Intent:         input.Intent,
 		MaxTools:       maxTools,
+	}
+}
+
+func residentToolExplicitlyRequested(toolName, query, explicitToolName string) bool {
+	if strings.EqualFold(strings.TrimSpace(explicitToolName), toolName) {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	switch toolName {
+	case "Tool.Search":
+		return containsAnyFold(normalized, "搜索工具", "查找工具", "tool.search")
+	case "Context.Get":
+		return containsAnyFold(normalized, "读取上下文", "获取上下文", "context.get")
+	case "Session.Summarize":
+		return containsAnyFold(normalized, "总结会话", "会话摘要", "session.summarize")
+	default:
+		return false
 	}
 }
 

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -61,17 +62,20 @@ func (r *IntentRouter) SetLLMClientFactory(fn func(ctx context.Context) (*llm.LL
 
 // Classify 意图分类
 // 混合策略：简单高置信查询走规则匹配，复杂或低置信查询走大模型分析
-func (r *IntentRouter) Classify(ctx context.Context, input IntentInput) IntentResult {
+func (r *IntentRouter) Classify(ctx context.Context, input IntentInput) (IntentResult, error) {
 	ruleResult := r.classifyByRules(input)
 
 	if r.llmClientFn != nil && shouldUseLLMForIntent(input.Query, ruleResult) {
 		llmResult, err := r.ClassifyWithLLM(ctx, input)
-		if err == nil && llmResult.Confidence > 0.6 {
-			return llmResult
+		if err != nil {
+			return IntentResult{}, err
+		}
+		if llmResult.Confidence > 0.6 {
+			return llmResult, nil
 		}
 	}
 
-	return ruleResult
+	return ruleResult, nil
 }
 
 // classifyByRules 基于规则的意图分类
@@ -194,14 +198,17 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 		return result, nil
 	}
 
-	// 没有 LLM 客户端工厂时降级为规则结果
+	// 未配置 LLM 时由规则分类，这是显式配置路径，不是运行时降级。
 	if r.llmClientFn == nil {
 		return result, nil
 	}
 
 	llmClient, err := r.llmClientFn(ctx)
-	if err != nil || llmClient == nil {
-		return result, nil
+	if err != nil {
+		return IntentResult{}, fmt.Errorf("initialize intent classifier llm: %w", err)
+	}
+	if llmClient == nil {
+		return IntentResult{}, fmt.Errorf("initialize intent classifier llm: client is nil")
 	}
 
 	// 构建轻量 LLM 分类 prompt
@@ -224,7 +231,7 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 
 	resp, err := llmClient.ChatCompletionWithMessages(ctx, messages, 0.1)
 	if err != nil {
-		return result, nil // 降级为规则结果
+		return IntentResult{}, fmt.Errorf("classify intent with llm: %w", err)
 	}
 
 	// 解析 LLM 返回的 JSON
@@ -239,7 +246,7 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 	}
 
 	if err := json.Unmarshal([]byte(resp), &llmResult); err != nil {
-		return result, nil // 解析失败，降级为规则结果
+		return IntentResult{}, fmt.Errorf("parse intent classifier response: %w", err)
 	}
 
 	// 用 LLM 结果增强规则结果

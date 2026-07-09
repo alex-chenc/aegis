@@ -368,26 +368,14 @@ func (p *AssistantPromptProvider) formatMandatoryToolSequenceGuide() string {
 	for i, item := range occurrences {
 		buf.WriteString(fmt.Sprintf("%d. %s\n", i+1, item.name))
 	}
-	buf.WriteString("- 同一工具重复出现表示需要按上下文使用不同参数分别调用，例如 Baseline.Script.Generate(CHECK) 和 Baseline.Script.Generate(FIX) 分别使用 script_type=CHECK/FIX。\n")
+	buf.WriteString("- 同一工具重复出现表示需要按上下文使用不同参数分别调用；每一次调用都必须由 Runtime 明确发起。\n")
 	buf.WriteString("- 如果已上传上下文或用户消息提供 template_id、rule_id、host_id，直接使用这些 ID；不得因为已有上下文而声称看不到文件。\n")
 	buf.WriteString("- 不要重复查询同一模板状态或规则列表超过一次，除非前一次调用失败或缺少必要参数。\n")
-	if strings.Contains(message, "Task.RunCheck") || strings.Contains(message, "Task.RunFix") {
-		buf.WriteString("- Task.List 只能在 Task.RunCheck/Task.RunFix 下发后用于查询进度或结果；不得用 Task.List 替代 Task.RunCheck 或 Task.RunFix。\n")
-	}
-	if strings.Contains(message, "Baseline.Script.Generate") && strings.Contains(message, "Task.RunCheck") {
-		buf.WriteString("- 基线闭环中，完成检测脚本和修复脚本生成后，下一步必须下发 Task.RunCheck；如果用户要求修复，再调用 Task.RunFix；最后再调用 Task.List 或 Task.GetDetail 查询任务状态。\n")
-	}
-	if strings.Contains(message, "Asset.Collection.Trigger") {
-		buf.WriteString("- 资产采集闭环中，如果 Asset.Collection.Trigger 的返回包含 asset_collection_sequence_complete=true 或 all_requested_tools_success=true，表示系统已经自动完成 Asset.Collection.Get、Asset.Application.List 和 Asset.Summary.Get 查询；必须立即基于 verified_result_summary 输出 step_result，不要再调用 Task.GetDetail、Tool.Search，也不要声称 Asset.Summary.Get 不存在或 task_id 缺失。\n")
-	}
-	if strings.Contains(message, "Vulnerability.Script.Execute") {
-		buf.WriteString("- 漏洞 POC/FIX 闭环中，如果 Vulnerability.Script.Status 或 Vulnerability.Script.Generate 返回 vulnerability_script_sequence_complete=true，表示系统已经按用户要求自动下发 Vulnerability.Script.Execute；必须基于 executions 中的 task_group_id 查询或输出任务状态，不要停留在脚本状态查询。\n")
-	}
 	return strings.TrimSpace(buf.String())
 }
 
 func (p *AssistantPromptProvider) formatNaturalOperationGuide() string {
-	message := normalizeNaturalOperationText(p.userMessage)
+	message := strings.ToLower(strings.TrimSpace(p.userMessage))
 	if message == "" || !hasAnyOperationalIntentForPrompt(message) {
 		return ""
 	}
@@ -398,18 +386,15 @@ func (p *AssistantPromptProvider) formatNaturalOperationGuide() string {
 	buf.WriteString("1. 先抽取：目标对象（主机/资产/软件/漏洞/基线/告警/任务）、动作（查询/采集/扫描/分析/生成/下发/修复）、范围（全部/在线/指定）、约束和缺失信息。\n")
 	buf.WriteString("2. 信息不足时先判断能否安全默认：只读查询可用合理默认；会创建任务、扫描、采集、修复、下发的操作如果目标或动作不清，应先追问。\n")
 	buf.WriteString("3. 工具选择应覆盖用户最终目标，不要拿第一个工具结果直接收工。例如用户要求“采集并分析软件漏洞”，采集只是证据来源之一，还需要继续查询软件、漏洞和受影响范围。\n")
-	buf.WriteString("4. 优先使用最贴近业务对象的工具；当前工具不足时使用 Tool.Search 搜索候选工具，不能发明不存在的工具名。\n")
+	buf.WriteString("4. 优先使用最贴近业务对象的已授权工具；当前工具集合不足时直接报告缺少的能力，不得搜索、臆造工具或降级执行。\n")
 	buf.WriteString("5. 写操作或任务型工具必须尊重审批结果；工具返回 task_id 后，如用户目标需要结果或进度，应继续用对应状态/详情工具查询。\n")
-	buf.WriteString("6. 最终回答必须说明已调用的数据源、关键证据、没有覆盖的证据缺口和下一步建议；没有数据只能说“当前数据未发现”，不能宣称绝对安全。")
+	buf.WriteString("6. 漏洞 POC 与修复任务由你显式规划每一次 Generate、Status、Execute 调用；若用户同时要求 POC 和 FIX，必须分别调用，并把用户给出的 max_rounds 原样传给 Execute。\n")
+	buf.WriteString("7. 最终回答必须说明已调用的数据源、关键证据、没有覆盖的证据缺口和下一步建议；没有数据只能说“当前数据未发现”，不能宣称绝对安全。")
 	return buf.String()
 }
 
 func hasAnyOperationalIntentForPrompt(text string) bool {
-	return hasAssetCollectionIntent(text) ||
-		hasVulnerabilityScanIntent(text) ||
-		hasBaselineScanIntent(text) ||
-		hasDetectionCheckIntent(text) ||
-		strings.Contains(text, "扫描") ||
+	return strings.Contains(text, "扫描") ||
 		strings.Contains(text, "采集") ||
 		strings.Contains(text, "修复") ||
 		strings.Contains(text, "下发") ||

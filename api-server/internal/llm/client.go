@@ -26,6 +26,16 @@ type LLMClient struct {
 	timeout    time.Duration
 }
 
+const (
+	// DefaultTimeoutSeconds is the platform-standard per-attempt LLM timeout.
+	// Slow reasoning models can take a long time to respond, so every LLM
+	// connection shares this generous budget.
+	DefaultTimeoutSeconds = 1200
+	// DefaultMaxRetries is the platform-standard retry count for LLM calls.
+	// After this many failed attempts the call reports the error.
+	DefaultMaxRetries = 5
+)
+
 type ChatCompletionRequest struct {
 	Model          string          `json:"model"`
 	Messages       []Message       `json:"messages"`
@@ -70,9 +80,9 @@ type CompletionResult struct {
 }
 
 type ChatCompletionResponse struct {
-	Choices []Choice   `json:"choices"`
-	Error   *Error     `json:"error,omitempty"`
-	Usage   *LLMUsage  `json:"usage,omitempty"`
+	Choices []Choice  `json:"choices"`
+	Error   *Error    `json:"error,omitempty"`
+	Usage   *LLMUsage `json:"usage,omitempty"`
 }
 
 type Choice struct {
@@ -127,9 +137,18 @@ type anthropicMessageResponse struct {
 }
 
 func NewLLMClient(apiKey, baseURL, modelName string, timeoutSeconds, maxRetries int) *LLMClient {
+	// Enforce the platform-standard minimums so every LLM connection shares the
+	// same generous timeout and retry budget regardless of the call site.
+	if timeoutSeconds < DefaultTimeoutSeconds {
+		timeoutSeconds = DefaultTimeoutSeconds
+	}
+	if maxRetries < DefaultMaxRetries {
+		maxRetries = DefaultMaxRetries
+	}
 	return &LLMClient{
 		// Don't set httpClient.Timeout - rely on context deadline instead
-		// This ensures proper cancellation when context is canceled
+		// This ensures proper cancellation when context is canceled.
+		// The per-attempt budget is applied via attemptContext using c.timeout.
 		httpClient: &http.Client{},
 		apiKey:     apiKey,
 		baseURL:    baseURL,
@@ -137,6 +156,17 @@ func NewLLMClient(apiKey, baseURL, modelName string, timeoutSeconds, maxRetries 
 		maxRetries: maxRetries,
 		timeout:    time.Duration(timeoutSeconds) * time.Second,
 	}
+}
+
+// attemptContext derives a per-attempt context bounded by the client timeout.
+// The platform relies on context deadlines (not http.Client.Timeout) so that
+// cancellation still propagates; this makes the configured timeout effective
+// for each retry attempt instead of being dead configuration.
+func (c *LLMClient) attemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.timeout)
 }
 
 func (c *LLMClient) prepareRequest(reqBody ChatCompletionRequest) ChatCompletionRequest {
@@ -255,7 +285,9 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, systemPrompt, userPrompt
 
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		response, err := c.sendRequest(ctx, reqBody)
+		attemptCtx, cancelAttempt := c.attemptContext(ctx)
+		response, err := c.sendRequest(attemptCtx, reqBody)
+		cancelAttempt()
 		if err == nil && response != "" {
 			return response, nil
 		}
@@ -557,6 +589,7 @@ func (c *LLMClient) isRetryableError(err error) bool {
 	errStr := err.Error()
 	return containsAny(errStr, []string{
 		"timeout",
+		"deadline",
 		"connection",
 		"500",
 		"502",
@@ -621,17 +654,51 @@ func (c *LLMClient) ChatCompletionWithMessages(ctx context.Context, messages []M
 // ChatCompletionWithMessagesFormat performs a chat completion with optional response format.
 // Pass nil for responseFormat to use the default text output mode.
 func (c *LLMClient) ChatCompletionWithMessagesFormat(ctx context.Context, messages []Message, temperature float64, responseFormat *ResponseFormat) (string, error) {
+	return c.chatCompletionWithMessages(ctx, messages, temperature, 131072, responseFormat)
+}
+
+// ChatCompletionWithMessagesMaxTokens performs a chat completion with a caller-defined output budget.
+// It is intended for bounded structured responses such as intent and tool selection JSON.
+func (c *LLMClient) ChatCompletionWithMessagesMaxTokens(ctx context.Context, messages []Message, temperature float64, maxTokens int) (string, error) {
+	if maxTokens <= 0 {
+		return "", fmt.Errorf("max tokens must be greater than zero")
+	}
+	return c.chatCompletionWithMessages(ctx, messages, temperature, maxTokens, nil)
+}
+
+// ChatCompletionWithMessagesMaxTokensFormat performs a chat completion with both a
+// caller-defined output budget and an optional response format (e.g. JSON mode).
+// Pass nil for responseFormat to use the default text output mode.
+func (c *LLMClient) ChatCompletionWithMessagesMaxTokensFormat(ctx context.Context, messages []Message, temperature float64, maxTokens int, responseFormat *ResponseFormat) (string, error) {
+	if maxTokens <= 0 {
+		return "", fmt.Errorf("max tokens must be greater than zero")
+	}
+	return c.chatCompletionWithMessages(ctx, messages, temperature, maxTokens, responseFormat)
+}
+
+// SupportsJSONObjectResponseFormat reports whether the configured endpoint is
+// expected to honor response_format={"type":"json_object"}. This is the
+// OpenAI-compatible JSON mode (supported by Xiaomi MiMo, OpenAI, DeepSeek, Qwen,
+// etc.). The Anthropic messages path ignores response_format entirely, so we
+// only advertise support on the OpenAI-compatible path.
+func (c *LLMClient) SupportsJSONObjectResponseFormat() bool {
+	return !c.usesAnthropicAPI()
+}
+
+func (c *LLMClient) chatCompletionWithMessages(ctx context.Context, messages []Message, temperature float64, maxTokens int, responseFormat *ResponseFormat) (string, error) {
 	reqBody := ChatCompletionRequest{
 		Model:          c.modelName,
 		Messages:       messages,
 		Temperature:    temperature,
-		MaxTokens:      131072,
+		MaxTokens:      maxTokens,
 		ResponseFormat: responseFormat,
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		response, err := c.sendRequest(ctx, reqBody)
+		attemptCtx, cancelAttempt := c.attemptContext(ctx)
+		response, err := c.sendRequest(attemptCtx, reqBody)
+		cancelAttempt()
 		if err == nil && response != "" {
 			return response, nil
 		}
@@ -685,7 +752,9 @@ func (c *LLMClient) ChatCompletionWithMessagesFormatResult(ctx context.Context, 
 
 	var lastErr error
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		result, err := c.sendRequestResult(ctx, reqBody)
+		attemptCtx, cancelAttempt := c.attemptContext(ctx)
+		result, err := c.sendRequestResult(attemptCtx, reqBody)
+		cancelAttempt()
 		if err == nil && result.Content != "" {
 			return result, nil
 		}

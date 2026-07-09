@@ -67,26 +67,26 @@ type ServiceBinding struct {
 
 // ToolSpec 工具规格定义（完整版，对齐设计文档）
 type ToolSpec struct {
-	Name              string                 `json:"name"`
-	Domain            ToolDomain             `json:"domain"`
-	Operation         ToolOperation          `json:"operation"`
-	Capability        string                 `json:"capability,omitempty"`
-	Description       string                 `json:"description"`
-	Aliases           []string               `json:"aliases,omitempty"`
-	Tags              []string               `json:"tags,omitempty"`
-	ObjectTypes       []string               `json:"object_types,omitempty"`
-	PageRoutes        []string               `json:"page_routes,omitempty"`
-	Risk              ToolRisk               `json:"risk"`
-	AutoCallable      bool                   `json:"auto_callable"`
-	RequiresApproval  bool                   `json:"requires_approval"`
-	Idempotent        bool                   `json:"idempotent"`
-	DefaultTimeout    time.Duration          `json:"default_timeout"`
-	ArgsSchema        map[string]interface{} `json:"args_schema"`
-	ResultSchema      map[string]interface{} `json:"result_schema,omitempty"`
-	Handler           ToolHandler            `json:"-"`
-	ServiceBinding    ServiceBinding         `json:"service_binding,omitempty"`
-	DefaultWhitelisted bool                  `json:"default_whitelisted"`
-	Enabled           bool                   `json:"enabled"`
+	Name               string                 `json:"name"`
+	Domain             ToolDomain             `json:"domain"`
+	Operation          ToolOperation          `json:"operation"`
+	Capability         string                 `json:"capability,omitempty"`
+	Description        string                 `json:"description"`
+	Aliases            []string               `json:"aliases,omitempty"`
+	Tags               []string               `json:"tags,omitempty"`
+	ObjectTypes        []string               `json:"object_types,omitempty"`
+	PageRoutes         []string               `json:"page_routes,omitempty"`
+	Risk               ToolRisk               `json:"risk"`
+	AutoCallable       bool                   `json:"auto_callable"`
+	RequiresApproval   bool                   `json:"requires_approval"`
+	Idempotent         bool                   `json:"idempotent"`
+	DefaultTimeout     time.Duration          `json:"default_timeout"`
+	ArgsSchema         map[string]interface{} `json:"args_schema"`
+	ResultSchema       map[string]interface{} `json:"result_schema,omitempty"`
+	Handler            ToolHandler            `json:"-"`
+	ServiceBinding     ServiceBinding         `json:"service_binding,omitempty"`
+	DefaultWhitelisted bool                   `json:"default_whitelisted"`
+	Enabled            bool                   `json:"enabled"`
 
 	// 兼容旧字段（已废弃，使用 Risk + DefaultWhitelisted 替代）
 	// Deprecated: use Risk instead

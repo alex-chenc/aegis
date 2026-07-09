@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -16,6 +18,28 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestHealingStepsFromLog(t *testing.T) {
+	now := time.Now()
+	healingLog := &model.HealingLog{
+		ScriptType: "POC",
+		AttemptsDetail: model.AttemptsDetail{
+			{Attempt: 1, ResultExitCode: 2, ResultStderr: "syntax error", Timestamp: now},
+			{Attempt: 2, ResultExitCode: 1, Timestamp: now.Add(time.Second)},
+		},
+	}
+
+	steps := healingStepsFromLog(healingLog)
+	if len(steps) != 2 {
+		t.Fatalf("expected two healing steps, got %d", len(steps))
+	}
+	if steps[0].Status != "failed" || steps[1].Status != "completed" {
+		t.Fatalf("unexpected step statuses: %+v", steps)
+	}
+	if !strings.Contains(steps[0].Summary, "syntax error") {
+		t.Fatalf("expected stderr summary in first step, got %q", steps[0].Summary)
+	}
+}
 
 func setupTaskHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()

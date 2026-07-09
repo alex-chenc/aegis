@@ -14,13 +14,13 @@ type ExternalMCPRedactor struct {
 	logger *zap.Logger
 
 	// 敏感数据正则表达式
-	tokenPatterns      []*regexp.Regexp
-	passwordPatterns   []*regexp.Regexp
-	emailPattern       *regexp.Regexp
-	phonePattern       *regexp.Regexp
-	idCardPattern      *regexp.Regexp
-	accessKeyPattern   *regexp.Regexp
-	privateKeyPattern  *regexp.Regexp
+	tokenPatterns     []*regexp.Regexp
+	passwordPatterns  []*regexp.Regexp
+	emailPattern      *regexp.Regexp
+	phonePattern      *regexp.Regexp
+	idCardPattern     *regexp.Regexp
+	accessKeyPattern  *regexp.Regexp
+	privateKeyPattern *regexp.Regexp
 }
 
 // NewExternalMCPRedactor 创建脱敏器
@@ -153,7 +153,7 @@ func (r *ExternalMCPRedactor) redactString(s string) string {
 
 // ExternalMCPPromptContext Prompt 上下文结构
 type ExternalMCPPromptContext struct {
-	SourcesUsed  []MCPSourceView         `json:"sources_used"`
+	SourcesUsed  []MCPSourceView          `json:"sources_used"`
 	QueryResults []ExternalMCPQueryResult `json:"query_results"`
-	Limitations  []string                `json:"limitations"`
+	Limitations  []string                 `json:"limitations"`
 }

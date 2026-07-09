@@ -2,10 +2,12 @@ package handler
 
 import (
 	grpcclient "api-server/internal/grpc"
+	"api-server/internal/model"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -97,34 +99,42 @@ type AuditHitRule struct {
 }
 
 type TaskLogResponse struct {
-	ID            string                 `json:"id"`
-	TaskGroupID   string                 `json:"task_group_id"`
-	RuleID        string                 `json:"rule_id"`
-	HostID        string                 `json:"host_id"`
-	VulnerabilityID string               `json:"vulnerability_id"`
-	RuleTitle     string                 `json:"rule_title"`
-	Hostname      string                 `json:"hostname"`
-	TaskType      string                 `json:"task_type"`
-	Status        string                 `json:"status"`
-	ScriptContent *string                `json:"script_content"`
-	Stdout        *string                `json:"stdout"`
-	Stderr        *string                `json:"stderr"`
-	ExitCode      *int                   `json:"exit_code"`
-	AttemptNo     int                    `json:"attempt_no"`
-	MaxRounds     int                    `json:"max_rounds"`
-	AutoVerify    bool                   `json:"auto_verify"`
-	VerifyRound   int                    `json:"verify_round"`
-	StartedAt     *string                `json:"started_at"`
-	FinishedAt    *string                `json:"finished_at"`
-	HealingStatus *HealingStatusResponse `json:"healing_status,omitempty"`
-	AuditInfo     *AuditInfoResponse     `json:"audit_info,omitempty"`
+	ID              string                 `json:"id"`
+	TaskGroupID     string                 `json:"task_group_id"`
+	RuleID          string                 `json:"rule_id"`
+	HostID          string                 `json:"host_id"`
+	VulnerabilityID string                 `json:"vulnerability_id"`
+	RuleTitle       string                 `json:"rule_title"`
+	Hostname        string                 `json:"hostname"`
+	TaskType        string                 `json:"task_type"`
+	Status          string                 `json:"status"`
+	ScriptContent   *string                `json:"script_content"`
+	Stdout          *string                `json:"stdout"`
+	Stderr          *string                `json:"stderr"`
+	ExitCode        *int                   `json:"exit_code"`
+	AttemptNo       int                    `json:"attempt_no"`
+	MaxRounds       int                    `json:"max_rounds"`
+	AutoVerify      bool                   `json:"auto_verify"`
+	VerifyRound     int                    `json:"verify_round"`
+	StartedAt       *string                `json:"started_at"`
+	FinishedAt      *string                `json:"finished_at"`
+	HealingStatus   *HealingStatusResponse `json:"healing_status,omitempty"`
+	AuditInfo       *AuditInfoResponse     `json:"audit_info,omitempty"`
 }
 
 type HealingStatusResponse struct {
-	Status        string `json:"status"`
-	TotalAttempts int    `json:"total_attempts"`
-	MaxAttempts   int    `json:"max_attempts"`
-	LastError     string `json:"last_error,omitempty"`
+	Status        string                `json:"status"`
+	TotalAttempts int                   `json:"total_attempts"`
+	MaxAttempts   int                   `json:"max_attempts"`
+	LastError     string                `json:"last_error,omitempty"`
+	Steps         []HealingStepResponse `json:"steps,omitempty"`
+}
+
+type HealingStepResponse struct {
+	Phase     string    `json:"phase"`
+	Status    string    `json:"status"`
+	Summary   string    `json:"summary"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 type RedispatchTaskResponse struct {
@@ -382,7 +392,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 			ruleID = log.RuleID.String()
 		}
 		vulnID := ""
-		if log.VulnerabilityID != nil {
+		if h.vulnRepo != nil && log.VulnerabilityID != nil {
 			vulnID = log.VulnerabilityID.String()
 		}
 		hostID := log.HostID.String()
@@ -397,7 +407,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 				}
 			}
 			// 漏洞任务没有 rule_id，使用 CVE 编号作为规则标题
-			if log.VulnerabilityID != nil {
+			if h.vulnRepo != nil && log.VulnerabilityID != nil {
 				if vuln, findErr := h.vulnRepo.FindByID(*log.VulnerabilityID); findErr == nil {
 					ruleTitle = vuln.CveID
 				}
@@ -416,23 +426,23 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		}
 
 		responses[i] = TaskLogResponse{
-			ID:            log.ID.String(),
-			TaskGroupID:   log.TaskGroupID.String(),
-			RuleID:        ruleID,
-			HostID:        hostID,
+			ID:              log.ID.String(),
+			TaskGroupID:     log.TaskGroupID.String(),
+			RuleID:          ruleID,
+			HostID:          hostID,
 			VulnerabilityID: vulnID,
-			RuleTitle:     ruleTitle,
-			Hostname:      hostname,
-			TaskType:      log.TaskType,
-			Status:        log.Status,
-			ScriptContent: log.ScriptContent,
-			Stdout:        log.Stdout,
-			Stderr:        log.Stderr,
-			ExitCode:      log.ExitCode,
-			AttemptNo:     log.AttemptNo,
-			MaxRounds:     log.MaxRounds,
-			AutoVerify:    log.AutoVerify,
-			VerifyRound:   log.VerifyRound,
+			RuleTitle:       ruleTitle,
+			Hostname:        hostname,
+			TaskType:        log.TaskType,
+			Status:          log.Status,
+			ScriptContent:   log.ScriptContent,
+			Stdout:          log.Stdout,
+			Stderr:          log.Stderr,
+			ExitCode:        log.ExitCode,
+			AttemptNo:       log.AttemptNo,
+			MaxRounds:       log.MaxRounds,
+			AutoVerify:      log.AutoVerify,
+			VerifyRound:     log.VerifyRound,
 		}
 
 		if log.StartedAt != nil {
@@ -448,12 +458,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		if h.selfHealingService != nil && shouldExposeHealingStatus(log.TaskType, log.Status, log.ExitCode) {
 			healingStatus := h.selfHealingService.GetHealingStatus(log.ID.String())
 			if healingStatus != nil {
-				responses[i].HealingStatus = &HealingStatusResponse{
-					Status:        healingStatus.Status,
-					TotalAttempts: healingStatus.TotalAttempts,
-					MaxAttempts:   healingStatus.MaxAttempts,
-					LastError:     healingStatus.LastError,
-				}
+				responses[i].HealingStatus = h.buildHealingStatusResponse(log.ID, healingStatus.Status, healingStatus.TotalAttempts, healingStatus.MaxAttempts, healingStatus.LastError)
 			}
 		}
 
@@ -562,12 +567,7 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 	if h.selfHealingService != nil && shouldExposeHealingStatus(log.TaskType, log.Status, log.ExitCode) {
 		healingStatus := h.selfHealingService.GetHealingStatus(log.ID.String())
 		if healingStatus != nil {
-			response.HealingStatus = &HealingStatusResponse{
-				Status:        healingStatus.Status,
-				TotalAttempts: healingStatus.TotalAttempts,
-				MaxAttempts:   healingStatus.MaxAttempts,
-				LastError:     healingStatus.LastError,
-			}
+			response.HealingStatus = h.buildHealingStatusResponse(log.ID, healingStatus.Status, healingStatus.TotalAttempts, healingStatus.MaxAttempts, healingStatus.LastError)
 		}
 	}
 
@@ -588,6 +588,69 @@ func shouldExposeHealingStatus(taskType, status string, exitCode *int) bool {
 		return false
 	}
 	return true
+}
+
+func (h *TaskHandler) buildHealingStatusResponse(taskID uuid.UUID, status string, totalAttempts, maxAttempts int, lastError string) *HealingStatusResponse {
+	response := &HealingStatusResponse{
+		Status:        status,
+		TotalAttempts: totalAttempts,
+		MaxAttempts:   maxAttempts,
+		LastError:     lastError,
+	}
+
+	if h.healingLogRepo != nil {
+		healingLog, err := h.healingLogRepo.GetLatestByOriginalTaskID(taskID)
+		if err != nil {
+			logger.Warn("failed to load automatic repair steps",
+				zap.Error(err),
+				zap.String("task_id", taskID.String()),
+			)
+		} else if healingLog != nil {
+			response.Steps = healingStepsFromLog(healingLog)
+		}
+	}
+
+	if (status == "queued" || status == "healing") && (len(response.Steps) == 0 || response.Steps[len(response.Steps)-1].Status != "running") {
+		response.Steps = append(response.Steps, HealingStepResponse{
+			Phase:     fmt.Sprintf("第 %d 轮自动修复", max(totalAttempts, 1)),
+			Status:    "running",
+			Summary:   "正在根据执行错误生成、审计并自动重新下发脚本",
+			Timestamp: time.Now(),
+		})
+	}
+	return response
+}
+
+func healingStepsFromLog(healingLog *model.HealingLog) []HealingStepResponse {
+	if healingLog == nil || len(healingLog.AttemptsDetail) == 0 {
+		return nil
+	}
+	steps := make([]HealingStepResponse, 0, len(healingLog.AttemptsDetail))
+	for _, attempt := range healingLog.AttemptsDetail {
+		stepStatus := "failed"
+		if attempt.ResultExitCode == 0 || (strings.EqualFold(healingLog.ScriptType, "POC") && attempt.ResultExitCode == 1) {
+			stepStatus = "completed"
+		}
+		summary := fmt.Sprintf("大模型脚本已生成并通过审计，自动下发退出码 %d", attempt.ResultExitCode)
+		if detail := truncateHealingSummary(attempt.ResultStderr, 160); detail != "" {
+			summary += "：" + detail
+		}
+		steps = append(steps, HealingStepResponse{
+			Phase:     fmt.Sprintf("第 %d 轮自动修复", attempt.Attempt),
+			Status:    stepStatus,
+			Summary:   summary,
+			Timestamp: attempt.Timestamp,
+		})
+	}
+	return steps
+}
+
+func truncateHealingSummary(value string, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if limit <= 0 || len([]rune(value)) <= limit {
+		return value
+	}
+	return string([]rune(value)[:limit]) + "…"
 }
 
 func (h *TaskHandler) RedispatchTask(c *gin.Context) {
@@ -872,7 +935,7 @@ func (h *TaskHandlerWithHealing) TriggerSelfHealing(c *gin.Context) {
 
 func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
 	taskIDStr := c.Param("id")
-	_, err := uuid.Parse(taskIDStr)
+	taskID, err := uuid.Parse(taskIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -892,6 +955,7 @@ func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
 		return
 	}
 
+	healingResponse := h.buildHealingStatusResponse(taskID, healingStatus.Status, healingStatus.TotalAttempts, healingStatus.MaxAttempts, healingStatus.LastError)
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
@@ -904,6 +968,7 @@ func (h *TaskHandlerWithHealing) GetHealingStatus(c *gin.Context) {
 			"last_error":      healingStatus.LastError,
 			"user_suggestion": healingStatus.UserSuggestion,
 			"script_type":     healingStatus.ScriptType,
+			"steps":           healingResponse.Steps,
 		},
 	})
 }
