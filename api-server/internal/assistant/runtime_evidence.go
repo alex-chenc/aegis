@@ -10,12 +10,13 @@ import (
 )
 
 type runtimeToolEvidence struct {
-	CallID          string      `json:"call_id"`
-	ToolName        string      `json:"tool_name"`
-	Status          string      `json:"status"`
-	Content         interface{} `json:"content,omitempty"`
-	Error           string      `json:"error,omitempty"`
-	ValidationStage string      `json:"validation_stage,omitempty"`
+	CallID          string                    `json:"call_id"`
+	ToolName        string                    `json:"tool_name"`
+	Status          string                    `json:"status"`
+	Content         interface{}               `json:"content,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	ValidationStage string                    `json:"validation_stage,omitempty"`
+	Outcome         *agentruntime.ToolOutcome `json:"outcome,omitempty"`
 }
 
 type runtimeEvidenceLedger struct {
@@ -61,6 +62,7 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 				ToolName: observation.ToolName,
 				Status:   string(observation.Status),
 				Error:    observation.Error,
+				Outcome:  observation.Outcome,
 			}
 			if record, ok := validationByCall[observation.CallID]; ok {
 				evidence.ValidationStage = record.ValidationStage
@@ -78,55 +80,42 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 				failedNames[observation.ToolName] = true
 				continue
 			}
-			payload, _ := content.(map[string]interface{})
-			switch observation.ToolName {
-			case "Vulnerability.List":
+			outcome := observation.Outcome
+			if outcome == nil {
+				continue
+			}
+			if strings.Contains(strings.ToLower(outcome.Capability), "vulnerability") {
 				ledger.VulnerabilityWorkflow = true
-				if total, ok := numericValue(payload["total"]); ok && int(total) > ledger.VulnerabilityCount {
-					ledger.VulnerabilityCount = int(total)
+			}
+			if outcome.OperationStatus == agentruntime.OperationFailed {
+				failedNames[observation.ToolName] = true
+			}
+			for _, fact := range outcome.Facts {
+				switch strings.ToLower(stringValue(fact["kind"])) {
+				case "host_online":
+					if id := stringValue(fact["id"]); id != "" {
+						onlineHostIDs[id] = true
+					}
+				case "vulnerability_record":
+					ledger.VulnerabilityWorkflow = true
+					ledger.VulnerabilityCount++
 				}
-				if count := len(resultDataItems(payload)); count > ledger.VulnerabilityCount {
-					ledger.VulnerabilityCount = count
+			}
+			for _, artifact := range outcome.Artifacts {
+				if scriptType := stringValue(artifact["script_type"]); scriptType != "" {
+					generatedTypes[scriptType] = true
 				}
-			case "Vulnerability.CustomQuery.Status":
-				ledger.VulnerabilityWorkflow = true
-				if stringValue(payload["result_vulnerability_id"]) != "" && ledger.VulnerabilityCount == 0 {
+				if stringValue(artifact["result_vulnerability_id"]) != "" && ledger.VulnerabilityCount == 0 {
+					ledger.VulnerabilityWorkflow = true
 					ledger.VulnerabilityCount = 1
 				}
-			case "Vulnerability.AffectedHosts":
-				ledger.VulnerabilityWorkflow = true
-				for _, item := range resultDataItems(payload) {
-					if online, exists := item["online"].(bool); exists && online {
-						if id := stringValue(item["id"]); id != "" {
-							onlineHostIDs[id] = true
-						}
+			}
+			for _, sideEffect := range outcome.SideEffects {
+				for _, field := range []string{"task_group_id", "task_id", "action_id", "block_id"} {
+					if id := stringValue(sideEffect[field]); id != "" {
+						taskGroups[id] = true
+						break
 					}
-				}
-			case "Host.List":
-				status := strings.ToLower(stringValue(payload["status"]))
-				if status == "online" {
-					for _, item := range resultDataItems(payload) {
-						if id := stringValue(item["id"]); id != "" {
-							onlineHostIDs[id] = true
-						}
-					}
-					if len(onlineHostIDs) == 0 {
-						if total, ok := numericValue(payload["total"]); ok {
-							ledger.OnlineHostCount = int(total)
-						}
-					}
-				}
-			case "Vulnerability.Script.Status":
-				ledger.VulnerabilityWorkflow = true
-				if strings.EqualFold(stringValue(payload["generation_status"]), "generated") {
-					if scriptType := stringValue(payload["script_type"]); scriptType != "" {
-						generatedTypes[scriptType] = true
-					}
-				}
-			case "Vulnerability.Script.Execute":
-				ledger.VulnerabilityWorkflow = true
-				if taskGroupID := stringValue(payload["task_group_id"]); taskGroupID != "" {
-					taskGroups[taskGroupID] = true
 				}
 			}
 		}

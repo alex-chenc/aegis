@@ -26,7 +26,6 @@ type Orchestrator struct {
 	toolCallRepo       repository.AssistantToolCallRepository
 	sessionRepo        repository.AssistantSessionRepository
 	toolRegistry       *ToolRegistry
-	toolSelector       *ToolSelector
 	intentDecomposer   *IntentDecomposer
 	toolDecisionEngine *ToolDecisionEngine
 	toolDispatcher     *ToolDispatcher
@@ -47,7 +46,6 @@ type OrchestratorDeps struct {
 	ToolCallRepo       repository.AssistantToolCallRepository
 	SessionRepo        repository.AssistantSessionRepository
 	ToolRegistry       *ToolRegistry
-	ToolSelector       *ToolSelector
 	IntentDecomposer   *IntentDecomposer
 	ToolDecisionEngine *ToolDecisionEngine
 	ToolDispatcher     *ToolDispatcher
@@ -81,7 +79,6 @@ func NewOrchestrator(deps OrchestratorDeps) *Orchestrator {
 		toolCallRepo:       deps.ToolCallRepo,
 		sessionRepo:        deps.SessionRepo,
 		toolRegistry:       deps.ToolRegistry,
-		toolSelector:       deps.ToolSelector,
 		intentDecomposer:   deps.IntentDecomposer,
 		toolDecisionEngine: deps.ToolDecisionEngine,
 		toolDispatcher:     deps.ToolDispatcher,
@@ -109,8 +106,10 @@ type RunInput struct {
 
 // RunResult 运行结果
 type RunResult struct {
-	MessageID   string `json:"message_id"`
-	FinalAnswer string `json:"final_answer"`
+	MessageID   string                   `json:"message_id"`
+	FinalAnswer string                   `json:"final_answer"`
+	RunStatus   string                   `json:"run_status"`
+	GoalOutcome agentruntime.GoalOutcome `json:"goal_outcome"`
 }
 
 // Run 运行编排。所有请求统一进入 agent-runtime；Runtime 根据任务复杂度决定直接回答或 Plan → React。
@@ -184,10 +183,12 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	if o.intentDecomposer == nil {
 		return nil, fmt.Errorf("assistant intent decomposer unavailable")
 	}
+	capabilityCatalog := o.buildCapabilityCatalog()
 	intentBreakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
 		Query:                  input.UserMessage,
 		Intent:                 intent,
 		ContextRefs:            intentInput.ContextRefs,
+		AvailableCapabilities:  capabilityCatalog,
 		EnableLLMDecomposition: true,
 	})
 	if err != nil {
@@ -199,38 +200,23 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		return nil, fmt.Errorf("decompose assistant intent with llm: %w", err)
 	}
 
-	// 6. 工具选择：业务语义和工具集合均由 LLM 产生，后端只做工具契约裁决。
-	// 问答和明确需要追问的请求不注入业务工具；LLM 失败时不进入规则降级。
+	// 6. 工具选择：LLM 只从实时英文 capability 目录中选择能力，后端通过
+	// exact mapping 解析工具并执行安全硬门。不存在工具评分、领域召回或预选绕过。
 	selection := &ToolSelectionResult{
 		Query:  input.UserMessage,
 		Intent: intent,
 	}
-	selectionMode := "llm"
-	if intent.Action != "answer" && !intentBreakdown.NeedClarification {
-		if llmSelection, err := o.selectToolsWithLLM(ctx, input.UserMessage, intent, intentInput.ContextRefs); err == nil && llmSelection != nil && len(llmSelection.SelectedTools) > 0 {
-			selection = llmSelection
-		} else if err != nil {
-			o.logger.Error("llm tool selection failed",
-				zap.String("session_id", input.SessionID),
-				zap.String("run_id", input.RunID),
-				zap.Error(err),
-			)
-			return nil, fmt.Errorf("select tools with llm: %w", err)
-		} else {
-			return nil, fmt.Errorf("select tools with llm: no executable tools selected")
-		}
-	}
+	selectionMode := "capability_mapping"
 	useAIAnalysisFlow := o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
 
 	var authorization *ToolExecutionPlan
 	if o.toolDecisionEngine != nil && o.toolDecisionEngine.config.Enabled {
 		plan, err := o.toolDecisionEngine.Decide(ctx, ToolDecisionInput{
-			Query:                input.UserMessage,
-			Intent:               intent,
-			Breakdown:            intentBreakdown,
-			ContextRefs:          intentInput.ContextRefs,
-			PreliminarySelection: selection,
-			UseAIAnalysisFlow:    useAIAnalysisFlow,
+			Query:             input.UserMessage,
+			Intent:            intent,
+			Breakdown:         intentBreakdown,
+			ContextRefs:       intentInput.ContextRefs,
+			UseAIAnalysisFlow: useAIAnalysisFlow,
 		})
 		if err != nil {
 			o.logger.Error("assistant tool decision failed",
@@ -253,7 +239,8 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 				o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
 					"intent_breakdown":   intentBreakdown,
 					"tool_authorization": authorization,
-					"current_run_status": "clarification_required",
+					"current_run_status": "needs_input",
+					"goal_outcome":       agentruntime.GoalNeedsInput,
 				})
 				question := plan.ClarifyingQuestion
 				if question == "" {
@@ -275,7 +262,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			}
 			selection.SelectedTools = plan.ToolNames()
 			selection.CandidateTools = dedupeStrings(append(selection.CandidateTools, selection.SelectedTools...))
-			selectionMode = selectionMode + "+decision"
+			selectionMode = selectionMode + "+hard_gates"
 			useAIAnalysisFlow = o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
 			o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
 				"intent_breakdown":   intentBreakdown,
@@ -353,10 +340,11 @@ func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput
 		)
 	}
 
-	o.runManager.Publish(input.SessionID, EventDonePayload(input.SessionID, input.RunID))
 	return &RunResult{
 		MessageID:   msgID,
 		FinalAnswer: response,
+		RunStatus:   "needs_input",
+		GoalOutcome: agentruntime.GoalNeedsInput,
 	}, nil
 }
 
@@ -374,8 +362,9 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 
 		descriptors = append(descriptors, agentruntime.ToolDescriptor{
 			Name:             tool.Name,
-			Description:      tool.Description,
+			Description:      modelFacingToolDescription(tool),
 			ArgsSchema:       normalizeRuntimeArgsSchema(tool.ArgsSchema),
+			ResultSchema:     normalizeRuntimeArgsSchema(tool.ResultSchema),
 			RiskLevel:        riskLevel,
 			AutoCallable:     tool.DefaultWhitelisted,
 			RequiresApproval: !tool.DefaultWhitelisted,
@@ -385,6 +374,33 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 		})
 	}
 	return descriptors
+}
+
+func (o *Orchestrator) buildCapabilityCatalog() []CapabilityCatalogItem {
+	if o == nil || o.toolRegistry == nil {
+		return nil
+	}
+	tools := o.toolRegistry.List()
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Capability < tools[j].Capability
+	})
+	catalog := make([]CapabilityCatalogItem, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil || !tool.Enabled || isResidentTool(tool.Name) {
+			continue
+		}
+		contract := BuildToolUseContract(tool)
+		catalog = append(catalog, CapabilityCatalogItem{
+			Capability:    contract.Capability,
+			Domain:        string(tool.Domain),
+			Operation:     string(tool.Operation),
+			ObjectTypes:   append([]string{}, tool.ObjectTypes...),
+			Risk:          string(tool.Risk),
+			ExecutionMode: tool.ExecutionContract.Mode,
+			Description:   modelFacingToolDescription(tool),
+		})
+	}
+	return catalog
 }
 
 func runtimeProfileName(useAIAnalysisFlow bool) string {
@@ -549,13 +565,22 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		)
 		response = buildEvidenceGroundedFallback(evidence)
 	}
+	goalOutcome := taskResult.GoalOutcome
+	if goalOutcome == "" {
+		goalOutcome = agentruntime.GoalFailed
+	}
+	if len(evidenceConflicts) > 0 && goalOutcome == agentruntime.GoalSucceeded {
+		goalOutcome = agentruntime.GoalPartiallySucceeded
+	}
 	contextBudget := effectiveRuntimeContextBudget(taskResult)
 	metadata := map[string]interface{}{
 		"runtime_profile":         runtimeProfileName(useAIAnalysisFlow),
 		"max_total_turns":         maxIterations,
 		"current_run_id":          input.RunID,
 		"current_message_id":      msgID,
-		"current_run_status":      "completed",
+		"runtime_status":          taskResult.Status,
+		"goal_outcome":            goalOutcome,
+		"current_run_status":      assistantRunStatus(goalOutcome),
 		"last_run_completed_at":   time.Now().UTC().Format(time.RFC3339),
 		"total_prompt_tokens":     taskResult.Metrics.TotalPromptTokens,
 		"total_completion_tokens": taskResult.Metrics.TotalCompletionTokens,
@@ -598,13 +623,25 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		o.logger.Error("failed to save assistant message", zap.Error(err))
 	}
 
-	// 发布完成事件
-	o.runManager.Publish(input.SessionID, EventDonePayload(input.SessionID, input.RunID))
-
 	return &RunResult{
 		MessageID:   msgID,
 		FinalAnswer: response,
+		RunStatus:   assistantRunStatus(goalOutcome),
+		GoalOutcome: goalOutcome,
 	}, nil
+}
+
+func assistantRunStatus(outcome agentruntime.GoalOutcome) string {
+	switch outcome {
+	case agentruntime.GoalSucceeded:
+		return "completed"
+	case agentruntime.GoalPartiallySucceeded:
+		return "completed_with_failures"
+	case agentruntime.GoalNeedsInput:
+		return "needs_input"
+	default:
+		return "failed"
+	}
 }
 
 func effectiveRuntimeContextBudget(result *agentruntime.TaskResult) *agentruntime.ContextBudgetSnapshot {
@@ -753,6 +790,12 @@ func (o *Orchestrator) persistRuntimeToolCallRecords(
 			CreatedAt:     createdAt,
 			UpdatedAt:     createdAt,
 		}
+		if runtimeCall.Outcome != nil {
+			terminal := runtimeCall.Outcome.Terminal
+			call.OperationStatus = string(runtimeCall.Outcome.OperationStatus)
+			call.OperationTerminal = &terminal
+			call.Outcome = mustMarshalJSON(runtimeCall.Outcome)
+		}
 		if err := o.toolCallRepo.Create(ctx, call); err != nil {
 			o.logger.Warn("failed to persist runtime tool call record",
 				zap.String("session_id", sessionID),
@@ -877,171 +920,6 @@ func cleanResponse(content string) string {
 		}
 	}
 	return strings.TrimSpace(content)
-}
-
-// ResumeAfterApprovalRequest 审批恢复请求
-type ResumeAfterApprovalRequest struct {
-	SessionID  string `json:"session_id"`
-	RunID      string `json:"run_id"`
-	ApprovalID string `json:"approval_id"`
-	Operator   string `json:"operator"`
-	Comment    string `json:"comment,omitempty"`
-}
-
-// PauseForApproval 暂停运行等待审批（对齐设计文档 18.4 节）
-//
-// 流程：
-//  1. ToolGateway.Call 遇到需要审批的工具
-//  2. ApprovalGate.CreateApproval 创建审批记录
-//  3. Orchestrator.PauseForApproval 标记 run 为 waiting_approval
-//  4. 发送 SSE approval_required 和 run_waiting_approval 事件
-//  5. 当前 agent-runtime 调用结束（工具返回 approval_required 错误）
-func (o *Orchestrator) PauseForApproval(ctx context.Context, sessionID, runID string, approval *model.AssistantApproval) error {
-	run, ok := o.runManager.Get(sessionID)
-	if !ok {
-		return fmt.Errorf("no active run for session %s", sessionID)
-	}
-
-	// 设置审批等待状态
-	run.SetWaitingApproval(&WaitingApprovalState{
-		ApprovalID:  approval.ApprovalID,
-		ToolCallID:  approval.ToolCallID,
-		ToolName:    approval.ToolName,
-		Operator:    approval.RequestedBy,
-		RequestedAt: time.Now(),
-	})
-
-	// 发送 SSE 事件
-	msgID := "msg_" + runID
-	o.runManager.Publish(sessionID, EventApprovalRequiredPayload(sessionID, runID, msgID, map[string]interface{}{
-		"approval_id": approval.ApprovalID,
-		"tool_name":   approval.ToolName,
-		"risk_level":  approval.RiskLevel,
-		"title":       approval.Title,
-		"expires_at":  approval.ExpiresAt,
-	}))
-
-	o.runManager.Publish(sessionID, EventRunWaitingApprovalPayload(sessionID, runID, approval.ApprovalID, approval.ToolName))
-
-	o.logger.Info("run paused for approval",
-		zap.String("session_id", sessionID),
-		zap.String("run_id", runID),
-		zap.String("approval_id", approval.ApprovalID),
-		zap.String("tool_name", approval.ToolName),
-	)
-
-	return nil
-}
-
-// ResumeAfterApproval 审批通过后恢复运行（对齐设计文档 18.4 节）
-//
-// 流程：
-//  1. 用户在前端批准审批
-//  2. ApprovalGate.ExecuteApprovedTool 执行原工具
-//  3. Orchestrator.ResumeAfterApproval 构造新 TaskInput 继续运行
-//  4. 创建新的 agent-runtime 实例，注入"刚才工具结果"
-//  5. agent-runtime 继续下一步
-func (o *Orchestrator) ResumeAfterApproval(ctx context.Context, req ResumeAfterApprovalRequest) (*RunResult, error) {
-	// 1. 获取审批记录
-	approval, err := o.approvalGate.GetApproval(ctx, req.ApprovalID)
-	if err != nil {
-		return nil, fmt.Errorf("approval not found: %w", err)
-	}
-
-	// 2. 获取运行状态
-	run, ok := o.runManager.Get(req.SessionID)
-	if !ok {
-		return nil, fmt.Errorf("no active run for session %s", req.SessionID)
-	}
-
-	waitingState := run.GetWaitingApproval()
-	if waitingState == nil || waitingState.ApprovalID != req.ApprovalID {
-		return nil, fmt.Errorf("run is not waiting for approval %s", req.ApprovalID)
-	}
-
-	// 3. 执行已批准的工具
-	toolResult, err := o.approvalGate.ExecuteApprovedTool(ctx, approval, o.toolDispatcher)
-	if err != nil {
-		o.logger.Error("failed to execute approved tool", zap.Error(err))
-		// 发送错误事件
-		o.runManager.Publish(req.SessionID, EventErrorPayload(req.SessionID, run.RunID, fmt.Sprintf("执行已批准工具失败: %s", err.Error())))
-		return nil, fmt.Errorf("execute approved tool: %w", err)
-	}
-
-	// 4. 清除等待状态
-	run.ClearWaitingApproval()
-
-	// 5. 发送工具结果事件
-	msgID := "msg_" + run.RunID
-	o.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, run.RunID, msgID, waitingState.ToolCallID, toolResult.Data))
-
-	// 6. 验证恢复运行所需的模型连接；失败直接返回错误。
-	// 获取会话消息历史摘要（用于 agent-runtime 上下文恢复）
-	_ = o.buildPreviousSummary(ctx, req.SessionID)
-
-	// 重新构建 runtime 并继续
-	_, err = o.runtimeFactory.BuildLLMClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("resume run after approval: LLM unavailable: %w", err)
-	}
-
-	// 直接调用 LLM 继续推理（简化实现：将工具结果注入对话）
-	response := fmt.Sprintf("工具 %s 执行完成。\n\n结果：%s\n\n基于以上结果，任务已继续处理。",
-		waitingState.ToolName, marshalToString(toolResult.Data))
-
-	// 保存消息
-	o.runManager.Publish(req.SessionID, EventMessageDeltaPayload(req.SessionID, run.RunID, msgID, response))
-
-	// 从事件历史中提取 thinking 和 plan 数据
-	thinkingContent := o.extractThinkingFromHistory(req.SessionID)
-	planData := o.extractPlanFromHistory(req.SessionID)
-
-	// 使用 context.Background() 保存消息，避免上下文取消导致保存失败
-	saveCtx := context.Background()
-	if err := o.messageRepo.Create(saveCtx, &model.AssistantMessage{
-		ID:        uuid.New(),
-		SessionID: req.SessionID,
-		MessageID: msgID,
-		Role:      "assistant",
-		Content:   response,
-		Thinking:  thinkingContent,
-		Plan:      planData,
-	}); err != nil {
-		o.logger.Error("failed to save resume message", zap.Error(err))
-	}
-
-	o.runManager.Publish(req.SessionID, EventDonePayload(req.SessionID, run.RunID))
-
-	o.logger.Info("run resumed after approval",
-		zap.String("session_id", req.SessionID),
-		zap.String("approval_id", req.ApprovalID),
-		zap.String("tool_name", waitingState.ToolName),
-		zap.Bool("tool_success", toolResult.Success),
-	)
-
-	return &RunResult{
-		MessageID:   msgID,
-		FinalAnswer: response,
-	}, nil
-}
-
-// buildPreviousSummary 构建之前的对话摘要
-func (o *Orchestrator) buildPreviousSummary(ctx context.Context, sessionID string) string {
-	messages, err := o.messageRepo.ListBySession(ctx, sessionID, 10)
-	if err != nil || len(messages) == 0 {
-		return ""
-	}
-
-	var summary strings.Builder
-	summary.WriteString("之前的对话摘要：\n")
-	for _, msg := range messages {
-		content := msg.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		summary.WriteString(fmt.Sprintf("[%s] %s\n", msg.Role, content))
-	}
-	return summary.String()
 }
 
 // extractThinkingFromHistory 从事件历史中提取 thinking 内容

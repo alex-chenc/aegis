@@ -1,5 +1,9 @@
 # 智能体模式统一通用流程改造
 
+> 2026-07-10 补充：工具授权、异步结果、步骤完成和最终证据的后续修正见
+> `assistant_mapping_authorization_and_truthful_completion_fix.md`。相关定义冲突时，
+> 以后者为准。
+
 ## 1. 问题与目标
 
 当前智能体链路虽然接入了大模型和 `agent-runtime`，但 Aegis 业务层仍会根据
@@ -22,9 +26,9 @@
 ```text
 User Request
   -> LLM IntentRouter（通用意图）
-  -> LLM IntentDecomposer（目标/对象/范围/约束/候选能力）
-  -> LLM ToolSelector（从实时工具目录选择候选工具）
-  -> ToolDecisionEngine（只做授权和风险硬门）
+  -> LLM IntentDecomposer（从实时英文目录选择 exact capability）
+  -> Capability Mapper（exact capability -> enabled tools）
+  -> ToolAuthorizationEngine（只做授权和风险硬门）
   -> RuntimeFactory（动态规划模式）
   -> agent-runtime Planner / ReAct / Correct / Reflect
   -> ToolGateway（一次只执行 Runtime 明确请求的一个工具）
@@ -36,7 +40,8 @@ User Request
 - Aegis 不把工具授权结果转换为 `agent-runtime.InitialPlan`。
 - ToolDecisionEngine 不扩展、排序、重复或条件编排工具，不按工具名绑定业务参数。
 - IntentDecomposer 使用开放对象、范围和参数结构，不包含 CVE、主机、基线等固定枚举。
-- ToolSelector 只依据用户目标和实时工具目录选择工具，不写任何命名业务场景。
+- 不存在独立工具名选择器或工具评分器；模型只能输出目录中的英文 capability。
+- Capability Mapper 只做 exact mapping，并可加入工具声明的只读状态/发现配套能力。
 - Planner 根据工具 schema、说明、前后置语义和每次真实返回值决定顺序、参数、
   重复调用、轮询、跳过、重试和结束。
 - ToolGateway 不暗中补跑工具。领域接口必要的参数校验、幂等、状态机校验和安全
@@ -66,11 +71,10 @@ User Request
 ToolDecisionEngine 的输出是授权审计结果，不是执行计划。为保持当前接口兼容，
 结构暂时仍使用 `ToolExecutionPlan`，但其中每个 step 仅代表一个被授权的工具：
 
-- 候选工具来自 LLM 明确选择、能力映射、用户明确指定，以及根据结构化
-  `domains`、`objects`、页面上下文与工具 descriptor 进行的通用契约召回；
-- 通用契约召回不解析用户原文关键词、不识别命名业务场景、不展开工作流，只用于
-  避免首次 LLM 预选偏差把 Runtime 需要的正确工具挡在授权目录之外；
-- 不自动增加前置、状态、详情或后续工具；
+- 候选工具只来自 exact capability mapping、用户明确指定的唯一工具，以及工具声明
+  的只读 completion/discovery 配套 capability；
+- 不做关键词、领域、对象、上下文相关度召回和分数阈值；
+- 不自动增加写前置、业务后续或场景工作流工具；
 - 不决定执行顺序；
 - 不为同一工具复制多个业务步骤；
 - 不使用场景规则生成参数；

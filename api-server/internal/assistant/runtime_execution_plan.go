@@ -33,14 +33,14 @@ func runtimePlanFromToolExecutionPlan(plan *ToolExecutionPlan) *agentruntime.Pla
 		}
 		objective := strings.TrimSpace(source.Reason)
 		if objective == "" {
-			objective = "执行工具 " + source.ToolName + " 并返回真实结果"
+			objective = "Execute " + source.ToolName + " and return the actual result."
 		}
 		if source.Condition != "" && !strings.Contains(objective, source.Condition) {
-			objective += "；执行条件：" + source.Condition
+			objective += " Execution condition: " + source.Condition
 		}
-		expected := strings.Join(source.Postconditions, "；")
+		expected := strings.Join(source.Postconditions, "; ")
 		if expected == "" {
-			expected = "返回真实工具结果，或基于前序证据明确跳过原因"
+			expected = "Return actual tool evidence, or explicitly explain a skip using prior evidence."
 		}
 		steps = append(steps, agentruntime.PlanStep{
 			StepID:         source.StepID,

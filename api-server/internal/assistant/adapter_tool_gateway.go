@@ -29,7 +29,7 @@ type AssistantToolGatewayAdapter struct {
 
 	// 回调函数，用于 SSE 事件推送
 	onToolCall        func(callID, toolName string, args interface{})
-	onToolResult      func(callID string, result interface{})
+	onToolResult      func(callID string, result interface{}, outcome *agentruntime.ToolOutcome)
 	onToolError       func(callID, errMsg string)
 	onApproval        func(approval interface{})
 	onApprovalUpdated func(approval interface{})
@@ -48,7 +48,7 @@ type AssistantToolGatewayConfig struct {
 	ContextRefs       []ContextRefResult
 	ExecutionPlan     *ToolExecutionPlan
 	OnToolCall        func(callID, toolName string, args interface{})
-	OnToolResult      func(callID string, result interface{})
+	OnToolResult      func(callID string, result interface{}, outcome *agentruntime.ToolOutcome)
 	OnToolError       func(callID, errMsg string)
 	OnApproval        func(approval interface{})
 	OnApprovalUpdated func(approval interface{})
@@ -157,17 +157,21 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 	// 处理执行结果
 	if result.Success {
 		resultJSON, _ := json.Marshal(result.Data)
+		tool, _ := a.dispatcher.registry.Get(req.ToolName)
+		outcome := normalizeToolOutcome(tool, result.Data)
+		a.logToolOutcome(req, outcome)
 		if a.onToolResult != nil {
-			a.onToolResult(result.CallID, result.Data)
+			a.onToolResult(result.CallID, result.Data, outcome)
 		}
 		return agentruntime.ToolResponse{
 			CallID:    req.CallID,
 			ToolName:  req.ToolName,
 			Status:    agentruntime.ToolCallSuccess,
 			Content:   string(resultJSON),
-			Summary:   fmt.Sprintf("工具 %s 执行成功", req.ToolName),
+			Summary:   outcome.Message,
 			StartedAt: startedAt,
 			EndedAt:   endedAt,
+			Outcome:   outcome,
 		}, nil
 	}
 
@@ -249,9 +253,10 @@ func (a *AssistantToolGatewayAdapter) reuseSuccessfulReadonlyToolCall(ctx contex
 			ToolName:  req.ToolName,
 			Status:    agentruntime.ToolCallSuccess,
 			Content:   string(call.Result),
-			Summary:   fmt.Sprintf("工具 %s 已复用本轮会话中相同参数的成功结果", req.ToolName),
+			Summary:   "Reused the successful result from the same run.",
 			StartedAt: startedAt,
 			EndedAt:   time.Now(),
+			Outcome:   normalizeToolOutcome(tool, unmarshalJSON(call.Result)),
 		}, true
 	}
 	return agentruntime.ToolResponse{}, false
@@ -380,17 +385,21 @@ func (a *AssistantToolGatewayAdapter) waitApprovalAndExecute(ctx context.Context
 
 	if dispatchResult.Success {
 		resultJSON, _ := json.Marshal(dispatchResult.Data)
+		tool, _ := a.dispatcher.registry.Get(req.ToolName)
+		outcome := normalizeToolOutcome(tool, dispatchResult.Data)
+		a.logToolOutcome(req, outcome)
 		if a.onToolResult != nil {
-			a.onToolResult(dispatchResult.CallID, dispatchResult.Data)
+			a.onToolResult(dispatchResult.CallID, dispatchResult.Data, outcome)
 		}
 		return agentruntime.ToolResponse{
 			CallID:    req.CallID,
 			ToolName:  req.ToolName,
 			Status:    agentruntime.ToolCallSuccess,
 			Content:   string(resultJSON),
-			Summary:   fmt.Sprintf("工具 %s 审批后执行成功", req.ToolName),
+			Summary:   outcome.Message,
 			StartedAt: startedAt,
 			EndedAt:   time.Now(),
+			Outcome:   outcome,
 		}, nil
 	}
 
@@ -406,6 +415,27 @@ func (a *AssistantToolGatewayAdapter) waitApprovalAndExecute(ctx context.Context
 		StartedAt:    startedAt,
 		EndedAt:      time.Now(),
 	}, nil
+}
+
+func (a *AssistantToolGatewayAdapter) logToolOutcome(req agentruntime.ToolRequest, outcome *agentruntime.ToolOutcome) {
+	if a == nil || a.logger == nil || outcome == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("session_id", a.sessionID),
+		zap.String("run_id", a.runID),
+		zap.String("step_id", req.StepID),
+		zap.String("call_id", req.CallID),
+		zap.String("tool_name", req.ToolName),
+		zap.String("capability", outcome.Capability),
+		zap.String("operation_status", string(outcome.OperationStatus)),
+		zap.Bool("terminal", outcome.Terminal),
+	}
+	if !outcome.Terminal || outcome.OperationStatus == agentruntime.OperationFailed {
+		a.logger.Info("assistant tool business outcome observed", fields...)
+		return
+	}
+	a.logger.Debug("assistant tool business outcome observed", fields...)
 }
 
 // applyPlanArgs applies caller-authorized args. The exact step_id is preferred

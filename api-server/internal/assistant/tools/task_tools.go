@@ -17,12 +17,14 @@ type TaskToolDeps struct {
 // RegisterTaskTools 注册任务域工具
 func RegisterTaskTools(registry *assistant.ToolRegistry, deps TaskToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Task.List",
-		Domain:      "task",
-		Operation:   "list",
-		Description: "列出任务组，支持按状态、类型、时间范围筛选",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Task.List",
+		Domain:             "task",
+		Operation:          "list",
+		Capability:         "list_tasks",
+		Description:        "列出任务组，支持按状态、类型、时间范围筛选",
+		ModelDescription:   "List task groups with optional status, type, time-range, and keyword filters.",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -42,12 +44,14 @@ func RegisterTaskTools(registry *assistant.ToolRegistry, deps TaskToolDeps) erro
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Task.GetDetail",
-		Domain:      "task",
-		Operation:   "get_detail",
-		Description: "根据任务ID获取任务详细信息",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Task.GetDetail",
+		Domain:             "task",
+		Operation:          "get_detail",
+		Capability:         "get_task_detail",
+		Description:        "根据任务ID获取任务详细信息",
+		ModelDescription:   "Get detailed execution information for one exact task ID.",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

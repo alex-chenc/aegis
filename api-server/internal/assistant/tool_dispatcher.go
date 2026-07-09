@@ -177,6 +177,22 @@ func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *T
 
 		if tr.result.Success {
 			_ = d.toolCallRepo.MarkSuccess(ctx, callID, tr.result.Data, duration)
+			outcome := normalizeToolOutcome(tool, tr.result.Data)
+			if err := d.toolCallRepo.MarkOutcome(
+				ctx,
+				callID,
+				string(outcome.OperationStatus),
+				outcome.Terminal,
+				outcome,
+			); err != nil {
+				d.logger.Warn("failed to persist assistant tool business outcome",
+					zap.String("call_id", callID),
+					zap.String("tool_name", tool.Name),
+					zap.String("operation_status", string(outcome.OperationStatus)),
+					zap.Bool("terminal", outcome.Terminal),
+					zap.Error(err),
+				)
+			}
 			_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
 		} else {
 			_ = d.toolCallRepo.MarkFailed(ctx, callID, tr.result.Error, duration)

@@ -240,11 +240,15 @@ func modelFacingToolDescription(tool *ToolSpec) string {
 		return ""
 	}
 	contract := BuildToolUseContract(tool)
-	parts := []string{
-		"Capability: " + contract.Capability + ".",
-		"Domain: " + contract.Domain + ".",
-		"Operation: " + string(tool.Operation) + ".",
+	parts := make([]string, 0, 8)
+	if description := strings.TrimSpace(tool.ModelDescription); description != "" && !containsHan(description) {
+		parts = append(parts, description)
 	}
+	parts = append(parts,
+		"Capability: "+contract.Capability+".",
+		"Domain: "+contract.Domain+".",
+		"Operation: "+string(tool.Operation)+".",
+	)
 	if len(contract.ObjectTypes) > 0 {
 		parts = append(parts, "Objects: "+strings.Join(contract.ObjectTypes, ", ")+".")
 	}
@@ -253,6 +257,12 @@ func modelFacingToolDescription(tool *ToolSpec) string {
 	}
 	if len(contract.Postconditions) > 0 {
 		parts = append(parts, "Postconditions: "+strings.Join(contract.Postconditions, ", ")+".")
+	}
+	if tool.ExecutionContract.Mode != "" {
+		parts = append(parts, "Execution mode: "+tool.ExecutionContract.Mode+".")
+	}
+	if tool.ExecutionContract.CompletionCapability != "" {
+		parts = append(parts, "Completion capability: "+tool.ExecutionContract.CompletionCapability+".")
 	}
 	return strings.Join(parts, " ")
 }
@@ -269,6 +279,9 @@ func normalizeRuntimeArgsSchema(schema map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(schema))
 	for k, v := range schema {
+		if k == "description" {
+			continue
+		}
 		out[k] = normalizeRuntimeSchemaValue(k, v)
 	}
 	return out

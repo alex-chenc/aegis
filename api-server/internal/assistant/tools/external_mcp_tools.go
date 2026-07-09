@@ -24,18 +24,18 @@ type ExternalMCPToolDeps struct {
 func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCPToolDeps) error {
 	// ExternalMCP.Source.List — 查询已配置的数据源
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.Source.List",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpList,
-		Capability:  "list_mcp_sources",
-		Description: "列出当前用户有权限使用的外接 MCP 数据源",
-		Aliases:     []string{"外部数据源", "MCP数据源", "list mcp sources"},
-		Tags:        []string{"v6.0", "external_mcp", "source"},
-		Risk:        assistant.ToolRiskReadonly,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "ExternalMCP.Source.List",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpList,
+		Capability:         "list_mcp_sources",
+		Description:        "列出当前用户有权限使用的外接 MCP 数据源",
+		Aliases:            []string{"外部数据源", "MCP数据源", "list mcp sources"},
+		Tags:               []string{"v6.0", "external_mcp", "source"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: true,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -58,18 +58,18 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 
 	// ExternalMCP.Source.GetSchema — 获取数据源 schema
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.Source.GetSchema",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpGet,
-		Capability:  "get_mcp_source_schema",
-		Description: "获取单个外接 MCP 数据源的 schema 和可用工具摘要",
-		Aliases:     []string{"MCP schema", "数据源详情"},
-		Tags:        []string{"v6.0", "external_mcp", "schema"},
-		Risk:        assistant.ToolRiskReadonly,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "ExternalMCP.Source.GetSchema",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpGet,
+		Capability:         "get_mcp_source_schema",
+		Description:        "获取单个外接 MCP 数据源的 schema 和可用工具摘要",
+		Aliases:            []string{"MCP schema", "数据源详情"},
+		Tags:               []string{"v6.0", "external_mcp", "schema"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: true,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -87,18 +87,18 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 
 	// ExternalMCP.Source.TestConnection — 测试连接
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.Source.TestConnection",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpExecute,
-		Capability:  "test_mcp_connection",
-		Description: "测试与外接 MCP 数据源的连接",
-		Aliases:     []string{"测试连接", "test connection"},
-		Tags:        []string{"v6.0", "external_mcp", "test"},
-		Risk:        assistant.ToolRiskLow,
-		AutoCallable: false,
-		Idempotent:   true,
+		Name:               "ExternalMCP.Source.TestConnection",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpExecute,
+		Capability:         "test_mcp_connection",
+		Description:        "测试与外接 MCP 数据源的连接",
+		Aliases:            []string{"测试连接", "test connection"},
+		Tags:               []string{"v6.0", "external_mcp", "test"},
+		Risk:               assistant.ToolRiskLow,
+		AutoCallable:       false,
+		Idempotent:         true,
 		DefaultWhitelisted: false,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -116,18 +116,18 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 
 	// ExternalMCP.Query — 查询外部数据源
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.Query",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpSearch,
-		Capability:  "query_mcp_source",
-		Description: "查询单个外接 MCP 数据源，返回归一化和脱敏后的结果",
-		Aliases:     []string{"查询外部数据", "MCP查询"},
-		Tags:        []string{"v6.0", "external_mcp", "query"},
-		Risk:        assistant.ToolRiskMedium,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "ExternalMCP.Query",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpSearch,
+		Capability:         "query_mcp_source",
+		Description:        "查询单个外接 MCP 数据源，返回归一化和脱敏后的结果",
+		Aliases:            []string{"查询外部数据", "MCP查询"},
+		Tags:               []string{"v6.0", "external_mcp", "query"},
+		Risk:               assistant.ToolRiskMedium,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: false,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -164,18 +164,18 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 
 	// ExternalMCP.MultiQuery — 多数据源并发查询
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.MultiQuery",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpSearch,
-		Capability:  "multi_query_mcp_sources",
-		Description: "并发查询多个外接 MCP 数据源，返回归一化和脱敏后的结果",
-		Aliases:     []string{"多源查询", "关联查询"},
-		Tags:        []string{"v6.0", "external_mcp", "multi_query"},
-		Risk:        assistant.ToolRiskMedium,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "ExternalMCP.MultiQuery",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpSearch,
+		Capability:         "multi_query_mcp_sources",
+		Description:        "并发查询多个外接 MCP 数据源，返回归一化和脱敏后的结果",
+		Aliases:            []string{"多源查询", "关联查询"},
+		Tags:               []string{"v6.0", "external_mcp", "multi_query"},
+		Risk:               assistant.ToolRiskMedium,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: false,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -206,18 +206,18 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 
 	// ExternalMCP.Analyze — 证据融合分析
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "ExternalMCP.Analyze",
-		Domain:      assistant.DomainExternalMCP,
-		Operation:   assistant.OpGenerate,
-		Capability:  "analyze_mcp_evidence",
-		Description: "对已查询的外部 MCP 结果做证据融合分析，不再次访问外部",
-		Aliases:     []string{"证据融合", "MCP分析"},
-		Tags:        []string{"v6.0", "external_mcp", "analyze"},
-		Risk:        assistant.ToolRiskReadonly,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "ExternalMCP.Analyze",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpGenerate,
+		Capability:         "analyze_mcp_evidence",
+		Description:        "对已查询的外部 MCP 结果做证据融合分析，不再次访问外部",
+		Aliases:            []string{"证据融合", "MCP分析"},
+		Tags:               []string{"v6.0", "external_mcp", "analyze"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: true,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -548,10 +548,10 @@ func makeExternalMCPAnalyzeHandler(
 		})
 
 		return map[string]interface{}{
-			"success":    true,
-			"prompt":     analysisPrompt,
-			"query_ids":  queryIDs,
-			"message":    "分析提示词已生成，请使用 LLM 进行分析",
+			"success":   true,
+			"prompt":    analysisPrompt,
+			"query_ids": queryIDs,
+			"message":   "分析提示词已生成，请使用 LLM 进行分析",
 		}, nil
 	}
 }

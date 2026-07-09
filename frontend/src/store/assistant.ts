@@ -266,7 +266,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         continue
       }
 
-      if (!plan || !['step_started', 'step_completed'].includes(event.type)) {
+      if (!plan || !['step_started', 'step_completed', 'step_failed', 'step_retrying'].includes(event.type)) {
         continue
       }
 
@@ -278,11 +278,18 @@ export const useAssistantStore = defineStore('assistant', () => {
 
       if (event.type === 'step_started') {
         step.status = payload.status || 'running'
-      } else {
+      } else if (event.type === 'step_completed') {
         step.status = payload.status || 'completed'
         const resultSummary = payload.result_summary || payload.summary
         if (resultSummary) {
           step.result_summary = resultSummary
+        }
+      } else if (event.type === 'step_retrying') {
+        step.status = 'retrying'
+      } else {
+        step.status = 'failed'
+        if (payload.error) {
+          step.result_summary = payload.error
         }
       }
 
@@ -353,6 +360,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   function isSettledToolCallStatus(status: AssistantToolCall['status']) {
     return [
+      'accepted',
       'completed',
       'success',
       'failed',
@@ -360,6 +368,48 @@ export const useAssistantStore = defineStore('assistant', () => {
       'approval_required',
       'rejected',
     ].includes(status)
+  }
+
+  function displayStatusForToolOutcome(
+    operationStatus: AssistantToolCall['operation_status'],
+    terminal: boolean | undefined,
+    fallback: AssistantToolCall['status']
+  ): AssistantToolCall['status'] {
+    switch (operationStatus) {
+      case 'accepted':
+        return 'accepted'
+      case 'running':
+        return 'running'
+      case 'failed':
+        return 'failed'
+      case 'succeeded':
+      case 'skipped':
+        return terminal === false ? 'running' : 'completed'
+      default:
+        return fallback
+    }
+  }
+
+  function normalizeToolCallBusinessOutcome(call: AssistantToolCall): AssistantToolCall {
+    return {
+      ...call,
+      status: displayStatusForToolOutcome(call.operation_status, call.terminal, call.status),
+    }
+  }
+
+  function summarizeOperationOutcome(payload: any): string {
+    switch (payload.operation_status) {
+      case 'accepted':
+        return '请求已受理，业务操作尚未完成。'
+      case 'running':
+        return '业务操作仍在执行。'
+      case 'failed':
+        return '业务操作执行失败，详情见返回结果。'
+      case 'skipped':
+        return '业务操作已跳过。'
+      default:
+        return summarizeToolResult(payload.result)
+    }
   }
 
   function sortedToolCallsForMessage(messageId: string) {
@@ -1032,7 +1082,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       const query: ToolCallsQueryParams = { ...params, page_size: pageSize }
       if (params?.page) {
         const result = await apiGetToolCalls(sessionId, query)
-        toolCalls.value = result.items
+        toolCalls.value = result.items.map(normalizeToolCallBusinessOutcome)
         return result
       }
 
@@ -1060,7 +1110,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         page: 1,
         page_size: effectivePageSize,
       }
-      toolCalls.value = result.items
+      toolCalls.value = result.items.map(normalizeToolCallBusinessOutcome)
       // 不在此处调用 rebuildAssistantHistoryCycles()
       // 由调用方（openSession）在所有数据加载完成后统一重建，避免竞态条件
       return result
@@ -1370,6 +1420,37 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
+  function updatePlanStatusFromOutcome(outcome?: string) {
+    if (!outcome || outcome === 'succeeded') {
+      updatePlanStatusToCompleted()
+      return
+    }
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const msg = messages.value[i]
+      if (msg.role !== 'assistant' || !msg.plan) continue
+      msg.plan.status = outcome === 'partially_succeeded' ? 'partial' : 'failed'
+      for (const step of msg.plan.steps) {
+        if (step.status === 'running' || step.status === 'retrying') {
+          step.status = 'failed'
+        } else if (step.status === 'pending') {
+          step.status = 'skipped'
+        }
+      }
+      break
+    }
+  }
+
+  function sessionStatusFromGoalOutcome(outcome?: string): AssistantSession['status'] {
+    switch (outcome) {
+      case 'failed':
+        return 'failed'
+      case 'needs_input':
+        return 'active'
+      default:
+        return 'completed'
+    }
+  }
+
   /**
    * 处理 SSE 流式事件并更新状态
    *
@@ -1495,6 +1576,22 @@ export const useAssistantStore = defineStore('assistant', () => {
         break
       }
 
+      case 'step_failed':
+      case 'step_retrying': {
+        const stepEventId = event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
+        if (stepEventId) {
+          const stepEventMsg = findMessage(stepEventId)
+          const step = stepEventMsg?.plan?.steps?.find(s => s.step_id === payload.step_id)
+          if (step) {
+            step.status = event.type === 'step_retrying' ? 'retrying' : 'failed'
+            if (payload.error) {
+              step.result_summary = payload.error
+            }
+          }
+        }
+        break
+      }
+
       case 'message_delta': {
         // 增量更新助手消息内容
         // payload: { message_id, delta }
@@ -1591,17 +1688,29 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
 
       case 'tool_result': {
-        // 工具调用完成
-        // payload: { call_id, result }
+        // The tool transport returned. Business completion is represented by
+        // operation_status + terminal and may still be accepted/running/failed.
+        // payload: { call_id, result, operation_status?, terminal?, outcome? }
         // 仅处理属于当前会话的工具调用
         if (event.session_id && event.session_id !== currentSession.value?.session_id) break
 
         // 更新全局工具调用列表
         const idx = toolCalls.value.findIndex(tc => tc.call_id === payload.call_id || tc.id === payload.call_id)
+        const operationStatus = payload.operation_status as AssistantToolCall['operation_status']
+        const displayStatus = displayStatusForToolOutcome(operationStatus, payload.terminal, 'completed')
+        const resultSummary = summarizeOperationOutcome(payload)
         if (idx > -1) {
-          toolCalls.value[idx].status = 'completed'
+          toolCalls.value[idx].status = displayStatus
           toolCalls.value[idx].result = payload.result
-          toolCalls.value[idx].result_summary = summarizeToolResult(payload.result)
+          toolCalls.value[idx].result_summary = resultSummary
+          toolCalls.value[idx].operation_status = operationStatus
+          toolCalls.value[idx].terminal = payload.terminal
+          toolCalls.value[idx].outcome = payload.outcome
+          toolCalls.value[idx].outcome_message = payload.outcome_message
+          toolCalls.value[idx].capability = payload.capability
+          if (displayStatus === 'failed' && !toolCalls.value[idx].error_message) {
+            toolCalls.value[idx].error_message = resultSummary
+          }
         } else if (payload.call_id) {
           toolCalls.value.push({
             id: payload.call_id,
@@ -1610,10 +1719,16 @@ export const useAssistantStore = defineStore('assistant', () => {
             call_id: payload.call_id,
             tool_name: payload.tool_name || 'Unknown.Tool',
             args: payload.args || {},
-            status: 'completed',
+            status: displayStatus,
             risk_level: 'readonly',
             result: payload.result,
-            result_summary: summarizeToolResult(payload.result),
+            result_summary: resultSummary,
+            operation_status: operationStatus,
+            terminal: payload.terminal,
+            outcome: payload.outcome,
+            outcome_message: payload.outcome_message,
+            capability: payload.capability,
+            error_message: displayStatus === 'failed' ? resultSummary : undefined,
             created_at: new Date().toISOString(),
           })
         }
@@ -1624,9 +1739,17 @@ export const useAssistantStore = defineStore('assistant', () => {
           if (toolResultMsg?.tool_calls) {
             const tcInMsg = toolResultMsg.tool_calls.find(tc => tc.call_id === payload.call_id)
             if (tcInMsg) {
-              tcInMsg.status = 'completed'
+              tcInMsg.status = displayStatus
               tcInMsg.result = payload.result
-              tcInMsg.result_summary = summarizeToolResult(payload.result)
+              tcInMsg.result_summary = resultSummary
+              tcInMsg.operation_status = operationStatus
+              tcInMsg.terminal = payload.terminal
+              tcInMsg.outcome = payload.outcome
+              tcInMsg.outcome_message = payload.outcome_message
+              tcInMsg.capability = payload.capability
+              if (displayStatus === 'failed' && !tcInMsg.error_message) {
+                tcInMsg.error_message = resultSummary
+              }
             }
           }
         }
@@ -1810,14 +1933,17 @@ export const useAssistantStore = defineStore('assistant', () => {
         streaming.value = false
         eventSource?.close()
         eventSource = null
-        // 更新会话状态为已完成
+        // A done event closes the stream, but the business goal may have
+        // failed or may still need user input.
         if (currentSession.value) {
-          currentSession.value.status = 'completed'
-          updateCurrentSessionMetadata({ current_run_status: 'completed' })
+          currentSession.value.status = sessionStatusFromGoalOutcome(payload.goal_outcome)
+          updateCurrentSessionMetadata({
+            current_run_status: payload.status || 'completed',
+            goal_outcome: payload.goal_outcome,
+          })
           refreshSessionSnapshot(currentSession.value.session_id)
         }
-        // 更新计划状态为已完成
-        updatePlanStatusToCompleted()
+        updatePlanStatusFromOutcome(payload.goal_outcome)
         break
       }
 

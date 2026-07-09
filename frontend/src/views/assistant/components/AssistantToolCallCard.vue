@@ -56,6 +56,7 @@ function getStatusTag(status: string): string {
   const map: Record<string, string> = {
     pending: 'info',
     running: 'warning',
+    accepted: 'warning',
     completed: 'success',
     success: 'success',
     failed: 'danger',
@@ -70,6 +71,7 @@ function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
     pending: '等待中',
     running: '执行中',
+    accepted: '已受理',
     completed: '成功',
     success: '成功',
     failed: '失败',

@@ -1280,4 +1280,90 @@ describe('assistant store stream events', () => {
     expect(api.getToolCalls).toHaveBeenNthCalledWith(1, 'session-1', expect.objectContaining({ page: 1, page_size: 100 }))
     expect(api.getToolCalls).toHaveBeenNthCalledWith(2, 'session-1', expect.objectContaining({ page: 2, page_size: 100 }))
   })
+
+  it('does not display an accepted asynchronous operation as success', () => {
+    const store = useAssistantStore()
+    store.currentSession = { ...session }
+
+    store.applyStreamEvent({
+      type: 'tool_call',
+      session_id: 'session-1',
+      run_id: 'run-async',
+      payload: {
+        call_id: 'call-generate',
+        tool_name: 'Vulnerability.Script.Generate',
+        args: { cve_id: 'CVE-2021-45340', script_type: 'fix' },
+      },
+    })
+    store.applyStreamEvent({
+      type: 'tool_result',
+      session_id: 'session-1',
+      run_id: 'run-async',
+      payload: {
+        call_id: 'call-generate',
+        result: { status: 'accepted', generation_id: 'gen-1' },
+        operation_status: 'accepted',
+        terminal: false,
+      },
+    })
+
+    expect(store.toolCalls[0].status).toBe('accepted')
+    expect(store.toolCalls[0].result_summary).toContain('尚未完成')
+  })
+
+  it('displays a business failure even when the tool transport returned a result', () => {
+    const store = useAssistantStore()
+    store.currentSession = { ...session }
+
+    store.applyStreamEvent({
+      type: 'tool_result',
+      session_id: 'session-1',
+      run_id: 'run-failed',
+      payload: {
+        call_id: 'call-dispatch',
+        result: { success: true },
+        operation_status: 'failed',
+        terminal: true,
+      },
+    })
+
+    expect(store.toolCalls[0].status).toBe('failed')
+    expect(store.toolCalls[0].error_message).toContain('业务操作执行失败')
+  })
+
+  it('does not mark a failed goal as a completed session when the stream closes', () => {
+    const store = useAssistantStore()
+    store.currentSession = { ...session }
+
+    store.applyStreamEvent({
+      type: 'done',
+      session_id: 'session-1',
+      run_id: 'run-goal-failed',
+      payload: {
+        status: 'failed',
+        goal_outcome: 'failed',
+      },
+    })
+
+    expect(store.currentSession?.status).toBe('failed')
+    expect(store.currentSession?.metadata?.current_run_status).toBe('failed')
+    expect(store.currentSession?.metadata?.goal_outcome).toBe('failed')
+  })
+
+  it('keeps a needs-input goal active when the stream closes', () => {
+    const store = useAssistantStore()
+    store.currentSession = { ...session }
+
+    store.applyStreamEvent({
+      type: 'done',
+      session_id: 'session-1',
+      run_id: 'run-needs-input',
+      payload: {
+        status: 'needs_input',
+        goal_outcome: 'needs_input',
+      },
+    })
+
+    expect(store.currentSession?.status).toBe('active')
+  })
 })

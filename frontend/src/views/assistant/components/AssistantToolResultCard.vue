@@ -130,6 +130,7 @@ const statusLabel = computed(() => {
   const map: Record<string, string> = {
     pending: '等待中',
     running: '执行中',
+    accepted: '已受理',
     completed: '成功',
     success: '成功',
     failed: '失败',
@@ -146,6 +147,7 @@ const statusTagType = computed(() => {
     case 'success':
       return 'success'
     case 'running':
+    case 'accepted':
     case 'approval_required':
       return 'warning'
     case 'failed':

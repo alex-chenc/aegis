@@ -146,7 +146,7 @@ Return exactly one JSON object containing an "action" field. Do not output non-J
 Choose tool names and arguments only from Available tools, user input, context, and actual prior results. Emit one tool call per response. If more calls may be needed, wait for the actual result before deciding the next call.
 
 ### Complete the current step
-{"action":"step_result","summary":"completion summary","step_result":{"result":"step result","evidence":["evidence"],"confidence":"high|medium|low"}}
+{"action":"step_result","summary":"completion summary","step_result":{"result":"step result","evidence":["exact terminal call_id when tools were used"],"confidence":"high|medium|low"}}
 
 ### Cannot continue
 {"action":"fail_step","summary":"failure summary","failure":{"reason":"failure reason","recoverable":true}}
@@ -157,6 +157,8 @@ Choose tool names and arguments only from Available tools, user input, context, 
 - For a complex goal, follow the current plan and ground every step in actual tool results.
 - Cover the complete set or scope requested by the user. If pagination, offline targets, permissions, or tool failures leave partial coverage, list the exact gap and reason.
 - When a tool fails, an asynchronous task is incomplete, or a result is empty, use its contract and actual result to decide whether to retry, query status, use an authorized alternative, or record an evidence gap.
+- A successful tool transport can still have operation_status=accepted or running. These non-terminal outcomes never satisfy a step.
+- When tools were used, step_result.evidence must contain exact call_id values for successful terminal outcomes. Never cite free-form evidence in place of a call ID.
 - When evidence is insufficient, state that evidence is insufficient. Never guess host, alert, status, or conclusion details.
 - After a tool error, use Internal recovery reflections to correct arguments or choose an alternative and retry at most once. Do not retry indefinitely.
 - Reuse a successful result for the same tool and arguments. Do not issue duplicate calls.

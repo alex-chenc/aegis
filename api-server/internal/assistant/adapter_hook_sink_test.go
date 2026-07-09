@@ -199,17 +199,20 @@ func TestAssistantHookSinkPublishesStepCompletedWithResultSummary(t *testing.T) 
 	}
 }
 
-func TestAssistantHookSinkDoesNotPublishTransientStepFailure(t *testing.T) {
+func TestAssistantHookSinkPublishesFailedAndRetryingStepStatus(t *testing.T) {
 	manager := NewRunManager()
 	run := manager.Start("session-1")
 	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
 
-	for _, eventType := range []agentruntime.HookEventType{
-		agentruntime.HookStepFailed,
-		agentruntime.HookStepRetrying,
+	for _, testCase := range []struct {
+		hook agentruntime.HookEventType
+		want string
+	}{
+		{hook: agentruntime.HookStepFailed, want: EventStepFailed},
+		{hook: agentruntime.HookStepRetrying, want: EventStepRetrying},
 	} {
 		err := sink.Handle(context.Background(), agentruntime.HookEvent{
-			Type:   eventType,
+			Type:   testCase.hook,
 			StepID: "step-1",
 			Snapshot: &agentruntime.TaskSnapshot{
 				CurrentPlan: &agentruntime.Plan{
@@ -221,7 +224,7 @@ func TestAssistantHookSinkDoesNotPublishTransientStepFailure(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("Handle returned error for %q: %v", eventType, err)
+			t.Fatalf("Handle returned error for %q: %v", testCase.hook, err)
 		}
 	}
 
@@ -231,10 +234,11 @@ func TestAssistantHookSinkDoesNotPublishTransientStepFailure(t *testing.T) {
 	}
 	defer unsubscribe()
 
-	select {
-	case event := <-ch:
-		t.Fatalf("expected no visible event for transient step failure/retry, got %q", event.Type)
-	case <-time.After(50 * time.Millisecond):
+	for _, want := range []string{EventStepFailed, EventStepRetrying} {
+		event := receiveEvent(t, ch)
+		if event.Type != want {
+			t.Fatalf("event type = %q, want %q", event.Type, want)
+		}
 	}
 }
 

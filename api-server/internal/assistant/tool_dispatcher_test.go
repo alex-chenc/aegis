@@ -56,6 +56,16 @@ func (f *fakeToolCallRepo) MarkSuccess(_ context.Context, callID string, result 
 	}
 	return nil
 }
+func (f *fakeToolCallRepo) MarkOutcome(_ context.Context, callID, operationStatus string, terminal bool, outcome interface{}) error {
+	for i := range f.calls {
+		if f.calls[i].CallID == callID {
+			f.calls[i].OperationStatus = operationStatus
+			f.calls[i].OperationTerminal = &terminal
+			f.calls[i].Outcome = mustMarshalJSON(outcome)
+		}
+	}
+	return nil
+}
 func (f *fakeToolCallRepo) MarkFailed(_ context.Context, callID, errMsg string, duration int64) error {
 	f.markFailedCall = &markFailedRecord{CallID: callID, ErrorMsg: errMsg, Duration: duration}
 	for i := range f.calls {
@@ -203,7 +213,7 @@ func TestAssistantToolGatewayAdapterPublishesCompletionForRuntimeCallID(t *testi
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			startedCallID = callID
 		},
-		OnToolResult: func(callID string, result interface{}) {
+		OnToolResult: func(callID string, result interface{}, outcome *agentruntime.ToolOutcome) {
 			completedCallID = callID
 		},
 	})
@@ -251,7 +261,7 @@ func TestAssistantToolGatewayAdapterReusesSuccessfulReadonlyToolCall(t *testing.
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			startedCount++
 		},
-		OnToolResult: func(callID string, result interface{}) {
+		OnToolResult: func(callID string, result interface{}, outcome *agentruntime.ToolOutcome) {
 			resultCount++
 		},
 	})

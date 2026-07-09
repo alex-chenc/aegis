@@ -109,12 +109,23 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		})
 
 	case agentruntime.HookStepFailed:
-		// Step failures can be transient when the runtime retries or applies
-		// reflection. Do not expose them as final-looking timeline items.
+		stepTitle := findAssistantStepTitle(event, event.StepID)
+		payload := map[string]interface{}{
+			"step_id": event.StepID,
+			"title":   stepTitle,
+			"status":  "failed",
+		}
+		if event.Snapshot != nil && len(event.Snapshot.RecentErrors) > 0 {
+			payload["error"] = event.Snapshot.RecentErrors[len(event.Snapshot.RecentErrors)-1].Message
+		}
+		s.publish(EventStepFailed, payload)
 
 	case agentruntime.HookStepRetrying:
-		// Internal recovery signal; the user-facing timeline should resume at
-		// the next tool call or completed/skipped step.
+		s.publish(EventStepRetrying, map[string]interface{}{
+			"step_id": event.StepID,
+			"title":   findAssistantStepTitle(event, event.StepID),
+			"status":  "retrying",
+		})
 
 	case agentruntime.HookStepSkipped:
 		stepTitle := findAssistantStepTitle(event, event.StepID)

@@ -106,7 +106,13 @@ export interface AssistantToolCall {
   tool_name: string
   domain?: string
   risk_level: AssistantRiskLevel
-  status: 'pending' | 'running' | 'completed' | 'success' | 'failed' | 'cancelled' | 'approval_required' | 'rejected'
+  status: 'pending' | 'running' | 'accepted' | 'completed' | 'success' | 'failed' | 'cancelled' | 'approval_required' | 'rejected'
+  /** Transport status is kept in status by the API; these fields describe the business operation. */
+  operation_status?: 'accepted' | 'running' | 'succeeded' | 'failed' | 'skipped'
+  terminal?: boolean
+  outcome?: Record<string, any>
+  outcome_message?: string
+  capability?: string
   args?: Record<string, any>
   args_summary?: string
   result?: any
@@ -706,6 +712,8 @@ export type AssistantStreamEventType =
   | 'plan'
   | 'step_started'
   | 'step_completed'
+  | 'step_failed'
+  | 'step_retrying'
   | 'tool_call'
   | 'tool_result'
   | 'tool_error'
@@ -779,7 +787,7 @@ export interface AssistantPlan {
   plan_id: string
   goal: string
   steps: AssistantPlanStep[]
-  status: 'planning' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'planning' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled'
 }
 
 /** 执行计划步骤 */
@@ -788,7 +796,7 @@ export interface AssistantPlanStep {
   title: string
   objective: string
   suggested_tools: string[]
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'waiting_approval'
+  status: 'pending' | 'running' | 'retrying' | 'completed' | 'failed' | 'skipped' | 'waiting_approval'
   result_summary?: string
 }
 

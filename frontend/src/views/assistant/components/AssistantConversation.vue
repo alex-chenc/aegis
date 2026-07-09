@@ -261,6 +261,7 @@ function shouldRenderStepResults(msg: AssistantMessage): boolean {
 
 function isToolCallDisplaySettled(toolCall: AssistantToolCall): boolean {
   return [
+    'accepted',
     'completed',
     'success',
     'failed',

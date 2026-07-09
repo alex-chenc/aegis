@@ -172,7 +172,6 @@ type ToolDecisionRecord struct {
 	ToolName        string                 `json:"tool_name"`
 	Capability      string                 `json:"capability"`
 	Decision        string                 `json:"decision"`
-	Score           float64                `json:"score"`
 	RequiresWrite   bool                   `json:"requires_write"`
 	HardGateResults []HardGateResult       `json:"hard_gate_results"`
 	ArgSources      map[string]ArgSource   `json:"arg_sources,omitempty"`

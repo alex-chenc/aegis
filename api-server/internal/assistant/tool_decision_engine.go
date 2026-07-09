@@ -21,8 +21,6 @@ type ToolDecisionConfig struct {
 	Enabled                    bool
 	TraceEnabled               bool
 	ClarificationRequiredWrite bool
-	MinScore                   float64
-	ReadonlyMinScore           float64
 	PostconditionCheckEnabled  bool
 	DryRunForWrite             bool
 }
@@ -32,8 +30,6 @@ func DefaultToolDecisionConfigFromEnv() ToolDecisionConfig {
 		Enabled:                    envBool("ASSISTANT_TOOL_DECISION_ENGINE_ENABLED", true),
 		TraceEnabled:               envBool("ASSISTANT_TOOL_DECISION_TRACE", false),
 		ClarificationRequiredWrite: envBool("ASSISTANT_CLARIFICATION_REQUIRED_FOR_WRITE", true),
-		MinScore:                   envFloat("ASSISTANT_TOOL_DECISION_MIN_SCORE", 0.75),
-		ReadonlyMinScore:           envFloat("ASSISTANT_TOOL_READONLY_MIN_SCORE", 0.60),
 		PostconditionCheckEnabled:  envBool("ASSISTANT_TOOL_POSTCONDITION_CHECK_ENABLED", true),
 		DryRunForWrite:             envBool("ASSISTANT_TOOL_DRY_RUN_FOR_WRITE", false),
 	}
@@ -69,12 +65,6 @@ func NewToolDecisionEngine(deps ToolDecisionEngineDeps) *ToolDecisionEngine {
 		logger = zap.NewNop()
 	}
 	config := deps.Config
-	if config.MinScore <= 0 {
-		config.MinScore = 0.75
-	}
-	if config.ReadonlyMinScore <= 0 {
-		config.ReadonlyMinScore = 0.60
-	}
 	if deps.Mapper == nil {
 		deps.Mapper = NewToolCapabilityMapper(deps.Registry)
 	}
@@ -175,6 +165,8 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 
 	e.logger.Info("assistant tool authorization completed",
 		zap.String("trace_id", traceID),
+		zap.String("authorization_mode", "mapping_hard_gates"),
+		zap.Strings("selected_capabilities", breakdown.CandidateCapabilities),
 		zap.Int("candidate_count", len(candidateNames)),
 		zap.Int("authorized_count", len(steps)),
 		zap.Bool("need_clarification", false),
@@ -229,24 +221,7 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 	}
 	mapped := e.mapper.ToolNamesForCapabilities(breakdown.CandidateCapabilities)
 	names = append(names, mapped...)
-	if sel := input.PreliminarySelection; sel != nil {
-		names = append(names, sel.SelectedTools...)
-	}
-	// A single LLM preselection must not permanently hide another relevant
-	// tool. Recall enabled tools through generic contracts derived from the
-	// LLM's structured domains and objects; scoring and hard gates below still
-	// decide which tools are authorized.
-	for _, tool := range e.registry.List() {
-		if tool == nil || !tool.Enabled || isResidentTool(tool.Name) {
-			continue
-		}
-		if containsDecisionString(breakdown.Domains, string(tool.Domain)) ||
-			containsDecisionString(input.Intent.Domains, string(tool.Domain)) ||
-			objectMatchesTool(breakdown.Objects, tool) ||
-			contextMatchesTool(input.ContextRefs, tool) {
-			names = append(names, tool.Name)
-		}
-	}
+	names = append(names, e.mapper.ReadonlyCompanionToolNames(mapped)...)
 
 	capabilityMatched := make(map[string]bool, len(breakdown.CandidateCapabilities))
 	for _, name := range mapped {
@@ -283,7 +258,6 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	record := ToolDecisionRecord{
 		ToolName:      name,
 		Capability:    contract.Capability,
-		Score:         e.scoreToolDecision(tool, contract, input, breakdown),
 		RequiresWrite: contract.RequiresExplicitUserIntent || tool.Risk != ToolRiskReadonly,
 		ArgSources:    map[string]ArgSource{},
 	}
@@ -325,25 +299,13 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	}
 	gates = append(gates, HardGateResult{Name: "required_entities", Passed: true})
 
-	threshold := e.config.MinScore
-	if tool.Risk == ToolRiskReadonly || tool.Risk == ToolRiskLow {
-		threshold = e.config.ReadonlyMinScore
-	}
-	if isResidentTool(name) || record.Score >= threshold || preliminarySelected(input.PreliminarySelection, name) {
-		record.Decision = toolDecisionAccepted
-		record.Reason = "tool contract matched intent and passed hard gates"
-		record.HardGateResults = gates
-		record.ApprovalState = approvalStateForContract(contract)
-		_, sources := bindPlanArgs(contract, input, breakdown)
-		record.ArgSources = sources
-		return record, true
-	}
-
-	gates = append(gates, HardGateResult{Name: "score_threshold", Passed: false, Reason: fmt.Sprintf("score %.2f below threshold %.2f", record.Score, threshold)})
-	record.Decision = toolDecisionRejected
-	record.Reason = fmt.Sprintf("tool score %.2f below threshold %.2f", record.Score, threshold)
+	record.Decision = toolDecisionAccepted
+	record.Reason = "exact capability mapping passed authorization hard gates"
 	record.HardGateResults = gates
-	return record, false
+	record.ApprovalState = approvalStateForContract(contract)
+	_, sources := bindPlanArgs(contract, input, breakdown)
+	record.ArgSources = sources
+	return record, true
 }
 
 // checkDeniedIntents 检查 LLM 候选能力是否命中工具的 denied_intents 或 negative_cases。
@@ -391,7 +353,7 @@ func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, inp
 				}
 			}
 			if value, _ := resolveArgBySourceOrderWithoutPreviousStep(binding, input, breakdown); value != nil ||
-				canResolveDuringRuntime(binding, input) {
+				canResolveDuringRuntime(binding, input, breakdown) {
 				satisfied = true
 				break
 			}
@@ -413,7 +375,7 @@ func bindingForEntity(bindings []ArgBindingRule, entity string) (ArgBindingRule,
 	return ArgBindingRule{}, false
 }
 
-func canResolveDuringRuntime(binding ArgBindingRule, input ToolDecisionInput) bool {
+func canResolveDuringRuntime(binding ArgBindingRule, input ToolDecisionInput, breakdown *IntentBreakdown) bool {
 	hasPreviousStepSource := false
 	hasSessionSource := false
 	for _, source := range binding.SourceOrder {
@@ -427,10 +389,18 @@ func canResolveDuringRuntime(binding ArgBindingRule, input ToolDecisionInput) bo
 	if hasSessionSource && len(input.ContextRefs) > 0 {
 		return true
 	}
-	if !hasPreviousStepSource || input.PreliminarySelection == nil {
+	if !hasPreviousStepSource {
 		return false
 	}
-	return len(dedupeStrings(input.PreliminarySelection.SelectedTools)) > 1
+	if breakdown != nil {
+		if len(dedupeStrings(breakdown.CandidateCapabilities)) > 1 {
+			return true
+		}
+		if breakdown.Scope.Kind != "" && breakdown.Scope.Kind != "unspecified" {
+			return true
+		}
+	}
+	return len(input.ContextRefs) > 0
 }
 
 func hasBreakdownEntity(breakdown *IntentBreakdown, entity string) bool {
@@ -444,39 +414,6 @@ func hasBreakdownEntity(breakdown *IntentBreakdown, entity string) bool {
 		}
 	}
 	return false
-}
-
-func (e *ToolDecisionEngine) scoreToolDecision(tool *ToolSpec, contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown) float64 {
-	if tool == nil {
-		return 0
-	}
-	if isResidentTool(tool.Name) {
-		return 1
-	}
-	score := 0.0
-	if containsDecisionString(input.Intent.Domains, string(tool.Domain)) || containsDecisionString(breakdown.Domains, string(tool.Domain)) {
-		score += 0.20
-	}
-	action := firstAction(breakdown, input.Intent)
-	if actionMatchesContract(action, contract.Actions, tool.Operation) {
-		score += 0.20
-	}
-	if objectMatchesTool(breakdown.Objects, tool) || input.Intent.Object == string(tool.Domain) {
-		score += 0.20
-	}
-	if breakdown.Scope.Kind != "" && breakdown.Scope.Kind != "unspecified" {
-		score += 0.15
-	}
-	if contextMatchesTool(input.ContextRefs, tool) {
-		score += 0.10
-	}
-	if hasCapability(breakdown, contract.Capability) || preliminarySelected(input.PreliminarySelection, tool.Name) {
-		score += 0.10
-	}
-	if (tool.Risk == ToolRiskReadonly && !breakdown.RequiresWrite) || (tool.Risk != ToolRiskReadonly && breakdown.RequiresWrite) {
-		score += 0.05
-	}
-	return score
 }
 
 func defaultEvidencePolicy(enabled bool) EvidencePolicy {
@@ -578,19 +515,14 @@ func extractArgFromBreakdown(binding ArgBindingRule, breakdown *IntentBreakdown)
 }
 
 func decisionStepReason(tool *ToolSpec, contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown) string {
+	_ = input
 	if tool == nil {
-		return "工具已通过后端裁决"
-	}
-	if containsDecisionString(contract.WorkflowHints, "asset_collection_then_analysis") || containsDecisionString(contract.NextCapabilities, "get_asset_collection_task") {
-		return "用户要求资产采集或资产分析，后端按契约生成采集及后续查询计划"
-	}
-	if preliminarySelected(input.PreliminarySelection, tool.Name) {
-		return "候选工具通过后端 mapping、风险和参数裁决"
+		return "The tool passed deterministic authorization hard gates."
 	}
 	if hasCapability(breakdown, contract.Capability) {
-		return "意图拆解候选能力映射到该工具并通过后端裁决"
+		return "The exact intent capability mapped to this tool and passed authorization hard gates."
 	}
-	return "用户明确指定的工具通过后端授权裁决"
+	return "The tool is a declared read-only companion or an explicitly requested tool and passed authorization hard gates."
 }
 
 func shouldStopForClarification(breakdown *IntentBreakdown, accepted []string, registry *ToolRegistry) bool {
@@ -612,13 +544,6 @@ func approvalStateForContract(contract ToolUseContract) string {
 		return "required"
 	}
 	return "not_required"
-}
-
-func preliminarySelected(selection *ToolSelectionResult, name string) bool {
-	if selection == nil {
-		return false
-	}
-	return containsDecisionString(selection.SelectedTools, name)
 }
 
 func hasCapability(breakdown *IntentBreakdown, capability string) bool {
@@ -745,18 +670,6 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-func envFloat(key string, fallback float64) float64 {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return fallback
 	}

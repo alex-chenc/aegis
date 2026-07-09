@@ -21,7 +21,6 @@ import (
 type RuntimeFactory struct {
 	configRepo     *repository.ConfigRepository
 	catalog        *ToolCatalog
-	selector       *ToolSelector
 	toolDispatcher *ToolDispatcher
 	runManager     *RunManager
 	memoryRepo     repository.AssistantMemoryRepository
@@ -32,7 +31,6 @@ type RuntimeFactory struct {
 type RuntimeFactoryDeps struct {
 	ConfigRepo     *repository.ConfigRepository
 	Catalog        *ToolCatalog
-	Selector       *ToolSelector
 	ToolDispatcher *ToolDispatcher
 	RunManager     *RunManager
 	MemoryRepo     repository.AssistantMemoryRepository
@@ -48,7 +46,6 @@ func NewRuntimeFactory(deps RuntimeFactoryDeps) *RuntimeFactory {
 	return &RuntimeFactory{
 		configRepo:     deps.ConfigRepo,
 		catalog:        deps.Catalog,
-		selector:       deps.Selector,
 		toolDispatcher: deps.ToolDispatcher,
 		runManager:     deps.RunManager,
 		memoryRepo:     deps.MemoryRepo,
@@ -113,8 +110,8 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
-		OnToolResult: func(callID string, result interface{}) {
-			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, req.MessageID, callID, result))
+		OnToolResult: func(callID string, result interface{}, outcome *agentruntime.ToolOutcome) {
+			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, req.MessageID, callID, result, outcome))
 		},
 		OnToolError: func(callID, errMsg string) {
 			f.runManager.Publish(req.SessionID, EventToolErrorPayload(req.SessionID, req.RunID, req.MessageID, callID, errMsg))

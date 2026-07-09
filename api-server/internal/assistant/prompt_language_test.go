@@ -13,11 +13,9 @@ var hanPromptPattern = regexp.MustCompile(`[\p{Han}]`)
 
 func TestAssistantStaticModelInstructionsAreEnglish(t *testing.T) {
 	staticPrompts := map[string]string{
-		"intent_router":       intentRouterSystemPrompt,
-		"intent_decomposer":   intentDecomposerSystemPrompt,
-		"tool_selector_draft": toolSelectionDraftSystemPrompt,
-		"tool_selector_final": toolSelectionFinalSystemPrompt,
-		"json_retry":          jsonOnlyRetryReminder,
+		"intent_router":     intentRouterSystemPrompt,
+		"intent_decomposer": intentDecomposerSystemPrompt,
+		"json_retry":        jsonOnlyRetryReminder,
 	}
 	for name, prompt := range staticPrompts {
 		t.Run(name, func(t *testing.T) {
@@ -77,9 +75,8 @@ func TestModelFacingToolMetadataUsesEnglishContract(t *testing.T) {
 	}
 
 	for name, text := range map[string]string{
-		"brief":      shortToolBrief(spec),
-		"detail":     formatToolDetailForLLM(spec),
-		"descriptor": spec.Descriptor().Description,
+		"model_description": modelFacingToolDescription(spec),
+		"descriptor":        spec.Descriptor().Description,
 	} {
 		t.Run(name, func(t *testing.T) {
 			assertNoHanPromptText(t, text)
