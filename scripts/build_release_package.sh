@@ -7,6 +7,10 @@ RELEASE_ROOT="${RELEASE_ROOT:-${ROOT_DIR}/release}"
 RELEASE_DIR="${RELEASE_ROOT}/${VERSION}"
 ZIP_NAME="aegis-${VERSION}-linux-amd64-release.zip"
 ZIP_PATH="${RELEASE_ROOT}/${ZIP_NAME}"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+EBPF_BUILDER_IMAGE="${EBPF_BUILDER_IMAGE:-aegis-agent-builder-ubi8:5.8.0}"
+AGENT_ARTIFACT_IMAGE="${AGENT_ARTIFACT_IMAGE:-aegis-agent-artifacts:release}"
+BUILDER_SERVICE_IMAGE="${BUILDER_SERVICE_IMAGE:-aegis-system/builder:latest}"
 
 info() {
   printf '[release] %s\n' "$*"
@@ -72,20 +76,44 @@ prepare_release_dir() {
 }
 
 build_agent_artifact() {
-  info "building agent and eBPF artifacts"
-  (
-    cd "${ROOT_DIR}/agent"
-    make bpf
-    make build
-    make package
-  )
+  info "building shared eBPF builder image (${EBPF_BUILDER_IMAGE})"
+  docker build --platform "${DOCKER_PLATFORM}" \
+    -f "${ROOT_DIR}/docker/ebpf-builder-base/Dockerfile" \
+    -t "${EBPF_BUILDER_IMAGE}" \
+    "${ROOT_DIR}"
 
-  cp "${ROOT_DIR}/agent/dist/aegis-agent-linux-amd64" \
-    "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64"
-  cp "${ROOT_DIR}/agent/dist/aegis-agent.tar.gz" \
-    "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz"
-  cp "${ROOT_DIR}"/agent/internal/ebpf/bpf/obj/*.bpf.o \
-    "${RELEASE_DIR}/build-context/bpf/"
+  info "building Linux AMD64 agent artifacts inside ${EBPF_BUILDER_IMAGE}"
+  docker build --platform "${DOCKER_PLATFORM}" \
+    -f "${ROOT_DIR}/agent/Dockerfile" \
+    --build-arg "EBPF_BASE_IMAGE=${EBPF_BUILDER_IMAGE}" \
+    -t "${AGENT_ARTIFACT_IMAGE}" \
+    "${ROOT_DIR}/agent"
+
+  local agent_container
+  agent_container="$(docker create "${AGENT_ARTIFACT_IMAGE}")"
+  if ! docker cp "${agent_container}:/out/." "${RELEASE_DIR}/build-context/"; then
+    docker rm -f "${agent_container}" >/dev/null 2>&1 || true
+    die "failed to extract agent artifacts from ${AGENT_ARTIFACT_IMAGE}"
+  fi
+  docker rm "${agent_container}" >/dev/null
+
+  if [ -f "${RELEASE_DIR}/build-context/aegis-agent.tar.gz" ]; then
+    mv "${RELEASE_DIR}/build-context/aegis-agent.tar.gz" \
+      "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz"
+  fi
+
+  test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64" || die "missing Linux AMD64 agent binary"
+  test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz" || die "missing Linux AMD64 agent archive"
+  compgen -G "${RELEASE_DIR}/build-context/bpf/*.bpf.o" >/dev/null || die "missing eBPF objects from agent image"
+}
+
+build_builder_service_image() {
+  info "building builder service inside ${EBPF_BUILDER_IMAGE}"
+  docker build --platform "${DOCKER_PLATFORM}" \
+    -f "${ROOT_DIR}/builder/Dockerfile" \
+    --build-arg "EBPF_BASE_IMAGE=${EBPF_BUILDER_IMAGE}" \
+    -t "${BUILDER_SERVICE_IMAGE}" \
+    "${ROOT_DIR}"
 }
 
 write_minio_context() {
@@ -245,6 +273,25 @@ services:
       retries: 5
       start_period: 20s
 
+  builder:
+    image: aegis-system/builder:latest
+    container_name: aegis-builder
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
+      BUILDER_KEY_FILE: /data/builder.key
+    volumes:
+      - builder_data:/data
+    ports:
+      - "19096:19096"
+    networks:
+      - aegis-network
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: aegis-zookeeper
@@ -357,6 +404,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      builder:
+        condition: service_started
       server:
         condition: service_healthy
       kafka:
@@ -385,6 +434,7 @@ services:
       AGENT_HUB_PORT: 19090
       SERVER_EXTERNAL_IP: ${EXTERNAL_IP:-}
       GRPC_SERVER_ADDRESS: server:19094
+      BUILDER_GRPC_ADDRESS: builder:19096
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       KAFKA_BROKERS: kafka:9092
       KAFKA_GROUP_ID: aegis-api-server-consumer
@@ -468,6 +518,8 @@ volumes:
   redis_data:
     driver: local
   minio_data:
+    driver: local
+  builder_data:
     driver: local
 EOF
 }
@@ -588,6 +640,7 @@ load_images() {
 
 require_cmd docker
 require_cmd gzip
+require_cmd curl
 
 docker info >/dev/null 2>&1 || die "Docker daemon is not available"
 
@@ -608,6 +661,21 @@ compose up -d
 
 sleep "${AEGIS_START_WAIT_SECONDS:-20}"
 compose ps
+
+health_attempts="${AEGIS_START_HEALTH_ATTEMPTS:-30}"
+attempt=1
+api_healthy=0
+while [ "${attempt}" -le "${health_attempts}" ]; do
+  if curl -fsS http://127.0.0.1:8082/health >/dev/null; then
+    log "api-server is healthy"
+    api_healthy=1
+    break
+  fi
+  sleep 2
+  attempt=$((attempt + 1))
+done
+
+[ "${api_healthy}" -eq 1 ] || die "api-server did not become healthy after ${health_attempts} attempts"
 
 log "frontend: http://${external_ip}:8081"
 log "api health: http://${external_ip}:8082/health"
@@ -647,10 +715,11 @@ copy_env_example() {
 
 build_images() {
   info "building application images"
-  docker build -f "${ROOT_DIR}/api-server/Dockerfile" -t aegis-system/api-server:latest "${ROOT_DIR}/api-server"
-  docker build -f "${ROOT_DIR}/server/Dockerfile" -t aegis-system/server:latest "${ROOT_DIR}/server"
-  docker build -f "${ROOT_DIR}/dc/Dockerfile" -t aegis-system/dc:latest "${ROOT_DIR}/dc"
-  docker build -f "${ROOT_DIR}/frontend/Dockerfile" -t aegis-system/frontend:latest "${ROOT_DIR}/frontend"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${ROOT_DIR}/api-server/Dockerfile" -t aegis-system/api-server:latest "${ROOT_DIR}/api-server"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${ROOT_DIR}/server/Dockerfile" -t aegis-system/server:latest "${ROOT_DIR}/server"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${ROOT_DIR}/dc/Dockerfile" -t aegis-system/dc:latest "${ROOT_DIR}/dc"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${ROOT_DIR}/frontend/Dockerfile" -t aegis-system/frontend:latest "${ROOT_DIR}/frontend"
+  build_builder_service_image
 
   info "pulling base images"
   docker pull pgvector/pgvector:pg16
@@ -661,7 +730,7 @@ build_images() {
   docker pull minio/mc:latest
 
   info "building MinIO image with preloaded agent artifact"
-  docker build -f "${RELEASE_DIR}/Dockerfile.minio" -t aegis-system/minio-with-agent:latest "${RELEASE_DIR}"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${RELEASE_DIR}/Dockerfile.minio" -t aegis-system/minio-with-agent:latest "${RELEASE_DIR}"
 }
 
 save_image() {
@@ -676,6 +745,8 @@ export_images() {
   save_image aegis-system/server:latest server.tar.gz
   save_image aegis-system/dc:latest dc.tar.gz
   save_image aegis-system/frontend:latest frontend.tar.gz
+  save_image "${BUILDER_SERVICE_IMAGE}" builder.tar.gz
+  save_image "${EBPF_BUILDER_IMAGE}" ebpf-builder-base.tar.gz
   save_image aegis-system/minio-with-agent:latest minio-with-agent.tar.gz
   save_image pgvector/pgvector:pg16 pgvector.tar.gz
   save_image redis:7-alpine redis.tar.gz

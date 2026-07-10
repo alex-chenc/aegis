@@ -22,9 +22,13 @@ description: 构建和验证 Aegis Linux AMD64 离线发布包，包括业务与
 
 1. 读取 `scripts/build_release_package.sh`、`.env.example`、`docker-compose.yml`、`migrations/` 及受影响组件的构建文件。
 2. 检查发布脚本是否仍与仓库一致：
-   - Agent 构建包含所需 eBPF 对象和 Linux AMD64 二进制；
+   - 共享 eBPF builder 必须先通过 Docker 构建为
+     `aegis-agent-builder-ubi8:5.8.0`，Agent 和 builder 服务均必须从该镜像的
+     Docker build stage 构建；不得在宿主机直接执行 `make bpf`、`make build` 或依赖
+     宿主机 `clang`；
    - `migrations/*.sql` 按确定顺序汇入初始化 SQL；
-   - 应用镜像、基础镜像及 MinIO Agent 制品都被导出；
+   - 应用镜像、`aegis-system/builder`、共享 eBPF builder 基础镜像、基础镜像及 MinIO
+     Agent 制品都被导出；
    - Compose 的镜像名、依赖、健康检查、端口和环境变量与运行时配置一致；
    - `start.sh` 能加载镜像、准备 `.env`、确定外部地址并等待服务就绪。
 3. 需要先审查生成内容时运行：
@@ -58,6 +62,9 @@ description: 构建和验证 Aegis Linux AMD64 离线发布包，包括业务与
   start.sh
   README.md
 ```
+
+其中 `images/` 必须包含 `builder.tar.gz` 和 `ebpf-builder-base.tar.gz`；release compose
+必须包含 `builder` 服务，并让 API Server 使用 `builder:19096`。
 
 MinIO 中供安装接口读取的 Agent 对象名、Compose 中的镜像名和 API 生成的下载地址必须一致。不要用硬编码凭证；发布模板只能包含明确标注的占位值或安全默认策略。
 
