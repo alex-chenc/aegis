@@ -15,6 +15,11 @@
    JSON Schema 也无法传递给支持结构化输出的模型。
 5. 最终总结会把模型发明的未注册工具解释成“平台缺少能力”，而不是执行阶段违反
    当前目录契约。
+6. 真实回归 `asst_e21d35f3` / `run_05ab4be8` 暴露了后续偏差：每次
+   `Vulnerability.Script.Status=running` 都重新调用模型、创建新的 call ID 和工具卡；
+   脚本终态后模型又在主机查询步骤发明 `Task.Create/Host.Task.Create`，并且
+   agent-runtime 的默认高风险策略在 Aegis mapping 已授权、平台为 `full_access` 后
+   仍二次拒绝 `Vulnerability.Script.Execute`。
 
 本次修改 `/code/agent-runtime` 和 Aegis `api-server`，更新 agent-runtime 依赖引用。
 不增加 CVE、主机、基线或其他领域专用流程，不恢复 caller-supplied 固定计划，不修改
@@ -27,8 +32,15 @@
   `call_id/tool_name/call_status/error/outcome/content`。
 - 终态成功后模型能引用真实 call ID 完成步骤；失败或非终态不能伪装成完成。
 - `accepted/running` 使用独立、有界、带退避的异步等待额度，不消耗步骤推理纠错额度。
+- 模型选择只读、幂等状态工具后，重复轮询由 Runtime 接管：不重复调用模型，不创建
+  重复逻辑工具记录，不向前端推送重复思考和工具卡。
 - ReAct 请求携带由本轮实时工具描述符生成的 JSON Schema；工具名只能来自实时目录，
   工具参数使用对应 `ArgsSchema`。
+- 动态 Planner 的每步 `suggested_tools` 会过滤为已注册工具并固化为该步骤
+  `AllowedTools`，ReAct 不得跨步骤调用或发明工具。
+- Runtime 只接收已经通过 Aegis capability mapping/hard gates 的工具子集，不再对
+  高风险工具做冲突的二次 deny；最终审批仍由 Aegis
+  `request_approval/whitelist/full_access` 策略负责。
 - 不支持 JSON Schema 的模型提供方可回退到 JSON object/文本模式，但仍能看到完整
   目录、参数 Schema 和校验错误并纠正。
 - 异步操作始终受 `TaskTimeout`、`MaxToolCalls` 和 `MaxToolCallsPerStep` 约束。
@@ -57,7 +69,9 @@ Runtime dynamic tool registry
   -> Observation envelope
        call_id + tool_name + call_status + error + outcome + content
   -> accepted/running
-       bounded exponential backoff
+       model selects the exact read-only idempotent status tool once
+       Runtime polls the same logical call with bounded exponential backoff
+       duplicate model calls and duplicate visible events are suppressed
        does not consume reasoning-recovery budget
   -> terminal succeeded/skipped
        LLM cites call_id in step_result
@@ -95,15 +109,20 @@ Tool observation:
 
 当成功工具调用返回 `terminal=false` 且 operation status 为 `accepted/running`：
 
-1. 该轮仍计入总模型轮数和工具调用数；
-2. 不消耗 `MaxStepReactTurns` 所代表的解析、纠错和完成推理预算；
-3. 下一轮模型调用前按连续非终态次数指数退避；
-4. 退避不超过 `AsyncPollMaxBackoff`；
-5. 工具终态、失败、解析失败或其他动作会重置连续非终态计数；
-6. `MaxToolCallsPerStep`、全局 `MaxToolCalls` 和 `TaskTimeout` 仍是硬上限。
+1. 首次异步写工具返回 accepted 后，由模型从实时目录中选择正确的完成状态工具；
+2. 当状态工具为 `read_only + idempotent` 且返回 running，Runtime 固定其精确工具名
+   和参数，后续轮询不再调用模型；
+3. 内部轮询复用同一个逻辑 `call_id`，Aegis 更新原记录，不新增工具调用记录；
+4. 非终态内部轮询不推送重复 thinking/tool_call/tool_result；终态结果更新原工具卡；
+5. 实际状态查询仍计入 Runtime 工具调用硬上限，但不重复增加 Aegis 的逻辑工具调用数；
+6. 该轮不消耗 `MaxStepReactTurns` 所代表的解析、纠错和完成推理预算；
+7. 下一次状态查询按连续非终态次数指数退避；
+8. 退避不超过 `AsyncPollMaxBackoff`；
+9. 工具终态、失败、解析失败或其他动作会重置连续非终态计数；
+10. `MaxToolCallsPerStep`、全局 `MaxToolCalls` 和 `TaskTimeout` 仍是硬上限。
 
-这不是后台替模型选择状态工具。模型仍根据实时目录和上次 outcome 决定下一步工具；
-Runtime 只提供通用异步调度语义。
+Runtime 不根据 CVE、主机或任务名称写业务规则。是否可自动轮询只依赖工具 descriptor
+中的通用属性 `RiskReadOnly + Idempotent` 以及标准 `ToolOutcome.Terminal`。
 
 ### 3.3 动态 ReAct JSON Schema
 
@@ -123,6 +142,16 @@ Schema 是提供方能力增强，不替代 Runtime 的 descriptor、arguments�
 动态 Planner 的 `risk_level` 不作为真实工具风险来源。执行时始终以 registry descriptor
 为准。Planner 生成计划后可按 `suggested_tools` 的 descriptor 规范化步骤风险，避免
 界面和审计显示高风险工具为只读。
+
+### 3.5 动态步骤工具边界
+
+Planner 仍由模型根据任意用户目标生成步骤。生成后 Runtime 对每步
+`suggested_tools` 做一次通用注册表交集和去重，并写入 `AllowedTools`：
+
+- ReAct JSON Schema 只暴露该步骤工具；
+- 即使提供方不执行 JSON Schema，Runtime step-scope validator 仍会拒绝目录外名称；
+- 需要不同工具时应通过计划纠正替换步骤，不允许在当前步骤盲猜工具名；
+- 无计划的简单任务保持动态目录能力，不引入领域固定流程。
 
 ## 4. Aegis 设计
 
@@ -155,6 +184,14 @@ ReAct 提示词的工具目录输出无本地化描述的精简 JSON Schema，�
 
 如果目录中存在合法工具，前两类错误不得总结为“平台缺少或未部署能力”。
 
+### 4.4 授权单一权威
+
+Assistant 在创建 Runtime 前已经完成 capability mapping、工具启用状态、用户写意图、
+必要实体和审批要求硬闸门，传入 Runtime 的 descriptor 是已授权子集。因此 Runtime
+允许该子集进入 Aegis ToolDispatcher；ToolDispatcher 再按当前平台模式执行审批或
+直接放行。该设计消除 Runtime `AllowHighRiskTools=false` 与 Aegis `full_access` 的
+双重策略冲突，同时保留 Aegis 的最终安全控制。
+
 ## 5. 测试设计
 
 ### 5.1 agent-runtime
@@ -165,10 +202,12 @@ ReAct 提示词的工具目录输出无本地化描述的精简 JSON Schema，�
 | 失败 observation | 下一轮 prompt 包含 validation error |
 | step_result 引用 observation call ID | 完成校验通过 |
 | 多次 running 后 succeeded | 非终态轮不耗尽 ReAct 推理预算，最终完成 |
+| 只读幂等状态工具持续 running | 仅前后各一次模型决策，内部自动轮询并复用逻辑 call ID |
 | 异步持续 running | 达到工具调用或任务超时上限后失败，不无限轮询 |
 | ReAct ResponseFormat | tool name 为当前 registry 枚举，args 使用对应 Schema |
 | 步骤 AllowedTools | ResponseFormat 不暴露步骤外工具 |
 | Planner 风险元数据 | 高风险 suggested tool 不再显示 read_only |
+| Planner 步骤工具边界 | 只保留注册表中的 suggested tools，ReAct 无法调用步骤外名称 |
 
 ### 5.2 Aegis
 
@@ -179,6 +218,8 @@ ReAct 提示词的工具目录输出无本地化描述的精简 JSON Schema，�
 | 工具目录参数 | 输出精确名称、类型、required、enum，不输出中文描述 |
 | descriptor failure 总结 | 表达模型目录违约，不声称平台缺失已有能力 |
 | accepted/running SSE | 显示已受理/执行中，不显示业务成功 |
+| Runtime 内部状态轮询 | 数据库只有一条逻辑工具记录，前端不产生重复状态卡 |
+| full_access 高风险工具 | 已 mapping 授权的工具可到达 Aegis ToolDispatcher，不被 Runtime 二次 deny |
 
 ### 5.3 真实受控回归
 
@@ -206,4 +247,3 @@ ReAct 提示词的工具目录输出无本地化描述的精简 JSON Schema，�
   无新增契约时无需重建。
 - 回滚：恢复 Aegis agent-runtime 伪版本和本次 adapter/prompt 修改；不删除已生成
   脚本或任务数据。
-

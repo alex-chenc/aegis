@@ -310,6 +310,93 @@ func TestAssistantToolGatewayAdapterDoesNotReuseVolatileStatusTool(t *testing.T)
 	}
 }
 
+func TestAssistantToolGatewayAdapterCollapsesRuntimeAsyncPollsIntoLogicalCall(t *testing.T) {
+	registry := NewToolRegistry()
+	executions := 0
+	_ = registry.Register(&ToolSpec{
+		Name:               "Example.Operation.Status",
+		Operation:          OpGet,
+		Risk:               ToolRiskReadonly,
+		Idempotent:         true,
+		Enabled:            true,
+		DefaultWhitelisted: true,
+		ResultContract: ToolResultContract{
+			OperationStatusField: "status",
+			PendingValues:        []string{"running"},
+			SuccessValues:        []string{"succeeded"},
+			OperationRefFields:   []string{"operation_id"},
+		},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			executions++
+			status := "running"
+			if executions == 3 {
+				status = "succeeded"
+			}
+			return map[string]interface{}{"operation_id": "operation-1", "status": status}, nil
+		},
+	})
+
+	dispatcher, repo := newTestToolDispatcher(t, registry)
+	startedCount := 0
+	resultCount := 0
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "session-1",
+		MessageID:  "message-1",
+		RunID:      "run-1",
+		Logger:     zap.NewNop(),
+		OnToolCall: func(string, string, interface{}) {
+			startedCount++
+		},
+		OnToolResult: func(string, interface{}, *agentruntime.ToolOutcome) {
+			resultCount++
+		},
+	})
+
+	call := func(polling bool, attempt string) agentruntime.ToolResponse {
+		t.Helper()
+		requestContext := map[string]string{}
+		if polling {
+			requestContext["agent_runtime_async_poll"] = "true"
+			requestContext["agent_runtime_poll_call_id"] = "logical-call-1"
+			requestContext["agent_runtime_poll_attempt"] = attempt
+		}
+		response, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+			CallID:   "logical-call-1",
+			ToolName: "Example.Operation.Status",
+			Args:     map[string]interface{}{"operation_id": "operation-1"},
+			Context:  requestContext,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	if response := call(false, ""); response.Outcome == nil || response.Outcome.Terminal {
+		t.Fatalf("initial response = %#v, want non-terminal", response.Outcome)
+	}
+	if response := call(true, "1"); response.Outcome == nil || response.Outcome.Terminal {
+		t.Fatalf("first poll response = %#v, want non-terminal", response.Outcome)
+	}
+	if response := call(true, "2"); response.Outcome == nil || !response.Outcome.Terminal {
+		t.Fatalf("terminal poll response = %#v, want terminal", response.Outcome)
+	}
+
+	if executions != 3 {
+		t.Fatalf("executions = %d, want 3", executions)
+	}
+	if len(repo.calls) != 1 {
+		t.Fatalf("persisted tool calls = %d, want one logical call", len(repo.calls))
+	}
+	if startedCount != 1 || resultCount != 2 {
+		t.Fatalf("visible callbacks started=%d results=%d, want 1 start and running+terminal results", startedCount, resultCount)
+	}
+	if repo.calls[0].OperationTerminal == nil || !*repo.calls[0].OperationTerminal {
+		t.Fatalf("persisted outcome did not reach terminal: %#v", repo.calls[0])
+	}
+}
+
 func TestAssistantToolGatewayAdapterExecutesOnlyRequestedAssetCollectionTool(t *testing.T) {
 	registry := NewToolRegistry()
 	for _, spec := range []*ToolSpec{

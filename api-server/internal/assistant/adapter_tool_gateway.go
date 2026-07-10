@@ -85,13 +85,18 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		req = prepared
 	}
 	args := req.Args
+	asyncPoll := req.Context != nil && req.Context["agent_runtime_async_poll"] == "true"
+	pollAttempt := ""
+	if req.Context != nil {
+		pollAttempt = req.Context["agent_runtime_poll_attempt"]
+	}
 
 	if cachedResp, ok := a.reuseSuccessfulReadonlyToolCall(ctx, req, args, startedAt); ok {
 		return cachedResp, nil
 	}
 
 	// 通知工具调用开始
-	if a.onToolCall != nil {
+	if a.onToolCall != nil && !asyncPoll {
 		a.onToolCall(req.CallID, req.ToolName, args)
 	}
 
@@ -104,6 +109,7 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		ToolName:  req.ToolName,
 		Args:      args,
 		Operator:  a.operator,
+		Polling:   asyncPoll,
 	})
 
 	endedAt := time.Now()
@@ -160,8 +166,18 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		tool, _ := a.dispatcher.registry.Get(req.ToolName)
 		outcome := normalizeToolOutcome(tool, result.Data)
 		a.logToolOutcome(req, outcome)
-		if a.onToolResult != nil {
+		if a.onToolResult != nil && (!asyncPoll || outcome.Terminal) {
 			a.onToolResult(result.CallID, result.Data, outcome)
+		}
+		if asyncPoll && outcome.Terminal && a.logger != nil {
+			a.logger.Info("assistant asynchronous operation reached terminal state",
+				zap.String("session_id", a.sessionID),
+				zap.String("run_id", a.runID),
+				zap.String("call_id", result.CallID),
+				zap.String("tool_name", result.ToolName),
+				zap.String("poll_attempt", pollAttempt),
+				zap.String("operation_status", string(outcome.OperationStatus)),
+			)
 		}
 		return agentruntime.ToolResponse{
 			CallID:    req.CallID,

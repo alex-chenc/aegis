@@ -24,11 +24,14 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if !cfg.EnableReflection || !cfg.EnableAudit || !cfg.EnableCorrection {
 		t.Fatalf("expected reflection, audit, and correction to be enabled")
 	}
-	if cfg.MaxToolCalls != 160 || cfg.MaxToolCallsPerStep != 16 {
+	if cfg.MaxToolCalls != 160 || cfg.MaxToolCallsPerStep != 32 {
 		t.Fatalf("expected AI analysis tool limits, got total=%d per_step=%d", cfg.MaxToolCalls, cfg.MaxToolCallsPerStep)
 	}
-	if cfg.AsyncPollInitialBackoff != 2*time.Second || cfg.AsyncPollMaxBackoff != 10*time.Second {
+	if cfg.AsyncPollInitialBackoff != 2*time.Second || cfg.AsyncPollMaxBackoff != 30*time.Second {
 		t.Fatalf("expected bounded async polling backoff, got initial=%s max=%s", cfg.AsyncPollInitialBackoff, cfg.AsyncPollMaxBackoff)
+	}
+	if !cfg.AllowHighRiskTools || !cfg.AllowDangerousTools {
+		t.Fatal("expected pre-authorized Aegis tools to reach the Aegis approval policy")
 	}
 }
 
