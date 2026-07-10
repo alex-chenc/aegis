@@ -40,6 +40,11 @@ release service environment.
   check and a guarded `ALTER TABLE` statement.
 - Replace the attempt-count loop with a five-minute, configurable,
   time-based API readiness wait (`AEGIS_API_HEALTH_TIMEOUT_SECONDS`).
+- Start PostgreSQL first and inspect the persisted schema before application
+  services are allowed to start. When the schema has no public tables, replay
+  the bundled initialization SQL automatically. When it is only partially
+  initialized, stop without modifying data and provide an explicit recovery
+  message.
 - Silence expected transient probe failures and report progress every ten
   seconds. On timeout, print `docker compose ps -a` and the relevant service
   log tails.
@@ -59,8 +64,9 @@ release service environment.
 
 ## Operational Recovery
 
-For an already failed fresh deployment, the PostgreSQL data volume contains the
-partially initialized database and will not rerun init scripts automatically.
-After confirming it contains no required data, stop the release stack and
-remove only that release's `postgres_data` volume, then start again with the
-corrected archive. Do not remove a volume that contains production data.
+For an already failed fresh deployment whose database is empty, the corrected
+`start.sh` replays `init.sql` automatically. A partially initialized database
+is intentionally not modified. After confirming it contains no required data,
+stop the release stack and remove only that release's `postgres_data` volume,
+then start again with the corrected archive. Do not remove a volume that
+contains production data.

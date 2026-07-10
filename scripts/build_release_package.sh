@@ -25,13 +25,6 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
-require_positive_integer() {
-  case "$2" in
-    ''|*[!0-9]*) die "$1 must be a positive integer, got: $2" ;;
-  esac
-  [ "$2" -gt 0 ] || die "$1 must be a positive integer, got: $2"
-}
-
 confirm_replace_zip() {
   if [ ! -f "${ZIP_PATH}" ]; then
     return
@@ -560,6 +553,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_positive_integer() {
+  case "$2" in
+    ''|*[!0-9]*) die "$1 must be a positive integer, got: $2" ;;
+  esac
+  [ "$2" -gt 0 ] || die "$1 must be a positive integer, got: $2"
+}
+
 compose() {
   if docker compose version >/dev/null 2>&1; then
     docker compose "$@"
@@ -654,6 +654,53 @@ load_images() {
   [ "${found}" -eq 1 ] || die "no Docker image archives found in images/"
 }
 
+wait_for_postgres() {
+  deadline=$((SECONDS + postgres_ready_timeout_seconds))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if compose exec -T postgres psql -U aegis_user -d aegis_db -Atc 'SELECT 1' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  die "postgres did not accept connections within ${postgres_ready_timeout_seconds} seconds"
+}
+
+release_schema_state() {
+  compose exec -T postgres psql -U aegis_user -d aegis_db -Atc "
+    SELECT CASE
+      WHEN to_regclass('public.hosts') IS NOT NULL
+       AND to_regclass('public.alerts') IS NOT NULL THEN 'ready'
+      WHEN NOT EXISTS (
+        SELECT 1 FROM pg_tables WHERE schemaname = 'public'
+      ) THEN 'empty'
+      ELSE 'partial'
+    END
+  "
+}
+
+bootstrap_empty_release_database() {
+  schema_state="$(release_schema_state)" || die "could not inspect PostgreSQL schema state"
+  case "${schema_state}" in
+    ready)
+      log "PostgreSQL schema is ready"
+      ;;
+    empty)
+      log "detected an empty persisted PostgreSQL database; applying release init.sql"
+      compose exec -T postgres psql -v ON_ERROR_STOP=1 -U aegis_user -d aegis_db \
+        -f /docker-entrypoint-initdb.d/01-init.sql
+      schema_state="$(release_schema_state)" || die "could not verify PostgreSQL schema after bootstrap"
+      [ "${schema_state}" = "ready" ] || die "release database bootstrap completed without the required schema"
+      log "PostgreSQL schema bootstrap completed"
+      ;;
+    partial)
+      die "PostgreSQL has a partial schema; refusing automatic repair to protect data. For a failed fresh install, remove only this release's postgres_data volume and rerun start.sh."
+      ;;
+    *)
+      die "unexpected PostgreSQL schema state: ${schema_state}"
+      ;;
+  esac
+}
+
 require_cmd docker
 require_cmd gzip
 require_cmd curl
@@ -672,13 +719,18 @@ fi
 upsert_env EXTERNAL_IP "${external_ip}"
 log "wrote EXTERNAL_IP=${external_ip} to .env"
 
-load_images
-compose up -d
-
-initial_wait_seconds="${AEGIS_START_WAIT_SECONDS:-10}"
+postgres_ready_timeout_seconds="${AEGIS_POSTGRES_READY_TIMEOUT_SECONDS:-180}"
 api_health_timeout_seconds="${AEGIS_API_HEALTH_TIMEOUT_SECONDS:-300}"
-require_positive_integer "AEGIS_START_WAIT_SECONDS" "${initial_wait_seconds}"
+initial_wait_seconds="${AEGIS_START_WAIT_SECONDS:-10}"
+require_positive_integer "AEGIS_POSTGRES_READY_TIMEOUT_SECONDS" "${postgres_ready_timeout_seconds}"
 require_positive_integer "AEGIS_API_HEALTH_TIMEOUT_SECONDS" "${api_health_timeout_seconds}"
+require_positive_integer "AEGIS_START_WAIT_SECONDS" "${initial_wait_seconds}"
+
+load_images
+compose up -d postgres
+wait_for_postgres
+bootstrap_empty_release_database
+compose up -d
 
 log "waiting ${initial_wait_seconds}s before checking API health"
 sleep "${initial_wait_seconds}"
@@ -747,6 +799,12 @@ Override that limit only when needed:
 \`\`\`bash
 AEGIS_API_HEALTH_TIMEOUT_SECONDS=600 ./start.sh
 \`\`\`
+
+Before starting application services, \`start.sh\` checks the persistent PostgreSQL
+schema. If a previous failed first boot left the database completely empty, it
+replays the included \`init.sql\` automatically. A partially initialized database
+is never changed automatically; the script stops and reports the recovery action
+instead, to avoid overwriting data.
 
 On timeout, \`start.sh\` prints the Compose service states and the latest logs for
 the API Server and its startup dependencies. Preserve that output when opening
