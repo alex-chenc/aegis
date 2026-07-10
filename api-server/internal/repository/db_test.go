@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,6 +60,57 @@ func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
 		if !strings.Contains(statements, fragment) {
 			t.Fatalf("expected asset collection schema to include %q", fragment)
 		}
+	}
+}
+
+func TestAssetCollectionSchemaStatementsIncludeContainerMetadataColumns(t *testing.T) {
+	statements := strings.Join(assetCollectionSchemaStatements(), "\n")
+
+	requiredFragments := []string{
+		"is_container       BOOLEAN NOT NULL DEFAULT FALSE",
+		"container_id       VARCHAR(128)",
+		"container_runtime  VARCHAR(64)",
+		"ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS is_container",
+		"ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_id",
+		"ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_runtime",
+	}
+
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("expected asset collection schema to include %q", fragment)
+		}
+	}
+}
+
+func TestHostApplicationAssetContainerMetadataMigrations(t *testing.T) {
+	repositoryDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get repository test directory: %v", err)
+	}
+	migrationsDir := filepath.Clean(filepath.Join(repositoryDir, "..", "..", "..", "migrations"))
+
+	tests := []struct {
+		name string
+		file string
+	}{
+		{name: "fresh schema", file: "015_v5.8_intelligent_asset_collection.sql"},
+		{name: "existing schema upgrade", file: "026_v6.1_host_application_container_metadata.sql"},
+	}
+	requiredColumns := []string{"is_container", "container_id", "container_runtime"}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			migrationPath := filepath.Join(migrationsDir, test.file)
+			content, err := os.ReadFile(migrationPath)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", migrationPath, err)
+			}
+			for _, column := range requiredColumns {
+				if !strings.Contains(string(content), column) {
+					t.Fatalf("expected migration %s to include column %q", test.file, column)
+				}
+			}
+		})
 	}
 }
 

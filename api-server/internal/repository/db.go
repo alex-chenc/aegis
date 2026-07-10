@@ -598,6 +598,9 @@ func assetCollectionSchemaStatements() []string {
 			framework_name     VARCHAR(100),
 			framework_version  VARCHAR(100),
 			related_pids       JSONB NOT NULL DEFAULT '[]',
+			is_container       BOOLEAN NOT NULL DEFAULT FALSE,
+			container_id       VARCHAR(128),
+			container_runtime  VARCHAR(64),
 			related_packages   JSONB NOT NULL DEFAULT '[]',
 			ai_confidence      NUMERIC(4,3) NOT NULL DEFAULT 0,
 			ai_evidence        JSONB NOT NULL DEFAULT '[]',
@@ -612,6 +615,9 @@ func assetCollectionSchemaStatements() []string {
 			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS is_container BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_id VARCHAR(128)`,
+		`ALTER TABLE host_application_assets ADD COLUMN IF NOT EXISTS container_runtime VARCHAR(64)`,
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'host_application_assets_host_id_fkey') THEN
 				ALTER TABLE host_application_assets ADD CONSTRAINT host_application_assets_host_id_fkey

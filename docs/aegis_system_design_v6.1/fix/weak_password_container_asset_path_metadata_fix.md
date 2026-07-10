@@ -30,6 +30,16 @@
   - `container_runtime`
 - 保存应用资产时将模型返回和进程快照证据合并，以进程 cgroup 解析结果为准。
 
+### 数据库兼容性
+
+- `host_application_assets` 的全新建表 DDL 必须包含：
+  - `is_container BOOLEAN NOT NULL DEFAULT FALSE`
+  - `container_id VARCHAR(128)`
+  - `container_runtime VARCHAR(64)`
+- 新增幂等升级迁移，为已有数据库使用 `ADD COLUMN IF NOT EXISTS` 补齐三列，现有记录按 `is_container=false` 兼容。
+- API Server 的运行时资产 Schema 兜底同时包含建表列和幂等补列，避免仅依赖离线初始化脚本或 GORM 模型。
+- 回滚应用代码不需要删除列；保留新增列可以兼容旧版本，避免破坏已采集的容器元数据。
+
 ### 弱密码检测
 
 - 弱密码候选应用继承应用资产的容器字段，DTO 返回 `is_container`、`container_id`、`container_runtime`。
@@ -52,6 +62,7 @@
 ## 验证
 
 1. 后端单元测试：
+   - 资产运行时 Schema、全新建表迁移和升级迁移均包含三个容器字段。
    - Agent 容器路径读取候选不回落宿主机。
    - API 资产分析 prompt 包含 cgroup 和容器输出字段。
    - 弱密码计划从资产继承容器字段。
