@@ -29,6 +29,12 @@ The startup script also had an 80-second fixed wait budget. Kafka and the agent
 hub have serial health checks, so a normal cold start can take longer than that
 and was reported as an API failure without useful container diagnostics.
 
+API Server runs GORM `AutoMigrate` before the legacy detection schema checks.
+On the failed bootstrap database it created 37 empty generic tables, then exited
+when `alerts` was missing. The first recovery implementation treated the
+presence of any public table as a partial schema, so it refused to repair this
+known, reproducible pre-bootstrap state.
+
 The release MinIO initialization additionally lacked the `aegis-builds` and
 `aegis-releases` buckets and did not configure `MINIO_ARTIFACT_BASE_URL` in the
 release service environment.
@@ -41,10 +47,12 @@ release service environment.
 - Replace the attempt-count loop with a five-minute, configurable,
   time-based API readiness wait (`AEGIS_API_HEALTH_TIMEOUT_SECONDS`).
 - Start PostgreSQL first and inspect the persisted schema before application
-  services are allowed to start. When the schema has no public tables, replay
-  the bundled initialization SQL automatically. When it is only partially
-  initialized, stop without modifying data and provide an explicit recovery
-  message.
+  services are allowed to start. Classify the database using seven required
+  core tables (`hosts`, `aegis_rules`, `task_logs`, `vulnerabilities`, `alerts`,
+  `block_policies`, and `sigma_rules`). When none exist, replay the bundled
+  initialization SQL automatically, even if empty GORM-managed tables exist.
+  When only some core tables exist, stop without modifying data and provide an
+  explicit recovery message.
 - Silence expected transient probe failures and report progress every ten
   seconds. On timeout, print `docker compose ps -a` and the relevant service
   log tails.
@@ -64,9 +72,10 @@ release service environment.
 
 ## Operational Recovery
 
-For an already failed fresh deployment whose database is empty, the corrected
-`start.sh` replays `init.sql` automatically. A partially initialized database
-is intentionally not modified. After confirming it contains no required data,
-stop the release stack and remove only that release's `postgres_data` volume,
-then start again with the corrected archive. Do not remove a volume that
-contains production data.
+For an already failed fresh deployment with none of the seven core tables, the
+corrected `start.sh` replays `init.sql` automatically. Empty tables previously
+created by API Server do not block this recovery. A database containing only a
+subset of the core tables is intentionally not modified. After confirming such
+a database contains no required data, stop the release stack and remove only
+that release's `postgres_data` volume, then start again with the corrected
+archive. Do not remove a volume that contains production data.

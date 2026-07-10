@@ -667,25 +667,39 @@ wait_for_postgres() {
 
 release_schema_state() {
   compose exec -T postgres psql -U aegis_user -d aegis_db -Atc "
+    WITH required_core_tables(table_name) AS (
+      VALUES
+        ('hosts'),
+        ('aegis_rules'),
+        ('task_logs'),
+        ('vulnerabilities'),
+        ('alerts'),
+        ('block_policies'),
+        ('sigma_rules')
+    ), core_state AS (
+      SELECT COUNT(*) FILTER (
+        WHERE to_regclass('public.' || table_name) IS NOT NULL
+      ) AS present_count,
+      COUNT(*) AS required_count
+      FROM required_core_tables
+    )
     SELECT CASE
-      WHEN to_regclass('public.hosts') IS NOT NULL
-       AND to_regclass('public.alerts') IS NOT NULL THEN 'ready'
-      WHEN NOT EXISTS (
-        SELECT 1 FROM pg_tables WHERE schemaname = 'public'
-      ) THEN 'empty'
+      WHEN present_count = required_count THEN 'ready'
+      WHEN present_count = 0 THEN 'recoverable'
       ELSE 'partial'
     END
+    FROM core_state
   "
 }
 
-bootstrap_empty_release_database() {
+bootstrap_recoverable_release_database() {
   schema_state="$(release_schema_state)" || die "could not inspect PostgreSQL schema state"
   case "${schema_state}" in
     ready)
       log "PostgreSQL schema is ready"
       ;;
-    empty)
-      log "detected an empty persisted PostgreSQL database; applying release init.sql"
+    recoverable)
+      log "detected a recoverable pre-bootstrap PostgreSQL schema; applying release init.sql"
       compose exec -T postgres psql -v ON_ERROR_STOP=1 -U aegis_user -d aegis_db \
         -f /docker-entrypoint-initdb.d/01-init.sql
       schema_state="$(release_schema_state)" || die "could not verify PostgreSQL schema after bootstrap"
@@ -729,7 +743,7 @@ require_positive_integer "AEGIS_START_WAIT_SECONDS" "${initial_wait_seconds}"
 load_images
 compose up -d postgres
 wait_for_postgres
-bootstrap_empty_release_database
+bootstrap_recoverable_release_database
 compose up -d
 
 log "waiting ${initial_wait_seconds}s before checking API health"
@@ -800,11 +814,11 @@ Override that limit only when needed:
 AEGIS_API_HEALTH_TIMEOUT_SECONDS=600 ./start.sh
 \`\`\`
 
-Before starting application services, \`start.sh\` checks the persistent PostgreSQL
-schema. If a previous failed first boot left the database completely empty, it
-replays the included \`init.sql\` automatically. A partially initialized database
-is never changed automatically; the script stops and reports the recovery action
-instead, to avoid overwriting data.
+Before starting application services, \`start.sh\` checks seven required core
+PostgreSQL tables. If a failed first boot left all core tables absent, it replays
+the included \`init.sql\` automatically, even when API Server already created
+empty GORM-managed tables. If only some core tables exist, the database is never
+changed automatically; the script stops and reports the recovery action instead.
 
 On timeout, \`start.sh\` prints the Compose service states and the latest logs for
 the API Server and its startup dependencies. Preserve that output when opening
