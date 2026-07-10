@@ -389,6 +389,7 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 			ArgsSchema:       normalizeRuntimeArgsSchema(tool.ArgsSchema),
 			ResultSchema:     normalizeRuntimeArgsSchema(tool.ResultSchema),
 			CompletionTools:  completionTools,
+			Prerequisites:    toRuntimePrerequisites(tool.ExecutionContract.Prerequisites),
 			RiskLevel:        riskLevel,
 			AutoCallable:     tool.DefaultWhitelisted,
 			RequiresApproval: !tool.DefaultWhitelisted,

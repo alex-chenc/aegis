@@ -1,6 +1,10 @@
 package assistant
 
-import "testing"
+import (
+	"testing"
+
+	agentruntime "github.com/alex-chenc/agent-runtime"
+)
 
 // TestNormalizeRuntimeArgsSchemaRelaxesInteger 验证提交给 agent-runtime 的参数
 // schema 会把 "integer" 放宽为 "number"。LLM 返回的整数经 JSON 解析后是 float64，
@@ -45,5 +49,24 @@ func TestNormalizeRuntimeArgsSchemaRelaxesInteger(t *testing.T) {
 	}
 	if _, exists := spec.ArgsSchema["additionalProperties"]; exists {
 		t.Fatal("source spec mutated: additionalProperties was added")
+	}
+}
+
+func TestToolSpecDescriptorCarriesPrerequisiteEvidenceGate(t *testing.T) {
+	spec := ToolSpec{
+		Name: "Example.Fallback",
+		ExecutionContract: ToolExecutionContract{
+			Prerequisites: []ToolPrerequisite{{
+				Capability: "list_examples",
+				Condition:  agentruntime.PrerequisiteCapabilityEmptyResult,
+			}},
+		},
+	}
+	descriptor := spec.Descriptor()
+	if len(descriptor.Prerequisites) != 1 {
+		t.Fatalf("prerequisites = %#v, want one", descriptor.Prerequisites)
+	}
+	if got := descriptor.Prerequisites[0]; got.Capability != "list_examples" || got.Condition != agentruntime.PrerequisiteCapabilityEmptyResult {
+		t.Fatalf("prerequisite = %#v", got)
 	}
 }

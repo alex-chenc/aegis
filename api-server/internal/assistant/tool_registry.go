@@ -75,9 +75,17 @@ const (
 // need in addition to the primary tool. Companion capabilities are availability
 // hints only; they never create execution steps or authorize write operations.
 type ToolExecutionContract struct {
-	Mode                  string   `json:"mode,omitempty"`
-	CompletionCapability  string   `json:"completion_capability,omitempty"`
-	DiscoveryCapabilities []string `json:"discovery_capabilities,omitempty"`
+	Mode                  string             `json:"mode,omitempty"`
+	CompletionCapability  string             `json:"completion_capability,omitempty"`
+	DiscoveryCapabilities []string           `json:"discovery_capabilities,omitempty"`
+	Prerequisites         []ToolPrerequisite `json:"prerequisites,omitempty"`
+}
+
+// ToolPrerequisite is declarative evidence gating for a companion operation.
+// Runtime evaluates it without inferring a business workflow from a tool name.
+type ToolPrerequisite struct {
+	Capability string `json:"capability"`
+	Condition  string `json:"condition"`
 }
 
 // ToolResultContract declares how a raw tool result becomes terminal business

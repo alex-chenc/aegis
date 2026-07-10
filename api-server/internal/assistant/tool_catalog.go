@@ -226,6 +226,7 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 		Description:      modelFacingToolDescription(&s),
 		ArgsSchema:       normalizeRuntimeArgsSchema(s.ArgsSchema),
 		ResultSchema:     s.ResultSchema,
+		Prerequisites:    toRuntimePrerequisites(s.ExecutionContract.Prerequisites),
 		RiskLevel:        toRuntimeRisk(s.Risk),
 		AutoCallable:     s.AutoCallable,
 		RequiresApproval: s.RequiresApproval,
@@ -233,6 +234,23 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 		Idempotent:       s.Idempotent,
 		Tags:             append([]string{string(s.Domain), string(s.Operation)}, s.Tags...),
 	}
+}
+
+func toRuntimePrerequisites(prerequisites []ToolPrerequisite) []agentruntime.ToolPrerequisite {
+	if len(prerequisites) == 0 {
+		return nil
+	}
+	result := make([]agentruntime.ToolPrerequisite, 0, len(prerequisites))
+	for _, prerequisite := range prerequisites {
+		if strings.TrimSpace(prerequisite.Capability) == "" || strings.TrimSpace(prerequisite.Condition) == "" {
+			continue
+		}
+		result = append(result, agentruntime.ToolPrerequisite{
+			Capability: prerequisite.Capability,
+			Condition:  prerequisite.Condition,
+		})
+	}
+	return result
 }
 
 func modelFacingToolDescription(tool *ToolSpec) string {
