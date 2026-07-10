@@ -350,6 +350,23 @@ func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput
 
 // buildAgentToolDescriptors 从工具注册表构建 agent-runtime 工具描述符
 func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentruntime.ToolDescriptor {
+	selected := make(map[string]struct{}, len(toolNames))
+	for _, name := range toolNames {
+		selected[name] = struct{}{}
+	}
+	toolByCapability := make(map[string]string)
+	for _, tool := range o.toolRegistry.List() {
+		if tool == nil || !tool.Enabled {
+			continue
+		}
+		if _, ok := selected[tool.Name]; !ok {
+			continue
+		}
+		if capability := strings.TrimSpace(tool.Capability); capability != "" {
+			toolByCapability[capability] = tool.Name
+		}
+	}
+
 	var descriptors []agentruntime.ToolDescriptor
 	for _, name := range toolNames {
 		tool, ok := o.toolRegistry.Get(name)
@@ -359,12 +376,19 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 
 		// 使用 tool_catalog.go 中的 toRuntimeRisk 映射风险等级
 		riskLevel := toRuntimeRisk(tool.Risk)
+		var completionTools []string
+		if completionCapability := strings.TrimSpace(tool.ExecutionContract.CompletionCapability); completionCapability != "" {
+			if completionTool, ok := toolByCapability[completionCapability]; ok {
+				completionTools = append(completionTools, completionTool)
+			}
+		}
 
 		descriptors = append(descriptors, agentruntime.ToolDescriptor{
 			Name:             tool.Name,
 			Description:      modelFacingToolDescription(tool),
 			ArgsSchema:       normalizeRuntimeArgsSchema(tool.ArgsSchema),
 			ResultSchema:     normalizeRuntimeArgsSchema(tool.ResultSchema),
+			CompletionTools:  completionTools,
 			RiskLevel:        riskLevel,
 			AutoCallable:     tool.DefaultWhitelisted,
 			RequiresApproval: !tool.DefaultWhitelisted,

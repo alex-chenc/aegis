@@ -277,12 +277,21 @@ func normalizeRuntimeArgsSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	out := make(map[string]any, len(schema))
+	out := make(map[string]any, len(schema)+1)
 	for k, v := range schema {
 		if k == "description" {
 			continue
 		}
 		out[k] = normalizeRuntimeSchemaValue(k, v)
+	}
+	// A schema with declared properties is a closed model-facing contract.
+	// Otherwise the model may emit plausible aliases that pass validation but
+	// are silently ignored by the handler, causing successful calls with wrong
+	// business defaults.
+	if out["type"] == "object" && out["properties"] != nil {
+		if _, declared := out["additionalProperties"]; !declared {
+			out["additionalProperties"] = false
+		}
 	}
 	return out
 }

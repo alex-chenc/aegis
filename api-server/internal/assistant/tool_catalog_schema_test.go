@@ -34,10 +34,16 @@ func TestNormalizeRuntimeArgsSchemaRelaxesInteger(t *testing.T) {
 	if got := props["cve_id"].(map[string]any)["type"]; got != "string" {
 		t.Fatalf("cve_id type = %v, want string (unchanged)", got)
 	}
+	if got := desc.ArgsSchema["additionalProperties"]; got != false {
+		t.Fatalf("additionalProperties = %v, want false for an exact runtime contract", got)
+	}
 
 	// 源 spec 不应被修改，仍保留 integer 语义。
 	srcProps := spec.ArgsSchema["properties"].(map[string]any)
 	if got := srcProps["page"].(map[string]any)["type"]; got != "integer" {
 		t.Fatalf("source spec mutated: page type = %v, want integer", got)
+	}
+	if _, exists := spec.ArgsSchema["additionalProperties"]; exists {
+		t.Fatal("source spec mutated: additionalProperties was added")
 	}
 }

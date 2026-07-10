@@ -154,3 +154,53 @@ func TestBuildAgentToolDescriptorsUsesRuntimeCompatibleNumberSchema(t *testing.T
 		t.Fatalf("runtime page schema type = %v, want number", got)
 	}
 }
+
+func TestBuildAgentToolDescriptorsResolvesAuthorizedCompletionTool(t *testing.T) {
+	registry := NewToolRegistry()
+	handler := func(context.Context, map[string]interface{}) (interface{}, error) {
+		return nil, nil
+	}
+	if err := registry.Register(&ToolSpec{
+		Name:       "Example.Generate",
+		Domain:     DomainSystem,
+		Operation:  OpGenerate,
+		Capability: "generate_example",
+		Risk:       ToolRiskMedium,
+		Enabled:    true,
+		ExecutionContract: ToolExecutionContract{
+			Mode:                 ToolExecutionAsynchronous,
+			CompletionCapability: "get_example_status",
+		},
+		ArgsSchema: map[string]interface{}{"type": "object"},
+		Handler:    handler,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(&ToolSpec{
+		Name:       "Example.Status",
+		Domain:     DomainSystem,
+		Operation:  OpGet,
+		Capability: "get_example_status",
+		Risk:       ToolRiskReadonly,
+		Enabled:    true,
+		Idempotent: true,
+		ArgsSchema: map[string]interface{}{"type": "object"},
+		Handler:    handler,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	orchestrator := &Orchestrator{toolRegistry: registry}
+	descriptors := orchestrator.buildAgentToolDescriptors([]string{"Example.Generate", "Example.Status"})
+	if len(descriptors) != 2 {
+		t.Fatalf("descriptors = %d, want 2", len(descriptors))
+	}
+	if got := descriptors[0].CompletionTools; len(got) != 1 || got[0] != "Example.Status" {
+		t.Fatalf("completion tools = %#v, want Example.Status", got)
+	}
+
+	descriptors = orchestrator.buildAgentToolDescriptors([]string{"Example.Generate"})
+	if len(descriptors[0].CompletionTools) != 0 {
+		t.Fatalf("unauthorized completion tool leaked into descriptor: %#v", descriptors[0].CompletionTools)
+	}
+}

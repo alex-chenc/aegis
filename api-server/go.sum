@@ -4,6 +4,8 @@ github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5 h1:IEjq88XO4PuBDcv
 github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5/go.mod h1:exZ0C/1emQJAw5tHOaUDyY1ycttqBAPcxuzf7QbY6ec=
 github.com/alex-chenc/agent-runtime v0.0.0-20260710003048-70a5272437be h1:tQboELXXH+oKrXsy+38PymJb6o+huZBIN3C8VX7QPTc=
 github.com/alex-chenc/agent-runtime v0.0.0-20260710003048-70a5272437be/go.mod h1:pWOfljnYA19ovePRCeodrk7O5ceU0n11Gl6AtzSsSnw=
+github.com/alex-chenc/agent-runtime v0.0.0-20260710005122-1186ef710e4f h1:3xtgWBD0O4GHQyeVRt56gu9b6qFDChhRj7PKYCVMbG8=
+github.com/alex-chenc/agent-runtime v0.0.0-20260710005122-1186ef710e4f/go.mod h1:pWOfljnYA19ovePRCeodrk7O5ceU0n11Gl6AtzSsSnw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
 github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
 github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
