@@ -80,9 +80,14 @@ type AssistantToolCall struct {
 	Result        datatypes.JSON `gorm:"type:jsonb" json:"result,omitempty"`
 	ResultSummary string         `gorm:"type:text" json:"result_summary,omitempty"`
 	ErrorMessage  string         `gorm:"type:text" json:"error_message,omitempty"`
-	DurationMs    int64          `json:"duration_ms"`
-	CreatedAt     time.Time      `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt     time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	// Status records transport execution. OperationStatus and OperationTerminal
+	// record whether the business side effect actually reached a terminal state.
+	OperationStatus   string         `gorm:"type:varchar(24)" json:"operation_status,omitempty"`
+	OperationTerminal *bool          `gorm:"type:boolean" json:"terminal,omitempty"`
+	Outcome           datatypes.JSON `gorm:"type:jsonb" json:"outcome,omitempty"`
+	DurationMs        int64          `json:"duration_ms"`
+	CreatedAt         time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	UpdatedAt         time.Time      `gorm:"not null;default:now()" json:"updated_at"`
 }
 
 func (AssistantToolCall) TableName() string {
@@ -135,20 +140,20 @@ func (AssistantToolSelection) TableName() string {
 
 // AssistantToolPolicy 工具策略
 type AssistantToolPolicy struct {
-	ID                uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	ToolName          string    `gorm:"type:varchar(160);uniqueIndex;not null" json:"tool_name"`
-	Domain            string    `gorm:"type:varchar(40);not null" json:"domain"`
-	Operation         string    `gorm:"type:varchar(40);not null" json:"operation"`
-	RiskLevel         string    `gorm:"type:varchar(20);not null" json:"risk_level"`
-	Description       string    `gorm:"type:text" json:"description"`
-	ArgsSummary       string    `gorm:"type:text" json:"args_summary"`
-	DefaultWhitelisted bool     `gorm:"not null;default:false" json:"default_whitelisted"`
-	Whitelisted       bool      `gorm:"not null;default:false" json:"whitelisted"`
-	Enabled           bool      `gorm:"not null;default:true" json:"enabled"`
-	Source            string    `gorm:"type:varchar(32);not null;default:'builtin'" json:"source"`
-	UpdatedBy         string    `gorm:"type:varchar(100)" json:"updated_by"`
-	CreatedAt         time.Time `gorm:"not null;default:now()" json:"created_at"`
-	UpdatedAt         time.Time `gorm:"not null;default:now()" json:"updated_at"`
+	ID                 uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	ToolName           string    `gorm:"type:varchar(160);uniqueIndex;not null" json:"tool_name"`
+	Domain             string    `gorm:"type:varchar(40);not null" json:"domain"`
+	Operation          string    `gorm:"type:varchar(40);not null" json:"operation"`
+	RiskLevel          string    `gorm:"type:varchar(20);not null" json:"risk_level"`
+	Description        string    `gorm:"type:text" json:"description"`
+	ArgsSummary        string    `gorm:"type:text" json:"args_summary"`
+	DefaultWhitelisted bool      `gorm:"not null;default:false" json:"default_whitelisted"`
+	Whitelisted        bool      `gorm:"not null;default:false" json:"whitelisted"`
+	Enabled            bool      `gorm:"not null;default:true" json:"enabled"`
+	Source             string    `gorm:"type:varchar(32);not null;default:'builtin'" json:"source"`
+	UpdatedBy          string    `gorm:"type:varchar(100)" json:"updated_by"`
+	CreatedAt          time.Time `gorm:"not null;default:now()" json:"created_at"`
+	UpdatedAt          time.Time `gorm:"not null;default:now()" json:"updated_at"`
 }
 
 func (AssistantToolPolicy) TableName() string {
@@ -172,23 +177,23 @@ func (AssistantMemory) TableName() string {
 
 // Session status constants
 const (
-	SessionStatusActive            = "active"
-	SessionStatusRunning           = "running"
-	SessionStatusWaitingApproval   = "waiting_approval"
-	SessionStatusCompleted         = "completed"
-	SessionStatusCancelled         = "cancelled"
-	SessionStatusFailed            = "failed"
+	SessionStatusActive          = "active"
+	SessionStatusRunning         = "running"
+	SessionStatusWaitingApproval = "waiting_approval"
+	SessionStatusCompleted       = "completed"
+	SessionStatusCancelled       = "cancelled"
+	SessionStatusFailed          = "failed"
 )
 
 // Task type constants
 const (
-	TaskTypeInvestigation          = "investigation"
+	TaskTypeInvestigation           = "investigation"
 	TaskTypeHostAttackInvestigation = "host_attack_investigation"
-	TaskTypeOperations             = "operations"
-	TaskTypeGeneration             = "generation"
-	TaskTypeRemediation            = "remediation"
-	TaskTypeConfiguration          = "configuration"
-	TaskTypeExplanation            = "explanation"
+	TaskTypeOperations              = "operations"
+	TaskTypeGeneration              = "generation"
+	TaskTypeRemediation             = "remediation"
+	TaskTypeConfiguration           = "configuration"
+	TaskTypeExplanation             = "explanation"
 )
 
 // Risk level constants
@@ -219,9 +224,9 @@ const (
 
 // Tool call status constants
 const (
-	ToolCallStatusRunning         = "running"
-	ToolCallStatusSuccess         = "success"
-	ToolCallStatusFailed          = "failed"
+	ToolCallStatusRunning          = "running"
+	ToolCallStatusSuccess          = "success"
+	ToolCallStatusFailed           = "failed"
 	ToolCallStatusApprovalRequired = "approval_required"
-	ToolCallStatusRejected        = "rejected"
+	ToolCallStatusRejected         = "rejected"
 )

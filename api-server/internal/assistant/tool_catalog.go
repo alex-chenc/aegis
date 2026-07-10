@@ -226,6 +226,7 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 		Description:      modelFacingToolDescription(&s),
 		ArgsSchema:       normalizeRuntimeArgsSchema(s.ArgsSchema),
 		ResultSchema:     s.ResultSchema,
+		Prerequisites:    toRuntimePrerequisites(s.ExecutionContract.Prerequisites),
 		RiskLevel:        toRuntimeRisk(s.Risk),
 		AutoCallable:     s.AutoCallable,
 		RequiresApproval: s.RequiresApproval,
@@ -235,16 +236,37 @@ func (s ToolSpec) Descriptor() agentruntime.ToolDescriptor {
 	}
 }
 
+func toRuntimePrerequisites(prerequisites []ToolPrerequisite) []agentruntime.ToolPrerequisite {
+	if len(prerequisites) == 0 {
+		return nil
+	}
+	result := make([]agentruntime.ToolPrerequisite, 0, len(prerequisites))
+	for _, prerequisite := range prerequisites {
+		if strings.TrimSpace(prerequisite.Capability) == "" || strings.TrimSpace(prerequisite.Condition) == "" {
+			continue
+		}
+		result = append(result, agentruntime.ToolPrerequisite{
+			Capability: prerequisite.Capability,
+			Condition:  prerequisite.Condition,
+		})
+	}
+	return result
+}
+
 func modelFacingToolDescription(tool *ToolSpec) string {
 	if tool == nil {
 		return ""
 	}
 	contract := BuildToolUseContract(tool)
-	parts := []string{
-		"Capability: " + contract.Capability + ".",
-		"Domain: " + contract.Domain + ".",
-		"Operation: " + string(tool.Operation) + ".",
+	parts := make([]string, 0, 8)
+	if description := strings.TrimSpace(tool.ModelDescription); description != "" && !containsHan(description) {
+		parts = append(parts, description)
 	}
+	parts = append(parts,
+		"Capability: "+contract.Capability+".",
+		"Domain: "+contract.Domain+".",
+		"Operation: "+string(tool.Operation)+".",
+	)
 	if len(contract.ObjectTypes) > 0 {
 		parts = append(parts, "Objects: "+strings.Join(contract.ObjectTypes, ", ")+".")
 	}
@@ -253,6 +275,12 @@ func modelFacingToolDescription(tool *ToolSpec) string {
 	}
 	if len(contract.Postconditions) > 0 {
 		parts = append(parts, "Postconditions: "+strings.Join(contract.Postconditions, ", ")+".")
+	}
+	if tool.ExecutionContract.Mode != "" {
+		parts = append(parts, "Execution mode: "+tool.ExecutionContract.Mode+".")
+	}
+	if tool.ExecutionContract.CompletionCapability != "" {
+		parts = append(parts, "Completion capability: "+tool.ExecutionContract.CompletionCapability+".")
 	}
 	return strings.Join(parts, " ")
 }
@@ -267,9 +295,21 @@ func normalizeRuntimeArgsSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	out := make(map[string]any, len(schema))
+	out := make(map[string]any, len(schema)+1)
 	for k, v := range schema {
+		if k == "description" {
+			continue
+		}
 		out[k] = normalizeRuntimeSchemaValue(k, v)
+	}
+	// A schema with declared properties is a closed model-facing contract.
+	// Otherwise the model may emit plausible aliases that pass validation but
+	// are silently ignored by the handler, causing successful calls with wrong
+	// business defaults.
+	if out["type"] == "object" && out["properties"] != nil {
+		if _, declared := out["additionalProperties"]; !declared {
+			out["additionalProperties"] = false
+		}
 	}
 	return out
 }

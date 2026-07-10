@@ -15,6 +15,9 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if cfg.MaxTotalTurns != 500 {
 		t.Fatalf("expected MaxTotalTurns 500, got %d", cfg.MaxTotalTurns)
 	}
+	if cfg.MaxPlanSteps != 16 {
+		t.Fatalf("expected MaxPlanSteps 16, got %d", cfg.MaxPlanSteps)
+	}
 	if cfg.TaskTimeout != 2*time.Hour {
 		t.Fatalf("expected TaskTimeout 2h, got %v", cfg.TaskTimeout)
 	}
@@ -24,8 +27,17 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if !cfg.EnableReflection || !cfg.EnableAudit || !cfg.EnableCorrection {
 		t.Fatalf("expected reflection, audit, and correction to be enabled")
 	}
-	if cfg.MaxToolCalls != 100 || cfg.MaxToolCallsPerStep != 10 {
+	if cfg.MaxToolCalls != 160 || cfg.MaxToolCallsPerStep != 32 {
 		t.Fatalf("expected AI analysis tool limits, got total=%d per_step=%d", cfg.MaxToolCalls, cfg.MaxToolCallsPerStep)
+	}
+	if cfg.AsyncPollInitialBackoff != 2*time.Second || cfg.AsyncPollMaxBackoff != 30*time.Second {
+		t.Fatalf("expected bounded async polling backoff, got initial=%s max=%s", cfg.AsyncPollInitialBackoff, cfg.AsyncPollMaxBackoff)
+	}
+	if cfg.MaxAsyncPollAttempts != 12 {
+		t.Fatalf("expected bounded async polling attempts, got %d", cfg.MaxAsyncPollAttempts)
+	}
+	if !cfg.AllowHighRiskTools || !cfg.AllowDangerousTools {
+		t.Fatal("expected pre-authorized Aegis tools to reach the Aegis approval policy")
 	}
 }
 
@@ -146,5 +158,55 @@ func TestBuildAgentToolDescriptorsUsesRuntimeCompatibleNumberSchema(t *testing.T
 	properties := descriptors[0].ArgsSchema["properties"].(map[string]interface{})
 	if got := properties["page"].(map[string]interface{})["type"]; got != "number" {
 		t.Fatalf("runtime page schema type = %v, want number", got)
+	}
+}
+
+func TestBuildAgentToolDescriptorsResolvesAuthorizedCompletionTool(t *testing.T) {
+	registry := NewToolRegistry()
+	handler := func(context.Context, map[string]interface{}) (interface{}, error) {
+		return nil, nil
+	}
+	if err := registry.Register(&ToolSpec{
+		Name:       "Example.Generate",
+		Domain:     DomainSystem,
+		Operation:  OpGenerate,
+		Capability: "generate_example",
+		Risk:       ToolRiskMedium,
+		Enabled:    true,
+		ExecutionContract: ToolExecutionContract{
+			Mode:                 ToolExecutionAsynchronous,
+			CompletionCapability: "get_example_status",
+		},
+		ArgsSchema: map[string]interface{}{"type": "object"},
+		Handler:    handler,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(&ToolSpec{
+		Name:       "Example.Status",
+		Domain:     DomainSystem,
+		Operation:  OpGet,
+		Capability: "get_example_status",
+		Risk:       ToolRiskReadonly,
+		Enabled:    true,
+		Idempotent: true,
+		ArgsSchema: map[string]interface{}{"type": "object"},
+		Handler:    handler,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	orchestrator := &Orchestrator{toolRegistry: registry}
+	descriptors := orchestrator.buildAgentToolDescriptors([]string{"Example.Generate", "Example.Status"})
+	if len(descriptors) != 2 {
+		t.Fatalf("descriptors = %d, want 2", len(descriptors))
+	}
+	if got := descriptors[0].CompletionTools; len(got) != 1 || got[0] != "Example.Status" {
+		t.Fatalf("completion tools = %#v, want Example.Status", got)
+	}
+
+	descriptors = orchestrator.buildAgentToolDescriptors([]string{"Example.Generate"})
+	if len(descriptors[0].CompletionTools) != 0 {
+		t.Fatalf("unauthorized completion tool leaked into descriptor: %#v", descriptors[0].CompletionTools)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -146,7 +145,7 @@ Return exactly one JSON object containing an "action" field. Do not output non-J
 Choose tool names and arguments only from Available tools, user input, context, and actual prior results. Emit one tool call per response. If more calls may be needed, wait for the actual result before deciding the next call.
 
 ### Complete the current step
-{"action":"step_result","summary":"completion summary","step_result":{"result":"step result","evidence":["evidence"],"confidence":"high|medium|low"}}
+{"action":"step_result","summary":"completion summary","step_result":{"result":"step result","evidence":["exact terminal call_id when tools were used"],"confidence":"high|medium|low"}}
 
 ### Cannot continue
 {"action":"fail_step","summary":"failure summary","failure":{"reason":"failure reason","recoverable":true}}
@@ -157,6 +156,8 @@ Choose tool names and arguments only from Available tools, user input, context, 
 - For a complex goal, follow the current plan and ground every step in actual tool results.
 - Cover the complete set or scope requested by the user. If pagination, offline targets, permissions, or tool failures leave partial coverage, list the exact gap and reason.
 - When a tool fails, an asynchronous task is incomplete, or a result is empty, use its contract and actual result to decide whether to retry, query status, use an authorized alternative, or record an evidence gap.
+- A successful tool transport can still have operation_status=accepted or running. These non-terminal outcomes never satisfy a step.
+- When tools were used, step_result.evidence must contain exact call_id values for successful terminal outcomes. Never cite free-form evidence in place of a call ID.
 - When evidence is insufficient, state that evidence is insufficient. Never guess host, alert, status, or conclusion details.
 - After a tool error, use Internal recovery reflections to correct arguments or choose an alternative and retry at most once. Do not retry indefinitely.
 - Reuse a successful result for the same tool and arguments. Do not issue duplicate calls.
@@ -179,7 +180,10 @@ Choose tool names and arguments only from Available tools, user input, context, 
 
 // buildSummarizePrompt 构建总结阶段提示词
 func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBundle {
-	systemPrompt := `You are the Aegis assistant. Answer from the user's original goal, plan steps, and actual tool evidence.
+	systemPrompt := fmt.Sprintf(`You are the Aegis assistant. Answer from the user's original goal, plan steps, and actual tool evidence.
+
+## Authorized tool catalog for this run
+%s
 
 ## Response rules
 1. Answer the final goal directly. Do not repeat internal plans, control JSON, or irrelevant process details.
@@ -190,7 +194,8 @@ func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBund
 6. Derive conclusions only from actual tool results and user-provided context. Never invent IDs, status, counts, impact scope, or execution results.
 7. If evidence conflicts, state the conflict and use the more conservative conclusion.
 8. Deduplicate evidence and provide the final conclusion only once, with the conclusion first.
-9. Write the user-facing answer in the same language as the user's request.`
+9. A descriptor validation failure means the model proposed a tool name outside the current catalog. An arguments validation failure means the model request did not satisfy the registered tool schema. If an authorized catalog tool can provide the requested capability, either failure must not be described as a missing platform capability or an undeployed module.
+10. Write the user-facing answer in the same language as the user's request.`, p.formatToolListDetail())
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
@@ -223,13 +228,10 @@ func (p *AssistantPromptProvider) formatToolListDetail() string {
 	for _, desc := range p.toolDescriptors {
 		buf.WriteString(fmt.Sprintf("- %s: %s", desc.Name, modelSafeRuntimeDescription(desc)))
 		if desc.ArgsSchema != nil {
-			if props, ok := desc.ArgsSchema["properties"].(map[string]interface{}); ok {
-				var params []string
-				for k := range props {
-					params = append(params, k)
-				}
-				if len(params) > 0 {
-					buf.WriteString(fmt.Sprintf(". Arguments: %s", formatParamList(props, desc.ArgsSchema)))
+			if schema := modelSafeRuntimeArgsSchema(desc.ArgsSchema); len(schema) > 0 {
+				if encoded, err := json.Marshal(schema); err == nil {
+					buf.WriteString(" Input schema: ")
+					buf.Write(encoded)
 				}
 			}
 		}
@@ -253,6 +255,39 @@ func containsHan(value string) bool {
 		}
 	}
 	return false
+}
+
+func modelSafeRuntimeArgsSchema(schema map[string]interface{}) map[string]interface{} {
+	sanitized, _ := sanitizeModelSchemaValue(schema).(map[string]interface{})
+	return sanitized
+}
+
+func sanitizeModelSchemaValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		sanitized := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "description", "title", "$comment", "examples":
+				continue
+			default:
+				sanitized[key] = sanitizeModelSchemaValue(item)
+			}
+		}
+		return sanitized
+	case []interface{}:
+		sanitized := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			sanitized = append(sanitized, sanitizeModelSchemaValue(item))
+		}
+		return sanitized
+	case []string:
+		sanitized := make([]string, len(typed))
+		copy(sanitized, typed)
+		return sanitized
+	default:
+		return typed
+	}
 }
 
 func (p *AssistantPromptProvider) formatReflectionGuide() string {
@@ -299,43 +334,4 @@ func (p *AssistantPromptProvider) formatContextRefs() string {
 		buf.WriteString("\n")
 	}
 	return strings.TrimSpace(buf.String())
-}
-
-// formatParamList 格式化参数列表
-func formatParamList(props map[string]interface{}, schema map[string]interface{}) string {
-	requiredSet := make(map[string]bool)
-	switch required := schema["required"].(type) {
-	case []string:
-		for _, name := range required {
-			requiredSet[name] = true
-		}
-	case []interface{}:
-		for _, value := range required {
-			if name, ok := value.(string); ok {
-				requiredSet[name] = true
-			}
-		}
-	}
-
-	var parts []string
-	for name, prop := range props {
-		propMap, ok := prop.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		enumSuffix := ""
-		if values, ok := propMap["enum"]; ok {
-			if encoded, err := json.Marshal(values); err == nil {
-				enumSuffix = ",enum=" + string(encoded)
-			}
-		}
-		if requiredSet[name] {
-			parts = append(parts, fmt.Sprintf("%s(required%s)", name, enumSuffix))
-		} else {
-			parts = append(parts, fmt.Sprintf("%s(optional%s)", name, enumSuffix))
-		}
-	}
-	sort.Strings(parts)
-	b, _ := json.Marshal(parts)
-	return string(b)
 }

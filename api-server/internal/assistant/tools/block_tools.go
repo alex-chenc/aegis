@@ -16,12 +16,14 @@ type BlockToolDeps struct {
 // RegisterBlockTools 注册阻断策略域工具
 func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Block.Policy.List",
-		Domain:      "block",
-		Operation:   "policy_list",
-		Description: "列出阻断策略，支持分页和关键字搜索",
-		Risk:        assistant.ToolRiskReadonly,
-		Enabled:     true,
+		Name:               "Block.Policy.List",
+		Domain:             "block",
+		Operation:          "policy_list",
+		Capability:         "list_block_policies",
+		Description:        "列出阻断策略，支持分页和关键字搜索",
+		ModelDescription:   "List blocking policies with pagination and keyword search.",
+		Risk:               assistant.ToolRiskReadonly,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -37,12 +39,14 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 	}
 
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Block.Policy.Update",
-		Domain:      "block",
-		Operation:   "policy_update",
-		Description: "更新阻断策略配置（高风险操作，需审批）",
-		Risk:        assistant.ToolRiskHigh,
-		Enabled:     true,
+		Name:               "Block.Policy.Update",
+		Domain:             "block",
+		Operation:          "policy_update",
+		Capability:         "update_block_policy",
+		Description:        "更新阻断策略配置（高风险操作，需审批）",
+		ModelDescription:   "Update one blocking policy after explicit user intent and approval.",
+		Risk:               assistant.ToolRiskHigh,
+		Enabled:            true,
 		DefaultWhitelisted: false,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

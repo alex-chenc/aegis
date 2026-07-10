@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
+	"go.uber.org/zap"
 
 	"api-server/internal/llm"
+	applogger "api-server/pkg/logger"
 )
 
 // LLMClientAdapter wraps the existing llm.LLMClient to satisfy the
@@ -55,17 +57,25 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 		messages = a.injectAlertContext(messages)
 	}
 
-	// Auto-enable JSON mode for DashScope when the request expects structured output
-	// and the prompt contains the required "json" keyword.
-	var responseFormat *llm.ResponseFormat
-	if req.ResponseSchema != "" && a.client.IsDashScope() && containsJSONKeyword(messages) {
+	// Prefer the exact structured-output contract supplied by agent-runtime.
+	// ResponseSchema remains as a compatibility hint for older callers.
+	responseFormat := translateResponseFormat(req.ResponseFormat)
+	if responseFormat == nil && req.ResponseSchema != "" && a.client.IsDashScope() && containsJSONKeyword(messages) {
 		responseFormat = &llm.ResponseFormat{Type: "json_object"}
 	}
 
 	result, err := a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, responseFormat)
 	if err != nil && responseFormat != nil {
-		// Fallback: thinking mode models (e.g., qwen3.5-plus) do not support json_object.
-		// Retry without response_format.
+		// Some thinking-mode and Anthropic-compatible models reject response_format.
+		// Keep execution available, while the runtime still enforces descriptor and
+		// argument validation after the unstructured retry.
+		if applogger.Get() != nil {
+			applogger.Warn("llm_structured_response_format_fallback",
+				zap.String("purpose", string(req.Purpose)),
+				zap.String("format_type", responseFormat.Type),
+				zap.Error(err),
+			)
+		}
 		result, err = a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, nil)
 	}
 	if err != nil {
@@ -94,6 +104,22 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 			TotalTokens:      result.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+func translateResponseFormat(format *agentruntime.ResponseFormat) *llm.ResponseFormat {
+	if format == nil || strings.TrimSpace(format.Type) == "" {
+		return nil
+	}
+	translated := &llm.ResponseFormat{Type: format.Type}
+	if format.JSONSchema != nil {
+		translated.JSONSchema = &llm.ResponseFormatSchema{
+			Name:        format.JSONSchema.Name,
+			Description: format.JSONSchema.Description,
+			Schema:      append(json.RawMessage(nil), format.JSONSchema.Schema...),
+			Strict:      format.JSONSchema.Strict,
+		}
+	}
+	return translated
 }
 
 // temperatureForPurpose returns the default temperature for each LLM purpose.

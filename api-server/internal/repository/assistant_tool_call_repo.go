@@ -17,6 +17,7 @@ type AssistantToolCallRepository interface {
 	FindByCallID(ctx context.Context, callID string) (*model.AssistantToolCall, error)
 	ListBySession(ctx context.Context, sessionID string, page, pageSize int) ([]model.AssistantToolCall, int64, error)
 	MarkSuccess(ctx context.Context, callID string, result interface{}, durationMs int64) error
+	MarkOutcome(ctx context.Context, callID, operationStatus string, terminal bool, outcome interface{}) error
 	MarkFailed(ctx context.Context, callID string, errMsg string, durationMs int64) error
 	MarkApprovalRequired(ctx context.Context, callID string, approvalID string) error
 	MarkRejected(ctx context.Context, callID string, comment string) error
@@ -90,6 +91,18 @@ func (r *assistantToolCallRepo) MarkSuccess(ctx context.Context, callID string, 
 			"result":      datatypes.JSON(mustMarshal(result)),
 			"duration_ms": durationMs,
 			"updated_at":  time.Now(),
+		}).Error
+}
+
+func (r *assistantToolCallRepo) MarkOutcome(ctx context.Context, callID, operationStatus string, terminal bool, outcome interface{}) error {
+	return r.db.WithContext(ctx).
+		Model(&model.AssistantToolCall{}).
+		Where("call_id = ?", callID).
+		Updates(map[string]interface{}{
+			"operation_status":   operationStatus,
+			"operation_terminal": terminal,
+			"outcome":            datatypes.JSON(mustMarshal(outcome)),
+			"updated_at":         time.Now(),
 		}).Error
 }
 

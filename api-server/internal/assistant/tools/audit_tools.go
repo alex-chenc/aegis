@@ -16,12 +16,14 @@ type AuditToolDeps struct {
 // RegisterAuditTools 注册审计域工具
 func RegisterAuditTools(registry *assistant.ToolRegistry, deps AuditToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Audit.Log.List",
-		Domain:      "audit",
-		Operation:   "log_list",
-		Description: "列出审计日志，支持按脚本类型、审计来源和审核结果筛选",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Audit.Log.List",
+		Domain:             "audit",
+		Operation:          "log_list",
+		Capability:         "list_audit_logs",
+		Description:        "列出审计日志，支持按脚本类型、审计来源和审核结果筛选",
+		ModelDescription:   "List audit-log records with pagination and optional script type, source, or review-result filters.",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

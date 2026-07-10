@@ -18,6 +18,15 @@ func TestRuntimeEvidenceRejectsOnlineHostContradiction(t *testing.T) {
 					ToolName: "Vulnerability.AffectedHosts",
 					Status:   agentruntime.ToolCallSuccess,
 					Content:  `{"total":1,"data":[{"id":"host-1","online":true}]}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "get_vulnerability_affected_hosts",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						Facts: []map[string]any{{
+							"kind": "host_online",
+							"id":   "host-1",
+						}},
+					},
 				},
 			}},
 		}},
@@ -45,6 +54,15 @@ func TestRuntimeEvidenceRejectsUnprovenDispatch(t *testing.T) {
 					ToolName: "Vulnerability.List",
 					Status:   agentruntime.ToolCallSuccess,
 					Content:  `{"total":1,"data":[{"id":"vuln-1"}]}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "list_vulnerabilities",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						Facts: []map[string]any{{
+							"kind": "vulnerability_record",
+							"id":   "vuln-1",
+						}},
+					},
 				},
 			}},
 		}},
@@ -65,6 +83,15 @@ func TestRuntimeEvidenceAcceptsTaskGroupBackedDispatch(t *testing.T) {
 					ToolName: "Vulnerability.Script.Execute",
 					Status:   agentruntime.ToolCallSuccess,
 					Content:  `{"task_group_id":"task-group-1"}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "execute_vulnerability_host_scripts",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						SideEffects: []map[string]any{{
+							"type":          "side_effect",
+							"task_group_id": "task-group-1",
+						}},
+					},
 				},
 			}},
 		}},
@@ -84,6 +111,15 @@ func TestRuntimeEvidenceCountsCustomCVECompletion(t *testing.T) {
 					ToolName: "Vulnerability.CustomQuery.Status",
 					Status:   agentruntime.ToolCallSuccess,
 					Content:  `{"status":"success","result_vulnerability_id":"vuln-1"}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "get_custom_cve_query_status",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						Artifacts: []map[string]any{{
+							"type":                    "artifact",
+							"result_vulnerability_id": "vuln-1",
+						}},
+					},
 				},
 			}},
 		}},
@@ -91,6 +127,30 @@ func TestRuntimeEvidenceCountsCustomCVECompletion(t *testing.T) {
 	ledger := buildRuntimeEvidenceLedger(result)
 	if ledger.VulnerabilityCount != 1 {
 		t.Fatalf("vulnerability count = %d, want 1", ledger.VulnerabilityCount)
+	}
+}
+
+func TestRuntimeEvidenceRejectsGeneratedClaimForAcceptedOperation(t *testing.T) {
+	result := &agentruntime.TaskResult{
+		StepExecutions: []agentruntime.StepExecution{{
+			ReactTurns: []agentruntime.ReactTurn{{
+				Observation: &agentruntime.Observation{
+					CallID:   "call-generate",
+					ToolName: "Vulnerability.Script.Generate",
+					Status:   agentruntime.ToolCallSuccess,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "generate_vulnerability_script",
+						OperationStatus: agentruntime.OperationAccepted,
+						Terminal:        false,
+					},
+				},
+			}},
+		}},
+	}
+	ledger := buildRuntimeEvidenceLedger(result)
+	conflicts := validateRuntimeEvidenceConsistency("修复脚本生成成功。", ledger)
+	if !containsDecisionString(conflicts, "script_generated_without_terminal_evidence") {
+		t.Fatalf("conflicts = %#v", conflicts)
 	}
 }
 

@@ -15,18 +15,18 @@ type NotificationToolDeps struct {
 func RegisterNotificationTools(registry *assistant.ToolRegistry, deps NotificationToolDeps) error {
 	// Notification.List — 获取通知列表
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Notification.List",
-		Domain:      assistant.DomainNotification,
-		Operation:   assistant.OpList,
-		Capability:  "list_notifications",
-		Description: "获取系统通知列表，包括告警通知、任务完成通知、审批通知等",
-		Aliases:     []string{"通知列表", "消息列表", "list notifications"},
-		Tags:        []string{"v6.0", "notification"},
-		Risk:        assistant.ToolRiskReadonly,
-		AutoCallable: true,
-		Idempotent:   true,
+		Name:               "Notification.List",
+		Domain:             assistant.DomainNotification,
+		Operation:          assistant.OpList,
+		Capability:         "list_notifications",
+		Description:        "获取系统通知列表，包括告警通知、任务完成通知、审批通知等",
+		Aliases:            []string{"通知列表", "消息列表", "list notifications"},
+		Tags:               []string{"v6.0", "notification"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
 		DefaultWhitelisted: true,
-		Enabled:      true,
+		Enabled:            true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

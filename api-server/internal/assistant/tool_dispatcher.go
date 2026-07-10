@@ -50,6 +50,10 @@ type DispatchRequest struct {
 	Args      map[string]interface{} `json:"args"`
 	Operator  string                 `json:"operator"`
 	Approved  bool                   `json:"approved"` // true if already approved via approval gate
+	// Polling marks an internal Runtime retry of an already-authorized,
+	// read-only, idempotent status call. It updates the original logical tool
+	// call instead of creating another user-visible/audit row.
+	Polling bool `json:"polling,omitempty"`
 }
 
 // DispatchResult 调度结果
@@ -72,25 +76,36 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 	if !ok {
 		return nil, fmt.Errorf("tool %s not found", req.ToolName)
 	}
+	if req.Polling && (tool.Risk != ToolRiskReadonly || !tool.Idempotent) {
+		return nil, fmt.Errorf("tool %s is not eligible for automatic asynchronous polling", req.ToolName)
+	}
 
-	// Create tool call record
 	callID := req.CallID
 	if callID == "" {
 		callID = "call_" + uuid.New().String()[:8]
 	}
-	toolCall := &model.AssistantToolCall{
-		ID:        uuid.New(),
-		SessionID: req.SessionID,
-		MessageID: req.MessageID,
-		CallID:    callID,
-		ToolName:  req.ToolName,
-		Domain:    string(tool.Domain),
-		RiskLevel: string(tool.Risk),
-		Status:    model.ToolCallStatusRunning,
-		Args:      mustMarshalJSON(req.Args),
+	if !req.Polling {
+		// A normal model-selected call creates one durable logical record.
+		// Internal polling updates that same record until it reaches a terminal
+		// business outcome.
+		toolCall := &model.AssistantToolCall{
+			ID:        uuid.New(),
+			SessionID: req.SessionID,
+			MessageID: req.MessageID,
+			CallID:    callID,
+			ToolName:  req.ToolName,
+			Domain:    string(tool.Domain),
+			RiskLevel: string(tool.Risk),
+			Status:    model.ToolCallStatusRunning,
+			Args:      mustMarshalJSON(req.Args),
+		}
+		if err := d.toolCallRepo.Create(ctx, toolCall); err != nil {
+			d.logger.Error("failed to create tool call record", zap.Error(err))
+		}
 	}
-	if err := d.toolCallRepo.Create(ctx, toolCall); err != nil {
-		d.logger.Error("failed to create tool call record", zap.Error(err))
+
+	if req.Polling {
+		return d.executeTool(ctx, callID, tool, req)
 	}
 
 	// Check if already approved
@@ -177,7 +192,25 @@ func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *T
 
 		if tr.result.Success {
 			_ = d.toolCallRepo.MarkSuccess(ctx, callID, tr.result.Data, duration)
-			_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
+			outcome := normalizeToolOutcome(tool, tr.result.Data)
+			if err := d.toolCallRepo.MarkOutcome(
+				ctx,
+				callID,
+				string(outcome.OperationStatus),
+				outcome.Terminal,
+				outcome,
+			); err != nil {
+				d.logger.Warn("failed to persist assistant tool business outcome",
+					zap.String("call_id", callID),
+					zap.String("tool_name", tool.Name),
+					zap.String("operation_status", string(outcome.OperationStatus)),
+					zap.Bool("terminal", outcome.Terminal),
+					zap.Error(err),
+				)
+			}
+			if !req.Polling {
+				_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
+			}
 		} else {
 			_ = d.toolCallRepo.MarkFailed(ctx, callID, tr.result.Error, duration)
 		}

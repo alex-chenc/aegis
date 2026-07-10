@@ -73,13 +73,15 @@ Use actual alert details and relevant context to distinguish confirmed threat, l
 Return exactly one JSON object with an "action" field.
 
 Direct response or completed step:
-{"action":"step_result","summary":"summary","step_result":{"result":"result in the user's language","evidence":[],"confidence":"high|medium|low"}}
+{"action":"step_result","summary":"summary","step_result":{"result":"result in the user's language","evidence":["exact terminal call_id when tools were used"],"confidence":"high|medium|low"}}
 
 One tool call:
 {"action":"tool_call","summary":"purpose","tool_call":{"tool_name":"Exact.ToolName","reason":"reason","args":{"argument":"value"}}}
 
 Cannot continue:
 {"action":"fail_step","summary":"failure summary","failure":{"reason":"reason","recoverable":true}}
+
+When tools are used, accepted or running is not terminal success. Cite exact terminal successful call_id values in step_result.evidence. A failed call cannot be reported as completed.
 
 Do not output Markdown, prose outside the JSON object, invented tool names, or multiple tool calls in one response.`,
 	},

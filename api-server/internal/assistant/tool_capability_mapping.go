@@ -48,6 +48,45 @@ func (m *ToolCapabilityMapper) ToolNamesForCapabilities(capabilities []string) [
 	return dedupeStrings(names)
 }
 
+// ReadonlyCompanionToolNames exposes only contract-declared read-only or low
+// risk helpers needed for completion polling or discovery. It resolves nested
+// companion contracts but never exposes medium/high-risk operations.
+func (m *ToolCapabilityMapper) ReadonlyCompanionToolNames(primaryToolNames []string) []string {
+	if m == nil || m.registry == nil {
+		return nil
+	}
+	queue := append([]string{}, primaryToolNames...)
+	visited := make(map[string]bool, len(queue))
+	var names []string
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+		tool, ok := m.registry.Get(name)
+		if !ok || tool == nil || !tool.Enabled {
+			continue
+		}
+		capabilities := append(
+			[]string{tool.ExecutionContract.CompletionCapability},
+			tool.ExecutionContract.DiscoveryCapabilities...,
+		)
+		for _, companionName := range m.ToolNamesForCapabilities(capabilities) {
+			companion, ok := m.registry.Get(companionName)
+			if !ok || companion == nil || !companion.Enabled {
+				continue
+			}
+			if companion.Risk == ToolRiskReadonly || companion.Risk == ToolRiskLow {
+				names = append(names, companionName)
+				queue = append(queue, companionName)
+			}
+		}
+	}
+	return dedupeStrings(names)
+}
+
 func BuildToolUseContract(tool *ToolSpec) ToolUseContract {
 	if tool == nil {
 		return ToolUseContract{}

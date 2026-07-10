@@ -77,7 +77,7 @@ func TestToolDecisionEngineAuthorizesOnlySelectedToolsWithoutWorkflowExpansion(t
 	}
 }
 
-func TestToolDecisionEngineRecallsRelevantContractBeyondWrongPreselection(t *testing.T) {
+func TestToolDecisionEngineDoesNotUseDomainRecallOrWrongPreselection(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, spec := range []*ToolSpec{
 		{Name: "Host.List", Domain: DomainHost, Operation: OpList, Capability: "list_hosts", Description: "list hosts", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
@@ -99,7 +99,9 @@ func TestToolDecisionEngineRecallsRelevantContractBeyondWrongPreselection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertContainsTool(t, authorization.ToolNames(), "Host.List")
+	if len(authorization.ToolNames()) != 0 {
+		t.Fatalf("unmapped capability and wrong preselection must not authorize tools, got %v", authorization.ToolNames())
+	}
 }
 
 func TestToolDecisionEngineAllowsRequiredArgFromPreviousStepForAnyTool(t *testing.T) {
@@ -308,8 +310,6 @@ func newDecisionTestEngine(registry *ToolRegistry) *ToolDecisionEngine {
 		Config: ToolDecisionConfig{
 			Enabled:                    true,
 			ClarificationRequiredWrite: true,
-			MinScore:                   0.75,
-			ReadonlyMinScore:           0.60,
 			PostconditionCheckEnabled:  true,
 		},
 	})
@@ -452,7 +452,7 @@ func TestToolDecisionEngineReadOnlyHostQuery(t *testing.T) {
 }
 
 // 评分不足：候选工具相似但对象不匹配，应拒绝或追问，不执行写工具
-func TestToolDecisionEngineRejectsLowScoreMismatch(t *testing.T) {
+func TestToolDecisionEngineRejectsUnmappedCapabilityWithoutPreselectionBypass(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	registerDecisionTestTool(t, registry, &ToolSpec{
 		Name:               "Detection.Alert.Block",
@@ -483,9 +483,11 @@ func TestToolDecisionEngineRejectsLowScoreMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	// 高风险写工具在只读查询中应被拒绝
+	// 预选工具不属于精确 capability mapping，因此不能进入授权集合。
 	assertNotContainsTool(t, plan.ToolNames(), "Detection.Alert.Block")
-	assertRejectedDecision(t, plan, "Detection.Alert.Block")
+	if len(plan.RejectedToolRecords) == 0 || plan.RejectedToolRecords[0].Capability != "list_hosts" {
+		t.Fatalf("expected an unmapped capability rejection, got %#v", plan.RejectedToolRecords)
+	}
 }
 
 // 概念解释：明确的 denied_intents 匹配检查

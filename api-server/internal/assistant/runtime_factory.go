@@ -21,7 +21,6 @@ import (
 type RuntimeFactory struct {
 	configRepo     *repository.ConfigRepository
 	catalog        *ToolCatalog
-	selector       *ToolSelector
 	toolDispatcher *ToolDispatcher
 	runManager     *RunManager
 	memoryRepo     repository.AssistantMemoryRepository
@@ -32,7 +31,6 @@ type RuntimeFactory struct {
 type RuntimeFactoryDeps struct {
 	ConfigRepo     *repository.ConfigRepository
 	Catalog        *ToolCatalog
-	Selector       *ToolSelector
 	ToolDispatcher *ToolDispatcher
 	RunManager     *RunManager
 	MemoryRepo     repository.AssistantMemoryRepository
@@ -48,7 +46,6 @@ func NewRuntimeFactory(deps RuntimeFactoryDeps) *RuntimeFactory {
 	return &RuntimeFactory{
 		configRepo:     deps.ConfigRepo,
 		catalog:        deps.Catalog,
-		selector:       deps.Selector,
 		toolDispatcher: deps.ToolDispatcher,
 		runManager:     deps.RunManager,
 		memoryRepo:     deps.MemoryRepo,
@@ -113,8 +110,8 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
-		OnToolResult: func(callID string, result interface{}) {
-			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, req.MessageID, callID, result))
+		OnToolResult: func(callID string, result interface{}, outcome *agentruntime.ToolOutcome) {
+			f.runManager.Publish(req.SessionID, EventToolResultPayload(req.SessionID, req.RunID, req.MessageID, callID, result, outcome))
 		},
 		OnToolError: func(callID, errMsg string) {
 			f.runManager.Publish(req.SessionID, EventToolErrorPayload(req.SessionID, req.RunID, req.MessageID, callID, errMsg))
@@ -303,19 +300,30 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		maxIterations = 80
 	}
 	return agentruntime.RuntimeConfig{
-		MaxTotalTurns:         maxIterations,
-		MaxPlanSteps:          8,
-		MaxStepReactTurns:     8,
-		MaxToolCalls:          60,
-		MaxToolCallsPerStep:   6,
-		MaxToolFailures:       8,
-		MaxModelFailures:      5,
-		MaxParseFailures:      3,
-		MaxNoProgressTurns:    3,
-		TaskTimeout:           30 * time.Minute,
-		ModelTimeout:          1200 * time.Second,
-		ToolTimeout:           60 * time.Second,
-		HookTimeout:           10 * time.Second,
+		MaxTotalTurns: maxIterations,
+		// A dynamic agent plan may legitimately contain discovery, asynchronous
+		// completion, execution, and verification steps. Keep a bounded but
+		// non-trivial ceiling so valid general-purpose plans are not rejected
+		// before their first tool call.
+		MaxPlanSteps:            16,
+		MaxStepReactTurns:       8,
+		MaxToolCalls:            80,
+		MaxToolCallsPerStep:     32,
+		MaxToolFailures:         8,
+		MaxModelFailures:        5,
+		MaxParseFailures:        3,
+		MaxNoProgressTurns:      3,
+		TaskTimeout:             30 * time.Minute,
+		ModelTimeout:            1200 * time.Second,
+		ToolTimeout:             60 * time.Second,
+		HookTimeout:             10 * time.Second,
+		AsyncPollInitialBackoff: 1 * time.Second,
+		AsyncPollMaxBackoff:     30 * time.Second,
+		// Stop a backend operation that remains non-terminal instead of keeping
+		// the assistant session in an unbounded "executing" state. With the
+		// configured exponential backoff this allows several minutes for normal
+		// script generation while preserving a deterministic failure boundary.
+		MaxAsyncPollAttempts:  12,
 		EnableReflection:      true,
 		EnableAudit:           true,
 		EnableCorrection:      true,
@@ -328,8 +336,11 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		AllowDynamicNewSteps:  true,
 		AllowSkipFailedStep:   false,
 		AllowBestEffortAnswer: false,
-		AllowHighRiskTools:    false,
-		AllowDangerousTools:   false,
+		// Tool descriptors reaching Runtime have already passed Aegis capability
+		// mapping and hard gates. Runtime must forward them to Aegis's approval
+		// policy instead of applying a conflicting second risk denial.
+		AllowHighRiskTools:    true,
+		AllowDangerousTools:   true,
 		MaxContextTokens:      256000,
 		ReservedOutputTokens:  8192,
 		EnableContextCompress: true,
@@ -348,33 +359,38 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 		maxIterations = 500
 	}
 	return agentruntime.RuntimeConfig{
-		MaxTotalTurns:         maxIterations,
-		MaxPlanSteps:          8,
-		MaxStepReactTurns:     8,
-		MaxToolCalls:          100,
-		MaxToolCallsPerStep:   10,
-		MaxToolFailures:       15,
-		MaxModelFailures:      5,
-		MaxParseFailures:      3,
-		MaxNoProgressTurns:    3,
-		TaskTimeout:           2 * time.Hour,
-		ModelTimeout:          1200 * time.Second,
-		ToolTimeout:           60 * time.Second,
-		HookTimeout:           10 * time.Second,
-		EnableReflection:      true,
-		EnableAudit:           true,
-		EnableCorrection:      true,
-		EnableExperience:      false,
-		AuditEveryNSteps:      3,
-		MaxAudits:             2,
-		MaxReflections:        3,
-		MaxStepRetries:        1,
-		MaxCorrections:        2,
-		AllowDynamicNewSteps:  true,
-		AllowSkipFailedStep:   false,
-		AllowBestEffortAnswer: false,
-		AllowHighRiskTools:    false,
-		AllowDangerousTools:   false,
+		MaxTotalTurns:           maxIterations,
+		MaxPlanSteps:            16,
+		MaxStepReactTurns:       8,
+		MaxToolCalls:            160,
+		MaxToolCallsPerStep:     32,
+		MaxToolFailures:         15,
+		MaxModelFailures:        5,
+		MaxParseFailures:        3,
+		MaxNoProgressTurns:      3,
+		TaskTimeout:             2 * time.Hour,
+		ModelTimeout:            1200 * time.Second,
+		ToolTimeout:             60 * time.Second,
+		HookTimeout:             10 * time.Second,
+		AsyncPollInitialBackoff: 2 * time.Second,
+		AsyncPollMaxBackoff:     30 * time.Second,
+		MaxAsyncPollAttempts:    12,
+		EnableReflection:        true,
+		EnableAudit:             true,
+		EnableCorrection:        true,
+		EnableExperience:        false,
+		AuditEveryNSteps:        3,
+		MaxAudits:               2,
+		MaxReflections:          3,
+		MaxStepRetries:          1,
+		MaxCorrections:          2,
+		AllowDynamicNewSteps:    true,
+		AllowSkipFailedStep:     false,
+		AllowBestEffortAnswer:   false,
+		// Aegis remains the authorization authority for this pre-filtered tool
+		// subset (request_approval/whitelist/full_access).
+		AllowHighRiskTools:    true,
+		AllowDangerousTools:   true,
 		MaxContextTokens:      256000,
 		ReservedOutputTokens:  8192,
 		EnableContextCompress: true,

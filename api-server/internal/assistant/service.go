@@ -10,6 +10,7 @@ import (
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
+	agentruntime "github.com/alex-chenc/agent-runtime"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
@@ -329,6 +330,7 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 					zap.String("approval_id", decision.ApprovalID),
 				)
 				_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
+				s.persistRunOutcomeMetadata(ctx, sessionID, "approval_rejected", agentruntime.GoalFailed)
 				s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, msg))
 				_ = s.messageRepo.Create(context.Background(), &model.AssistantMessage{
 					ID:        uuid.New(),
@@ -345,6 +347,7 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		}
 		s.logger.Info("run cancelled", zap.String("session_id", sessionID), zap.String("run_id", runID))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCancelled)
+		s.persistRunOutcomeMetadata(ctx, sessionID, "cancelled", agentruntime.GoalFailed)
 		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, "任务已取消"))
 		s.runManager.Finish(sessionID)
 		return
@@ -353,6 +356,7 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 	if err != nil {
 		s.logger.Error("run failed", zap.String("session_id", sessionID), zap.Error(err))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
+		s.persistRunOutcomeMetadata(ctx, sessionID, "failed", agentruntime.GoalFailed)
 
 		// 错误时也保存一条助手消息，避免用户看到空白
 		errMsg := fmt.Sprintf("抱歉，执行过程中出现错误: %s", err.Error())
@@ -379,11 +383,77 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		s.runManager.Publish(sessionID, EventMessageDeltaPayload(sessionID, runID, msgID, errMsg))
 		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, err.Error()))
 	} else {
-		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCompleted)
-		s.runManager.Publish(sessionID, EventDonePayload(sessionID, runID))
+		if result == nil {
+			s.logger.Error("assistant run returned no result",
+				zap.String("session_id", sessionID),
+				zap.String("run_id", runID),
+			)
+			_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusFailed)
+			s.persistRunOutcomeMetadata(ctx, sessionID, "failed", agentruntime.GoalFailed)
+			s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, "assistant run returned no result"))
+		} else {
+			sessionStatus := sessionStatusForGoalOutcome(result.GoalOutcome)
+			_ = s.sessionRepo.UpdateStatus(ctx, sessionID, sessionStatus)
+			s.persistRunOutcomeMetadata(ctx, sessionID, result.RunStatus, result.GoalOutcome)
+			s.runManager.Publish(sessionID, EventDoneOutcomePayload(
+				sessionID,
+				runID,
+				result.RunStatus,
+				string(result.GoalOutcome),
+			))
+			s.logger.Info("assistant run completed with explicit outcome",
+				zap.String("session_id", sessionID),
+				zap.String("run_id", runID),
+				zap.String("run_status", result.RunStatus),
+				zap.String("goal_outcome", string(result.GoalOutcome)),
+				zap.String("session_status", sessionStatus),
+			)
+		}
 	}
 
 	s.runManager.Finish(sessionID)
+}
+
+func sessionStatusForGoalOutcome(outcome agentruntime.GoalOutcome) string {
+	switch outcome {
+	case agentruntime.GoalSucceeded, agentruntime.GoalPartiallySucceeded:
+		return model.SessionStatusCompleted
+	case agentruntime.GoalNeedsInput:
+		return model.SessionStatusActive
+	default:
+		return model.SessionStatusFailed
+	}
+}
+
+func (s *Service) persistRunOutcomeMetadata(ctx context.Context, sessionID, runStatus string, outcome agentruntime.GoalOutcome) {
+	if s == nil || s.sessionRepo == nil || sessionID == "" {
+		return
+	}
+	session, err := s.sessionRepo.FindBySessionID(ctx, sessionID)
+	if err != nil || session == nil {
+		s.logger.Warn("failed to load assistant session for outcome persistence",
+			zap.String("session_id", sessionID),
+			zap.String("run_status", runStatus),
+			zap.Error(err),
+		)
+		return
+	}
+	metadata := unmarshalJSON(session.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	metadata["current_run_status"] = runStatus
+	metadata["goal_outcome"] = outcome
+	metadata["last_run_finished_at"] = time.Now().UTC().Format(time.RFC3339)
+	session.Metadata = mustMarshalJSON(metadata)
+	if err := s.sessionRepo.Update(ctx, session); err != nil {
+		s.logger.Warn("failed to persist assistant run outcome",
+			zap.String("session_id", sessionID),
+			zap.String("run_status", runStatus),
+			zap.String("goal_outcome", string(outcome)),
+			zap.Error(err),
+		)
+	}
 }
 
 // ListContextRefs 列出上下文引用

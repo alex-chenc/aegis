@@ -27,6 +27,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		Operation:          assistant.OpList,
 		Capability:         "list_hosts",
 		Description:        "列出所有主机，支持分页和关键字搜索",
+		ModelDescription:   "List hosts with pagination, query, and online or offline agent-status filters.",
 		Aliases:            []string{"主机列表", "资产列表", "list hosts"},
 		Tags:               []string{"v5.5", "host", "asset"},
 		ObjectTypes:        []string{"host"},
@@ -36,6 +37,15 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		Idempotent:         true,
 		DefaultWhitelisted: true,
 		Enabled:            true,
+		ResultContract: assistant.ToolResultContract{
+			FactBindings: []assistant.ToolFactBinding{{
+				Kind:       "host_online",
+				ItemsField: "data",
+				IDField:    "id",
+				StateField: "agent_status",
+				StateValue: "online",
+			}},
+		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

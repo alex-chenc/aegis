@@ -71,10 +71,23 @@ func compactRuntimeDisplayPayload(event AssistantEvent) (map[string]interface{},
 		if callID == "" {
 			return nil, false
 		}
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"call_id": callID,
 			"result":  payload["result"],
-		}, true
+		}
+		for _, key := range []string{
+			"transport_status",
+			"operation_status",
+			"terminal",
+			"outcome_message",
+			"capability",
+			"outcome",
+		} {
+			if value, exists := payload[key]; exists {
+				result[key] = value
+			}
+		}
+		return result, true
 	case EventToolError:
 		callID, _ := payload["call_id"].(string)
 		if callID == "" {
@@ -96,9 +109,9 @@ func compactRuntimeDisplayPayload(event AssistantEvent) (map[string]interface{},
 			return nil, false
 		}
 		return plan, true
-	case EventStepStarted, EventStepCompleted:
+	case EventStepStarted, EventStepCompleted, EventStepFailed, EventStepRetrying:
 		result := make(map[string]interface{})
-		for _, key := range []string{"step_id", "id", "title", "status", "result_summary", "summary"} {
+		for _, key := range []string{"step_id", "id", "title", "status", "result_summary", "summary", "error"} {
 			value, exists := payload[key]
 			if !exists || value == nil {
 				continue

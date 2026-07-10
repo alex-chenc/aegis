@@ -17,12 +17,14 @@ type ConfigToolDeps struct {
 // RegisterConfigTools 注册配置域工具
 func RegisterConfigTools(registry *assistant.ToolRegistry, deps ConfigToolDeps) error {
 	if err := registry.Register(&assistant.ToolSpec{
-		Name:        "Config.Get",
-		Domain:      "config",
-		Operation:   "get",
-		Description: "获取系统配置信息，支持按配置键查询",
-		Risk:        assistant.ToolRiskLow,
-		Enabled:     true,
+		Name:               "Config.Get",
+		Domain:             "config",
+		Operation:          "get",
+		Capability:         "get_system_config",
+		Description:        "获取系统配置信息，支持按配置键查询",
+		ModelDescription:   "Get system configuration values, optionally restricted to one configuration key.",
+		Risk:               assistant.ToolRiskLow,
+		Enabled:            true,
 		DefaultWhitelisted: true,
 		ArgsSchema: map[string]interface{}{
 			"type": "object",

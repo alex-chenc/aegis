@@ -2,7 +2,7 @@
 
 **版本**: 6.1  
 **日期**: 2026-07-02  
-**状态**: 设计方案  
+**状态**: 已废弃的历史设计（不得用于当前实现）
 **关联文档**:
 
 - `docs/aegis_system_design_v6.0/agent_runtime_tool_orchestration_design_v6.0.md`
@@ -10,6 +10,18 @@
 - `docs/aegis_system_design_v5.8/fix/assistant_tool_call_routing_fix.md`
 
 ---
+
+> **2026-07-10 替代说明**
+>
+> 本文保留用于解释历史演进，其中的独立 ToolSelector、软评分、分数阈值、领域召回、
+> 预选绕过和固定执行计划均已废弃。当前唯一有效设计为：
+>
+> - `fix/assistant_generic_agent_flow_only.md`
+> - `fix/assistant_mapping_authorization_and_truthful_completion_fix.md`
+>
+> 当前生产语义是：大模型从实时英文 capability 目录输出 exact capability，后端只做
+> exact mapping 与安全硬门，agent-runtime 是唯一规划器，工具完成以终态 ToolOutcome
+> 和真实 call ID 证据为准。
 
 ## 1. 问题背景与需求
 

@@ -21,13 +21,13 @@ const intentDecomposerSystemPrompt = `You are the intent decomposer for the Aegi
 
 Requirements:
 1. Output candidate_capabilities only as machine-readable capability identifiers, never as final tool_name values.
-2. Every candidate_capabilities item MUST be a lowercase English identifier matching ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$. Never translate a capability into Chinese or use free-form text. Prefer exact capability identifiers already supplied in Existing candidate capabilities.
+2. Every candidate_capabilities item MUST be copied exactly from the Available capability catalog and must match ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$. Never translate a capability, summarize it, or invent a new identifier.
 3. Infer write intent only when the original user message explicitly asks to execute, collect, scan, repair, block, generate, dispatch, or otherwise change state.
 4. If an object, action, or scope is genuinely ambiguous, set need_clarification=true and provide one concise question.
 5. Preserve page references such as "this alert" or "current host" as object references. Never invent a real ID.
 6. objects must be an array. Each item has the shape {"type":"open English business object identifier","id":"optional ID explicitly provided by the user","selector":"optional selection criteria"}. Never emit a bare string.
 7. scope.kind, domains, actions, object types, and parameter keys must use concise English machine identifiers. These are open structures, not predefined business enums. parameters must retain only parameters and constraints explicitly supplied by the user.
-8. candidate_capabilities should describe capabilities that may be needed to complete the goal. Reuse supplied capabilities when applicable. Do not emit tool names or expand a known scenario into a hard-coded capability sequence.
+8. candidate_capabilities should include every catalog capability that Runtime may need for the requested goal, including relevant discovery, asynchronous status, and explicitly requested write operations. Do not emit tool names or capabilities outside the catalog. Runtime, not this stage, determines execution order.
 9. Ask for clarification only when missing information would change the goal, execution target, or write-operation safety boundary. Do not ask the user for information that page context, a tool result, or a later read-only lookup can provide.
 10. Return JSON only, without Markdown.
 11. Natural-language fields such as goal, reason, and clarifying_question may follow the user's language. Machine identifiers must remain English.
@@ -38,11 +38,24 @@ Output schema:
 type LLMClientFactory func(ctx context.Context) (*llm.LLMClient, error)
 
 type IntentDecomposeInput struct {
-	Query                  string            `json:"query"`
-	Intent                 IntentResult      `json:"intent"`
-	ContextRefs            []ContextRefInput `json:"context_refs,omitempty"`
-	CandidateCapabilities  []string          `json:"candidate_capabilities,omitempty"`
-	EnableLLMDecomposition bool              `json:"enable_llm_decomposition,omitempty"`
+	Query                  string                  `json:"query"`
+	Intent                 IntentResult            `json:"intent"`
+	ContextRefs            []ContextRefInput       `json:"context_refs,omitempty"`
+	CandidateCapabilities  []string                `json:"candidate_capabilities,omitempty"`
+	AvailableCapabilities  []CapabilityCatalogItem `json:"available_capabilities,omitempty"`
+	EnableLLMDecomposition bool                    `json:"enable_llm_decomposition,omitempty"`
+}
+
+// CapabilityCatalogItem is the compact, English-only capability contract sent
+// to the intent model. The model must select exact values from this catalog.
+type CapabilityCatalogItem struct {
+	Capability    string   `json:"capability"`
+	Domain        string   `json:"domain"`
+	Operation     string   `json:"operation"`
+	ObjectTypes   []string `json:"object_types,omitempty"`
+	Risk          string   `json:"risk"`
+	ExecutionMode string   `json:"execution_mode"`
+	Description   string   `json:"description"`
 }
 
 type IntentDecomposerDeps struct {
@@ -105,10 +118,11 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nExisting candidate capabilities:\n%s",
+	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nAvailable capability catalog (candidate_capabilities may contain only exact capability values from this catalog):\n%s\n\nExisting candidate capabilities:\n%s",
 		input.Query,
 		encodeJSON(input.Intent),
 		encodeJSON(input.ContextRefs),
+		encodeJSON(input.AvailableCapabilities),
 		encodeJSON(input.CandidateCapabilities),
 	)
 	baseMessages := []llm.Message{
@@ -125,7 +139,7 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 		return nil, err
 	}
 	normalizeIntentBreakdown(&breakdown, input)
-	if err := validateIntentBreakdown(&breakdown); err != nil {
+	if err := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities); err != nil {
 		logger.Warn("assistant intent breakdown contract correction requested",
 			zap.Int("attempt", 1),
 			zap.String("error_category", "contract_validation"),
@@ -147,7 +161,7 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 			return nil, fmt.Errorf("correct invalid intent breakdown: %w", retryErr)
 		}
 		normalizeIntentBreakdown(&breakdown, input)
-		if retryErr := validateIntentBreakdown(&breakdown); retryErr != nil {
+		if retryErr := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities); retryErr != nil {
 			return nil, fmt.Errorf("intent breakdown contract invalid after correction: %w", retryErr)
 		}
 	}
@@ -214,12 +228,25 @@ func validateIntentBreakdown(value *IntentBreakdown) error {
 	return nil
 }
 
-func isConceptQuestion(query string) bool {
-	return containsAnyFold(query, "是什么", "什么意思", "介绍", "解释", "说明一下", "如何理解", "why", "what is")
-}
-
-func looksLikeIDInText(text string) bool {
-	return strings.Contains(text, "id") || strings.Contains(text, "uuid") || strings.Contains(text, "-")
+func validateIntentBreakdownAgainstCatalog(value *IntentBreakdown, catalog []CapabilityCatalogItem) error {
+	if err := validateIntentBreakdown(value); err != nil {
+		return err
+	}
+	if len(catalog) == 0 {
+		return nil
+	}
+	available := make(map[string]struct{}, len(catalog))
+	for _, item := range catalog {
+		if capability := strings.TrimSpace(item.Capability); capability != "" {
+			available[capability] = struct{}{}
+		}
+	}
+	for _, capability := range value.CandidateCapabilities {
+		if _, ok := available[capability]; !ok {
+			return fmt.Errorf("candidate_capabilities item %q is not present in the available capability catalog", capability)
+		}
+	}
+	return nil
 }
 
 func containsAnyFold(text string, keywords ...string) bool {

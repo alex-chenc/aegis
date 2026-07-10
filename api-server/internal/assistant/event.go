@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"time"
+
+	agentruntime "github.com/alex-chenc/agent-runtime"
 )
 
 // AssistantEvent SSE 事件
@@ -31,6 +33,8 @@ const (
 	EventPlan                     = "plan"
 	EventStepStarted              = "step_started"
 	EventStepCompleted            = "step_completed"
+	EventStepFailed               = "step_failed"
+	EventStepRetrying             = "step_retrying"
 	EventToolCall                 = "tool_call"
 	EventToolResult               = "tool_result"
 	EventToolError                = "tool_error"
@@ -94,12 +98,24 @@ func EventToolCallPayload(sessionID, runID, messageID, callID, toolName string, 
 	}), messageID)
 }
 
-// EventToolResultPayload 创建工具结果事件
-func EventToolResultPayload(sessionID, runID, messageID, callID string, result interface{}) AssistantEvent {
-	return withMessageID(NewEvent(EventToolResult, sessionID, runID, map[string]interface{}{
-		"call_id": callID,
-		"result":  result,
-	}), messageID)
+// EventToolResultPayload creates a transport-success event while preserving the
+// separate business-operation outcome. A successful RPC may only mean that an
+// asynchronous operation was accepted, so consumers must not infer terminal
+// success from EventToolResult alone.
+func EventToolResultPayload(sessionID, runID, messageID, callID string, result interface{}, outcome *agentruntime.ToolOutcome) AssistantEvent {
+	payload := map[string]interface{}{
+		"call_id":          callID,
+		"result":           result,
+		"transport_status": string(agentruntime.ToolCallSuccess),
+	}
+	if outcome != nil {
+		payload["outcome"] = outcome
+		payload["operation_status"] = outcome.OperationStatus
+		payload["terminal"] = outcome.Terminal
+		payload["outcome_message"] = outcome.Message
+		payload["capability"] = outcome.Capability
+	}
+	return withMessageID(NewEvent(EventToolResult, sessionID, runID, payload), messageID)
 }
 
 // EventToolErrorPayload 创建工具错误事件
@@ -120,10 +136,10 @@ func EventResultCardPayload(sessionID, runID string, card interface{}) Assistant
 	return NewEvent(EventResultCard, sessionID, runID, card)
 }
 
-// EventDonePayload 创建完成事件
-func EventDonePayload(sessionID, runID string) AssistantEvent {
+func EventDoneOutcomePayload(sessionID, runID, runStatus, goalOutcome string) AssistantEvent {
 	return NewEvent(EventDone, sessionID, runID, map[string]interface{}{
-		"status": "completed",
+		"status":       runStatus,
+		"goal_outcome": goalOutcome,
 	})
 }
 

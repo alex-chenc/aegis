@@ -339,7 +339,6 @@ func main() {
 		weakPasswordService,
 	)
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
-	toolSelector := assistant.NewToolSelector(toolCatalog, toolRegistry)
 	toolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
 		PolicyRepo:   assistantToolPolicyRepo,
 		Registry:     toolRegistry,
@@ -366,7 +365,6 @@ func main() {
 	runtimeFactory := assistant.NewRuntimeFactory(assistant.RuntimeFactoryDeps{
 		ConfigRepo:     configRepo,
 		Catalog:        toolCatalog,
-		Selector:       toolSelector,
 		ToolDispatcher: toolDispatcher,
 		RunManager:     runManager,
 		MemoryRepo:     assistantMemoryRepo,
@@ -383,7 +381,6 @@ func main() {
 		ToolCallRepo:       assistantToolCallRepo,
 		SessionRepo:        assistantSessionRepo,
 		ToolRegistry:       toolRegistry,
-		ToolSelector:       toolSelector,
 		IntentDecomposer:   intentDecomposer,
 		ToolDecisionEngine: toolDecisionEngine,
 		ToolDispatcher:     toolDispatcher,
