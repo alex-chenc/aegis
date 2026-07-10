@@ -300,8 +300,12 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		maxIterations = 80
 	}
 	return agentruntime.RuntimeConfig{
-		MaxTotalTurns:           maxIterations,
-		MaxPlanSteps:            8,
+		MaxTotalTurns: maxIterations,
+		// A dynamic agent plan may legitimately contain discovery, asynchronous
+		// completion, execution, and verification steps. Keep a bounded but
+		// non-trivial ceiling so valid general-purpose plans are not rejected
+		// before their first tool call.
+		MaxPlanSteps:            16,
 		MaxStepReactTurns:       8,
 		MaxToolCalls:            80,
 		MaxToolCallsPerStep:     32,
@@ -351,7 +355,7 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 	}
 	return agentruntime.RuntimeConfig{
 		MaxTotalTurns:           maxIterations,
-		MaxPlanSteps:            8,
+		MaxPlanSteps:            16,
 		MaxStepReactTurns:       8,
 		MaxToolCalls:            160,
 		MaxToolCallsPerStep:     32,

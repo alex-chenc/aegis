@@ -15,6 +15,9 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if cfg.MaxTotalTurns != 500 {
 		t.Fatalf("expected MaxTotalTurns 500, got %d", cfg.MaxTotalTurns)
 	}
+	if cfg.MaxPlanSteps != 16 {
+		t.Fatalf("expected MaxPlanSteps 16, got %d", cfg.MaxPlanSteps)
+	}
 	if cfg.TaskTimeout != 2*time.Hour {
 		t.Fatalf("expected TaskTimeout 2h, got %v", cfg.TaskTimeout)
 	}
