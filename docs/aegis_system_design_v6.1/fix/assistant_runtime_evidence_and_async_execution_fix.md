@@ -43,7 +43,8 @@
   `request_approval/whitelist/full_access` 策略负责。
 - 不支持 JSON Schema 的模型提供方可回退到 JSON object/文本模式，但仍能看到完整
   目录、参数 Schema 和校验错误并纠正。
-- 异步操作始终受 `TaskTimeout`、`MaxToolCalls` 和 `MaxToolCallsPerStep` 约束。
+- 异步操作还受 `MaxAsyncPollAttempts` 约束；后端持续返回 pending/running 时，助手
+  必须以“未在轮询预算内完成”的真实证据结束，不能无限显示“执行中”。
 - 最终总结把 descriptor/arguments validation failure 表达为“本轮模型调用违反工具
   契约”，不能推断平台缺少已经由授权目录提供的能力。
 - 真实漏洞会话最终产生脚本终态证据、在线主机证据以及非空下发任务记录。
@@ -119,7 +120,9 @@ Tool observation:
 7. 下一次状态查询按连续非终态次数指数退避；
 8. 退避不超过 `AsyncPollMaxBackoff`；
 9. 工具终态、失败、解析失败或其他动作会重置连续非终态计数；
-10. `MaxToolCallsPerStep`、全局 `MaxToolCalls` 和 `TaskTimeout` 仍是硬上限。
+10. `MaxAsyncPollAttempts` 是 Runtime 的专用自动轮询上限；达到上限时产生
+    `stage=async_poll` 的可恢复错误，携带最后一个逻辑 `call_id`；
+11. `MaxToolCallsPerStep`、全局 `MaxToolCalls` 和 `TaskTimeout` 仍是额外硬上限。
 
 Runtime 不根据 CVE、主机或任务名称写业务规则。是否可自动轮询只依赖工具 descriptor
 中的通用属性 `RiskReadOnly + Idempotent` 以及标准 `ToolOutcome.Terminal`。
@@ -203,7 +206,7 @@ Assistant 在创建 Runtime 前已经完成 capability mapping、工具启用状
 | step_result 引用 observation call ID | 完成校验通过 |
 | 多次 running 后 succeeded | 非终态轮不耗尽 ReAct 推理预算，最终完成 |
 | 只读幂等状态工具持续 running | 仅前后各一次模型决策，内部自动轮询并复用逻辑 call ID |
-| 异步持续 running | 达到工具调用或任务超时上限后失败，不无限轮询 |
+| 异步持续 running | 达到 `MaxAsyncPollAttempts` 后返回 `async_poll` 错误，不无限轮询 |
 | ReAct ResponseFormat | tool name 为当前 registry 枚举，args 使用对应 Schema |
 | 步骤 AllowedTools | ResponseFormat 不暴露步骤外工具 |
 | Planner 风险元数据 | 高风险 suggested tool 不再显示 read_only |
@@ -240,10 +243,44 @@ Assistant 在创建 Runtime 前已经完成 capability mapping、工具启用状
 - response format 回退记录 WARN，字段包含 `purpose/format/error`，不记录 prompt、
   tool args、脚本内容或主机详情。
 - observation 只进入当前模型上下文和现有受控证据存储；继续执行截断和压缩。
-- 新增 RuntimeConfig 字段向后兼容；零值使用无额外等待的兼容行为，Aegis 显式设置
-  生产退避值。
+- 新增 RuntimeConfig 字段使用安全默认值；Aegis 显式设置生产退避值和
+  `MaxAsyncPollAttempts=12`。
 - 不支持 JSON Schema 的 provider 保持可运行，Runtime 服务端校验始终生效。
 - 发布顺序：agent-runtime 提交并推送，Aegis 更新伪版本，再重建 api-server；前端
   无新增契约时无需重建。
 - 回滚：恢复 Aegis agent-runtime 伪版本和本次 adapter/prompt 修改；不删除已生成
   脚本或任务数据。
+
+## 7. 后续通用可靠性加固（无领域规则）
+
+在真实 CVE 回归中，继续发现的偏差均已在 descriptor、evidence 和 Runtime 通用层修复；
+不通过解析 CVE 文本或写死漏洞业务流程解决。
+
+| 偏差 | 通用修复 | 结果 |
+| --- | --- | --- |
+| completion capability 不在固定步骤的 `AllowedTools` | descriptor 声明 `CompletionTools`，Runtime 在不放宽步骤目录的前提下加入其异步完成工具 | 生成后能查询真实终态 |
+| 合法动态计划超过 8 步 | Aegis 的有界计划上限提高至 16，并按实际计划长度扩展 | 计划不会在首个工具调用前被拒绝 |
+| 模型传入别名字段后由 Handler 静默使用默认值 | 对 ReAct 使用 strict JSON Schema，所有对象闭合 `additionalProperties:false` | 错误字段被拒绝，不会错误下发默认轮数 |
+| 模型在后续步骤再次请求相同写操作 | Runtime 按 task/tool/标准化参数缓存已终态的非幂等写结果 | 同一运行内不重复创建任务 |
+| 已查询到实体仍调用 fallback，或未启动 fallback 就查询其状态 | descriptor `Prerequisites` 使用标准 capability evidence 条件：`capability_empty_result`、`capability_observed` | 调用在 Gateway 前被通用拦截，不产生错误工具卡 |
+| 异步状态长期 `generating` | Runtime 的 `MaxAsyncPollAttempts` 设为必填安全配置；Aegis 设为 12 | 自动轮询有确定结束条件，不再无限循环 |
+
+上述条件只读取 `ToolDescriptor`、`ToolOutcome` 的 `Capability`、`Facts`、`Terminal` 和
+`OperationStatus`。例如自定义 CVE 查询只是使用了这些通用元数据：列表返回非空 facts
+时不允许 fallback start；没有接受到 start capability 时不允许其 status。Runtime 不知道
+“CVE”“主机”或任何业务工具名称。
+
+### 7.1 最终回归验收方法
+
+每次部署后必须新建会话，而不能复用已运行的会话。验收从数据库和工具证据同时核对：
+
+1. `Vulnerability.List` 对已存在 CVE 返回非空 facts 时，没有 `CustomQuery.Start` 或
+   `CustomQuery.Status` 的 Gateway 调用记录；
+2. POC 与 fix 分别只有一条逻辑生成/状态调用记录，status 记录从 running 原地更新到
+   terminal；
+3. 仅各有一条 POC 和 fix execute 逻辑调用，fix 的实际参数为 `max_rounds=5` 和
+   `auto_verify=true`；
+4. 新建的任务记录包含非空 task group 与 task ID。任务下发成功与脚本在目标主机上
+   执行成功必须分别报告；后者失败时不得称漏洞已修复；
+5. 若生成服务始终未终态，会以 `async_poll` 失败结束且保留最后的 status 证据，前端
+   不再无期限停留在“执行中”。
