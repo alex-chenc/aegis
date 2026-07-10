@@ -67,8 +67,20 @@ CREATE INDEX IF NOT EXISTS idx_llm_aggregations_time ON llm_aggregations(start_t
 -- Update block_policies: add auto_dispose field
 ALTER TABLE block_policies ADD COLUMN IF NOT EXISTS auto_dispose BOOLEAN DEFAULT FALSE;
 
--- Update sigma_rules: add rule_id as foreign key reference
-ALTER TABLE sigma_rules ADD CONSTRAINT IF NOT EXISTS fk_sigma_rules_rule_id UNIQUE (rule_id);
+-- PostgreSQL does not support ADD CONSTRAINT IF NOT EXISTS. Use a catalog
+-- check so that the migration remains safe when the release init script is
+-- replayed against a database that already has this constraint.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_sigma_rules_rule_id'
+          AND conrelid = 'sigma_rules'::regclass
+    ) THEN
+        ALTER TABLE sigma_rules
+            ADD CONSTRAINT fk_sigma_rules_rule_id UNIQUE (rule_id);
+    END IF;
+END $$;
 
 -- Comments for documentation
 COMMENT ON COLUMN alerts.judgment_source IS 'system or ai - indicates who made the judgment';

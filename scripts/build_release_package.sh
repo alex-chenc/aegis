@@ -25,6 +25,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+require_positive_integer() {
+  case "$2" in
+    ''|*[!0-9]*) die "$1 must be a positive integer, got: $2" ;;
+  esac
+  [ "$2" -gt 0 ] || die "$1 must be a positive integer, got: $2"
+}
+
 confirm_replace_zip() {
   if [ ! -f "${ZIP_PATH}" ]; then
     return
@@ -137,7 +144,10 @@ done
 mc mb myminio/aegis-templates --ignore-existing >/dev/null 2>&1 || true
 mc mb myminio/agent-artifacts --ignore-existing >/dev/null 2>&1 || true
 mc mb myminio/generated-scripts --ignore-existing >/dev/null 2>&1 || true
+mc mb myminio/aegis-builds --ignore-existing >/dev/null 2>&1 || true
+mc mb myminio/aegis-releases --ignore-existing >/dev/null 2>&1 || true
 mc anonymous set download myminio/agent-artifacts >/dev/null 2>&1 || true
+mc anonymous set download myminio/aegis-releases >/dev/null 2>&1 || true
 
 if [ -f /agent-artifacts/aegis-agent-linux-amd64.tar.gz ]; then
   mc cp /agent-artifacts/aegis-agent-linux-amd64.tar.gz myminio/agent-artifacts/aegis-agent.tar.gz >/dev/null
@@ -171,6 +181,10 @@ write_init_sql() {
       printf '\n'
     done
   } > "${RELEASE_DIR}/backend/scripts/init.sql"
+  # PostgreSQL runs the init script as its unprivileged postgres user. The
+  # release process may run with umask 0077, so explicitly make the bind mount
+  # readable rather than relying on the caller's umask.
+  chmod 0644 "${RELEASE_DIR}/backend/scripts/init.sql"
 }
 
 write_release_compose() {
@@ -367,6 +381,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-a_strong_redis_password}
       REDIS_DB: 0
       REDIS_POOL_SIZE: 20
+      MINIO_ARTIFACT_BASE_URL: "http://${EXTERNAL_IP:-localhost}:9000/aegis-releases"
       KAFKA_BROKERS: kafka:9092
       KAFKA_GROUP_ID: aegis-server-consumer
       SERVER_GRPC_PORT: 19090
@@ -429,6 +444,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-a_third_strong_secret_password}
       MINIO_USE_SSL: "false"
+      MINIO_ARTIFACT_BASE_URL: "http://${EXTERNAL_IP:-localhost}:9000/aegis-releases"
       SERVER_HTTP_PORT: 8082
       SERVER_GRPC_PORT: 19093
       AGENT_HUB_PORT: 19090
@@ -659,23 +675,48 @@ log "wrote EXTERNAL_IP=${external_ip} to .env"
 load_images
 compose up -d
 
-sleep "${AEGIS_START_WAIT_SECONDS:-20}"
+initial_wait_seconds="${AEGIS_START_WAIT_SECONDS:-10}"
+api_health_timeout_seconds="${AEGIS_API_HEALTH_TIMEOUT_SECONDS:-300}"
+require_positive_integer "AEGIS_START_WAIT_SECONDS" "${initial_wait_seconds}"
+require_positive_integer "AEGIS_API_HEALTH_TIMEOUT_SECONDS" "${api_health_timeout_seconds}"
+
+log "waiting ${initial_wait_seconds}s before checking API health"
+sleep "${initial_wait_seconds}"
 compose ps
 
-health_attempts="${AEGIS_START_HEALTH_ATTEMPTS:-30}"
-attempt=1
+diagnose_start_failure() {
+  log "deployment status at API health-check timeout:"
+  compose ps -a || true
+
+  for service in api-server server kafka postgres redis minio builder; do
+    log "last ${AEGIS_START_LOG_TAIL:-120} log lines for ${service}:"
+    compose logs --tail="${AEGIS_START_LOG_TAIL:-120}" "${service}" || true
+  done
+}
+
+deadline=$((SECONDS + api_health_timeout_seconds))
+next_progress_at=$SECONDS
 api_healthy=0
-while [ "${attempt}" -le "${health_attempts}" ]; do
-  if curl -fsS http://127.0.0.1:8082/health >/dev/null; then
+while [ "$SECONDS" -lt "$deadline" ]; do
+  if curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:8082/health >/dev/null 2>&1; then
     log "api-server is healthy"
     api_healthy=1
     break
   fi
+
+  if [ "$SECONDS" -ge "$next_progress_at" ]; then
+    remaining=$((deadline - SECONDS))
+    log "waiting for api-server health (up to ${remaining}s remaining)"
+    next_progress_at=$((SECONDS + 10))
+  fi
+
   sleep 2
-  attempt=$((attempt + 1))
 done
 
-[ "${api_healthy}" -eq 1 ] || die "api-server did not become healthy after ${health_attempts} attempts"
+if [ "${api_healthy}" -ne 1 ]; then
+  diagnose_start_failure
+  die "api-server did not become healthy within ${api_health_timeout_seconds} seconds; see service logs above"
+fi
 
 log "frontend: http://${external_ip}:8081"
 log "api health: http://${external_ip}:8082/health"
@@ -698,6 +739,18 @@ chmod +x ./start.sh
 \`.env\` as \`EXTERNAL_IP\` before starting Docker Compose. The API server and
 agent hub read this value through \`SERVER_EXTERNAL_IP\`, so generated Agent
 install commands point back to this host instead of an internal container IP.
+
+The first startup can take several minutes while Kafka and the agent hub pass
+their health checks. \`start.sh\` waits up to five minutes for the API by default.
+Override that limit only when needed:
+
+\`\`\`bash
+AEGIS_API_HEALTH_TIMEOUT_SECONDS=600 ./start.sh
+\`\`\`
+
+On timeout, \`start.sh\` prints the Compose service states and the latest logs for
+the API Server and its startup dependencies. Preserve that output when opening
+a deployment issue.
 
 ## Useful Checks
 
