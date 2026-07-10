@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
-	github.com/alex-chenc/agent-runtime v0.0.0-20260710025213-fc021c53c6c9
+	github.com/alex-chenc/agent-runtime v0.0.0-20260710030432-e7b09ef19c64
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

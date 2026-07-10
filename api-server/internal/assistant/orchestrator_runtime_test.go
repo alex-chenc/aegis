@@ -33,6 +33,9 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	if cfg.AsyncPollInitialBackoff != 2*time.Second || cfg.AsyncPollMaxBackoff != 30*time.Second {
 		t.Fatalf("expected bounded async polling backoff, got initial=%s max=%s", cfg.AsyncPollInitialBackoff, cfg.AsyncPollMaxBackoff)
 	}
+	if cfg.MaxAsyncPollAttempts != 12 {
+		t.Fatalf("expected bounded async polling attempts, got %d", cfg.MaxAsyncPollAttempts)
+	}
 	if !cfg.AllowHighRiskTools || !cfg.AllowDangerousTools {
 		t.Fatal("expected pre-authorized Aegis tools to reach the Aegis approval policy")
 	}

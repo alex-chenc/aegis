@@ -64,6 +64,7 @@ func NewAegisRuntime(
 		HookTimeout:             10 * time.Second,
 		AsyncPollInitialBackoff: 2 * time.Second,
 		AsyncPollMaxBackoff:     30 * time.Second,
+		MaxAsyncPollAttempts:    12,
 		EnableReflection:        true,
 		EnableAudit:             true,
 		EnableCorrection:        true,

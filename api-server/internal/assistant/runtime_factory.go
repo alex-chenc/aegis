@@ -319,18 +319,23 @@ func DefaultAgentRuntimeConfig(maxIterations int) agentruntime.RuntimeConfig {
 		HookTimeout:             10 * time.Second,
 		AsyncPollInitialBackoff: 1 * time.Second,
 		AsyncPollMaxBackoff:     30 * time.Second,
-		EnableReflection:        true,
-		EnableAudit:             true,
-		EnableCorrection:        true,
-		EnableExperience:        false,
-		AuditEveryNSteps:        3,
-		MaxAudits:               2,
-		MaxReflections:          2,
-		MaxStepRetries:          1,
-		MaxCorrections:          2,
-		AllowDynamicNewSteps:    true,
-		AllowSkipFailedStep:     false,
-		AllowBestEffortAnswer:   false,
+		// Stop a backend operation that remains non-terminal instead of keeping
+		// the assistant session in an unbounded "executing" state. With the
+		// configured exponential backoff this allows several minutes for normal
+		// script generation while preserving a deterministic failure boundary.
+		MaxAsyncPollAttempts:  12,
+		EnableReflection:      true,
+		EnableAudit:           true,
+		EnableCorrection:      true,
+		EnableExperience:      false,
+		AuditEveryNSteps:      3,
+		MaxAudits:             2,
+		MaxReflections:        2,
+		MaxStepRetries:        1,
+		MaxCorrections:        2,
+		AllowDynamicNewSteps:  true,
+		AllowSkipFailedStep:   false,
+		AllowBestEffortAnswer: false,
 		// Tool descriptors reaching Runtime have already passed Aegis capability
 		// mapping and hard gates. Runtime must forward them to Aegis's approval
 		// policy instead of applying a conflicting second risk denial.
@@ -369,6 +374,7 @@ func DefaultAIAnalysisRuntimeConfig(maxIterations int) agentruntime.RuntimeConfi
 		HookTimeout:             10 * time.Second,
 		AsyncPollInitialBackoff: 2 * time.Second,
 		AsyncPollMaxBackoff:     30 * time.Second,
+		MaxAsyncPollAttempts:    12,
 		EnableReflection:        true,
 		EnableAudit:             true,
 		EnableCorrection:        true,
