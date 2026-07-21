@@ -376,7 +376,7 @@ func assetCollectionSchemaStatements() []string {
 			id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			enabled            BOOLEAN NOT NULL DEFAULT true,
 			interval_hours     INT NOT NULL DEFAULT 12,
-			collect_types      JSONB NOT NULL DEFAULT '["process","application_analysis"]',
+			collect_types      JSONB NOT NULL DEFAULT '["process","software","application_analysis"]',
 			scope              VARCHAR(32) NOT NULL DEFAULT 'all_hosts',
 			next_run_at        TIMESTAMPTZ,
 			last_run_at        TIMESTAMPTZ,
@@ -384,6 +384,8 @@ func assetCollectionSchemaStatements() []string {
 			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE asset_collection_configs
+			ALTER COLUMN collect_types SET DEFAULT '["process","software","application_analysis"]'::jsonb`,
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_asset_collection_config_interval') THEN
 				ALTER TABLE asset_collection_configs ADD CONSTRAINT chk_asset_collection_config_interval
@@ -399,7 +401,7 @@ func assetCollectionSchemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_asset_collection_configs_next_run
 			ON asset_collection_configs(enabled, next_run_at)`,
 		`INSERT INTO asset_collection_configs (enabled, interval_hours, collect_types, scope)
-			SELECT true, 12, '["process","application_analysis"]'::jsonb, 'all_hosts'
+			SELECT true, 12, '["process","software","application_analysis"]'::jsonb, 'all_hosts'
 			WHERE NOT EXISTS (SELECT 1 FROM asset_collection_configs)`,
 
 		// 2. Asset Collection Tasks
@@ -409,7 +411,7 @@ func assetCollectionSchemaStatements() []string {
 			trigger_source     VARCHAR(32) NOT NULL DEFAULT 'manual',
 			scope              VARCHAR(32) NOT NULL DEFAULT 'hosts',
 			host_filter        JSONB NOT NULL DEFAULT '[]',
-			collect_types      JSONB NOT NULL DEFAULT '["process","application_analysis"]',
+			collect_types      JSONB NOT NULL DEFAULT '["process","software","application_analysis"]',
 			status             VARCHAR(32) NOT NULL DEFAULT 'collecting',
 			total_hosts        INT NOT NULL DEFAULT 0,
 			success_hosts      INT NOT NULL DEFAULT 0,
@@ -422,6 +424,8 @@ func assetCollectionSchemaStatements() []string {
 			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE asset_collection_tasks
+			ALTER COLUMN collect_types SET DEFAULT '["process","software","application_analysis"]'::jsonb`,
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_asset_collection_task_status') THEN
 				ALTER TABLE asset_collection_tasks ADD CONSTRAINT chk_asset_collection_task_status

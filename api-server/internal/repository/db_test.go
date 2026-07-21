@@ -63,6 +63,23 @@ func TestAssetCollectionSchemaStatementsIncludeAIAssetCategories(t *testing.T) {
 	}
 }
 
+func TestAssetCollectionSchemaStatementsDefaultToSoftwareCollection(t *testing.T) {
+	statements := strings.Join(assetCollectionSchemaStatements(), "\n")
+	defaultValue := `'["process","software","application_analysis"]'::jsonb`
+
+	requiredFragments := []string{
+		"ALTER TABLE asset_collection_configs",
+		"ALTER TABLE asset_collection_tasks",
+		"ALTER COLUMN collect_types SET DEFAULT " + defaultValue,
+		"SELECT true, 12, " + defaultValue,
+	}
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("expected asset collection schema to include %q", fragment)
+		}
+	}
+}
+
 func TestAssetCollectionSchemaStatementsIncludeContainerMetadataColumns(t *testing.T) {
 	statements := strings.Join(assetCollectionSchemaStatements(), "\n")
 

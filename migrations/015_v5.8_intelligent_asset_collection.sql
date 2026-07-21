@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS asset_collection_configs (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     enabled            BOOLEAN NOT NULL DEFAULT true,
     interval_hours     INT NOT NULL DEFAULT 12,
-    collect_types      JSONB NOT NULL DEFAULT '["process","application_analysis"]',
+    collect_types      JSONB NOT NULL DEFAULT '["process","software","application_analysis"]',
     scope              VARCHAR(32) NOT NULL DEFAULT 'all_hosts',
     next_run_at        TIMESTAMPTZ,
     last_run_at        TIMESTAMPTZ,
@@ -18,12 +18,15 @@ CREATE TABLE IF NOT EXISTS asset_collection_configs (
     CONSTRAINT chk_asset_collection_config_scope CHECK (scope IN ('all_hosts','host_group','hosts'))
 );
 
+ALTER TABLE asset_collection_configs
+    ALTER COLUMN collect_types SET DEFAULT '["process","software","application_analysis"]'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_asset_collection_configs_next_run
     ON asset_collection_configs(enabled, next_run_at);
 
 -- Insert default config if not exists
 INSERT INTO asset_collection_configs (enabled, interval_hours, collect_types, scope)
-SELECT true, 12, '["process","application_analysis"]'::jsonb, 'all_hosts'
+SELECT true, 12, '["process","software","application_analysis"]'::jsonb, 'all_hosts'
 WHERE NOT EXISTS (SELECT 1 FROM asset_collection_configs);
 
 -- 2. Asset Collection Tasks
@@ -33,7 +36,7 @@ CREATE TABLE IF NOT EXISTS asset_collection_tasks (
     trigger_source     VARCHAR(32) NOT NULL DEFAULT 'manual',
     scope              VARCHAR(32) NOT NULL DEFAULT 'hosts',
     host_filter        JSONB NOT NULL DEFAULT '[]',
-    collect_types      JSONB NOT NULL DEFAULT '["process","application_analysis"]',
+    collect_types      JSONB NOT NULL DEFAULT '["process","software","application_analysis"]',
     status             VARCHAR(32) NOT NULL DEFAULT 'collecting',
     total_hosts        INT NOT NULL DEFAULT 0,
     success_hosts      INT NOT NULL DEFAULT 0,
@@ -49,6 +52,9 @@ CREATE TABLE IF NOT EXISTS asset_collection_tasks (
         status IN ('collecting','analyzing','completed','failed','cancelled')
     )
 );
+
+ALTER TABLE asset_collection_tasks
+    ALTER COLUMN collect_types SET DEFAULT '["process","software","application_analysis"]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_asset_collection_tasks_status
     ON asset_collection_tasks(status);

@@ -12,7 +12,7 @@ type AssetCollectionConfig struct {
 	ID            uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	Enabled       bool           `gorm:"default:true" json:"enabled"`
 	IntervalHours int            `gorm:"default:12" json:"interval_hours"`
-	CollectTypes  datatypes.JSON `gorm:"type:jsonb;default:'[\"process\",\"application_analysis\"]'" json:"collect_types"`
+	CollectTypes  datatypes.JSON `gorm:"type:jsonb;default:'[\"process\",\"software\",\"application_analysis\"]'" json:"collect_types"`
 	Scope         string         `gorm:"type:varchar(32);default:'all_hosts'" json:"scope"`
 	NextRunAt     *time.Time     `json:"next_run_at"`
 	LastRunAt     *time.Time     `json:"last_run_at"`
@@ -32,7 +32,7 @@ type AssetCollectionTask struct {
 	TriggerSource string         `gorm:"type:varchar(32);default:'manual'" json:"trigger_source"`
 	Scope         string         `gorm:"type:varchar(32);default:'hosts'" json:"scope"`
 	HostFilter    datatypes.JSON `gorm:"type:jsonb;default:'[]'" json:"host_filter"`
-	CollectTypes  datatypes.JSON `gorm:"type:jsonb;default:'[\"process\",\"application_analysis\"]'" json:"collect_types"`
+	CollectTypes  datatypes.JSON `gorm:"type:jsonb;default:'[\"process\",\"software\",\"application_analysis\"]'" json:"collect_types"`
 	Status        string         `gorm:"type:varchar(32);default:'collecting'" json:"status"`
 	TotalHosts    int            `gorm:"default:0" json:"total_hosts"`
 	SuccessHosts  int            `gorm:"default:0" json:"success_hosts"`

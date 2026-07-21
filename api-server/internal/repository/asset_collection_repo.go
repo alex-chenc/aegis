@@ -32,7 +32,7 @@ func (r *AssetCollectionRepository) GetConfig() (*model.AssetCollectionConfig, e
 				ID:            uuid.New(),
 				Enabled:       true,
 				IntervalHours: 12,
-				CollectTypes:  []byte(`["process","application_analysis"]`),
+				CollectTypes:  []byte(`["process","software","application_analysis"]`),
 				Scope:         "all_hosts",
 				NextRunAt:     &nextRun,
 			}

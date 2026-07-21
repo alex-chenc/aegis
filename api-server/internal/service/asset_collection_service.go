@@ -262,6 +262,21 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 			zap.Error(err))
 	}
 
+	softwareCount := 0
+	if hasCollectType(types, "software") {
+		softwareSnapshot, err := s.collectSoftware(ctx, hostID)
+		if err != nil {
+			return s.failTaskHost(taskHost, fmt.Sprintf("software collection failed: %v", err))
+		}
+
+		count, err := s.saveSoftwareAssets(hostUUID, softwareSnapshot)
+		softwareCount = count
+		taskHost.SoftwareCount = softwareCount
+		if err != nil {
+			return s.failTaskHost(taskHost, fmt.Sprintf("software persistence failed: %v", err))
+		}
+	}
+
 	// 采集 AI 资产（LLM 服务 / AI Agent / MCP Server）
 	aiAssetCount := 0
 	aiAssets, err := s.collectAIAssets(ctx, hostID)
@@ -312,7 +327,7 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 	taskHost.Hostname = snapshot.Hostname
 	taskHost.IPAddress = snapshot.IPAddress
 	taskHost.Status = assetCollectionStatusCompleted
-	taskHost.SoftwareCount = 0
+	taskHost.SoftwareCount = softwareCount
 	taskHost.ProcessCount = len(snapshot.Processes)
 	taskHost.ApplicationCount = applicationCount + aiAssetCount
 	taskHost.RawSnapshotID = &processSnapshot.ID
@@ -323,10 +338,60 @@ func (s *AssetCollectionService) collectHost(ctx context.Context, taskID uuid.UU
 
 	s.logger.Info("Asset collection host completed",
 		zap.String("host_id", hostID),
+		zap.Int("software_count", softwareCount),
 		zap.Int("process_count", len(snapshot.Processes)),
 		zap.Int("application_count", applicationCount))
 
 	return nil
+}
+
+// collectSoftware 调用 Agent 主机资产工具采集软件包清单。
+func (s *AssetCollectionService) collectSoftware(ctx context.Context, hostID string) (HostAssetSnapshot, error) {
+	snapshot := HostAssetSnapshot{HostID: hostID}
+	args := map[string]interface{}{
+		"host_id":               hostID,
+		"collect_types":         []string{"software"},
+		"include_package_files": false,
+		"include_listen_ports":  false,
+		"max_process_count":     1,
+	}
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return snapshot, fmt.Errorf("failed to build software collection arguments: %w", err)
+	}
+
+	softwareCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	resp, err := s.serverClient.ExecuteTool(softwareCtx, uuid.New().String(), hostID, "AssetCollectHostAssets", string(argsJSON), 120)
+	if err != nil {
+		return snapshot, fmt.Errorf("software collection call failed: %w", err)
+	}
+	if resp == nil || !resp.Success {
+		errMsg := "software collection failed"
+		if resp != nil && resp.Error != "" {
+			errMsg = resp.Error
+		}
+		return snapshot, fmt.Errorf("%s", errMsg)
+	}
+	if err := json.Unmarshal([]byte(resp.Result), &snapshot); err != nil {
+		return snapshot, fmt.Errorf("failed to parse software collection result: %w", err)
+	}
+
+	return snapshot, nil
+}
+
+// saveSoftwareAssets 将软件包清单保存到主机软件资产表。
+func (s *AssetCollectionService) saveSoftwareAssets(hostID uuid.UUID, snapshot HostAssetSnapshot) (int, error) {
+	count := 0
+	for _, pkg := range snapshot.Packages {
+		asset := s.convertPackageToAsset(hostID, snapshot, pkg)
+		if err := s.repo.UpsertSoftwareAsset(asset); err != nil {
+			return count, fmt.Errorf("failed to upsert software asset %q: %w", pkg.Name, err)
+		}
+		count++
+	}
+	return count, nil
 }
 
 // collectAIAssets 调用 Agent 的 AI 资产采集工具
@@ -589,8 +654,13 @@ func (s *AssetCollectionService) RetryFailed(ctx context.Context, taskID uuid.UU
 		return err
 	}
 
-	// 重新执行采集
-	go s.executeCollection(ctx, taskID, failedHostIDs, []string{"process", "application_analysis"})
+	var collectTypes []string
+	if err := json.Unmarshal(task.CollectTypes, &collectTypes); err != nil {
+		return fmt.Errorf("failed to parse task collect types: %w", err)
+	}
+
+	// 重新执行采集，并保持原任务的采集类型。
+	go s.executeCollection(ctx, taskID, failedHostIDs, normalizeCollectTypes(collectTypes))
 
 	return nil
 }
@@ -674,14 +744,20 @@ func hasCollectType(types []string, target string) bool {
 }
 
 func normalizeCollectTypes(types []string) []string {
+	includeSoftware := false
 	includeAnalysis := false
 	for _, t := range types {
+		if t == "software" || t == "full" {
+			includeSoftware = true
+		}
 		if t == "application_analysis" || t == "full" {
 			includeAnalysis = true
-			break
 		}
 	}
 	normalized := []string{"process"}
+	if includeSoftware {
+		normalized = append(normalized, "software")
+	}
 	if includeAnalysis {
 		normalized = append(normalized, "application_analysis")
 	}
