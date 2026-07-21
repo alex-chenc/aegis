@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { detectionPackageApi } from '@/api/detection-packages'
 import type { DetectionPackage, DetectionPackageDraft, DetectionPackageBuild, PackageHostStatus, PageQuery } from '@/api/detection-packages'
 import { ElMessage } from 'element-plus'
+import { translate } from '@/i18n'
 
 export function useDetectionPackages() {
   const packages = ref<DetectionPackage[]>([])
@@ -20,7 +21,7 @@ export function useDetectionPackages() {
       packages.value = res.data
       total.value = res.total
     } catch (e: any) {
-      ElMessage.error(e.message || '获取检测包列表失败')
+      ElMessage.error(e.message || translate('dynamic.packageListFailed'))
     } finally {
       loading.value = false
     }
@@ -31,7 +32,7 @@ export function useDetectionPackages() {
     try {
       currentPackage.value = await detectionPackageApi.get(packageId)
     } catch (e: any) {
-      ElMessage.error(e.message || '获取检测包详情失败')
+      ElMessage.error(e.message || translate('dynamic.packageDetailsFailed'))
     } finally {
       loading.value = false
     }
@@ -51,7 +52,7 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       currentDraft.value = await detectionPackageApi.generateDraft(data)
-      ElMessage.success('AI 草稿生成成功')
+      ElMessage.success(translate('dynamic.aiDraftGenerated'))
       return currentDraft.value
     } finally {
       loading.value = false
@@ -62,10 +63,10 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       currentDraft.value = await detectionPackageApi.createDraft(data)
-      ElMessage.success('草稿创建成功')
+      ElMessage.success(translate('dynamic.draftCreated'))
       return currentDraft.value
     } catch (e: any) {
-      ElMessage.error(e.message || '草稿创建失败')
+      ElMessage.error(e.message || translate('dynamic.draftCreateFailed'))
       throw e
     } finally {
       loading.value = false
@@ -76,10 +77,10 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       currentDraft.value = await detectionPackageApi.updateDraft(draftId, data)
-      ElMessage.success('草稿更新成功')
+      ElMessage.success(translate('dynamic.draftUpdated'))
       return currentDraft.value
     } catch (e: any) {
-      ElMessage.error(e.message || '草稿更新失败')
+      ElMessage.error(e.message || translate('dynamic.draftUpdateFailed'))
       throw e
     } finally {
       loading.value = false
@@ -90,10 +91,10 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       currentBuild.value = await detectionPackageApi.build(packageId)
-      ElMessage.success('构建任务已提交')
+      ElMessage.success(translate('dynamic.buildSubmitted'))
       return currentBuild.value
     } catch (e: any) {
-      ElMessage.error(e.message || '构建任务提交失败')
+      ElMessage.error(e.message || translate('dynamic.buildSubmitFailed'))
       throw e
     } finally {
       loading.value = false
@@ -105,7 +106,7 @@ export function useDetectionPackages() {
       currentBuild.value = await detectionPackageApi.getBuild(buildId)
       return currentBuild.value
     } catch (e: any) {
-      ElMessage.error(e.message || '获取构建状态失败')
+      ElMessage.error(e.message || translate('dynamic.buildStatusFailed'))
       throw e
     }
   }
@@ -122,10 +123,10 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       currentPackage.value = await detectionPackageApi.sign(packageId)
-      ElMessage.success('签名发布成功')
+      ElMessage.success(translate('dynamic.packageSigned'))
       return currentPackage.value
     } catch (e: any) {
-      ElMessage.error(e.message || '签名发布失败')
+      ElMessage.error(e.message || translate('dynamic.packageSignFailed'))
       throw e
     } finally {
       loading.value = false
@@ -136,9 +137,9 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       await detectionPackageApi.enable(packageId)
-      ElMessage.success('检测包已启用')
+      ElMessage.success(translate('dynamic.packageEnabled'))
     } catch (e: any) {
-      ElMessage.error(e.message || '启用失败')
+      ElMessage.error(e.message || translate('dynamic.enableFailed'))
       throw e
     } finally {
       loading.value = false
@@ -149,9 +150,9 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       await detectionPackageApi.disable(packageId)
-      ElMessage.success('检测包已禁用')
+      ElMessage.success(translate('dynamic.packageDisabled'))
     } catch (e: any) {
-      ElMessage.error(e.message || '禁用失败')
+      ElMessage.error(e.message || translate('dynamic.disableFailed'))
       throw e
     } finally {
       loading.value = false
@@ -162,9 +163,9 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       await detectionPackageApi.uninstall(packageId)
-      ElMessage.success('卸载指令已下发')
+      ElMessage.success(translate('dynamic.uninstallDispatched'))
     } catch (e: any) {
-      ElMessage.error(e.message || '卸载失败')
+      ElMessage.error(e.message || translate('dynamic.uninstallFailed'))
       throw e
     } finally {
       loading.value = false
@@ -175,9 +176,9 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       await detectionPackageApi.deletePackage(packageId)
-      ElMessage.success('删除成功')
+      ElMessage.success(translate('common.messages.deleteSuccess'))
     } catch (e: any) {
-      ElMessage.error(e.message || '删除失败')
+      ElMessage.error(e.message || translate('dynamic.deleteFailed'))
       throw e
     } finally {
       loading.value = false
@@ -188,9 +189,9 @@ export function useDetectionPackages() {
     loading.value = true
     try {
       await detectionPackageApi.batchDeletePackages(packageIds)
-      ElMessage.success(`成功删除 ${packageIds.length} 个检测包`)
+      ElMessage.success(translate('dynamic.packagesDeleted', { count: packageIds.length }))
     } catch (e: any) {
-      ElMessage.error(e.message || '批量删除失败')
+      ElMessage.error(e.message || translate('dynamic.batchDeleteFailed'))
       throw e
     } finally {
       loading.value = false
@@ -203,7 +204,7 @@ export function useDetectionPackages() {
       hostStatuses.value = res.data
       hostTotal.value = res.total
     } catch (e: any) {
-      ElMessage.error(e.message || '获取主机状态失败')
+      ElMessage.error(e.message || translate('dynamic.hostStatusFailed'))
     }
   }
 

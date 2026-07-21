@@ -10,15 +10,15 @@
       >
         <el-radio-button value="request_approval">
           <el-icon><Lock /></el-icon>
-          请求确认
+          {{ $t('generated.assistantAssistantComposer_request_confirmation_7641bf') }}
         </el-radio-button>
         <el-radio-button value="whitelist">
           <el-icon><List /></el-icon>
-          白名单
+          {{ $t('generated.common_whitelist_8f74cd') }}
         </el-radio-button>
         <el-radio-button value="full_access">
           <el-icon><Unlock /></el-icon>
-          全权限
+          {{ $t('generated.assistantAssistantComposer_full_permission_cb5a92') }}
         </el-radio-button>
       </el-radio-group>
 
@@ -29,9 +29,9 @@
           class="purpose-select"
           :disabled="disabled || uploading"
         >
-          <el-option label="分析文件" value="analysis" />
-          <el-option label="基线模板" value="baseline_template" />
-          <el-option label="Sigma 规则" value="sigma_rule" />
+          <el-option :label="$t('generated.assistantAssistantComposer_analyze_files_f8bd8b')" value="analysis" />
+          <el-option :label="$t('generated.assistantAssistantComposer_baseline_template_169b50')" value="baseline_template" />
+          <el-option :label="$t('generated.assistantAssistantComposer_sigma_rules_80c495')" value="sigma_rule" />
         </el-select>
         <el-button
           size="small"
@@ -40,7 +40,7 @@
           @click="openFilePicker"
         >
           <el-icon><Upload /></el-icon>
-          上传
+          {{ $t('generated.assistantAssistantComposer_upload_a97765') }}
         </el-button>
         <input
           ref="fileInputRef"
@@ -62,7 +62,7 @@
         <span class="file-name" :title="item.name">{{ item.name }}</span>
         <el-icon v-if="item.status === 'uploading'" class="status-icon loading"><Loading /></el-icon>
         <el-icon v-else-if="item.status === 'success'" class="status-icon success"><CircleCheck /></el-icon>
-        <el-tooltip v-else :content="item.error || '上传失败'" placement="top">
+        <el-tooltip v-else :content="item.error || $t('common.messages.uploadFailed')" placement="top">
           <el-icon class="status-icon error"><CircleClose /></el-icon>
         </el-tooltip>
         <el-button
@@ -80,14 +80,14 @@
         v-model="inputText"
         type="textarea"
         :rows="2"
-        :placeholder="disabled ? '等待响应完成...' : '输入消息，Enter 发送...'"
+        :placeholder="disabled ? $t('dynamic.waitForResponse') : $t('dynamic.enterMessage')"
         :disabled="disabled"
         @keydown="handleKeydown"
       />
     </div>
     <div class="composer-actions">
       <div class="composer-hint">
-        <span class="hint-text">Enter 发送，Shift+Enter 换行</span>
+        <span class="hint-text">{{ $t('generated.assistantAssistantComposer_enter_to_send_shift_enter_to_0e9125') }}</span>
       </div>
       <el-button
         type="primary"
@@ -96,7 +96,7 @@
         @click="handleSend"
       >
         <el-icon><Promotion /></el-icon>
-        发送
+        {{ $t('generated.assistantAssistantComposer_send_1214d6') }}
       </el-button>
     </div>
   </div>

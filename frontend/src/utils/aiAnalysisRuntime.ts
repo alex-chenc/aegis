@@ -1,4 +1,5 @@
 import type { PlanEvent, PlanStep } from '@/api/aiAnalysis'
+import { translate } from '@/i18n'
 
 type RuntimePlan = Record<string, any>
 
@@ -33,7 +34,7 @@ export function normalizePlanEvent(raw: RuntimePlan | null | undefined): PlanEve
     total_steps: raw.total_steps || steps.length,
     steps: steps.map((step: RuntimePlan, index: number): PlanStep => {
       const stepId = step.step_id || step.id || fallbackStepId(index)
-      const title = String(step.title || step.description || step.objective || `步骤 ${index + 1}`)
+      const title = String(step.title || step.description || step.objective || translate('assistant.progress.stepTitle', { number: index + 1 }))
       const objective = String(step.objective || '')
       const tools = normalizeTools(step.suggested_tools || step.tool_names)
 

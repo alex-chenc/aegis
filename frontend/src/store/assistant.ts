@@ -36,6 +36,7 @@ import {
   type ApprovalsQueryParams,
 } from '@/api/assistant'
 import type { ContextBudgetEvent, ContextCompressedEvent } from '@/api/aiAnalysis'
+import { getCurrentLocale, translate } from '@/i18n'
 
 export const useAssistantStore = defineStore('assistant', () => {
   // ============================================
@@ -152,7 +153,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   function inferSessionTitle(content: string) {
     const trimmed = content.trim()
-    if (!trimmed) return '新会话'
+    if (!trimmed) return translate('assistant.session.new')
     return Array.from(trimmed).slice(0, 18).join('')
   }
 
@@ -219,21 +220,21 @@ export const useAssistantStore = defineStore('assistant', () => {
   }
 
   function matchToolCallThinkingStep(step: string) {
-    return step.match(/^正在调用工具[:：]\s*(.+)$/)
+    return step.match(/^(?:正在调用工具|Calling tool)[:：]\s*(.+)$/i)
   }
 
   function matchStepCompletedThinkingStep(step: string) {
-    const match = step.match(/^步骤完成[:：]\s*(.+)$/)
+    const match = step.match(/^(?:步骤完成|Step completed)[:：]\s*(.+)$/i)
     return match?.[1]?.trim() || ''
   }
 
   function isHiddenInternalThinkingStep(step: string) {
-    return /^正在反思执行过程/.test(step) ||
-      /^反思结果[:：]/.test(step) ||
-      /^步骤失败[:：]/.test(step) ||
-      /^正在重试步骤[:：]/.test(step) ||
-      /^正在审计执行进度/.test(step) ||
-      /^审计完成(?:[:：]|$)/.test(step)
+    return /^(?:正在反思执行过程|Reflecting on execution)/i.test(step) ||
+      /^(?:反思结果|Reflection result)[:：]/i.test(step) ||
+      /^(?:步骤失败|Step failed)[:：]/i.test(step) ||
+      /^(?:正在重试步骤|Retrying step)[:：]/i.test(step) ||
+      /^(?:正在审计执行进度|Auditing execution progress)/i.test(step) ||
+      /^(?:审计完成|Audit complete)(?:[:：]|$)/i.test(step)
   }
 
   function buildStepResultPlan(source: AssistantMessage, completedStepTitle: string): AssistantMessage['plan'] | undefined {
@@ -242,7 +243,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
     const steps = source.plan?.steps || []
     const matchedStep = steps.find(step => step.title === title)
-    const resultSummary = matchedStep?.result_summary || `已完成步骤：${title}`
+    const resultSummary = matchedStep?.result_summary || translate('assistant.progress.stepCompleted', { title })
 
     return {
       goal: source.plan?.goal || '',
@@ -400,13 +401,13 @@ export const useAssistantStore = defineStore('assistant', () => {
   function summarizeOperationOutcome(payload: any): string {
     switch (payload.operation_status) {
       case 'accepted':
-        return '请求已受理，业务操作尚未完成。'
+        return translate('assistant.outcome.accepted')
       case 'running':
-        return '业务操作仍在执行。'
+        return translate('assistant.outcome.running')
       case 'failed':
-        return '业务操作执行失败，详情见返回结果。'
+        return translate('assistant.outcome.failed')
       case 'skipped':
-        return '业务操作已跳过。'
+        return translate('assistant.outcome.skipped')
       default:
         return summarizeToolResult(payload.result)
     }
@@ -466,7 +467,7 @@ export const useAssistantStore = defineStore('assistant', () => {
           message_id: messageId,
           role: 'assistant',
           content: '',
-          thinking: relatedToolCalls.map(tc => `正在调用工具: ${tc.tool_name}`),
+          thinking: relatedToolCalls.map(tc => translate('assistant.progress.callingTool', { name: tc.tool_name })),
           tool_calls: relatedToolCalls.map(tc => ({
             ...tc,
             message_id: messageId,
@@ -497,7 +498,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       if (!hasToolMarker) {
         message.thinking = [
           ...steps,
-          ...relatedToolCalls.map(tc => `正在调用工具: ${tc.tool_name}`),
+          ...relatedToolCalls.map(tc => translate('assistant.progress.callingTool', { name: tc.tool_name })),
         ]
       }
     }
@@ -630,7 +631,7 @@ export const useAssistantStore = defineStore('assistant', () => {
               ? takeToolCallByCallID(eventCallID)
               : takeToolCallByName(String(payload.tool_name || ''))
             if (toolCall) {
-              pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
+              pushThinkingStep(translate('assistant.progress.callingTool', { name: toolCall.tool_name }))
               pushToolCall(toolCall)
             }
           }
@@ -638,7 +639,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
         for (const toolCall of relatedToolCalls) {
           if (usedToolCalls.has(toolCall.call_id || toolCall.id)) continue
-          pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
+          pushThinkingStep(translate('assistant.progress.callingTool', { name: toolCall.tool_name }))
           pushToolCall(toolCall)
         }
 
@@ -730,7 +731,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
       for (const toolCall of relatedToolCalls) {
         if (usedToolCalls.has(toolCall.call_id || toolCall.id)) continue
-        pushThinkingStep(`正在调用工具: ${toolCall.tool_name}`)
+        pushThinkingStep(translate('assistant.progress.callingTool', { name: toolCall.tool_name }))
         pushToolCall(toolCall)
       }
 
@@ -793,7 +794,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       return result
     } catch (err: any) {
       // 不抛出错误，避免页面崩溃
-      error.value = err.message || '获取会话列表失败'
+      error.value = err.message || translate('assistant.errors.fetchSessions')
       if (!append) sessions.value = []
       return { sessions: [], total: 0 }
     } finally {
@@ -817,7 +818,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       hasMoreSessions.value = sessions.value.length < sessionTotal.value
       return result
     } catch (err: any) {
-      error.value = err.message || '获取会话列表失败'
+      error.value = err.message || translate('assistant.errors.fetchSessions')
       sessions.value = []
       return { sessions: [], total: 0 }
     } finally {
@@ -842,7 +843,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
       return true
     } catch (err: any) {
-      error.value = err.message || '删除会话失败'
+      error.value = err.message || translate('assistant.errors.deleteSession')
       return false
     }
   }
@@ -871,7 +872,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
       return session
     } catch (err: any) {
-      error.value = err.message || '创建会话失败'
+      error.value = err.message || translate('assistant.errors.createSession')
       // 不抛出错误，避免页面崩溃
       return null
     } finally {
@@ -896,7 +897,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
       return session
     } catch (err: any) {
-      error.value = err.message || '获取会话详情失败'
+      error.value = err.message || translate('assistant.errors.fetchSession')
       throw err
     } finally {
       loading.value = false
@@ -932,7 +933,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       messages.value = normalized
       return messages.value
     } catch (err: any) {
-      error.value = err.message || '获取消息列表失败'
+      error.value = err.message || translate('assistant.errors.fetchMessages')
       throw err
     } finally {
       loading.value = false
@@ -953,10 +954,11 @@ export const useAssistantStore = defineStore('assistant', () => {
           title: inferSessionTitle(content),
           task_type: pendingTaskType.value || 'explanation',
           context_refs: contextRefsData,
+          locale: getCurrentLocale(),
         }
         session = await createSession(createData)
         if (!session) {
-          throw new Error('创建会话失败')
+          throw new Error(translate('assistant.errors.createSession'))
         }
         pendingTaskType.value = null
       }
@@ -976,7 +978,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       messages.value.push(userMessage)
 
       // 发送消息到后端
-      const data: SendMessageRequest = { content }
+      const data: SendMessageRequest = { content, locale: getCurrentLocale() }
       if (contextRefsData?.length) {
         data.context_refs = contextRefsData
       }
@@ -998,7 +1000,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       startStream(sessionId)
     } catch (err: any) {
       messages.value = messages.value.filter(message => !String(message.message_id).startsWith('temp-'))
-      error.value = err.message || '发送消息失败'
+      error.value = err.message || translate('assistant.errors.sendMessage')
       throw err
     }
   }
@@ -1036,7 +1038,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
       stopStream()
     } catch (err: any) {
-      error.value = err.message || '取消运行失败'
+      error.value = err.message || translate('assistant.errors.cancelRun')
       throw err
     }
   }
@@ -1051,14 +1053,14 @@ export const useAssistantStore = defineStore('assistant', () => {
       contextRefs.value = result
       return result
     } catch (err: any) {
-      error.value = err.message || '获取上下文引用失败'
+      error.value = err.message || translate('assistant.errors.fetchContextRefs')
       throw err
     }
   }
 
   async function uploadSessionFile(file: File, purpose: AssistantFileUploadPurpose = 'analysis'): Promise<AssistantFileUploadResult> {
     if (!currentSession.value?.session_id) {
-      throw new Error('请先创建会话')
+      throw new Error(translate('assistant.errors.sessionRequired'))
     }
     const result = await apiUploadAssistantFile(currentSession.value.session_id, file, purpose)
     if (result?.context_ref) {
@@ -1115,7 +1117,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       // 由调用方（openSession）在所有数据加载完成后统一重建，避免竞态条件
       return result
     } catch (err: any) {
-      error.value = err.message || '获取工具调用列表失败'
+      error.value = err.message || translate('assistant.errors.fetchToolCalls')
       throw err
     }
   }
@@ -1130,7 +1132,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       approvals.value = result.items
       return result
     } catch (err: any) {
-      error.value = err.message || '获取审批列表失败'
+      error.value = err.message || translate('assistant.errors.fetchApprovals')
       throw err
     }
   }
@@ -1147,7 +1149,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       updateMessageApproval(approval)
       return result
     } catch (err: any) {
-      error.value = err.message || '审批操作失败'
+      error.value = err.message || translate('assistant.errors.approval')
       throw err
     }
   }
@@ -1163,7 +1165,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       updateMessageApproval(result)
       return result
     } catch (err: any) {
-      error.value = err.message || '审批操作失败'
+      error.value = err.message || translate('assistant.errors.approval')
       throw err
     }
   }
@@ -1377,7 +1379,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       status: plan.status || 'running',
       steps: steps.map((step: Record<string, any>, index: number) => ({
         step_id: step.step_id || step.id || `step-${index + 1}`,
-        title: step.title || step.description || step.objective || `步骤 ${index + 1}`,
+        title: step.title || step.description || step.objective || translate('assistant.progress.stepTitle', { number: index + 1 }),
         status: step.status || 'pending',
         result_summary: step.result_summary,
       })),
@@ -1924,7 +1926,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
 
       case 'context_compression_failed': {
-        error.value = event.error || payload.message || '上下文压缩失败'
+        error.value = event.error || payload.message || translate('assistant.errors.compression')
         break
       }
 
@@ -1949,7 +1951,7 @@ export const useAssistantStore = defineStore('assistant', () => {
 
       case 'error': {
         // 错误事件
-        error.value = event.error || payload.message || '助手运行出错'
+        error.value = event.error || payload.message || translate('assistant.errors.run')
         streaming.value = false
         eventSource?.close()
         eventSource = null
@@ -1988,7 +1990,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         stopStream()
       }
     } catch (err: any) {
-      error.value = err.message || '打开会话失败'
+      error.value = err.message || translate('assistant.errors.openSession')
       throw err
     } finally {
       loading.value = false

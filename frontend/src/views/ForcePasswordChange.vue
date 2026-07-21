@@ -1,10 +1,10 @@
 <template>
   <main class="change-page">
-    <section class="change-panel" aria-label="设置管理员账号密码">
+    <section class="change-panel" :aria-label="t('auth.credentials.panelAria')">
       <div class="panel-heading">
         <span class="eyebrow">Required Step</span>
-        <h1>设置管理员凭据</h1>
-        <p>首次进入后必须完成账号密码设置，完成前无法访问控制台业务页面。</p>
+        <h1>{{ t('auth.credentials.title') }}</h1>
+        <p>{{ t('auth.credentials.detailedSubtitle') }}</p>
       </div>
 
       <el-form
@@ -15,10 +15,10 @@
         class="change-form"
         @submit.prevent="handleSubmit"
       >
-        <el-form-item label="管理员账号" prop="username">
+        <el-form-item :label="t('auth.credentials.username')" prop="username">
           <el-input v-model.trim="form.username" autocomplete="username" size="large" />
         </el-form-item>
-        <el-form-item label="新密码" prop="newPassword">
+        <el-form-item :label="t('auth.credentials.password')" prop="newPassword">
           <el-input
             v-model="form.newPassword"
             type="password"
@@ -27,7 +27,7 @@
             show-password
           />
         </el-form-item>
-        <el-form-item label="确认密码" prop="confirmPassword">
+        <el-form-item :label="t('auth.credentials.confirmPassword')" prop="confirmPassword">
           <el-input
             v-model="form.confirmPassword"
             type="password"
@@ -37,7 +37,7 @@
           />
         </el-form-item>
         <el-button type="primary" size="large" class="submit-button" :loading="submitting" @click="handleSubmit">
-          保存并进入控制台
+          {{ t('auth.credentials.submit') }}
         </el-button>
       </el-form>
     </section>
@@ -45,13 +45,17 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { changeCredentials } from '@/api/auth'
 import { saveAuthSession } from '@/utils/auth'
 
 const formRef = ref<FormInstance>()
+const { t } = useI18n()
+const router = useRouter()
 const submitting = ref(false)
 const form = reactive({
   username: 'admin',
@@ -59,18 +63,18 @@ const form = reactive({
   confirmPassword: ''
 })
 
-const rules: FormRules = {
-  username: [{ required: true, message: '请输入管理员账号', trigger: 'blur' }],
+const rules = computed<FormRules>(() => ({
+  username: [{ required: true, message: t('auth.credentials.usernameRequired'), trigger: 'blur' }],
   newPassword: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 8, message: '密码至少 8 位', trigger: 'blur' }
+    { required: true, message: t('auth.credentials.passwordRequired'), trigger: 'blur' },
+    { min: 8, message: t('auth.credentials.passwordMin'), trigger: 'blur' }
   ],
   confirmPassword: [
-    { required: true, message: '请确认新密码', trigger: 'blur' },
+    { required: true, message: t('auth.credentials.confirmRequired'), trigger: 'blur' },
     {
       validator: (_, value, callback) => {
         if (value !== form.newPassword) {
-          callback(new Error('两次输入的密码不一致'))
+          callback(new Error(t('auth.credentials.mismatch')))
           return
         }
         callback()
@@ -78,7 +82,7 @@ const rules: FormRules = {
       trigger: 'blur'
     }
   ]
-}
+}))
 
 async function handleSubmit() {
   if (!formRef.value) return
@@ -93,8 +97,8 @@ async function handleSubmit() {
       confirm_password: form.confirmPassword
     })
     saveAuthSession(session)
-    ElMessage.success('账号密码已设置')
-    window.location.assign('/hosts')
+    ElMessage.success(t('auth.credentials.success'))
+    await router.replace('/hosts')
   } finally {
     submitting.value = false
   }

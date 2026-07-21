@@ -2,12 +2,12 @@
   <div class="assets-overview">
     <div class="overview-toolbar">
       <div>
-        <h2>资产概览</h2>
+        <h2>{{ $t('generated.hostsAssetsOverview_asset_overview_daa7c9') }}</h2>
         <div class="overview-meta">
-          <span>最近采集 {{ formatTime(summary?.last_collection_at) }}</span>
-          <span>待复核 {{ summary?.needs_review_count || 0 }}</span>
+          <span>{{ $t('generated.hostsAssetsOverview_recently_collected_014935') }} {{ formatTime(summary?.last_collection_at) }}</span>
+          <span>{{ $t('generated.common_to_be_reviewed_4607ba') }} {{ summary?.needs_review_count || 0 }}</span>
           <span v-if="currentTaskStatus">
-            当前任务
+            {{ $t('generated.hostsAssetsOverview_current_task_e94d42') }}
             <el-tag size="small" :type="getTaskStatusType(currentTaskStatus)">
               {{ getTaskStatusLabel(currentTaskStatus) }}
             </el-tag>
@@ -15,16 +15,16 @@
         </div>
       </div>
       <div class="toolbar-actions">
-        <el-tooltip content="刷新概览" placement="bottom">
+        <el-tooltip :content="$t('generated.hostsAssetsOverview_refresh_overview_78d03b')" placement="bottom">
           <el-button :icon="Refresh" circle :loading="loading" @click="refreshOverview" />
         </el-tooltip>
         <el-button type="primary" :loading="collecting" @click="triggerManualCollection">
           <el-icon><Refresh /></el-icon>
-          立即采集
+          {{ $t('generated.common_collect_now_abbbcf') }}
         </el-button>
         <el-button @click="showConfigDrawer = true">
           <el-icon><Setting /></el-icon>
-          周期配置
+          {{ $t('generated.hostsAssetsOverview_period_configuration_6c2ac1') }}
         </el-button>
       </div>
     </div>
@@ -35,7 +35,7 @@
           <div class="stat-content">
             <div>
               <div class="stat-value">{{ summary?.software_count || 0 }}</div>
-              <div class="stat-label">软件包</div>
+              <div class="stat-label">{{ $t('generated.hostsAssetsOverview_software_package_e71277') }}</div>
             </div>
             <el-icon class="stat-icon" :size="36"><Box /></el-icon>
           </div>
@@ -46,7 +46,7 @@
           <div class="stat-content">
             <div>
               <div class="stat-value">{{ summary?.application_count || 0 }}</div>
-              <div class="stat-label">应用资产</div>
+              <div class="stat-label">{{ $t('generated.hostsAssetsOverview_application_assets_aabf38') }}</div>
             </div>
             <el-icon class="stat-icon success" :size="36"><Monitor /></el-icon>
           </div>
@@ -57,7 +57,7 @@
           <div class="stat-content">
             <div>
               <div class="stat-value">{{ summary?.database_count || 0 }}</div>
-              <div class="stat-label">数据库</div>
+              <div class="stat-label">{{ $t('generated.common_database_f4dbbc') }}</div>
             </div>
             <el-icon class="stat-icon warning" :size="36"><Coin /></el-icon>
           </div>
@@ -68,7 +68,7 @@
           <div class="stat-content">
             <div>
               <div class="stat-value">{{ summary?.web_service_count || 0 }}</div>
-              <div class="stat-label">Web 服务</div>
+              <div class="stat-label">{{ $t('generated.common_web_services_e3d112') }}</div>
             </div>
             <el-icon class="stat-icon danger" :size="36"><Connection /></el-icon>
           </div>
@@ -116,7 +116,7 @@
       <el-card shadow="never" class="category-panel">
         <template #header>
           <div class="panel-header">
-            <span>资产分类</span>
+            <span>{{ $t('generated.common_asset_classification_74af01') }}</span>
             <el-tag size="small" type="info">V5.8</el-tag>
           </div>
         </template>
@@ -142,7 +142,7 @@
       <el-card shadow="never" class="analysis-panel">
         <template #header>
           <div class="panel-header">
-            <span>应用分析</span>
+            <span>{{ $t('generated.hostsAssetsOverview_application_analysis_dbaa8d') }}</span>
             <el-tag :type="applicationAnalysisTag.type" size="small">
               {{ applicationAnalysisTag.label }}
             </el-tag>
@@ -150,11 +150,11 @@
         </template>
         <div class="analysis-metrics">
           <div class="analysis-metric">
-            <span class="metric-label">Web 框架</span>
+            <span class="metric-label">{{ $t('generated.common_web_framework_0d07e2') }}</span>
             <strong>{{ summary?.web_framework_count || 0 }}</strong>
           </div>
           <div class="analysis-metric">
-            <span class="metric-label">Web 站点</span>
+            <span class="metric-label">{{ $t('generated.common_website_671e5d') }}</span>
             <strong>{{ summary?.web_site_count || 0 }}</strong>
           </div>
           <div class="analysis-metric">
@@ -170,39 +170,40 @@
             <strong>{{ summary?.mcp_server_count || 0 }}</strong>
           </div>
           <div class="analysis-metric">
-            <span class="metric-label">待复核</span>
+            <span class="metric-label">{{ $t('generated.common_to_be_reviewed_4607ba') }}</span>
             <strong>{{ summary?.needs_review_count || 0 }}</strong>
           </div>
         </div>
       </el-card>
     </div>
 
-    <el-drawer v-model="showConfigDrawer" title="周期采集配置" size="420px">
+    <el-drawer v-model="showConfigDrawer" :title="$t('generated.hostsAssetsOverview_periodic_collection_configuration_783916')" size="420px">
       <el-form :model="configForm" label-width="120px">
-        <el-form-item label="启用周期采集">
+        <el-form-item :label="$t('generated.hostsAssetsOverview_enable_periodic_collection_7afde7')">
           <el-switch v-model="configForm.enabled" />
         </el-form-item>
-        <el-form-item label="采集周期">
+        <el-form-item :label="$t('generated.hostsAssetsOverview_collection_cycle_9b415a')">
           <el-select v-model="configForm.interval_hours" style="width: 100%">
-            <el-option :value="6" label="6 小时" />
-            <el-option :value="12" label="12 小时" />
-            <el-option :value="24" label="24 小时" />
-            <el-option :value="48" label="48 小时" />
-            <el-option :value="72" label="72 小时" />
-            <el-option :value="168" label="168 小时" />
+            <el-option :value="6" :label="$t('generated.hostsAssetsOverview_6_hours_43499b')" />
+            <el-option :value="12" :label="$t('generated.hostsAssetsOverview_12_hours_a43b0a')" />
+            <el-option :value="24" :label="$t('generated.hostsAssetsOverview_24_hours_284b07')" />
+            <el-option :value="48" :label="$t('generated.hostsAssetsOverview_48_hours_af7980')" />
+            <el-option :value="72" :label="$t('generated.hostsAssetsOverview_72_hours_982319')" />
+            <el-option :value="168" :label="$t('generated.hostsAssetsOverview_168_hours_29ff95')" />
           </el-select>
         </el-form-item>
-        <el-form-item label="采集内容">
+        <el-form-item :label="$t('generated.hostsAssetsOverview_collect_content_7c7964')">
           <el-checkbox-group v-model="configForm.collect_types">
-            <el-checkbox label="process" disabled>进程快照</el-checkbox>
-            <el-checkbox label="application_analysis">AI 应用分析</el-checkbox>
+            <el-checkbox label="process" disabled>{{ $t('generated.hostsAssetsOverview_process_snapshot_cc8b8c') }}</el-checkbox>
+            <el-checkbox label="software">{{ $t('generated.common_software_manifest_33aa7e') }}</el-checkbox>
+            <el-checkbox label="application_analysis">{{ $t('generated.hostsAssetsOverview_ai_application_analysis_bebe4e') }}</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
-        <el-form-item label="下一次执行">
+        <el-form-item :label="$t('generated.hostsAssetsOverview_next_execution_768b2d')">
           <el-input :value="formatTime(configForm.next_run_at)" disabled />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
+          <el-button type="primary" :loading="saving" @click="saveConfig">{{ $t('generated.common_save_configuration_817af1') }}</el-button>
         </el-form-item>
       </el-form>
     </el-drawer>
@@ -210,6 +211,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -247,49 +251,49 @@ let taskPollTimer: ReturnType<typeof window.setTimeout> | null = null
 const configForm = reactive({
   enabled: true,
   interval_hours: 12,
-  collect_types: ['process', 'application_analysis'],
+  collect_types: ['process', 'software', 'application_analysis'],
   scope: 'all_hosts',
   next_run_at: null as string | null,
 })
 
 const categoryCards = computed(() => [
   {
-    name: '软件清单',
+    name: translate('generatedScript.common_software_manifest_33aa7e'),
     count: summary.value?.software_count || 0,
     path: '/hosts/assets/software',
     icon: Box,
     tone: 'primary',
   },
   {
-    name: '应用资产',
+    name: translate('generatedScript.hostsAssetsOverview_application_assets_aabf38'),
     count: summary.value?.application_count || 0,
     path: '/hosts/assets/applications',
     icon: Grid,
     tone: 'success',
   },
   {
-    name: '数据库',
+    name: translate('generatedScript.common_database_f4dbbc'),
     count: summary.value?.database_count || 0,
     path: '/hosts/assets/databases',
     icon: Coin,
     tone: 'warning',
   },
   {
-    name: 'Web 服务',
+    name: translate('generatedScript.common_web_services_e3d112'),
     count: summary.value?.web_service_count || 0,
     path: '/hosts/assets/web-services',
     icon: Connection,
     tone: 'danger',
   },
   {
-    name: 'Web 框架',
+    name: translate('generatedScript.common_web_framework_0d07e2'),
     count: summary.value?.web_framework_count || 0,
     path: '/hosts/assets/web-frameworks',
     icon: Cpu,
     tone: 'primary',
   },
   {
-    name: 'Web 站点',
+    name: translate('generatedScript.common_website_671e5d'),
     count: summary.value?.web_site_count || 0,
     path: '/hosts/assets/web-sites',
     icon: Link,
@@ -320,12 +324,12 @@ const categoryCards = computed(() => [
 
 const applicationAnalysisTag = computed(() => {
   if ((summary.value?.application_count || 0) > 0) {
-    return { label: '已识别', type: 'success' as const }
+    return { label: translate('generatedScript.hostsAssetsOverview_recognized_129cec'), type: 'success' as const }
   }
   if (summary.value?.last_collection_at) {
-    return { label: '无结果', type: 'warning' as const }
+    return { label: translate('generatedScript.hostsAssetsOverview_no_results_9b7997'), type: 'warning' as const }
   }
-  return { label: '未采集', type: 'info' as const }
+  return { label: translate('generatedScript.hostsAssetsOverview_not_collected_72a70d'), type: 'info' as const }
 })
 
 onMounted(async () => {
@@ -354,24 +358,24 @@ async function refreshOverview() {
 
 async function triggerManualCollection() {
   try {
-    await ElMessageBox.confirm('确定要立即执行资产采集吗？', '确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.common_are_you_sure_you_want_to_aabc95'), translate('generatedScript.common_confirm_b56d9a'), {
+      confirmButtonText: translate('generatedScript.common_sure_f526c8'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'info',
     })
 
     const task = await assetStore.triggerCollection({
       scope: 'all_hosts',
-      types: ['process', 'application_analysis'],
+      types: ['process', 'software', 'application_analysis'],
     })
 
     currentTaskStatus.value = task.status
     pollCollectionTask(task.task_id)
-    ElMessage.success('资产采集已开始')
+    ElMessage.success(translate('generatedScript.hostsAssetsOverview_asset_collection_has_started_d8ba5d'))
     window.setTimeout(() => assetStore.fetchSummary(), 6000)
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('触发采集失败')
+      ElMessage.error(translate('generatedScript.common_trigger_acquisition_failed_3c4208'))
     }
   }
 }
@@ -381,11 +385,11 @@ async function saveConfig() {
   try {
     configForm.collect_types = normalizeConfigTypes(configForm.collect_types)
     await assetStore.saveCollectionConfig(configForm)
-    ElMessage.success('配置已保存')
+    ElMessage.success(translate('generatedScript.hostsAssetsOverview_configuration_saved_c4e4c1'))
     showConfigDrawer.value = false
     await assetStore.fetchSummary()
   } catch (error) {
-    ElMessage.error('保存配置失败')
+    ElMessage.error(translate('generatedScript.hostsAssetsOverview_failed_to_save_configuration_83498c'))
   } finally {
     saving.value = false
   }
@@ -393,11 +397,14 @@ async function saveConfig() {
 
 function formatTime(time?: string | null) {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 
 function normalizeConfigTypes(types: string[]) {
   const next = ['process']
+  if (types.includes('software')) {
+    next.push('software')
+  }
   if (types.includes('application_analysis')) {
     next.push('application_analysis')
   }
@@ -443,11 +450,11 @@ function getTaskStatusType(status: string) {
 
 function getTaskStatusLabel(status: string) {
   const labels: Record<string, string> = {
-    collecting: '采集中',
-    analyzing: '分析中',
-    completed: '完成',
-    failed: '失败',
-    cancelled: '已取消',
+    collecting: translate('generatedScript.common_collecting_b5de8d'),
+    analyzing: translate('generatedScript.common_analyzing_2c2a14'),
+    completed: translate('generatedScript.common_finish_33246f'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
   }
   return labels[status] || status
 }

@@ -3,8 +3,8 @@
     <section class="page-hero settings-hero">
       <div>
         <span class="hero-kicker">Agent Tool Policy</span>
-        <h1>智能体工具权限</h1>
-        <p>配置智能体工具的审批模式和白名单策略，控制工具调用的安全边界。</p>
+        <h1>{{ $t('generated.settingsAssistantToolPolicySettings_agent_tool_permissions_92394c') }}</h1>
+        <p>{{ $t('generated.settingsAssistantToolPolicySettings_configure_the_approval_mode_and_whitelist_0c18a3') }}</p>
       </div>
     </section>
 
@@ -13,7 +13,7 @@
       <el-card class="aegis-card settings-card">
         <template #header>
           <div class="card-header">
-            <span>工具审批模式</span>
+            <span>{{ $t('generated.settingsAssistantToolPolicySettings_tool_approval_mode_b911c9') }}</span>
             <el-tag :type="modeTagType" size="small">{{ modeLabel }}</el-tag>
           </div>
         </template>
@@ -31,15 +31,15 @@
         <el-radio-group v-model="currentMode" class="mode-selector" @change="handleModeChange">
           <el-radio-button value="request_approval">
             <el-icon><Lock /></el-icon>
-            请求批准
+            {{ $t('generated.settingsAssistantToolPolicySettings_request_approval_4e7978') }}
           </el-radio-button>
           <el-radio-button value="whitelist">
             <el-icon><List /></el-icon>
-            白名单
+            {{ $t('generated.common_whitelist_8f74cd') }}
           </el-radio-button>
           <el-radio-button value="full_access">
             <el-icon><Unlock /></el-icon>
-            完全权限
+            {{ $t('generated.settingsAssistantToolPolicySettings_full_permission_da805f') }}
           </el-radio-button>
         </el-radio-group>
       </el-card>
@@ -48,11 +48,11 @@
       <el-card class="aegis-card settings-card" :class="{ 'card-disabled': currentMode === 'request_approval' || currentMode === 'full_access' }">
         <template #header>
           <div class="card-header">
-            <span>工具白名单</span>
+            <span>{{ $t('generated.settingsAssistantToolPolicySettings_tool_whitelist_36efe9') }}</span>
             <div class="card-header-actions">
-              <el-tag size="small" type="info">共 {{ totalTools }} 个工具</el-tag>
+              <el-tag size="small" type="info">{{ $t('generated.common_common_3b6ef8') }} {{ totalTools }} {{ $t('generated.settingsAssistantToolPolicySettings_tools_2a84b2') }}</el-tag>
               <el-button size="small" :loading="resetting" @click="handleResetDefaults">
-                恢复默认白名单
+                {{ $t('generated.settingsAssistantToolPolicySettings_restore_default_whitelist_88c462') }}
               </el-button>
             </div>
           </div>
@@ -62,7 +62,7 @@
         <div class="filter-bar">
           <el-input
             v-model="keyword"
-            placeholder="搜索工具名、描述..."
+            :placeholder="$t('generated.settingsAssistantToolPolicySettings_search_tool_name_description_8f0f51')"
             clearable
             class="filter-input"
             @input="debouncedFetch"
@@ -71,29 +71,29 @@
               <el-icon><Search /></el-icon>
             </template>
           </el-input>
-          <el-select v-model="domainFilter" placeholder="领域" clearable class="filter-select" @change="fetchTools">
+          <el-select v-model="domainFilter" :placeholder="$t('generated.settingsAssistantToolPolicySettings_field_388b18')" clearable class="filter-select" @change="fetchTools">
             <el-option v-for="d in domainOptions" :key="d.value" :label="d.label" :value="d.value" />
           </el-select>
-          <el-select v-model="riskFilter" placeholder="风险等级" clearable class="filter-select" @change="fetchTools">
+          <el-select v-model="riskFilter" :placeholder="$t('generated.common_risk_level_a90f1e')" clearable class="filter-select" @change="fetchTools">
             <el-option v-for="r in riskOptions" :key="r.value" :label="r.label" :value="r.value" />
           </el-select>
-          <el-select v-model="whitelistFilter" placeholder="白名单状态" clearable class="filter-select" @change="fetchTools">
-            <el-option label="已加入白名单" value="true" />
-            <el-option label="未加入白名单" value="false" />
+          <el-select v-model="whitelistFilter" :placeholder="$t('generated.settingsAssistantToolPolicySettings_whitelist_status_1bc7d6')" clearable class="filter-select" @change="fetchTools">
+            <el-option :label="$t('generated.settingsAssistantToolPolicySettings_already_added_to_whitelist_7ebb98')" value="true" />
+            <el-option :label="$t('generated.settingsAssistantToolPolicySettings_not_whitelisted_67ea0c')" value="false" />
           </el-select>
           <el-button
             size="small"
             :disabled="!hasSelection"
             @click="handleBatchWhitelist(true)"
           >
-            批量加入白名单
+            {{ $t('generated.settingsAssistantToolPolicySettings_add_to_whitelist_in_batches_029e50') }}
           </el-button>
           <el-button
             size="small"
             :disabled="!hasSelection"
             @click="handleBatchWhitelist(false)"
           >
-            批量移出白名单
+            {{ $t('generated.settingsAssistantToolPolicySettings_remove_from_whitelist_in_batches_b7d790') }}
           </el-button>
         </div>
 
@@ -105,24 +105,24 @@
           @selection-change="handleSelectionChange"
         >
           <el-table-column type="selection" width="45" />
-          <el-table-column prop="tool_name" label="工具名称" min-width="180" show-overflow-tooltip />
-          <el-table-column prop="domain" label="领域" width="100">
+          <el-table-column prop="tool_name" :label="$t('generated.settingsAssistantToolPolicySettings_tool_name_e28d76')" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="domain" :label="$t('generated.settingsAssistantToolPolicySettings_field_388b18')" width="100">
             <template #default="{ row }">
               <el-tag size="small" type="info">{{ row.domain }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="operation" label="操作" width="90">
+          <el-table-column prop="operation" :label="$t('generated.common_operate_f3ea6d')" width="90">
             <template #default="{ row }">
               <el-tag size="small">{{ row.operation }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="risk_level" label="风险" width="90">
+          <el-table-column prop="risk_level" :label="$t('generated.settingsAssistantToolPolicySettings_risk_96a969')" width="90">
             <template #default="{ row }">
               <el-tag :type="getRiskTagType(row.risk_level)" size="small">{{ riskLabel(row.risk_level) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="description" label="工具详情" min-width="240" show-overflow-tooltip />
-          <el-table-column label="白名单" width="90" align="center">
+          <el-table-column prop="description" :label="$t('generated.settingsAssistantToolPolicySettings_tool_details_9bbf4f')" min-width="240" show-overflow-tooltip />
+          <el-table-column :label="$t('generated.common_whitelist_8f74cd')" width="90" align="center">
             <template #default="{ row }">
               <el-switch
                 v-model="row.whitelisted"
@@ -151,6 +151,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { List, Lock, Search, Unlock } from '@element-plus/icons-vue'
@@ -170,9 +172,9 @@ const modeLoading = ref(false)
 
 const modeLabel = computed(() => {
   const map: Record<AssistantToolApprovalMode, string> = {
-    request_approval: '请求批准',
-    whitelist: '白名单',
-    full_access: '完全权限'
+    request_approval: translate('generatedScript.settingsAssistantToolPolicySettings_request_approval_4e7978'),
+    whitelist: translate('generatedScript.settingsAssistantToolPolicySettings_whitelist_8f74cd'),
+    full_access: translate('generatedScript.settingsAssistantToolPolicySettings_full_permission_da805f')
   }
   return map[currentMode.value] || currentMode.value
 })
@@ -188,9 +190,9 @@ const modeTagType = computed(() => {
 
 const modeAlertTitle = computed(() => {
   const map: Record<AssistantToolApprovalMode, string> = {
-    request_approval: '请求批准模式',
-    whitelist: '白名单模式（默认）',
-    full_access: '完全权限模式'
+    request_approval: translate('generatedScript.settingsAssistantToolPolicySettings_request_approval_mode_1187df'),
+    whitelist: translate('generatedScript.settingsAssistantToolPolicySettings_whitelist_mode_default_ec1c26'),
+    full_access: translate('generatedScript.settingsAssistantToolPolicySettings_full_access_mode_f25595')
   }
   return map[currentMode.value]
 })
@@ -206,9 +208,9 @@ const modeAlertType = computed(() => {
 
 const modeAlertDescription = computed(() => {
   const map: Record<AssistantToolApprovalMode, string> = {
-    request_approval: '所有工具调用都将等待人工批准，包含只读查询。适用于生产环境初期、安全演示、强审计场景。',
-    whitelist: '白名单内工具自动执行；非白名单工具需要人工批准。兼顾效率和安全。',
-    full_access: '所有被本轮智能体选中的工具将直接执行，仍会记录审计。适用于测试环境、离线演练、受控管理员环境。'
+    request_approval: translate('generatedScript.settingsAssistantToolPolicySettings_all_tool_calls_will_await_manual_6b5ee9'),
+    whitelist: translate('generatedScript.settingsAssistantToolPolicySettings_whitelisted_tools_are_automatically_executed_non_2b5ace'),
+    full_access: translate('generatedScript.settingsAssistantToolPolicySettings_all_tools_selected_by_the_agent_d24473')
   }
   return map[currentMode.value]
 })
@@ -217,9 +219,9 @@ async function handleModeChange(mode: AssistantToolApprovalMode) {
   modeLoading.value = true
   try {
     await updateToolApprovalPolicy({ mode })
-    ElMessage.success('审批模式已更新')
+    ElMessage.success(translate('generatedScript.settingsAssistantToolPolicySettings_approval_mode_has_been_updated_0a8fb3'))
   } catch (e: any) {
-    ElMessage.error(e.message || '更新失败')
+    ElMessage.error(e.message || translate('generatedScript.common_update_failed_8f8818'))
     // 回滚
     await fetchApprovalMode()
   } finally {
@@ -251,40 +253,40 @@ const pageSize = ref(20)
 const selectedTools = ref<any[]>([])
 const hasSelection = computed(() => selectedTools.value.length > 0)
 
-const domainOptions = [
-  { label: '系统', value: 'system' },
-  { label: '主机', value: 'host' },
-  { label: '资产', value: 'asset' },
-  { label: '基线', value: 'baseline' },
-  { label: '任务', value: 'task' },
-  { label: '漏洞', value: 'vulnerability' },
-  { label: '检测', value: 'detection' },
-  { label: 'Sigma 规则', value: 'sigma_rule' },
-  { label: '阻断', value: 'block' },
-  { label: '检测包', value: 'package' },
-  { label: '配置', value: 'config' },
-  { label: '审计', value: 'audit' },
+const domainOptions = computed(() => [
+  { label: translate('generatedScript.common_system_1a1f6d'), value: 'system' },
+  { label: translate('generatedScript.common_host_2e8a0c'), value: 'host' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_assets_713fd9'), value: 'asset' },
+  { label: translate('generatedScript.common_baseline_4bb193'), value: 'baseline' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_task_3172b3'), value: 'task' },
+  { label: translate('generatedScript.common_loopholes_86835d'), value: 'vulnerability' },
+  { label: translate('generatedScript.common_detection_b3ff0c'), value: 'detection' },
+  { label: translate('generatedScript.common_sigma_rules_80c495'), value: 'sigma_rule' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_block_8b8621'), value: 'block' },
+  { label: translate('generatedScript.common_test_kit_757931'), value: 'package' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_configuration_d7d7ce'), value: 'config' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_audit_3a96c5'), value: 'audit' },
   { label: 'Agent', value: 'agent' },
-  { label: '研判', value: 'investigation' },
-  { label: '外部 MCP', value: 'external_mcp' },
-  { label: '通知', value: 'notification' }
-]
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_research_and_judge_13bb05'), value: 'investigation' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_external_mcp_72d932'), value: 'external_mcp' },
+  { label: translate('generatedScript.settingsAssistantToolPolicySettings_notify_7a66c0'), value: 'notification' }
+])
 
-const riskOptions = [
-  { label: '只读', value: 'readonly' },
-  { label: '低', value: 'low' },
-  { label: '中', value: 'medium' },
-  { label: '高', value: 'high' },
-  { label: '严重', value: 'critical' }
-]
+const riskOptions = computed(() => [
+  { label: translate('generatedScript.common_read_only_ffc1d0'), value: 'readonly' },
+  { label: translate('generatedScript.common_low_b9ee25'), value: 'low' },
+  { label: translate('generatedScript.common_middle_086907'), value: 'medium' },
+  { label: translate('generatedScript.common_high_b096b3'), value: 'high' },
+  { label: translate('generatedScript.common_serious_81ffc6'), value: 'critical' }
+])
 
 function riskLabel(risk: string): string {
   const map: Record<string, string> = {
-    readonly: '只读',
-    low: '低',
-    medium: '中',
-    high: '高',
-    critical: '严重'
+    readonly: translate('generatedScript.common_read_only_ffc1d0'),
+    low: translate('generatedScript.common_low_b9ee25'),
+    medium: translate('generatedScript.common_middle_086907'),
+    high: translate('generatedScript.common_high_b096b3'),
+    critical: translate('generatedScript.common_serious_81ffc6')
   }
   return map[risk] || risk
 }
@@ -317,7 +319,7 @@ async function fetchTools() {
     tools.value = res.tools || res.items || []
     totalTools.value = res.total || 0
   } catch (e: any) {
-    ElMessage.error(e.message || '获取工具列表失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsAssistantToolPolicySettings_failed_to_get_tool_list_26bc71'))
   } finally {
     loading.value = false
   }
@@ -341,9 +343,9 @@ async function handleWhitelistChange(row: any, whitelisted: boolean) {
   if (whitelisted && row.risk_level === 'critical') {
     try {
       await ElMessageBox.confirm(
-        `确定要将 ${row.tool_name}（严重风险）加入白名单吗？加入后该工具将自动执行，无需人工审批。`,
-        '二次确认',
-        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+        translate('generatedScript.settingsAssistantToolPolicySettings_are_you_sure_you_want_to_b0e02d', { p0: row.tool_name }),
+        translate('generatedScript.settingsAssistantToolPolicySettings_second_confirmation_06a584'),
+        { confirmButtonText: translate('generatedScript.common_sure_f526c8'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'warning' }
       )
     } catch {
       // 取消，回滚
@@ -354,10 +356,10 @@ async function handleWhitelistChange(row: any, whitelisted: boolean) {
 
   try {
     await updateToolWhitelist(row.tool_name, { whitelisted })
-    ElMessage.success(whitelisted ? '已加入白名单' : '已移出白名单')
+    ElMessage.success(whitelisted ? translate('generatedScript.settingsAssistantToolPolicySettings_already_added_to_whitelist_7ebb98') : translate('generatedScript.settingsAssistantToolPolicySettings_removed_from_whitelist_c79ac9'))
   } catch (e: any) {
     row.whitelisted = !whitelisted
-    ElMessage.error(e.message || '更新失败')
+    ElMessage.error(e.message || translate('generatedScript.common_update_failed_8f8818'))
   }
 }
 
@@ -370,9 +372,9 @@ async function handleBatchWhitelist(whitelisted: boolean) {
     if (criticalTools.length > 0) {
       try {
         await ElMessageBox.confirm(
-          `选中包含 ${criticalTools.length} 个严重风险工具，确定要加入白名单吗？`,
-          '二次确认',
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+          translate('generatedScript.settingsAssistantToolPolicySettings_serious_risk_tools_are_selected_are_1ce99a', { p0: criticalTools.length }),
+          translate('generatedScript.settingsAssistantToolPolicySettings_second_confirmation_06a584'),
+          { confirmButtonText: translate('generatedScript.common_sure_f526c8'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'warning' }
         )
       } catch {
         return
@@ -386,19 +388,19 @@ async function handleBatchWhitelist(whitelisted: boolean) {
       whitelisted
     }))
     await batchUpdateWhitelist({ items })
-    ElMessage.success(whitelisted ? '已批量加入白名单' : '已批量移出白名单')
+    ElMessage.success(whitelisted ? translate('generatedScript.settingsAssistantToolPolicySettings_already_added_to_whitelist_in_batches_e1cb18') : translate('generatedScript.settingsAssistantToolPolicySettings_removed_from_whitelist_in_batches_58a481'))
     await fetchTools()
   } catch (e: any) {
-    ElMessage.error(e.message || '批量更新失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsAssistantToolPolicySettings_batch_update_failed_6d420d'))
   }
 }
 
 async function handleResetDefaults() {
   try {
     await ElMessageBox.confirm(
-      '确定要恢复默认白名单吗？这将把所有工具的白名单状态重置为系统默认值。',
-      '恢复默认',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+      translate('generatedScript.settingsAssistantToolPolicySettings_are_you_sure_you_want_to_4b2c7d'),
+      translate('generatedScript.settingsAssistantToolPolicySettings_restore_default_a19193'),
+      { confirmButtonText: translate('generatedScript.common_sure_f526c8'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'warning' }
     )
   } catch {
     return
@@ -407,10 +409,10 @@ async function handleResetDefaults() {
   resetting.value = true
   try {
     await resetWhitelistDefaults()
-    ElMessage.success('已恢复默认白名单')
+    ElMessage.success(translate('generatedScript.settingsAssistantToolPolicySettings_default_whitelist_restored_464589'))
     await fetchTools()
   } catch (e: any) {
-    ElMessage.error(e.message || '恢复失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsAssistantToolPolicySettings_recovery_failed_76842a'))
   } finally {
     resetting.value = false
   }

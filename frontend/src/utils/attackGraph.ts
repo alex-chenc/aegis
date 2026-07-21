@@ -154,21 +154,12 @@ export function isLikelyAttackGraphFinalAnswer(content: string): boolean {
   return false
 }
 
-const threatLevelLabels: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危',
-  info: '信息'
+const threatLevelLabelKeys: Record<string, string> = {
+  critical: 'analysis.severity.critical', high: 'analysis.severity.high', medium: 'analysis.severity.medium', low: 'analysis.severity.low', info: 'analysis.severity.info',
 }
 
-const actionLabels: Record<string, string> = {
-  allow: '允许',
-  monitor: '监控',
-  investigate: '调查',
-  isolate: '隔离',
-  block: '阻断',
-  close: '关闭'
+const actionLabelKeys: Record<string, string> = {
+  allow: 'analysis.graph.allow', monitor: 'analysis.graph.monitor', investigate: 'analysis.graph.investigate', isolate: 'analysis.graph.isolate', block: 'analysis.graph.block', close: 'analysis.graph.close',
 }
 
 function formatList(items: string[], emptyText: string): string {
@@ -178,27 +169,27 @@ function formatList(items: string[], emptyText: string): string {
 
 export function buildAttackGraphDisplayText(finalAnswer: AttackGraphFinalAnswer): string {
   const { graph, conclusions } = finalAnswer
-  const threatLevel = threatLevelLabels[graph.threatLevel] || graph.threatLevel || '未知'
+  const threatLevel = threatLevelLabelKeys[graph.threatLevel] ? translate(threatLevelLabelKeys[graph.threatLevel]) : graph.threatLevel || translate('analysis.severity.unknown')
   const conclusionLines = conclusions.map((item) => {
-    const id = item.alert_id ? `告警 ${item.alert_id}` : '告警'
-    const action = item.action ? actionLabels[item.action] || item.action : '待确认'
-    const summary = item.summary || '未提供结论摘要'
-    return `${id}：${summary}（处置：${action}）`
+    const id = item.alert_id ? `${translate('analysis.graph.alert')} ${item.alert_id}` : translate('analysis.graph.alert')
+    const action = item.action ? (actionLabelKeys[item.action] ? translate(actionLabelKeys[item.action]) : item.action) : translate('analysis.graph.pendingConfirmation')
+    const summary = item.summary || translate('analysis.graph.noConclusion')
+    return `${id}: ${summary} (${translate('analysis.graph.disposition', { action })})`
   })
 
   return [
-    `分析已完成：${graph.title}`,
-    `风险等级：${threatLevel}`,
+    translate('analysis.graph.completed', { title: graph.title }),
+    translate('analysis.graph.riskLevel', { level: threatLevel }),
     '',
-    `结论摘要：${graph.summary || 'AI 已生成攻击链路，请查看下方溯源图。'}`,
+    translate('analysis.graph.summary', { summary: graph.summary || translate('analysis.graph.defaultSummary') }),
     '',
-    '告警结论：',
-    formatList(conclusionLines, '本次最终结果未返回逐条告警结论，请以图谱摘要和处置建议为准。'),
+    translate('analysis.graph.alertConclusions'),
+    formatList(conclusionLines, translate('analysis.graph.noAlertConclusions')),
     '',
-    '处置建议：',
-    formatList(graph.recommendations || [], '暂无处置建议。'),
+    translate('analysis.graph.recommendations'),
+    formatList(graph.recommendations || [], translate('analysis.graph.noRecommendations')),
     '',
-    '溯源图已在下方渲染，可打开节点和链路查看攻击过程。'
+    translate('analysis.graph.rendered')
   ].join('\n')
 }
 
@@ -294,13 +285,14 @@ export function buildAttackGraphSvgDataUrl(graph: AttackGraphData): string {
       <rect width="100%" height="100%" rx="0" fill="#f8fafc" />
       <text x="48" y="52" class="title">${escapeXML(graph.title)}</text>
       <text x="48" y="82" class="summary">${escapeXML(graph.summary || '')}</text>
-      <text x="48" y="118" class="timeline-title">攻击流程</text>
+      <text x="48" y="118" class="timeline-title">${escapeXML(translate('analysis.graph.attackFlow'))}</text>
       ${edgeSvg}
       ${nodeSvg}
-      <text x="48" y="258" class="timeline-title">关键时间线</text>
+      <text x="48" y="258" class="timeline-title">${escapeXML(translate('analysis.graph.timeline'))}</text>
       ${timelineSvg}
     </svg>
   `.trim()
 
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
+import { translate } from '@/i18n'

@@ -1,0 +1,15 @@
+import common from './common'
+import app from './app'
+import routes from './routes'
+import auth from './auth'
+import errors from './errors'
+import notifications from './notifications'
+import assistant from './assistant'
+import generated from './generated'
+import dynamic from './dynamic'
+import generatedScript from './generatedScript'
+import weakPassword from './weakPassword'
+import execution from './execution'
+import analysis from './analysis'
+
+export default { common, app, routes, auth, errors, notifications, assistant, generated, dynamic, generatedScript, weakPassword, execution, analysis }

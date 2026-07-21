@@ -2,23 +2,23 @@
   <div class="task-center">
     <div class="overview-grid">
       <div class="overview-card">
-        <span>任务组</span>
+        <span>{{ $t('generated.taskCenter_task_force_cf61d3') }}</span>
         <strong>{{ taskOverview.total }}</strong>
       </div>
       <div class="overview-card">
-        <span>执行中</span>
+        <span>{{ $t('generated.common_executing_1f425b') }}</span>
         <strong>{{ taskOverview.active }}</strong>
       </div>
       <div class="overview-card">
-        <span>成功</span>
+        <span>{{ $t('generated.common_success_51991a') }}</span>
         <strong>{{ taskOverview.success }}</strong>
       </div>
       <div class="overview-card">
-        <span>失败/超时</span>
+        <span>{{ $t('generated.taskCenter_failure_timeout_7ff2a6') }}</span>
         <strong>{{ taskOverview.failed }}</strong>
       </div>
       <div class="overview-card">
-        <span>平均通过率</span>
+        <span>{{ $t('generated.taskCenter_average_pass_rate_bb1021') }}</span>
         <strong>{{ taskOverview.passRate }}%</strong>
       </div>
     </div>
@@ -30,11 +30,11 @@
           <div class="header-actions">
             <span class="live-indicator" :class="{ active: hasLiveTasks }">
               <i />
-              {{ hasLiveTasks ? '实时刷新中' : '实时空闲' }}
+              {{ hasLiveTasks ? $t('dynamic.liveRefreshing') : $t('dynamic.liveIdle') }}
             </span>
-            <span class="refresh-time">最后刷新 {{ lastRefreshText }}</span>
+            <span class="refresh-time">{{ $t('generated.taskCenter_last_refresh_be7bef') }} {{ lastRefreshText }}</span>
             <el-button @click="exportExcelReport" :loading="exporting">
-              导出合规报告
+              {{ $t('generated.taskCenter_export_compliance_reports_9d881a') }}
             </el-button>
             <el-button
               type="danger"
@@ -42,31 +42,31 @@
               @click="handleBatchDelete"
               v-if="taskGroups.length > 0"
             >
-              批量删除 ({{ selectedTaskIds.length }})
+              {{ $t('generated.common_batch_delete_4edb06') }}{{ selectedTaskIds.length }})
             </el-button>
-            <el-button @click="refresh" :loading="loading">刷新</el-button>
+            <el-button @click="refresh" :loading="loading">{{ $t('generated.common_refresh_38108e') }}</el-button>
           </div>
         </div>
       </template>
 
       <div class="filter-bar">
-        <el-select v-model="filters.status" placeholder="状态" clearable style="width: 120px" @change="handleFilterChange">
-          <el-option label="待执行" value="pending" />
-          <el-option label="执行中" value="running" />
-          <el-option label="成功" value="success" />
-          <el-option label="失败" value="failed" />
+        <el-select v-model="filters.status" :placeholder="$t('generated.common_state_62e951')" clearable style="width: 120px" @change="handleFilterChange">
+          <el-option :label="$t('generated.common_to_be_executed_6cf0af')" value="pending" />
+          <el-option :label="$t('generated.common_executing_1f425b')" value="running" />
+          <el-option :label="$t('generated.common_success_51991a')" value="success" />
+          <el-option :label="$t('generated.common_fail_3e3c80')" value="failed" />
         </el-select>
 
-        <el-select v-model="filters.task_type" placeholder="类型" clearable style="width: 120px; margin-left: 10px" @change="handleFilterChange">
-          <el-option v-if="!isVulnerabilityTask" label="检测" value="CHECK" />
-          <el-option v-if="!isVulnerabilityTask" label="修复" value="FIX" />
-          <el-option v-if="isVulnerabilityTask" label="POC验证" value="POC_VERIFY" />
-          <el-option v-if="isVulnerabilityTask" label="漏洞修复" value="VULNERABILITY_FIX" />
+        <el-select v-model="filters.task_type" :placeholder="$t('generated.common_type_e4e46c')" clearable style="width: 120px; margin-left: 10px" @change="handleFilterChange">
+          <el-option v-if="!isVulnerabilityTask" :label="$t('generated.common_detection_b3ff0c')" value="CHECK" />
+          <el-option v-if="!isVulnerabilityTask" :label="$t('generated.common_repair_590253')" value="FIX" />
+          <el-option v-if="isVulnerabilityTask" :label="$t('generated.common_poc_verification_2e1c70')" value="POC_VERIFY" />
+          <el-option v-if="isVulnerabilityTask" :label="$t('generated.common_bug_fixes_091102')" value="VULNERABILITY_FIX" />
         </el-select>
 
         <el-input
           v-model="filters.search"
-          placeholder="搜索规则名称"
+          :placeholder="$t('generated.taskCenter_search_rule_name_ba7bfb')"
           clearable
           style="width: 200px; margin-left: 10px"
           @keyup.enter="handleFilterChange"
@@ -85,32 +85,32 @@
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="task_group_id" label="任务组ID" min-width="280">
+        <el-table-column prop="task_group_id" :label="$t('generated.taskCenter_task_group_id_c17fc0')" min-width="280">
           <template #default="{ row }">
             <el-link type="primary" @click="goToDetail(row.task_group_id)">
               {{ row.task_group_id.substring(0, 8) }}...
             </el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="task_type" label="类型" min-width="140">
+        <el-table-column prop="task_type" :label="$t('generated.common_type_e4e46c')" min-width="140">
           <template #default="{ row }">
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-              <el-tag v-if="row.has_check || normalizeType(row.task_type) === 'CHECK'" type="primary" size="small">检测</el-tag>
-              <el-tag v-if="row.has_fix || normalizeType(row.task_type) === 'FIX'" type="warning" size="small">修复</el-tag>
-              <el-tag v-if="normalizeType(row.task_type) === 'POC_VERIFY'" type="success" size="small">POC验证</el-tag>
-              <el-tag v-if="normalizeType(row.task_type) === 'VULNERABILITY_FIX'" type="danger" size="small">漏洞修复</el-tag>
+              <el-tag v-if="row.has_check || normalizeType(row.task_type) === 'CHECK'" type="primary" size="small">{{ $t('generated.common_detection_b3ff0c') }}</el-tag>
+              <el-tag v-if="row.has_fix || normalizeType(row.task_type) === 'FIX'" type="warning" size="small">{{ $t('generated.common_repair_590253') }}</el-tag>
+              <el-tag v-if="normalizeType(row.task_type) === 'POC_VERIFY'" type="success" size="small">{{ $t('generated.common_poc_verification_2e1c70') }}</el-tag>
+              <el-tag v-if="normalizeType(row.task_type) === 'VULNERABILITY_FIX'" type="danger" size="small">{{ $t('generated.common_bug_fixes_091102') }}</el-tag>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="task_count" label="任务数" width="80" />
-        <el-table-column label="通过率" width="100">
+        <el-table-column prop="task_count" :label="$t('generated.taskCenter_number_of_tasks_cd75bc')" width="80" />
+        <el-table-column :label="$t('generated.common_pass_rate_b4582b')" width="100">
           <template #default="{ row }">
             <span :style="{ color: getPassRate(row) >= 100 ? '#67c23a' : getPassRate(row) > 0 ? '#e6a23c' : '#f56c6c', fontWeight: 600 }">
               {{ getPassRate(row) }}%
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="进度" min-width="220">
+        <el-table-column :label="$t('generated.common_schedule_acf014')" min-width="220">
           <template #default="{ row }">
             <div class="progress-info">
               <span class="success">{{ row.success_count }}</span> /
@@ -121,22 +121,22 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" :label="$t('generated.common_state_62e951')" width="100">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" min-width="180">
+        <el-table-column prop="created_at" :label="$t('generated.common_creation_time_84e380')" min-width="180">
           <template #default="{ row }">
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="160">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" min-width="160">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="goToDetail(row.task_group_id)">
-              详情
+              {{ $t('generated.common_details_4f55ee') }}
             </el-button>
             <el-button
               link
@@ -145,7 +145,7 @@
               @click="handleDeleteTaskGroup(row)"
               :disabled="row.status === 'running' || row.status === 'pending'"
             >
-              删除
+              {{ $t('generated.common_delete_3755f5') }}
             </el-button>
           </template>
         </el-table-column>
@@ -167,6 +167,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatTime as formatLocaleTime } from '@/i18n/formatters'
+
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -186,7 +189,7 @@ const route = useRoute()
 const router = useRouter()
 
 const isVulnerabilityTask = computed(() => route.path.startsWith('/vulnerability/tasks'))
-const taskCenterTitle = computed(() => isVulnerabilityTask.value ? '漏洞任务中心' : '基线任务中心')
+const taskCenterTitle = computed(() => isVulnerabilityTask.value ? translate('generatedScript.taskCenter_vulnerability_task_center_7d3137') : translate('generatedScript.taskCenter_baseline_mission_center_1ddf31'))
 const detailBasePath = computed(() => isVulnerabilityTask.value ? '/vulnerability/tasks' : '/baseline/tasks')
 const defaultTypeScope = computed(() =>
   isVulnerabilityTask.value ? 'POC_VERIFY,VULNERABILITY_FIX' : 'CHECK,FIX'
@@ -227,7 +230,7 @@ const taskOverview = computed(() => {
 
 const lastRefreshText = computed(() => {
   if (!lastRefreshAt.value) return '-'
-  return lastRefreshAt.value.toLocaleTimeString('zh-CN', { hour12: false })
+  return formatLocaleTime(lastRefreshAt.value)
 })
 
 const fetchTasks = async () => {
@@ -258,7 +261,7 @@ const fetchTasks = async () => {
     selectedTaskIds.value = []
     lastRefreshAt.value = new Date()
   } catch (e: any) {
-    ElMessage.error(e.message || '获取任务列表失败')
+    ElMessage.error(e.message || translate('generatedScript.taskCenter_failed_to_get_task_list_bae2e0'))
   } finally {
     loading.value = false
   }
@@ -303,11 +306,11 @@ const getStatusType = (status: string) => {
 
 const getStatusText = (status: string) => {
   switch (status) {
-    case 'pending': return '待执行'
-    case 'running': return '执行中'
-    case 'success': return '成功'
-    case 'failed': return '失败'
-    case 'timeout': return '超时'
+    case 'pending': return translate('generatedScript.common_to_be_executed_6cf0af')
+    case 'running': return translate('generatedScript.common_executing_1f425b')
+    case 'success': return translate('generatedScript.common_success_51991a')
+    case 'failed': return translate('generatedScript.common_fail_3e3c80')
+    case 'timeout': return translate('generatedScript.common_time_out_ff06c2')
     default: return status
   }
 }
@@ -333,10 +336,10 @@ const goToDetail = (taskGroupId: string) => {
 const getTaskTypeLabel = (type: string) => {
   const normalized = normalizeType(type)
   switch (normalized) {
-    case 'CHECK': return '检测'
-    case 'FIX': return '修复'
-    case 'POC_VERIFY': return 'POC验证'
-    case 'VULNERABILITY_FIX': return '漏洞修复'
+    case 'CHECK': return translate('generatedScript.common_detection_b3ff0c')
+    case 'FIX': return translate('generatedScript.common_repair_590253')
+    case 'POC_VERIFY': return translate('generatedScript.common_poc_verification_2e1c70')
+    case 'VULNERABILITY_FIX': return translate('generatedScript.common_bug_fixes_091102')
     default: return type
   }
 }
@@ -346,17 +349,17 @@ const getTaskDisplayStatus = (task: any) => {
   const status = normalizeStatus(task.status)
   const exitCode = task.exit_code
 
-  if (status === 'pending') return '待执行'
-  if (status === 'running') return '执行中'
-  if (status === 'timeout') return '超时'
-  if (status === 'audit_blocked') return '审计未通过'
+  if (status === 'pending') return translate('generatedScript.common_to_be_executed_6cf0af')
+  if (status === 'running') return translate('generatedScript.common_executing_1f425b')
+  if (status === 'timeout') return translate('generatedScript.common_time_out_ff06c2')
+  if (status === 'audit_blocked') return translate('generatedScript.taskCenter_audit_failed_85ee93')
   if (status === 'success') {
     if (taskType === 'CHECK' || taskType === 'POC_VERIFY') {
-      return exitCode === 0 ? '通过' : '未通过'
+      return exitCode === 0 ? translate('generatedScript.taskCenter_pass_dcc423') : translate('generatedScript.taskCenter_failed_349c9e')
     }
-    return exitCode === 0 ? '成功' : '失败'
+    return exitCode === 0 ? translate('generatedScript.common_success_51991a') : translate('generatedScript.common_fail_3e3c80')
   }
-  if (status === 'failed') return '失败'
+  if (status === 'failed') return translate('generatedScript.common_fail_3e3c80')
   return status
 }
 
@@ -364,10 +367,10 @@ const exportExcelReport = async () => {
   exporting.value = true
   try {
     const headers = [
-      '任务组ID', '规则标题', '主机', '主机ID', '任务类型', '状态', '退出码',
-      '通过', '漏洞ID', '自动验证', '验证轮数', '最大轮数',
-      '脚本内容', '标准输出', '错误输出',
-      '创建时间', '开始时间', '结束时间',
+      translate('generatedScript.taskCenter_task_group_id_c17fc0'), translate('generatedScript.taskCenter_rule_title_298a16'), translate('generatedScript.common_host_2e8a0c'), translate('generatedScript.common_host_id_62fac9'), translate('generatedScript.taskCenter_task_type_4a6f41'), translate('generatedScript.common_state_62e951'), translate('generatedScript.taskCenter_exit_code_8c8923'),
+      translate('generatedScript.taskCenter_pass_dcc423'), translate('generatedScript.taskCenter_vulnerability_id_6066ec'), translate('generatedScript.taskCenter_automatic_verification_30b2d5'), translate('generatedScript.taskCenter_number_of_verification_rounds_6996eb'), translate('generatedScript.taskCenter_maximum_number_of_rounds_7b621d'),
+      translate('generatedScript.common_script_content_2a33ea'), translate('generatedScript.taskCenter_standard_output_8286ef'), translate('generatedScript.taskCenter_error_output_d6e03d'),
+      translate('generatedScript.taskCenter_creation_time_84e380'), translate('generatedScript.taskCenter_start_time_e8868a'), translate('generatedScript.taskCenter_end_time_a0bb9f'),
     ]
 
     const allRows: (string | number)[][] = []
@@ -376,7 +379,7 @@ const exportExcelReport = async () => {
       try {
         const tasks = await getTaskLogs(group.task_group_id)
         for (const task of tasks) {
-          const passed = normalizeStatus(task.status) === 'success' && (task.exit_code ?? 0) === 0 ? '是' : '否'
+          const passed = normalizeStatus(task.status) === 'success' && (task.exit_code ?? 0) === 0 ? translate('generatedScript.taskCenter_yes_30160a') : translate('generatedScript.taskCenter_no_8bf5c1')
           allRows.push([
             group.task_group_id,
             task.rule_title || task.rule_id || task.vulnerability_id || '-',
@@ -387,7 +390,7 @@ const exportExcelReport = async () => {
             task.exit_code ?? '-',
             passed,
             task.vulnerability_id || '-',
-            task.auto_verify ? '是' : '否',
+            task.auto_verify ? translate('generatedScript.taskCenter_yes_30160a') : translate('generatedScript.taskCenter_no_8bf5c1'),
             task.verify_round ?? '-',
             task.max_rounds ?? '-',
             task.script_content || '-',
@@ -401,7 +404,7 @@ const exportExcelReport = async () => {
       } catch {
         allRows.push([
           group.task_group_id,
-          '(获取详情失败)',
+          translate('generatedScript.taskCenter_failed_to_obtain_details_3c92f5'),
           '-', '-',
           getTaskTypeLabel(group.task_type),
           getStatusText(normalizeStatus(group.status)),
@@ -413,17 +416,17 @@ const exportExcelReport = async () => {
     }
 
     if (allRows.length === 0) {
-      ElMessage.warning('当前没有可导出的任务')
+      ElMessage.warning(translate('generatedScript.taskCenter_there_are_currently_no_tasks_available_2b4313'))
       return
     }
 
     const csv = buildCsv(headers, allRows)
     const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
-    const prefix = isVulnerabilityTask.value ? '漏洞任务详情' : '基线任务详情'
+    const prefix = isVulnerabilityTask.value ? translate('generatedScript.taskCenter_vulnerability_task_details_9af140') : translate('generatedScript.taskCenter_baseline_task_details_4ec2cd')
     downloadCsv(`${prefix}_${ts}.csv`, csv)
-    ElMessage.success(`已导出 ${allRows.length} 条任务详情`)
+    ElMessage.success(translate('generatedScript.taskCenter_task_details_have_been_exported_a73be4', { p0: allRows.length }))
   } catch (e: any) {
-    ElMessage.error(e.message || '导出失败')
+    ElMessage.error(e.message || translate('generatedScript.taskCenter_export_failed_675338'))
   } finally {
     exporting.value = false
   }
@@ -440,30 +443,30 @@ const startAutoRefresh = () => {
 
 const handleDeleteTaskGroup = async (row: TaskGroupSummary) => {
   if (row.status === 'running' || row.status === 'pending') {
-    ElMessage.warning('运行中的任务无法删除')
+    ElMessage.warning(translate('generatedScript.taskCenter_running_tasks_cannot_be_deleted_211561'))
     return
   }
 
   try {
-    await ElMessageBox.confirm(`确定删除任务组 "${row.task_group_id.substring(0, 8)}..." ？`, '确认删除', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.taskCenter_are_you_sure_you_want_to_18b598', { p0: row.task_group_id.substring(0, 8) }), translate('generatedScript.common_confirm_deletion_3c06ab'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning'
     })
 
     await deleteTaskGroup(row.task_group_id)
-    ElMessage.success('任务已删除')
+    ElMessage.success(translate('generatedScript.taskCenter_task_deleted_1ae6b1'))
     fetchTasks()
   } catch (e: any) {
     if (e !== 'cancel') {
-      ElMessage.error(e.message || '删除失败')
+      ElMessage.error(e.message || translate('generatedScript.common_delete_failed_72250c'))
     }
   }
 }
 
 const handleBatchDelete = async () => {
   if (selectedTaskIds.value.length === 0) {
-    ElMessage.warning('请先选择要删除的任务')
+    ElMessage.warning(translate('generatedScript.taskCenter_please_select_the_task_to_delete_de9134'))
     return
   }
 
@@ -476,30 +479,30 @@ const handleBatchDelete = async () => {
   const skippedCount = selectedTaskIds.value.length - deletableTasks.length
 
   if (deletableTasks.length === 0) {
-    ElMessage.warning('选中的任务都在运行中，无法删除')
+    ElMessage.warning(translate('generatedScript.taskCenter_the_selected_tasks_are_all_running_5dc594'))
     return
   }
 
-  let message = `确定删除选中的 ${deletableTasks.length} 个任务？`
+  let message = translate('generatedScript.taskCenter_are_you_sure_you_want_to_ff9528', { p0: deletableTasks.length })
   if (skippedCount > 0) {
-    message += `\n（已跳过 ${skippedCount} 个运行中的任务）`
+    message += translate('generatedScript.taskCenter_running_tasks_skipped_606245', { p0: skippedCount })
   }
 
   try {
-    await ElMessageBox.confirm(message, '批量删除确认', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(message, translate('generatedScript.common_batch_deletion_confirmation_dc0217'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning'
     })
 
     const result = await batchDeleteTasks(deletableTasks.map(t => t.task_group_id))
     const deletedCount = result?.deleted_count ?? 0
     const resultSkippedCount = result?.skipped_count ?? 0
-    ElMessage.success(`成功删除 ${deletedCount} 个任务${resultSkippedCount > 0 ? `，跳过 ${resultSkippedCount} 个` : ''}`)
+    ElMessage.success(translate('generatedScript.taskCenter_successfully_deleted_tasks_9ed20a', { p0: deletedCount, p1: resultSkippedCount > 0 ? translate('generatedScript.taskCenter_skipping_040c7c', { p0: resultSkippedCount }) : '' }))
     fetchTasks()
   } catch (e: any) {
     if (e !== 'cancel') {
-      ElMessage.error(e.message || '批量删除失败')
+      ElMessage.error(e.message || translate('generatedScript.common_batch_deletion_failed_b59edb'))
     }
   }
 }

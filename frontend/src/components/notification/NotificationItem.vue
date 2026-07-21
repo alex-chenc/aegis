@@ -6,21 +6,21 @@
       </el-tag>
       <span class="notification-time">{{ timeAgo }}</span>
     </div>
-    <div class="notification-title" :title="notification.title">
-      {{ notification.title }}
+    <div class="notification-title" :title="localizedTitle">
+      {{ localizedTitle }}
     </div>
-    <el-tooltip :content="notification.content" placement="top" :disabled="!isContentTruncated">
+    <el-tooltip :content="localizedContent" placement="top" :disabled="!isContentTruncated">
       <div class="notification-content" :class="{ 'is-truncated': isContentTruncated }">
-        {{ notification.content }}
+        {{ localizedContent }}
       </div>
     </el-tooltip>
     <div class="notification-actions">
       <el-button v-if="notification.link" link type="primary" @click="handleLink">
-        前往查看
+        {{ t('notifications.view') }}
         <el-icon class="el-icon--right"><ArrowRight /></el-icon>
       </el-button>
       <el-button v-if="!notification.is_read" link type="primary" @click="handleMarkRead">
-        标为已读
+        {{ t('notifications.markRead') }}
       </el-button>
     </div>
   </div>
@@ -29,11 +29,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
 import type { Notification } from '@/types/notification'
+import { formatRelativeTime } from '@/i18n/formatters'
 
 const props = defineProps<{
   notification: Notification
 }>()
+const { t, te } = useI18n()
 
 const emit = defineEmits<{
   (e: 'mark-read', id: string): void
@@ -54,31 +57,31 @@ const severityType = computed(() => {
 // severity 标签文字
 const severityLabel = computed(() => {
   const map: Record<string, string> = {
-    critical: '严重',
-    high: '高危',
-    medium: '中危',
-    low: '低危',
-    info: '通知'
+    critical: 'common.severity.critical',
+    high: 'common.severity.high',
+    medium: 'common.severity.medium',
+    low: 'common.severity.low',
+    info: 'common.severity.info'
   }
-  return map[props.notification.severity] || '通知'
+  return t(map[props.notification.severity] || 'common.severity.info')
 })
 
-// 相对时间
-const timeAgo = computed(() => {
-  const now = new Date()
-  const timestamp = new Date(props.notification.timestamp)
-  const diff = Math.floor((now.getTime() - timestamp.getTime()) / 1000)
+const timeAgo = computed(() => formatRelativeTime(props.notification.timestamp))
 
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  if (diff < 604800) return `${Math.floor(diff / 86400)} 天前`
-  return timestamp.toLocaleDateString('zh-CN')
-})
+const localizedTitle = computed(() => localizeNotificationField('title', props.notification.title))
+const localizedContent = computed(() => localizeNotificationField('content', props.notification.content))
+
+function localizeNotificationField(field: 'title' | 'content', fallback: string): string {
+  const baseKey = props.notification.metadata?.i18n_key
+  if (!baseKey) return fallback
+  const key = `${baseKey}.${field}`
+  if (!te(key)) return fallback
+  return t(key, props.notification.metadata?.i18n_params || {})
+}
 
 // 内容是否被截断
 const isContentTruncated = computed(() => {
-  return props.notification.content.length > 100
+  return localizedContent.value.length > 100
 })
 
 function handleMarkRead() {

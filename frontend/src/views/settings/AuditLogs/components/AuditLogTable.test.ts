@@ -4,7 +4,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick, defineComponent, h } from 'vue'
 import AuditLogTable from './AuditLogTable.vue'
 import type { AuditLog } from '@/api/audit-logs'
-import { auditSourceLabels, scriptTypeLabels } from '../constants'
+import { auditSourceLabelKeys } from '../constants'
 
 const { confirmMock } = vi.hoisted(() => ({
   confirmMock: vi.fn().mockResolvedValue('confirm')
@@ -259,20 +259,20 @@ describe('AuditLogTable audit source display', () => {
   })
 
   it('maps generation audit source to Chinese label', () => {
-    expect(auditSourceLabels['generation']).toBe('生成阶段')
+    expect(auditSourceLabelKeys['generation']).toBe('dynamic.auditGeneration')
   })
 
   it('maps dispatch audit source to Chinese label', () => {
-    expect(auditSourceLabels['dispatch']).toBe('下发阶段')
+    expect(auditSourceLabelKeys['dispatch']).toBe('dynamic.auditDispatch')
   })
 
   it('maps agent audit source to Chinese label', () => {
-    expect(auditSourceLabels['agent']).toBe('Agent侧')
+    expect(auditSourceLabelKeys['agent']).toBe('dynamic.auditAgent')
   })
 
   it('does not contain obsolete blacklist/ai source labels', () => {
-    expect(auditSourceLabels['blacklist']).toBeUndefined()
-    expect(auditSourceLabels['ai']).toBeUndefined()
+    expect(auditSourceLabelKeys['blacklist']).toBeUndefined()
+    expect(auditSourceLabelKeys['ai']).toBeUndefined()
   })
 
   it('emits correct audit_source value in filter event', async () => {

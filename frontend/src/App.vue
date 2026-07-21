@@ -1,15 +1,33 @@
 <template>
-  <router-view v-if="isAuthLayout" />
-  <el-container v-else class="app-container" :class="{ 'assistant-mode': isAssistantMode, 'sidebar-collapsed': isSidebarCollapsed }">
+  <el-config-provider :locale="elementLocale">
+  <div v-if="isAuthLayout" class="auth-layout-wrapper">
+    <LanguageSwitcher class="auth-language-switcher" />
+    <router-view />
+  </div>
+  <el-container
+    v-else
+    class="app-container"
+    :class="{
+      'assistant-mode': isAssistantMode,
+      'sidebar-collapsed': isSidebarCollapsed,
+      'sidebar-labels-wrap': sidebarLayout.wrapMenuLabels,
+    }"
+    :style="{ '--aegis-sidebar-expanded-width': `${sidebarLayout.expandedWidth}px` }"
+  >
     <!-- 普通模式才显示侧边栏 -->
-    <el-aside v-if="!isAssistantMode" :width="isSidebarCollapsed ? '64px' : '220px'" class="sidebar" :class="{ collapsed: isSidebarCollapsed }">
+    <el-aside
+      v-if="!isAssistantMode"
+      :width="isSidebarCollapsed ? '64px' : `${sidebarLayout.expandedWidth}px`"
+      class="sidebar"
+      :class="{ collapsed: isSidebarCollapsed }"
+    >
       <div class="logo">
         <span class="logo-mark" aria-hidden="true">
           <span class="brand-shield"></span>
         </span>
         <div class="logo-copy">
           <span class="logo-text">Aegis</span>
-          <span class="logo-subtitle">主机安全指挥台</span>
+          <span class="logo-subtitle">{{ t('app.brand.subtitle') }}</span>
         </div>
       </div>
       <el-menu
@@ -21,118 +39,118 @@
       >
         <el-menu-item index="/hosts">
           <el-icon><Monitor /></el-icon>
-          <span>主机列表</span>
+          <span>{{ t('app.menu.hosts') }}</span>
         </el-menu-item>
 
         <el-sub-menu index="assets">
           <template #title>
             <el-icon><Box /></el-icon>
-            <span>智能资产采集</span>
+            <span>{{ t('app.menu.assets') }}</span>
           </template>
           <el-menu-item index="/hosts/assets">
             <el-icon><DataBoard /></el-icon>
-            <span>资产概览</span>
+            <span>{{ t('app.menu.assetsOverview') }}</span>
           </el-menu-item>
           <el-menu-item index="/hosts/assets/software">
             <el-icon><Files /></el-icon>
-            <span>软件清单</span>
+            <span>{{ t('app.menu.software') }}</span>
           </el-menu-item>
           <el-menu-item index="/hosts/assets/applications">
             <el-icon><Grid /></el-icon>
-            <span>应用资产</span>
+            <span>{{ t('app.menu.applications') }}</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="baseline">
           <template #title>
             <el-icon><Document /></el-icon>
-            <span>智能基线检查与修复</span>
+            <span>{{ t('app.menu.baseline') }}</span>
           </template>
           <el-menu-item index="/baseline/workbench">
             <el-icon><SetUp /></el-icon>
-            <span>规则管理</span>
+            <span>{{ t('app.menu.ruleManagement') }}</span>
           </el-menu-item>
           <el-menu-item index="/baseline/tasks">
             <el-icon><List /></el-icon>
-            <span>基线任务中心</span>
+            <span>{{ t('app.menu.baselineTasks') }}</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="vulnerability">
           <template #title>
             <el-icon><Warning /></el-icon>
-            <span>智能漏洞检查与修复</span>
+            <span>{{ t('app.menu.vulnerability') }}</span>
           </template>
           <el-menu-item index="/vulnerability">
             <el-icon><SetUp /></el-icon>
-            <span>漏洞工作台</span>
+            <span>{{ t('app.menu.vulnerabilityWorkbench') }}</span>
           </el-menu-item>
           <el-menu-item index="/vulnerability/tasks">
             <el-icon><List /></el-icon>
-            <span>漏洞任务中心</span>
+            <span>{{ t('app.menu.vulnerabilityTasks') }}</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="detection">
           <template #title>
             <el-icon><DataAnalysis /></el-icon>
-            <span>智能异常检测</span>
+            <span>{{ t('app.menu.detection') }}</span>
           </template>
           <el-menu-item index="/detection/overview">
             <el-icon><DataAnalysis /></el-icon>
-            <span>安全概览</span>
+            <span>{{ t('app.menu.securityOverview') }}</span>
           </el-menu-item>
           <el-menu-item index="/detection/alerts">
             <el-icon><Bell /></el-icon>
-            <span>告警列表</span>
+            <span>{{ t('app.menu.alerts') }}</span>
           </el-menu-item>
           <el-menu-item index="/detection/ai-analysis">
             <el-icon><ChatDotRound /></el-icon>
-            <span>AI 分析</span>
+            <span>{{ t('app.menu.aiAnalysis') }}</span>
           </el-menu-item>
           <el-menu-item index="/detection/policies">
             <el-icon><Operation /></el-icon>
-            <span>阻断策略</span>
+            <span>{{ t('app.menu.blockingPolicies') }}</span>
           </el-menu-item>
           <el-menu-item index="/detection/rules">
             <el-icon><Tickets /></el-icon>
-            <span>规则管理</span>
+            <span>{{ t('app.menu.ruleManagement') }}</span>
           </el-menu-item>
           <el-menu-item index="/detection/packages">
             <el-icon><Box /></el-icon>
-            <span>动态检测包</span>
+            <span>{{ t('app.menu.detectionPackages') }}</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/risk/weak-password">
           <el-icon><Lock /></el-icon>
-          <span>智能弱密码检测</span>
+          <span>{{ t('app.menu.weakPassword') }}</span>
         </el-menu-item>
 
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
-            <span>系统配置</span>
+            <span>{{ t('app.menu.settings') }}</span>
           </template>
           <el-menu-item index="/settings/models">
             <el-icon><Setting /></el-icon>
-            <span>模型配置</span>
+            <span>{{ t('app.menu.modelSettings') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings/agent">
             <el-icon><Operation /></el-icon>
-            <span>Agent 安装</span>
+            <span>{{ t('app.menu.agentInstall') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings/command-audit">
             <el-icon><Tickets /></el-icon>
-            <span>命令审计配置</span>
+            <span>{{ t('app.menu.commandAudit') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings/audit-logs">
             <el-icon><Document /></el-icon>
-            <span>审计日志</span>
+            <span>{{ t('app.menu.auditLogs') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings/ebpf-hooks">
             <el-icon><Connection /></el-icon>
-            <span>eBPF Hook 白名单</span>
+            <span>{{ t('app.menu.ebpfHooks') }}</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
@@ -140,9 +158,9 @@
       <div class="sidebar-footer">
         <template v-if="!isSidebarCollapsed">
           <span class="status-dot" />
-          <span class="version">控制面在线 · V6.1</span>
+          <span class="version">{{ t('app.sidebar.controlPlaneOnline') }}</span>
         </template>
-        <el-tooltip :content="isSidebarCollapsed ? '展开导航' : '收起导航'" placement="right">
+        <el-tooltip :content="isSidebarCollapsed ? t('app.sidebar.expand') : t('app.sidebar.collapse')" placement="right">
           <el-button
             class="collapse-button"
             :icon="isSidebarCollapsed ? Expand : Fold"
@@ -165,7 +183,7 @@
           </el-breadcrumb>
           <div v-else class="assistant-title">
             <el-icon><MagicStick /></el-icon>
-            <span>智能安全助手</span>
+            <span>{{ t('app.header.assistantTitle') }}</span>
           </div>
         </div>
         <div class="header-right">
@@ -178,8 +196,9 @@
               @change="handleModeChange"
             />
           </div>
+          <LanguageSwitcher />
           <NotificationBell />
-          <el-tooltip content="刷新" placement="bottom">
+          <el-tooltip :content="t('app.header.refresh')" placement="bottom">
             <el-button :icon="Refresh" circle size="small" @click="handleRefresh" />
           </el-tooltip>
           <UserProfileDropdown />
@@ -191,28 +210,35 @@
       </el-main>
     </el-container>
   </el-container>
+  </el-config-provider>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Monitor, Document, SetUp, List, Warning, Setting, Refresh, DataAnalysis, Bell, Operation, Tickets, ChatDotRound, Box, Connection, DataBoard, Files, Grid, MagicStick, Lock, Fold, Expand } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/notification/NotificationBell.vue'
 import UserProfileDropdown from '@/components/UserProfileDropdown.vue'
+import LanguageSwitcher from '@/components/common/LanguageSwitcher.vue'
 import { clearStoredAuth, getStoredAuth } from '@/utils/auth'
 import { createIdleLogout } from '@/utils/sessionTimeout'
+import { elementLocale } from '@/i18n'
+import { getSidebarLayout } from '@/utils/sidebarLayout'
 
 const route = useRoute()
 const router = useRouter()
+const { t, locale } = useI18n()
 const isSidebarCollapsed = ref(false)
+const sidebarLayout = computed(() => getSidebarLayout(locale.value))
 
 // 模式切换
 const currentMode = ref<'normal' | 'assistant'>('normal')
-const modeOptions = [
-  { label: '运维审计', value: 'normal' },
-  { label: '智能助手', value: 'assistant' },
-]
+const modeOptions = computed(() => [
+  { label: t('app.mode.operationsAudit'), value: 'normal' },
+  { label: t('app.mode.agentMode'), value: 'assistant' },
+])
 
 const isAssistantMode = computed(() => {
   return route.path === '/assistant' || currentMode.value === 'assistant'
@@ -236,13 +262,13 @@ const activeMenu = computed(() => {
 })
 
 const breadcrumbs = computed(() => {
-  const matched = route.matched.filter(item => item.meta && item.meta.title)
-  const crumbs = [{ path: '/', title: '首页' }]
+  const matched = route.matched.filter(item => item.meta && item.meta.titleKey)
+  const crumbs = [{ path: '/', title: t('routes.home') }]
 
   matched.forEach(item => {
     crumbs.push({
       path: item.path,
-      title: item.meta.title as string
+      title: t(String(item.meta.titleKey || 'routes.home'))
     })
   })
 
@@ -277,7 +303,7 @@ const idleLogout = createIdleLogout({
   isEnabled: () => Boolean(getStoredAuth()) && !route.meta.authLayout,
   onTimeout: () => {
     clearStoredAuth()
-    ElMessage.warning('2 小时未操作，已自动退出登录')
+    ElMessage.warning(t('app.session.idleLogout'))
     router.replace('/login')
   }
 })
@@ -296,15 +322,33 @@ watch(() => route.fullPath, () => {
   syncViewportForLayout()
   idleLogout.refresh()
 }, { immediate: true })
+
+watch([() => route.fullPath, locale], () => {
+  const titleKey = String(route.meta.titleKey || 'routes.home')
+  document.title = `${t(titleKey)} · Aegis`
+}, { immediate: true })
 </script>
 
 <style scoped>
+.auth-layout-wrapper {
+  min-height: 100dvh;
+  position: relative;
+}
+
+.auth-language-switcher {
+  position: fixed;
+  right: 24px;
+  top: 20px;
+  z-index: 20;
+}
+
 .app-container {
+  --aegis-sidebar-expanded-width: 220px;
   height: 100dvh;
   min-width: var(--aegis-desktop-min-width);
   width: max(100vw, var(--aegis-desktop-min-width));
   background:
-    linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 220px, transparent 220px),
+    linear-gradient(90deg, rgba(11, 18, 32, 0.98) 0 var(--aegis-sidebar-expanded-width), transparent var(--aegis-sidebar-expanded-width)),
     radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.14), transparent 25%),
     linear-gradient(135deg, #edf5ff, #f8fafc);
 }
@@ -419,7 +463,7 @@ watch(() => route.fullPath, () => {
 }
 
 .sidebar-menu:not(.el-menu--collapse) {
-  width: 220px;
+  width: var(--aegis-sidebar-expanded-width);
 }
 
 .sidebar-menu.el-menu--collapse {
@@ -545,6 +589,7 @@ watch(() => route.fullPath, () => {
 
 :deep(.el-menu) {
   border-right: none;
+  background: transparent;
 }
 
 :deep(.el-menu-item),
@@ -586,9 +631,24 @@ watch(() => route.fullPath, () => {
 }
 
 :deep(.el-sub-menu .el-menu-item) {
-  min-width: 220px;
+  min-width: var(--aegis-sidebar-expanded-width);
   padding-left: 44px !important;
   background: rgba(15, 23, 42, 0.34) !important;
+}
+
+.sidebar-labels-wrap .sidebar:not(.collapsed) :deep(.el-sub-menu__title) {
+  height: auto;
+  min-height: 46px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  line-height: 20px;
+}
+
+.sidebar-labels-wrap .sidebar:not(.collapsed) :deep(.el-sub-menu__title > span) {
+  min-width: 0;
+  max-width: calc(100% - 90px);
+  white-space: normal;
+  line-height: 20px;
 }
 
 :deep(.el-sub-menu .el-menu-item:hover) {

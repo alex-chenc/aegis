@@ -43,7 +43,7 @@
     <!-- 任务状态摘要 -->
     <div v-else-if="card.type === 'task_status'" class="task-status-summary">
       <div class="task-status-topline">
-        <span>{{ card.payload.task_group_id || card.payload.task_id || '任务' }}</span>
+        <span>{{ card.payload.task_group_id || card.payload.task_id || $t('dynamic.task') }}</span>
         <el-tag :type="getTaskStatusTag(String(card.payload.status || 'pending'))" size="small">
           {{ getTaskStatusLabel(String(card.payload.status || 'pending')) }}
         </el-tag>
@@ -64,6 +64,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { DataBoard } from '@element-plus/icons-vue'
 import type { AssistantResultCard } from '@/api/assistant'
 import HostAttackInvestigationPanel from './HostAttackInvestigationPanel.vue'
@@ -74,13 +76,13 @@ defineProps<{
 
 function getTypeLabel(type: string): string {
   const map: Record<string, string> = {
-    host_list: '主机列表',
-    alert_list: '告警列表',
-    task_status: '任务状态',
-    package_summary: '检测包摘要',
-    attack_graph: '攻击图',
-    host_attack_investigation: '攻击研判',
-    evidence_matrix: '证据矩阵',
+    host_list: translate('generatedScript.assistantAssistantResultRenderer_host_list_510935'),
+    alert_list: translate('generatedScript.assistantAssistantResultRenderer_alarm_list_9f383e'),
+    task_status: translate('generatedScript.assistantAssistantResultRenderer_task_status_b7d412'),
+    package_summary: translate('generatedScript.assistantAssistantResultRenderer_detection_package_summary_f6012b'),
+    attack_graph: translate('generatedScript.assistantAssistantResultRenderer_attack_graph_b9d67e'),
+    host_attack_investigation: translate('generatedScript.assistantAssistantResultRenderer_attack_research_and_judgment_3a7d6e'),
+    evidence_matrix: translate('generatedScript.assistantAssistantResultRenderer_evidence_matrix_6931aa'),
     markdown: 'Markdown',
     json: 'JSON',
   }
@@ -107,22 +109,22 @@ function getTaskStatusTag(status: string): string {
 
 function getTaskStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '运行中',
-    success: '成功',
-    completed: '完成',
-    failed: '失败',
-    timeout: '超时',
+    pending: translate('generatedScript.common_waiting_bd3488'),
+    running: translate('generatedScript.common_running_594249'),
+    success: translate('generatedScript.common_success_51991a'),
+    completed: translate('generatedScript.common_finish_33246f'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    timeout: translate('generatedScript.common_time_out_ff06c2'),
   }
   return map[status.toLowerCase()] || status
 }
 
 function getTaskMetrics(payload: Record<string, any>) {
   return [
-    { label: '总数', value: payload.total ?? payload.task_count ?? 0 },
-    { label: '成功', value: payload.success ?? payload.success_count ?? 0 },
-    { label: '运行', value: payload.running ?? payload.running_count ?? 0 },
-    { label: '失败', value: payload.failed ?? payload.failed_count ?? 0 },
+    { label: translate('generatedScript.assistantAssistantResultRenderer_total_367ff5'), value: payload.total ?? payload.task_count ?? 0 },
+    { label: translate('generatedScript.common_success_51991a'), value: payload.success ?? payload.success_count ?? 0 },
+    { label: translate('generatedScript.assistantAssistantResultRenderer_run_0c3acd'), value: payload.running ?? payload.running_count ?? 0 },
+    { label: translate('generatedScript.common_fail_3e3c80'), value: payload.failed ?? payload.failed_count ?? 0 },
   ]
 }
 

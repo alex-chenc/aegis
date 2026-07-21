@@ -1,23 +1,23 @@
 <template>
   <div class="process-tree">
     <div v-if="!treeData" class="empty-state">
-      <el-empty description="暂无进程树数据" :image-size="88" />
+      <el-empty :description="$t('generated.processTree_no_process_tree_data_yet_11fdb5')" :image-size="88" />
     </div>
 
     <div v-else class="tree-shell">
       <div class="tree-summary">
         <div>
           <div class="summary-eyebrow">Process Lineage</div>
-          <div class="summary-title">进程链路调查视图</div>
+          <div class="summary-title">{{ $t('generated.processTree_process_link_survey_view_21fe12') }}</div>
         </div>
-        <div class="summary-pills" aria-label="进程链路摘要">
+        <div class="summary-pills" :aria-label="$t('generated.processTree_process_link_summary_e9170c')">
           <span v-if="hasParent" class="summary-pill muted">PPID {{ treeData.ppid }}</span>
           <span class="summary-pill danger">PID {{ treeData.pid }}</span>
-          <span class="summary-pill">{{ childCount }} 个子进程</span>
+          <span class="summary-pill">{{ childCount }} {{ $t('generated.processTree_child_process_d36c8a') }}</span>
         </div>
       </div>
 
-      <div class="timeline" role="list" aria-label="告警进程链路">
+      <div class="timeline" role="list" :aria-label="$t('generated.processTree_alarm_process_link_069c21')">
         <section v-if="hasParent" class="process-node" role="listitem">
           <div class="node-rail">
             <span class="rail-dot neutral">
@@ -27,7 +27,7 @@
           <article class="node-card parent-card">
             <header class="process-header">
               <div class="process-heading">
-                <span class="node-kicker">父进程</span>
+                <span class="node-kicker">{{ $t('generated.processTree_parent_process_cc0f56') }}</span>
                 <strong class="process-name">{{ parentProcessName }}</strong>
               </div>
               <el-tag size="small" type="info">PPID {{ treeData.ppid }}</el-tag>
@@ -35,17 +35,17 @@
 
             <div class="meta-grid compact-grid">
               <div class="meta-item">
-                <span>用户</span>
+                <span>{{ $t('generated.processTree_user_9ba763') }}</span>
                 <strong>{{ treeData.ppid_user || '-' }}</strong>
               </div>
               <div class="meta-item">
-                <span>关系</span>
-                <strong>启动来源</strong>
+                <span>{{ $t('generated.common_relation_daf4f2') }}</span>
+                <strong>{{ $t('generated.processTree_start_source_9d3d45') }}</strong>
               </div>
             </div>
 
             <div v-if="treeData.ppid_command_line" class="command-block">
-              <span class="command-label">命令行</span>
+              <span class="command-label">{{ $t('generated.processTree_command_line_f3f9b2') }}</span>
               <code :title="treeData.ppid_command_line">{{ treeData.ppid_command_line }}</code>
             </div>
           </article>
@@ -60,10 +60,10 @@
           <article class="node-card threat-card">
             <header class="process-header">
               <div class="process-heading">
-                <span class="node-kicker danger">威胁进程</span>
+                <span class="node-kicker danger">{{ $t('generated.processTree_threat_process_ff2f3d') }}</span>
                 <strong class="process-name">{{ processName(treeData.name, treeData.pid) }}</strong>
               </div>
-              <el-tag type="danger" size="small" effect="dark">命中告警</el-tag>
+              <el-tag type="danger" size="small" effect="dark">{{ $t('generated.processTree_hit_alarm_6f401e') }}</el-tag>
             </header>
 
             <div class="meta-grid">
@@ -76,21 +76,21 @@
                 <strong>{{ treeData.ppid || '-' }}</strong>
               </div>
               <div class="meta-item">
-                <span>用户</span>
+                <span>{{ $t('generated.processTree_user_9ba763') }}</span>
                 <strong>{{ treeData.user || '-' }}</strong>
               </div>
               <div class="meta-item">
-                <span>用户组</span>
+                <span>{{ $t('generated.processTree_user_group_653600') }}</span>
                 <strong>{{ treeData.user_group || '-' }}</strong>
               </div>
             </div>
 
             <div v-if="treeData.exe_path" class="command-block">
-              <span class="command-label">启动路径</span>
+              <span class="command-label">{{ $t('generated.common_startup_path_b782b1') }}</span>
               <code :title="treeData.exe_path">{{ treeData.exe_path }}</code>
             </div>
             <div v-if="treeData.command_line" class="command-block">
-              <span class="command-label">命令行</span>
+              <span class="command-label">{{ $t('generated.processTree_command_line_f3f9b2') }}</span>
               <code :title="treeData.command_line">{{ treeData.command_line }}</code>
             </div>
           </article>
@@ -105,8 +105,8 @@
           <article class="node-card children-card">
             <header class="process-header">
               <div class="process-heading">
-                <span class="node-kicker">派生进程</span>
-                <strong class="process-name">{{ childCount }} 个子进程</strong>
+                <span class="node-kicker">{{ $t('generated.processTree_fork_process_d96abe') }}</span>
+                <strong class="process-name">{{ childCount }} {{ $t('generated.processTree_child_process_d36c8a') }}</strong>
               </div>
             </header>
 

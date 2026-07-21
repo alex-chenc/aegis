@@ -10,6 +10,8 @@ export type NotificationType =
 
 // 通知元数据（业务扩展字段）
 export interface NotificationMetadata {
+  i18n_key?:     string
+  i18n_params?:  Record<string, string | number | boolean | null>
   rule_id?:       string    // 关联规则 ID（rule_generated 时携带）
   mitre_id?:      string    // 关联 MITRE ID
   trigger_count?: number    // 触发次数

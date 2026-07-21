@@ -1,5 +1,5 @@
 # Build stage
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20 AS builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22 AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm config set registry https://registry.npmmirror.com && npm install

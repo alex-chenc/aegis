@@ -17,19 +17,19 @@
 
     <div class="task-metrics">
       <div class="metric">
-        <span>总数</span>
+        <span>{{ $t('generated.assistantAssistantTaskProgressCard_total_367ff5') }}</span>
         <strong>{{ progress.total }}</strong>
       </div>
       <div class="metric">
-        <span>成功</span>
+        <span>{{ $t('generated.common_success_51991a') }}</span>
         <strong>{{ progress.success }}</strong>
       </div>
       <div class="metric">
-        <span>运行</span>
+        <span>{{ $t('generated.assistantAssistantTaskProgressCard_run_0c3acd') }}</span>
         <strong>{{ progress.running }}</strong>
       </div>
       <div class="metric">
-        <span>失败</span>
+        <span>{{ $t('generated.common_fail_3e3c80') }}</span>
         <strong>{{ progress.failed }}</strong>
       </div>
     </div>
@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { getCollectionTask } from '@/api/assets'
 import { getTaskLogs, getTaskStatus, type TaskLog } from '@/api/tasks'
@@ -100,12 +102,12 @@ const displayId = computed(() => {
 const taskTitle = computed(() => {
   const kind = taskRef.value?.kind
   const map: Record<string, string> = {
-    asset_collection: '资产采集进度',
-    baseline_task: '基线任务进度',
-    vulnerability_scan: '漏洞扫描进度',
-    vulnerability_task: '漏洞脚本任务',
+    asset_collection: translate('generatedScript.assistantAssistantTaskProgressCard_asset_collection_progress_010009'),
+    baseline_task: translate('generatedScript.assistantAssistantTaskProgressCard_baseline_task_progress_4d6a0b'),
+    vulnerability_scan: translate('generatedScript.assistantAssistantTaskProgressCard_vulnerability_scan_progress_a25131'),
+    vulnerability_task: translate('generatedScript.assistantAssistantTaskProgressCard_vulnerability_script_task_db9aa2'),
   }
-  return map[kind || ''] || '任务进度'
+  return map[kind || ''] || translate('generatedScript.assistantAssistantTaskProgressCard_task_progress_01eaf9')
 })
 
 const progressPercent = computed(() => {
@@ -120,19 +122,19 @@ const progressPercent = computed(() => {
 const statusLabel = computed(() => {
   const status = String(progress.value.status || '').toLowerCase()
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '运行中',
-    collecting: '采集中',
-    scanning: '扫描中',
-    analyzing: '分析中',
-    success: '成功',
-    completed: '完成',
-    failed: '失败',
-    timeout: '超时',
-    stopped: '已停止',
-    stopping: '停止中',
+    pending: translate('generatedScript.common_waiting_bd3488'),
+    running: translate('generatedScript.common_running_594249'),
+    collecting: translate('generatedScript.common_collecting_b5de8d'),
+    scanning: translate('generatedScript.assistantAssistantTaskProgressCard_scanning_320639'),
+    analyzing: translate('generatedScript.common_analyzing_2c2a14'),
+    success: translate('generatedScript.common_success_51991a'),
+    completed: translate('generatedScript.common_finish_33246f'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    timeout: translate('generatedScript.common_time_out_ff06c2'),
+    stopped: translate('generatedScript.assistantAssistantTaskProgressCard_stopped_75dddf'),
+    stopping: translate('generatedScript.assistantAssistantTaskProgressCard_stopping_434eb8'),
   }
-  return map[status] || status || '等待中'
+  return map[status] || status || translate('generatedScript.common_waiting_bd3488')
 })
 
 const statusTagType = computed(() => {
@@ -175,7 +177,7 @@ async function pollOnce() {
       stopPolling()
     }
   } catch {
-    progress.value.message = '进度暂时不可用'
+    progress.value.message = translate('generatedScript.assistantAssistantTaskProgressCard_progress_is_temporarily_unavailable_06b167')
   }
 }
 
@@ -194,7 +196,7 @@ async function pollTaskGroup(ref: TaskRef) {
     pending: status.pending,
     failed: status.failed,
     timeout: status.timeout || 0,
-    message: status.total ? '' : '任务已创建，等待执行明细',
+    message: status.total ? '' : translate('generatedScript.assistantAssistantTaskProgressCard_task_has_been_created_waiting_for_1d4186'),
   }
   latestLog.value = logs[0] || null
 }

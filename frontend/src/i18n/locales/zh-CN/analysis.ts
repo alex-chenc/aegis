@@ -1,0 +1,6 @@
+export default {
+  severity: { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息', unknown: '未知' },
+  prompt: { intro: '本次需要分析以下 {count} 条真实告警：', alertId: '告警ID：{value}', host: '主机：{value}', rule: '规则：{value}', severity: '级别：{value}', latest: '最近时间：{value}', description: '描述：{value}', timeRange: '分析时间范围：{start} 至 {end}', request: '请结合以上真实告警内容判断是否为真实威胁，并给出攻击链路溯源与处置建议。', maxIterations: 'AI 已达到最大推理轮数，但仍未生成最终结论。请缩小告警范围、补充问题，或提高最大轮数后重试。' },
+  graph: { allow: '允许', monitor: '监控', investigate: '调查', isolate: '隔离', block: '阻断', close: '关闭', alert: '告警', pendingConfirmation: '待确认', noConclusion: '未提供结论摘要', disposition: '处置：{action}', completed: '分析已完成：{title}', riskLevel: '风险等级：{level}', summary: '结论摘要：{summary}', defaultSummary: 'AI 已生成攻击链路，请查看下方溯源图。', alertConclusions: '告警结论：', noAlertConclusions: '本次最终结果未返回逐条告警结论，请以图谱摘要和处置建议为准。', recommendations: '处置建议：', noRecommendations: '暂无处置建议。', rendered: '溯源图已在下方渲染，可打开节点和链路查看攻击过程。', attackFlow: '攻击流程', timeline: '关键时间线', glyph: { attacker: '攻', victim: '靶', process: '进', file: '文', network: '网', command: '令', malware: '毒' } },
+  remediation: { malicious: '建议立即隔离受影响主机，进行深入取证分析，并检查横向移动迹象。', suspicious: '建议进一步监控相关进程和网络活动，收集更多证据以确认威胁。', unknown: '建议人工复核分析结果，结合上下文信息进行判断。', default: '建议根据实际情况采取相应措施。' },
+}

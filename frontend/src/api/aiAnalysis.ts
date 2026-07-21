@@ -1,6 +1,7 @@
 import request from './index'
 import { getAuthToken } from '@/utils/auth'
 import { normalizeExecutionResult } from '@/utils/taskExecutionResult'
+import { translate } from '@/i18n'
 
 // AI Analysis Session types
 export interface CreateSessionRequest {
@@ -278,7 +279,7 @@ export interface SessionListItem {
   created_at: string
   updated_at: string
   concluded_at?: string
-  conclusion?: Record<string, any>
+  conclusion?: Record<string, any> | string
 }
 
 export interface SessionListResponse {
@@ -363,7 +364,7 @@ export async function getExecutionResult(sessionId: string): Promise<ExecutionRe
   const payload = await request.get(`/detection/alerts/ai-analysis/${sessionId}/execution-result`)
   const result = resolveExecutionResultPayload(payload as ExecutionResultPayload)
   if (!result) {
-    throw new Error('执行记录不存在')
+    throw new Error(translate('dynamic.executionRecordMissing'))
   }
   return result
 }
@@ -401,7 +402,7 @@ export function createAISessionStream(
     streamFinished = true
     onEvent({
       type: 'error',
-      content: 'AI 分析连接中断，请稍后重试或查看服务日志'
+      content: translate('dynamic.aiConnectionInterrupted')
     })
     eventSource.close()
   }

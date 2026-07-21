@@ -15,9 +15,9 @@ describe('TaskDetail automatic repair workflow', () => {
   })
 
   it('keeps the shared automatic repair process visible', () => {
-    expect(source).toContain('自动修复过程')
+    expect(source).toContain("$t('generated.taskDetail_automatic_repair_process_2cb789')")
     expect(source).toContain('task.healingStatus?.steps?.length')
-    expect(source).toContain('当前轮次')
+    expect(source).toContain("$t('generated.taskDetail_current_round_0f55b9')")
     expect(source).toContain('healingStepStatusText(step.status)')
   })
 })

@@ -3,22 +3,22 @@
     <el-row :gutter="16" class="stats-row">
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card clickable" @click="goToAlerts()">
-          <el-statistic title="今日告警" :value="threatStats?.today_alerts || 0" />
+          <el-statistic :title="$t('generated.detectionOverview_alarm_today_fe59ff')" :value="threatStats?.today_alerts || 0" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
-          <el-statistic title="今日阻断" :value="threatStats?.today_blocks || 0" />
+          <el-statistic :title="$t('generated.detectionOverview_block_today_b0054f')" :value="threatStats?.today_blocks || 0" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
-          <el-statistic title="受影响主机" :value="threatStats?.affected_hosts || 0" />
+          <el-statistic :title="$t('generated.detectionOverview_affected_hosts_546286')" :value="threatStats?.affected_hosts || 0" />
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
-          <el-statistic title="生效规则" :value="threatStats?.active_rules || 0" />
+          <el-statistic :title="$t('generated.detectionOverview_effective_rules_f03848')" :value="threatStats?.active_rules || 0" />
         </el-card>
       </el-col>
     </el-row>
@@ -26,8 +26,8 @@
     <el-card class="trend-card">
       <template #header>
         <div class="card-header">
-          <span>告警趋势（近24小时）</span>
-          <el-button size="small" @click="refreshData">刷新</el-button>
+          <span>{{ $t('generated.detectionOverview_alarm_trend_last_24_hours_5aba66') }}</span>
+          <el-button size="small" @click="refreshData">{{ $t('generated.common_refresh_38108e') }}</el-button>
         </div>
       </template>
       <div ref="chartRef" class="trend-chart"></div>
@@ -35,7 +35,7 @@
 
     <el-card class="matrix-card">
       <template #header>
-        <span>MITRE ATT&CK 战术矩阵（14战术）</span>
+        <span>{{ $t('generated.detectionOverview_miter_att_ck_tactical_matrix_14_3448b4') }}</span>
       </template>
       <el-row :gutter="12">
         <el-col v-for="tactic in attackMatrix?.tactics || []" :key="tactic.id" :xs="24" :sm="12" :md="8" :lg="6" class="matrix-col">
@@ -46,7 +46,7 @@
                 {{ tech.name }} ({{ tech.alert_count }})
               </span>
               <span v-if="tactic.techniques.length > 3" class="tech-more">
-                +{{ tactic.techniques.length - 3 }} 更多
+                +{{ tactic.techniques.length - 3 }} {{ $t('generated.common_more_9b0c6c') }}
               </span>
             </div>
           </el-card>

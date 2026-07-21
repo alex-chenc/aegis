@@ -1,0 +1,33 @@
+export default {
+  session: {
+    new: 'New Session',
+  },
+  progress: {
+    callingTool: 'Calling tool: {name}',
+    stepCompleted: 'Completed step: {title}',
+    stepTitle: 'Step {number}',
+  },
+  outcome: {
+    accepted: 'The request was accepted, but the operation has not finished.',
+    running: 'The operation is still running.',
+    failed: 'The operation failed. See the result for details.',
+    skipped: 'The operation was skipped.',
+  },
+  errors: {
+    fetchSessions: 'Failed to retrieve sessions',
+    deleteSession: 'Failed to delete session',
+    createSession: 'Failed to create session',
+    fetchSession: 'Failed to retrieve session details',
+    fetchMessages: 'Failed to retrieve messages',
+    sendMessage: 'Failed to send message',
+    cancelRun: 'Failed to cancel the run',
+    fetchContextRefs: 'Failed to retrieve context references',
+    sessionRequired: 'Create a session first',
+    fetchToolCalls: 'Failed to retrieve tool calls',
+    fetchApprovals: 'Failed to retrieve approvals',
+    approval: 'Approval operation failed',
+    compression: 'Context compression failed',
+    run: 'Assistant run failed',
+    openSession: 'Failed to open session',
+  },
+}

@@ -1,4 +1,5 @@
 import type { SessionListItem } from '@/api/aiAnalysis'
+import { translate } from '@/i18n'
 
 /**
  * 根据conclusion字段判定会话显示状态
@@ -39,13 +40,13 @@ export function isFalsePositive(verdict: string): boolean {
 export function getRemediationSuggestion(verdict: string): string {
   switch (verdict) {
     case 'malicious':
-      return '建议立即隔离受影响主机，进行深入取证分析，并检查横向移动迹象。'
+      return translate('analysis.remediation.malicious')
     case 'suspicious':
-      return '建议进一步监控相关进程和网络活动，收集更多证据以确认威胁。'
+      return translate('analysis.remediation.suspicious')
     case 'unknown':
-      return '建议人工复核分析结果，结合上下文信息进行判断。'
+      return translate('analysis.remediation.unknown')
     default:
-      return '建议根据实际情况采取相应措施。'
+      return translate('analysis.remediation.default')
   }
 }
 
@@ -73,12 +74,12 @@ export function getVerdictText(verdict: string): string {
   switch (verdict) {
     case 'benign':
     case 'false_positive':
-      return '良性/误报'
+      return translate('execution.verdict.benign')
     case 'malicious':
-      return '恶意'
+      return translate('execution.verdict.malicious')
     case 'suspicious':
-      return '可疑'
+      return translate('execution.verdict.suspicious')
     default:
-      return '未知'
+      return translate('execution.verdict.unknown')
   }
 }

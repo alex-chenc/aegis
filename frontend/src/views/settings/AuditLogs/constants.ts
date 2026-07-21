@@ -1,12 +1,12 @@
-export const scriptTypeLabels: Record<string, string> = {
-  check: '检测',
-  fix: '修复',
-  poc_verify: 'POC',
-  self_healing: '自愈'
+export const scriptTypeLabelKeys: Record<string, string> = {
+  check: 'dynamic.auditCheck',
+  fix: 'dynamic.auditFix',
+  poc_verify: 'dynamic.auditPoc',
+  self_healing: 'dynamic.auditSelfHealing'
 }
 
-export const auditSourceLabels: Record<string, string> = {
-  generation: '生成阶段',
-  dispatch: '下发阶段',
-  agent: 'Agent侧'
+export const auditSourceLabelKeys: Record<string, string> = {
+  generation: 'dynamic.auditGeneration',
+  dispatch: 'dynamic.auditDispatch',
+  agent: 'dynamic.auditAgent'
 }

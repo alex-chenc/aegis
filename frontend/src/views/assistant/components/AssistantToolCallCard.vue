@@ -13,12 +13,12 @@
     </div>
 
     <div v-if="call.args_summary" class="card-args">
-      <span class="label">参数:</span>
+      <span class="label">{{ $t('generated.assistantAssistantToolCallCard_parameter_0b94fc') }}</span>
       <span class="value">{{ call.args_summary }}</span>
     </div>
 
     <div v-if="call.result_summary" class="card-result">
-      <span class="label">结果:</span>
+      <span class="label">{{ $t('generated.assistantAssistantToolCallCard_result_b2957d') }}</span>
       <span class="value">{{ call.result_summary }}</span>
     </div>
 
@@ -28,12 +28,14 @@
     </div>
 
     <div v-if="call.duration_ms" class="card-duration">
-      耗时: {{ formatDuration(call.duration_ms) }}
+      {{ $t('generated.assistantAssistantToolCallCard_time_consuming_1bb779') }} {{ formatDuration(call.duration_ms) }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { Warning } from '@element-plus/icons-vue'
 import type { AssistantToolCall } from '@/api/assistant'
 
@@ -69,15 +71,15 @@ function getStatusTag(status: string): string {
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '执行中',
-    accepted: '已受理',
-    completed: '成功',
-    success: '成功',
-    failed: '失败',
-    approval_required: '待审批',
-    rejected: '已拒绝',
-    cancelled: '已取消',
+    pending: translate('generatedScript.common_waiting_bd3488'),
+    running: translate('generatedScript.common_executing_1f425b'),
+    accepted: translate('generatedScript.common_accepted_926b04'),
+    completed: translate('generatedScript.common_success_51991a'),
+    success: translate('generatedScript.common_success_51991a'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    approval_required: translate('generatedScript.common_pending_approval_57fce0'),
+    rejected: translate('generatedScript.common_rejected_4c7c52'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
   }
   return map[status] || status
 }

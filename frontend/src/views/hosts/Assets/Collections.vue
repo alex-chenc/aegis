@@ -5,25 +5,25 @@
       <div class="filter-row">
         <el-select
           v-model="filters.status"
-          placeholder="任务状态"
+          :placeholder="$t('generated.common_task_status_b7d412')"
           clearable
           style="width: 150px"
         >
-          <el-option label="采集中" value="collecting" />
-          <el-option label="分析中" value="analyzing" />
-          <el-option label="完成" value="completed" />
-          <el-option label="失败" value="failed" />
-          <el-option label="已取消" value="cancelled" />
+          <el-option :label="$t('generated.hostsAssetsCollections_collecting_b5de8d')" value="collecting" />
+          <el-option :label="$t('generated.hostsAssetsCollections_analyzing_2c2a14')" value="analyzing" />
+          <el-option :label="$t('generated.common_finish_33246f')" value="completed" />
+          <el-option :label="$t('generated.common_fail_3e3c80')" value="failed" />
+          <el-option :label="$t('generated.hostsAssetsCollections_canceled_a5ffdc')" value="cancelled" />
         </el-select>
 
         <el-button type="primary" @click="handleSearch">
           <el-icon><Search /></el-icon>
-          查询
+          {{ $t('generated.common_query_711363') }}
         </el-button>
 
         <el-button @click="handleReset">
           <el-icon><RefreshRight /></el-icon>
-          重置
+          {{ $t('generated.common_reset_3d8134') }}
         </el-button>
       </div>
     </el-card>
@@ -32,11 +32,11 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>采集任务</span>
+          <span>{{ $t('generated.hostsAssetsCollections_collection_tasks_d3aae6') }}</span>
           <div class="header-actions">
             <el-button type="success" @click="triggerManualCollection" :loading="collecting">
               <el-icon><Refresh /></el-icon>
-              立即采集
+              {{ $t('generated.common_collect_now_abbbcf') }}
             </el-button>
           </div>
         </div>
@@ -49,15 +49,15 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="id" label="任务 ID" width="280" show-overflow-tooltip />
+        <el-table-column prop="id" :label="$t('generated.hostsAssetsCollections_task_id_041516')" width="280" show-overflow-tooltip />
 
-        <el-table-column prop="task_type" label="任务类型" width="120">
+        <el-table-column prop="task_type" :label="$t('generated.hostsAssetsCollections_task_type_4a6f41')" width="120">
           <template #default="{ row }">
             <el-tag size="small">{{ getTaskTypeLabel(row.task_type) }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="trigger_source" label="触发方式" width="100">
+        <el-table-column prop="trigger_source" :label="$t('generated.hostsAssetsCollections_trigger_mode_f67f18')" width="100">
           <template #default="{ row }">
             <el-tag :type="getTriggerType(row.trigger_source)" size="small">
               {{ getTriggerLabel(row.trigger_source) }}
@@ -65,9 +65,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="scope" label="主机范围" width="100" show-overflow-tooltip />
+        <el-table-column prop="scope" :label="$t('generated.hostsAssetsCollections_host_range_58c301')" width="100" show-overflow-tooltip />
 
-        <el-table-column prop="status" label="状态" width="120">
+        <el-table-column prop="status" :label="$t('generated.common_state_62e951')" width="120">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)">
               {{ getStatusLabel(row.status) }}
@@ -75,48 +75,48 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="total_hosts" label="总主机数" width="100" align="center" />
+        <el-table-column prop="total_hosts" :label="$t('generated.hostsAssetsCollections_total_number_of_hosts_a2c65d')" width="100" align="center" />
 
-        <el-table-column prop="success_hosts" label="成功" width="80" align="center">
+        <el-table-column prop="success_hosts" :label="$t('generated.common_success_51991a')" width="80" align="center">
           <template #default="{ row }">
             <span class="success-count">{{ row.success_hosts }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="failed_hosts" label="失败" width="80" align="center">
+        <el-table-column prop="failed_hosts" :label="$t('generated.common_fail_3e3c80')" width="80" align="center">
           <template #default="{ row }">
             <span :class="{ 'fail-count': row.failed_hosts > 0 }">{{ row.failed_hosts }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="current_stage" label="当前阶段" width="120" show-overflow-tooltip>
+        <el-table-column prop="current_stage" :label="$t('generated.hostsAssetsCollections_current_stage_0a2489')" width="120" show-overflow-tooltip>
           <template #default="{ row }">
             {{ row.current_stage || '-' }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="error_message" label="错误摘要" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="error_message" :label="$t('generated.hostsAssetsCollections_error_summary_e12773')" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="error-message">{{ row.error_message || '-' }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="started_at" label="开始时间" width="180">
+        <el-table-column prop="started_at" :label="$t('generated.hostsAssetsCollections_start_time_e8868a')" width="180">
           <template #default="{ row }">
             {{ row.started_at ? formatTime(row.started_at) : '-' }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="finished_at" label="结束时间" width="180">
+        <el-table-column prop="finished_at" :label="$t('generated.hostsAssetsCollections_end_time_a0bb9f')" width="180">
           <template #default="{ row }">
             {{ row.finished_at ? formatTime(row.finished_at) : '-' }}
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="180" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="viewDetail(row.id)">
-              详情
+              {{ $t('generated.common_details_4f55ee') }}
             </el-button>
             <el-button
               v-if="row.status === 'failed'"
@@ -124,7 +124,7 @@
               type="warning"
               @click="retryTask(row.id)"
             >
-              重试
+              {{ $t('generated.common_try_again_e2d53a') }}
             </el-button>
             <el-button
               v-if="row.status === 'collecting' || row.status === 'analyzing'"
@@ -132,7 +132,7 @@
               type="danger"
               @click="cancelTask(row.id)"
             >
-              取消
+              {{ $t('generated.common_cancel_4d0b46') }}
             </el-button>
           </template>
         </el-table-column>
@@ -154,56 +154,56 @@
     <!-- 任务详情抽屉 -->
     <el-drawer
       v-model="showDetailDrawer"
-      title="任务详情"
+      :title="$t('generated.hostsAssetsCollections_mission_details_b19fb2')"
       size="700px"
     >
       <div v-if="selectedTask" class="task-detail">
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="任务 ID">{{ selectedTask.id }}</el-descriptions-item>
-          <el-descriptions-item label="任务类型">{{ getTaskTypeLabel(selectedTask.task_type) }}</el-descriptions-item>
-          <el-descriptions-item label="触发方式">
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_task_id_041516')">{{ selectedTask.id }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_task_type_4a6f41')">{{ getTaskTypeLabel(selectedTask.task_type) }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_trigger_mode_f67f18')">
             <el-tag :type="getTriggerType(selectedTask.trigger_source)">
               {{ getTriggerLabel(selectedTask.trigger_source) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="状态">
+          <el-descriptions-item :label="$t('generated.common_state_62e951')">
             <el-tag :type="getStatusType(selectedTask.status)">
               {{ getStatusLabel(selectedTask.status) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="总主机数">{{ selectedTask.total_hosts }}</el-descriptions-item>
-          <el-descriptions-item label="成功主机数">{{ selectedTask.success_hosts }}</el-descriptions-item>
-          <el-descriptions-item label="失败主机数">{{ selectedTask.failed_hosts }}</el-descriptions-item>
-          <el-descriptions-item label="请求用户">{{ selectedTask.requested_by || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="开始时间">{{ selectedTask.started_at ? formatTime(selectedTask.started_at) : '-' }}</el-descriptions-item>
-          <el-descriptions-item label="结束时间">{{ selectedTask.finished_at ? formatTime(selectedTask.finished_at) : '-' }}</el-descriptions-item>
-          <el-descriptions-item label="错误信息" :span="2">
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_total_number_of_hosts_a2c65d')">{{ selectedTask.total_hosts }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_number_of_successful_hosts_e801e1')">{{ selectedTask.success_hosts }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_number_of_failed_hosts_f68623')">{{ selectedTask.failed_hosts }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_request_user_b54206')">{{ selectedTask.requested_by || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_start_time_e8868a')">{{ selectedTask.started_at ? formatTime(selectedTask.started_at) : '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsCollections_end_time_a0bb9f')">{{ selectedTask.finished_at ? formatTime(selectedTask.finished_at) : '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_error_message_a38a81')" :span="2">
             {{ selectedTask.error_message || '-' }}
           </el-descriptions-item>
         </el-descriptions>
 
         <!-- 主机执行明细 -->
-        <div class="section-title">主机执行明细</div>
+        <div class="section-title">{{ $t('generated.hostsAssetsCollections_host_execution_details_7427cb') }}</div>
         <el-table :data="taskHosts" border stripe size="small">
-          <el-table-column prop="hostname" label="主机名" width="150" />
-          <el-table-column prop="ip_address" label="IP 地址" width="120" />
-          <el-table-column prop="status" label="状态" width="100">
+          <el-table-column prop="hostname" :label="$t('generated.common_hostname_981e96')" width="150" />
+          <el-table-column prop="ip_address" :label="$t('generated.common_ip_address_010efa')" width="120" />
+          <el-table-column prop="status" :label="$t('generated.common_state_62e951')" width="100">
             <template #default="{ row }">
               <el-tag :type="getStatusType(row.status)" size="small">
                 {{ getStatusLabel(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="software_count" label="软件数" width="80" align="center" />
-          <el-table-column prop="process_count" label="进程数" width="80" align="center" />
-          <el-table-column prop="application_count" label="应用数" width="80" align="center" />
-          <el-table-column prop="error_message" label="错误信息" show-overflow-tooltip />
-          <el-table-column prop="collect_started_at" label="开始时间" width="160">
+          <el-table-column prop="software_count" :label="$t('generated.hostsAssetsCollections_number_of_software_06ef05')" width="80" align="center" />
+          <el-table-column prop="process_count" :label="$t('generated.common_number_of_processes_f2b9d5')" width="80" align="center" />
+          <el-table-column prop="application_count" :label="$t('generated.hostsAssetsCollections_number_of_applications_2ffa48')" width="80" align="center" />
+          <el-table-column prop="error_message" :label="$t('generated.common_error_message_a38a81')" show-overflow-tooltip />
+          <el-table-column prop="collect_started_at" :label="$t('generated.hostsAssetsCollections_start_time_e8868a')" width="160">
             <template #default="{ row }">
               {{ row.collect_started_at ? formatTime(row.collect_started_at) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column prop="collect_finished_at" label="结束时间" width="160">
+          <el-table-column prop="collect_finished_at" :label="$t('generated.hostsAssetsCollections_end_time_a0bb9f')" width="160">
             <template #default="{ row }">
               {{ row.collect_finished_at ? formatTime(row.collect_finished_at) : '-' }}
             </template>
@@ -215,6 +215,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { ref, onMounted } from 'vue'
 import { Search, RefreshRight, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -265,21 +268,21 @@ function handlePageChange() {
 // 触发手动采集
 async function triggerManualCollection() {
   try {
-    await ElMessageBox.confirm('确定要立即执行资产采集吗？', '确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.common_are_you_sure_you_want_to_aabc95'), translate('generatedScript.common_confirm_b56d9a'), {
+      confirmButtonText: translate('generatedScript.common_sure_f526c8'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'info',
     })
 
     await assetStore.triggerCollection({
       scope: 'all_hosts',
-      types: ['process', 'application_analysis'],
+      types: ['process', 'software', 'application_analysis'],
     })
 
-    ElMessage.success('采集任务已创建')
+    ElMessage.success(translate('generatedScript.hostsAssetsCollections_collection_task_has_been_created_d1f008'))
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('触发采集失败')
+      ElMessage.error(translate('generatedScript.common_trigger_acquisition_failed_3c4208'))
     }
   }
 }
@@ -292,24 +295,24 @@ async function viewDetail(taskId: string) {
     taskHosts.value = result.hosts || []
     showDetailDrawer.value = true
   } catch (error) {
-    ElMessage.error('获取详情失败')
+    ElMessage.error(translate('generatedScript.common_failed_to_get_details_b8ba3a'))
   }
 }
 
 // 重试任务
 async function retryTask(taskId: string) {
   try {
-    await ElMessageBox.confirm('确定要重试失败的主机吗？', '确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.hostsAssetsCollections_are_you_sure_you_want_to_6cd8d4'), translate('generatedScript.common_confirm_b56d9a'), {
+      confirmButtonText: translate('generatedScript.common_sure_f526c8'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
 
     await assetStore.retryTask(taskId)
-    ElMessage.success('重试任务已创建')
+    ElMessage.success(translate('generatedScript.hostsAssetsCollections_retry_task_created_471a9c'))
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('重试失败')
+      ElMessage.error(translate('generatedScript.hostsAssetsCollections_retry_failed_8af761'))
     }
   }
 }
@@ -317,17 +320,17 @@ async function retryTask(taskId: string) {
 // 取消任务
 async function cancelTask(taskId: string) {
   try {
-    await ElMessageBox.confirm('确定要取消此任务吗？', '确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.hostsAssetsCollections_are_you_sure_you_want_to_a2eb3e'), translate('generatedScript.common_confirm_b56d9a'), {
+      confirmButtonText: translate('generatedScript.common_sure_f526c8'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
 
     await assetStore.cancelTask(taskId)
-    ElMessage.success('任务已取消')
+    ElMessage.success(translate('generatedScript.hostsAssetsCollections_task_canceled_6df9b7'))
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('取消失败')
+      ElMessage.error(translate('generatedScript.hostsAssetsCollections_cancellation_failed_3e62cc'))
     }
   }
 }
@@ -335,15 +338,15 @@ async function cancelTask(taskId: string) {
 // 格式化时间
 function formatTime(time: string) {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 
 // 获取任务类型标签
 function getTaskTypeLabel(type: string) {
   const labels: Record<string, string> = {
-    full: '完整采集',
-    process: '进程采集',
-    application_analysis: '应用分析',
+    full: translate('generatedScript.hostsAssetsCollections_complete_collection_6abc5f'),
+    process: translate('generatedScript.hostsAssetsCollections_process_collection_8627b4'),
+    application_analysis: translate('generatedScript.hostsAssetsCollections_application_analysis_dbaa8d'),
   }
   return labels[type] || type
 }
@@ -361,9 +364,9 @@ function getTriggerType(trigger: string) {
 // 获取触发方式标签
 function getTriggerLabel(trigger: string) {
   const labels: Record<string, string> = {
-    manual: '手动',
-    schedule: '周期',
-    agent_register: '注册触发',
+    manual: translate('generatedScript.hostsAssetsCollections_manual_2a4a4d'),
+    schedule: translate('generatedScript.hostsAssetsCollections_cycle_8a12b1'),
+    agent_register: translate('generatedScript.hostsAssetsCollections_register_trigger_ccef5a'),
   }
   return labels[trigger] || trigger
 }
@@ -383,11 +386,11 @@ function getStatusType(status: string) {
 // 获取状态标签
 function getStatusLabel(status: string) {
   const labels: Record<string, string> = {
-    collecting: '采集中',
-    analyzing: '分析中',
-    completed: '完成',
-    failed: '失败',
-    cancelled: '已取消',
+    collecting: translate('generatedScript.common_collecting_b5de8d'),
+    analyzing: translate('generatedScript.common_analyzing_2c2a14'),
+    completed: translate('generatedScript.common_finish_33246f'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
   }
   return labels[status] || status
 }

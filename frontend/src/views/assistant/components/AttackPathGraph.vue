@@ -1,18 +1,18 @@
 <template>
   <div class="attack-path">
     <div class="section-header">
-      <span class="section-title">攻击路径图</span>
-      <el-tag v-if="nodes.length" size="small">{{ nodes.length }} 个节点, {{ edges.length }} 条边</el-tag>
+      <span class="section-title">{{ $t('generated.assistantAttackPathGraph_attack_path_map_96177a') }}</span>
+      <el-tag v-if="nodes.length" size="small">{{ nodes.length }} {{ $t('generated.assistantAttackPathGraph_nodes_438d96') }} {{ edges.length }} {{ $t('generated.assistantAttackPathGraph_strip_edge_0a72d2') }}</el-tag>
     </div>
 
     <div v-if="!nodes.length" class="empty-hint">
-      暂无攻击路径数据
+      {{ $t('generated.assistantAttackPathGraph_no_attack_path_data_yet_c1e71e') }}
     </div>
 
     <div v-else class="graph-container">
       <!-- 简化图形渲染：节点列表 + 关系列表 -->
       <div class="nodes-section">
-        <div class="sub-title">节点</div>
+        <div class="sub-title">{{ $t('generated.assistantAttackPathGraph_node_e840cd') }}</div>
         <div class="node-list">
           <div
             v-for="node in nodes"
@@ -28,14 +28,14 @@
               {{ node.risk_level }}
             </el-tag>
             <span v-if="node.evidence_ids?.length" class="node-evidence">
-              {{ node.evidence_ids.length }} 条证据
+              {{ node.evidence_ids.length }} {{ $t('generated.common_pieces_of_evidence_bf9c74') }}
             </span>
           </div>
         </div>
       </div>
 
       <div class="edges-section">
-        <div class="sub-title">关系</div>
+        <div class="sub-title">{{ $t('generated.common_relation_daf4f2') }}</div>
         <div class="edge-list">
           <div v-for="edge in edges" :key="`${edge.from}-${edge.to}`" class="edge-item">
             <span class="edge-from">{{ nodeLabel(edge.from) }}</span>
@@ -52,6 +52,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed } from 'vue'
 import { Right } from '@element-plus/icons-vue'
 
@@ -104,14 +106,14 @@ function nodeTypeTag(type: string): string {
 
 function nodeTypeLabel(type: string): string {
   const map: Record<string, string> = {
-    host: '主机',
-    process: '进程',
-    user: '用户',
+    host: translate('generatedScript.common_host_2e8a0c'),
+    process: translate('generatedScript.common_process_4eb476'),
+    user: translate('generatedScript.assistantAttackPathGraph_user_9ba763'),
     ip: 'IP',
-    file: '文件',
+    file: translate('generatedScript.common_document_49deaf'),
     cve: 'CVE',
-    baseline: '基线',
-    alert: '告警',
+    baseline: translate('generatedScript.common_baseline_4bb193'),
+    alert: translate('generatedScript.common_alarm_507842'),
   }
   return map[type] || type
 }
@@ -129,12 +131,12 @@ function riskTag(level: string): string {
 
 function relationLabel(relation: string): string {
   const map: Record<string, string> = {
-    spawned: '生成',
-    connected_to: '连接',
-    wrote_file: '写入文件',
-    exploited: '利用',
-    authenticated: '认证',
-    triggered: '触发',
+    spawned: translate('generatedScript.assistantAttackPathGraph_generate_4aa230'),
+    connected_to: translate('generatedScript.common_connect_7328de'),
+    wrote_file: translate('generatedScript.assistantAttackPathGraph_write_file_e620fd'),
+    exploited: translate('generatedScript.assistantAttackPathGraph_use_6cba8c'),
+    authenticated: translate('generatedScript.assistantAttackPathGraph_certification_32c808'),
+    triggered: translate('generatedScript.assistantAttackPathGraph_trigger_27eccf'),
   }
   return map[relation] || relation
 }

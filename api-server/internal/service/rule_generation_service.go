@@ -367,6 +367,12 @@ func (s *RuleGenerationService) applyRuleAdjustmentDirectly(rule *model.SigmaRul
 			"action":      "tighten",
 			"alert_count": stats.AlertCount,
 			"time_window": stats.TimeWindow,
+			"i18n_key":    "notifications.ruleAdjusted",
+			"i18n_params": map[string]interface{}{
+				"ruleTitle": rule.Title,
+				"mitreId":   rule.MitreID,
+				"version":   rule.Version,
+			},
 		})
 		notification := &model.Notification{
 			Title:    "AI规则更新通知",
@@ -436,6 +442,11 @@ func (s *RuleGenerationService) createRuleAdjustmentProposal(rule *model.SigmaRu
 			"time_window":     stats.TimeWindow,
 			"dispatch_status": "not_dispatched",
 			"generation_mode": "suggest",
+			"i18n_key":        "notifications.ruleAdjustmentSuggested",
+			"i18n_params": map[string]interface{}{
+				"ruleTitle": rule.Title,
+				"mitreId":   rule.MitreID,
+			},
 		})
 		notification := &model.Notification{
 			Title:    "AI规则更新建议",
@@ -658,6 +669,10 @@ func (s *RuleGenerationService) promoteRuleToActive(rule *model.SigmaRule) error
 		metadataBytes, _ := json.Marshal(map[string]interface{}{
 			"rule_id":  rule.RuleID,
 			"mitre_id": rule.MitreID,
+			"i18n_key": "notifications.ruleApproved",
+			"i18n_params": map[string]interface{}{
+				"ruleTitle": rule.Title,
+			},
 		})
 		notification := &model.Notification{
 			Title:    "规则审核通过",
@@ -800,6 +815,12 @@ func (s *RuleGenerationService) GenerateRule(ctx context.Context, req *GenerateR
 		metadataBytes, _ := json.Marshal(map[string]interface{}{
 			"rule_id":  rule.RuleID,
 			"mitre_id": rule.MitreID,
+			"i18n_key": "notifications.ruleGenerated",
+			"i18n_params": map[string]interface{}{
+				"ruleTitle": rule.Title,
+				"mitreId":   rule.MitreID,
+				"status":    rule.Status,
+			},
 		})
 		notification := &model.Notification{
 			Title:    "AI规则生成通知",
@@ -1024,6 +1045,10 @@ func (s *RuleGenerationService) ActivateRule(ruleID string) error {
 		metadataBytes, _ := json.Marshal(map[string]interface{}{
 			"rule_id":  ruleID,
 			"mitre_id": rule.MitreID,
+			"i18n_key": "notifications.ruleApproved",
+			"i18n_params": map[string]interface{}{
+				"ruleTitle": rule.Title,
+			},
 		})
 		notification := &model.Notification{
 			Title:    "规则审核通过",

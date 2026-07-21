@@ -5,34 +5,34 @@
         <div class="card-header">
           <div>
             <el-button link @click="$router.back()">
-              <el-icon><ArrowLeft /></el-icon> 返回
+              <el-icon><ArrowLeft /></el-icon> {{ $t('generated.common_return_11d024') }}
             </el-button>
-            <span style="margin-left: 12px; font-weight: bold;">{{ isEdit ? '编辑检测包' : '新建检测包' }}</span>
+            <span style="margin-left: 12px; font-weight: bold;">{{ isEdit ? $t('dynamic.editDetectionPackage') : $t('dynamic.newDetectionPackage') }}</span>
           </div>
           <div>
-            <el-button @click="handleAIGenerate" :loading="generating">AI 生成草稿</el-button>
-            <el-button type="primary" :loading="saving" @click="handleSave">保存草稿</el-button>
+            <el-button @click="handleAIGenerate" :loading="generating">{{ $t('generated.detectionDetectionPackagesPackageEditor_ai_generated_draft_3b6972') }}</el-button>
+            <el-button type="primary" :loading="saving" @click="handleSave">{{ $t('generated.detectionDetectionPackagesPackageEditor_save_draft_4cd30e') }}</el-button>
           </div>
         </div>
       </template>
 
       <el-tabs v-model="activeTab">
-        <el-tab-pane label="基础信息" name="basic">
+        <el-tab-pane :label="$t('generated.common_basic_information_41654e')" name="basic">
           <el-form :model="form" label-width="120px" style="max-width: 600px;">
             <el-form-item v-if="isEdit" label="Package ID">
               <el-input v-model="form.package_id" disabled />
             </el-form-item>
-            <el-form-item label="版本" required>
-              <el-input v-model="form.target_version" placeholder="如 1.0.0" />
+            <el-form-item :label="$t('generated.common_version_989d1a')" required>
+              <el-input v-model="form.target_version" :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_such_as_1_0_0_949313')" />
             </el-form-item>
-            <el-form-item label="标题" required>
-              <el-input v-model="form.title" placeholder="检测包标题" />
+            <el-form-item :label="$t('generated.common_title_748d7d')" required>
+              <el-input v-model="form.title" :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_detection_package_title_d86270')" />
             </el-form-item>
-            <el-form-item label="描述">
+            <el-form-item :label="$t('generated.common_describe_412f54')">
               <el-input v-model="form.description" type="textarea" :rows="3" />
             </el-form-item>
             <el-form-item label="CVE IDs">
-              <el-select v-model="form.cve_ids" multiple filterable allow-create placeholder="输入 CVE ID">
+              <el-select v-model="form.cve_ids" multiple filterable allow-create :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_enter_cve_id_d51d32')">
               </el-select>
             </el-form-item>
           </el-form>
@@ -40,61 +40,63 @@
 
         <el-tab-pane label="HookPlan" name="hookplan">
           <el-text type="info" size="small" style="margin-bottom: 8px; display: block;">
-            定义 eBPF hook 点和事件提取规则。只描述采集，不包含告警逻辑。
+            {{ $t('generated.detectionDetectionPackagesPackageEditor_define_ebpf_hook_points_and_event_cfbd3b') }}
           </el-text>
           <CodeEditorPanel v-model="form.hook_plan_yaml" language="yaml" placeholder="HookPlan YAML" />
         </el-tab-pane>
 
-        <el-tab-pane label="eBPF 源码" name="ebpf">
+        <el-tab-pane :label="$t('generated.common_ebpf_source_code_ada0b4')" name="ebpf">
           <el-text type="info" size="small" style="margin-bottom: 8px; display: block;">
-            eBPF C 源码草稿。只做事件采集和轻量过滤，不做复杂检测。
+            {{ $t('generated.detectionDetectionPackagesPackageEditor_ebpf_c_source_code_draft_it_b0dd84') }}
           </el-text>
-          <CodeEditorPanel v-model="form.ebpf_source" language="c" placeholder="eBPF C 源码" />
+          <CodeEditorPanel v-model="form.ebpf_source" language="c" :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_ebpf_c_source_code_c3a4a2')" />
         </el-tab-pane>
 
-        <el-tab-pane label="Sigma 原子规则" name="sigma">
+        <el-tab-pane :label="$t('generated.common_sigma_atomic_rules_0c85cc')" name="sigma">
           <el-text type="info" size="small" style="margin-bottom: 8px; display: block;">
-            单事件匹配规则。rule_id 使用 package_id.stable_name 格式。
+            {{ $t('generated.detectionDetectionPackagesPackageEditor_single_event_matching_rules_rule_id_3c0363') }}
           </el-text>
           <CodeEditorPanel v-model="form.sigma_rules_yaml" language="yaml" placeholder="Sigma YAML" />
         </el-tab-pane>
 
         <el-tab-pane label="Correlation" name="correlation">
           <el-text type="info" size="small" style="margin-bottom: 8px; display: block;">
-            多事件关联规则。只支持 ordered sequence + window + by。
+            {{ $t('generated.detectionDetectionPackagesPackageEditor_multiple_event_correlation_rules_only_ordered_d1098d') }}
           </el-text>
           <CodeEditorPanel v-model="form.correlation_yaml" language="yaml" placeholder="Correlation YAML" />
         </el-tab-pane>
       </el-tabs>
     </el-card>
 
-    <el-dialog v-model="aiDialogVisible" title="AI 生成草稿" width="600">
+    <el-dialog v-model="aiDialogVisible" :title="$t('generated.detectionDetectionPackagesPackageEditor_ai_generated_draft_3b6972')" width="600">
       <el-form :model="aiForm" label-width="120px">
         <el-form-item label="CVE ID" required>
-          <el-input v-model="aiForm.cve_id" placeholder="如 CVE-2026-31431" />
+          <el-input v-model="aiForm.cve_id" :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_such_as_cve_2026_31431_1c3241')" />
         </el-form-item>
-        <el-form-item label="漏洞描述" required>
-          <el-input v-model="aiForm.vulnerability_description" type="textarea" :rows="4" placeholder="描述漏洞原理和利用方式" />
+        <el-form-item :label="$t('generated.common_vulnerability_description_3eb740')" required>
+          <el-input v-model="aiForm.vulnerability_description" type="textarea" :rows="4" :placeholder="$t('generated.detectionDetectionPackagesPackageEditor_describe_how_the_vulnerability_works_and_941c06')" />
         </el-form-item>
-        <el-form-item label="攻击前置条件">
+        <el-form-item :label="$t('generated.detectionDetectionPackagesPackageEditor_attack_preconditions_88b9f0')">
           <el-input v-model="aiForm.attack_prerequisites" type="textarea" :rows="2" />
         </el-form-item>
-        <el-form-item label="利用链行为">
+        <el-form-item :label="$t('generated.detectionDetectionPackagesPackageEditor_exploit_chain_behavior_eb89ee')">
           <el-input v-model="aiForm.exploitation_chain" type="textarea" :rows="2" />
         </el-form-item>
-        <el-form-item label="误报约束">
+        <el-form-item :label="$t('generated.detectionDetectionPackagesPackageEditor_false_positive_constraints_460bb1')">
           <el-input v-model="aiForm.false_positive_constraints" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="aiDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="generating" @click="confirmAIGenerate">生成</el-button>
+        <el-button @click="aiDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" :loading="generating" @click="confirmAIGenerate">{{ $t('generated.detectionDetectionPackagesPackageEditor_generate_4aa230') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
@@ -161,7 +163,7 @@ function handleAIGenerate() {
 
 async function confirmAIGenerate() {
   if (!aiForm.cve_id || !aiForm.vulnerability_description) {
-    ElMessage.warning('请填写 CVE ID 和漏洞描述')
+    ElMessage.warning(translate('generatedScript.detectionDetectionPackagesPackageEditor_please_fill_in_the_cve_id_71fec4'))
     return
   }
   generating.value = true
@@ -180,9 +182,9 @@ async function confirmAIGenerate() {
       aiDialogVisible.value = false
     }
   } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || 'AI 草稿生成失败'
+    const msg = e?.response?.data?.message || e?.message || translate('generatedScript.detectionDetectionPackagesPackageEditor_ai_draft_generation_failed_0583ce')
     if (e?.response?.status === 503) {
-      ElMessage.error(`AI 服务不可用: ${msg}，请检查 LLM 配置`)
+      ElMessage.error(translate('generatedScript.detectionDetectionPackagesPackageEditor_ai_service_unavailable_please_check_llm_27cb12', { p0: msg }))
     } else {
       ElMessage.error(msg)
     }
@@ -193,7 +195,7 @@ async function confirmAIGenerate() {
 
 async function handleSave() {
   if (!form.title || !form.target_version) {
-    ElMessage.warning('请填写必填字段')
+    ElMessage.warning(translate('generatedScript.detectionDetectionPackagesPackageEditor_please_fill_in_required_fields_81265f'))
     return
   }
   saving.value = true

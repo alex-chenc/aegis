@@ -31,7 +31,7 @@
               <div v-if="segment.type === 'thinking'" class="thinking-block">
                 <div class="thinking-header">
                   <span class="thinking-pulse" aria-hidden="true"></span>
-                  <span>思考</span>
+                  <span>{{ $t('generated.assistantAssistantConversation_think_a6c149') }}</span>
                 </div>
                 <div class="thinking-content">
                   <div
@@ -119,6 +119,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { User, Monitor, InfoFilled, CircleCheck } from '@element-plus/icons-vue'
 import { gsap } from 'gsap'
@@ -180,12 +182,12 @@ function getThinkingSteps(msg: AssistantMessage): string[] {
 }
 
 function isHiddenInternalThinkingStep(step: string) {
-  return /^正在反思执行过程/.test(step) ||
-    /^反思结果[:：]/.test(step) ||
-    /^步骤失败[:：]/.test(step) ||
-    /^正在重试步骤[:：]/.test(step) ||
-    /^正在审计执行进度/.test(step) ||
-    /^审计完成(?:[:：]|$)/.test(step)
+  return /^(?:正在反思执行过程|Reflecting on execution)/i.test(step) ||
+    /^(?:反思结果|Reflection result)[:：]/i.test(step) ||
+    /^(?:步骤失败|Step failed)[:：]/i.test(step) ||
+    /^(?:正在重试步骤|Retrying step)[:：]/i.test(step) ||
+    /^(?:正在审计执行进度|Auditing execution progress)/i.test(step) ||
+    /^(?:审计完成|Audit complete)(?:[:：]|$)/i.test(step)
 }
 
 function getMessageToolCalls(msg: AssistantMessage): AssistantToolCall[] {
@@ -240,12 +242,12 @@ function getToolCallKey(toolCall: AssistantToolCall): string {
 }
 
 function matchToolCallThinkingStep(step: string): string | null {
-  const match = step.match(/^正在调用工具[:：]\s*(.+)$/)
+  const match = step.match(/^(?:正在调用工具|Calling tool)[:：]\s*(.+)$/i)
   return match?.[1]?.trim() || null
 }
 
 function matchStepCompletedThinkingStep(step: string): string | null {
-  const match = step.match(/^步骤完成[:：]\s*(.+)$/)
+  const match = step.match(/^(?:步骤完成|Step completed)[:：]\s*(.+)$/i)
   return match?.[1]?.trim() || null
 }
 
@@ -355,7 +357,7 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
     return {
       key: `fallback-${index}-${normalizedTitle}`,
       title: normalizedTitle,
-      summary: `已完成步骤：${normalizedTitle}`,
+      summary: translate('generatedScript.assistantAssistantConversation_completed_steps_00a764', { p0: normalizedTitle }),
     }
   }
 

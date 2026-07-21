@@ -10,7 +10,7 @@
       >
         <el-card shadow="never">
           <div class="evidence-header">
-            <el-tag size="small" :type="getStepColor(index)">步骤 {{ index + 1 }}</el-tag>
+            <el-tag size="small" :type="getStepColor(index)">{{ $t('generated.detectionDetectionPackagesEvidenceTimeline_step_d13bfa') }} {{ index + 1 }}</el-tag>
             <el-text tag="b" style="margin-left: 8px;">{{ item.rule_id }}</el-text>
           </div>
           <el-descriptions :column="2" size="small" border style="margin-top: 8px;">
@@ -18,10 +18,10 @@
             <el-descriptions-item label="PID">{{ item.pid }}</el-descriptions-item>
             <el-descriptions-item v-if="item.ppid" label="PPID">{{ item.ppid }}</el-descriptions-item>
             <el-descriptions-item label="UID">{{ item.uid }}</el-descriptions-item>
-            <el-descriptions-item v-if="item.image" label="进程" :span="2">{{ item.image }}</el-descriptions-item>
+            <el-descriptions-item v-if="item.image" :label="$t('generated.detectionDetectionPackagesEvidenceTimeline_process_4eb476')" :span="2">{{ item.image }}</el-descriptions-item>
           </el-descriptions>
           <el-collapse v-if="item.fields && Object.keys(item.fields).length > 0" style="margin-top: 8px;">
-            <el-collapse-item title="详细字段">
+            <el-collapse-item :title="$t('generated.detectionDetectionPackagesEvidenceTimeline_detailed_fields_ac0f96')">
               <pre class="fields-json">{{ JSON.stringify(item.fields, null, 2) }}</pre>
             </el-collapse-item>
           </el-collapse>
@@ -32,6 +32,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatDateTime } from '@/i18n/formatters'
 export interface EvidenceItem {
   rule_id: string
   event_type: string
@@ -50,7 +51,7 @@ defineProps<{
 function formatTime(ns?: number) {
   if (!ns) return ''
   const ms = ns / 1_000_000
-  return new Date(ms).toLocaleString()
+  return formatDateTime(ms)
 }
 
 function getStepColor(index: number) {

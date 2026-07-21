@@ -2,11 +2,11 @@
   <el-table v-if="rows.length > 0" :data="rows" border size="small">
     <el-table-column prop="eventId" label="Event ID" width="110" />
     <el-table-column prop="eventName" label="Event Type" min-width="180" show-overflow-tooltip />
-    <el-table-column prop="fieldId" label="字段 ID" width="100" />
-    <el-table-column prop="fieldName" label="字段名" min-width="160" show-overflow-tooltip />
-    <el-table-column prop="fieldType" label="类型" width="120" />
+    <el-table-column prop="fieldId" :label="$t('generated.detectionDetectionPackagesEventSchemaTable_field_id_204aa4')" width="100" />
+    <el-table-column prop="fieldName" :label="$t('generated.detectionDetectionPackagesEventSchemaTable_field_name_074a5e')" min-width="160" show-overflow-tooltip />
+    <el-table-column prop="fieldType" :label="$t('generated.common_type_e4e46c')" width="120" />
   </el-table>
-  <el-empty v-else description="暂无 Event Schema" />
+  <el-empty v-else :description="$t('generated.detectionDetectionPackagesEventSchemaTable_no_event_schema_yet_4631ec')" />
 </template>
 
 <script setup lang="ts">

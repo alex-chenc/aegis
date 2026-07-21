@@ -1,3 +1,6 @@
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 interface AlertSnapshotLike {
   id: string
   hostname?: string
@@ -7,49 +10,46 @@ interface AlertSnapshotLike {
   last_seen_at?: string
 }
 
-const severityLabels: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危'
+const severityLabelKeys: Record<string, string> = {
+  critical: 'analysis.severity.critical', high: 'analysis.severity.high', medium: 'analysis.severity.medium', low: 'analysis.severity.low',
 }
 
 function formatTimestamp(timestamp?: string) {
   if (!timestamp) return '-'
-  return new Date(timestamp).toLocaleString('zh-CN')
+  return formatDateTime(timestamp)
 }
 
 export function buildInitialAnalysisMessage(
   alerts: AlertSnapshotLike[],
   timeRange?: [string, string] | null
 ) {
-  const lines = [`本次需要分析以下 ${alerts.length} 条真实告警：`]
+  const lines = [translate('analysis.prompt.intro', { count: alerts.length })]
 
   alerts.forEach((alert, index) => {
     lines.push(
-      `${index + 1}. 告警ID：${alert.id}`,
-      `   主机：${alert.hostname || '-'}`,
-      `   规则：${alert.rule_title || '-'}`,
-      `   级别：${severityLabels[alert.severity || ''] || alert.severity || '-'}`,
-      `   最近时间：${formatTimestamp(alert.last_seen_at)}`,
-      `   描述：${alert.description || '-'}`
+      `${index + 1}. ${translate('analysis.prompt.alertId', { value: alert.id })}`,
+      `   ${translate('analysis.prompt.host', { value: alert.hostname || '-' })}`,
+      `   ${translate('analysis.prompt.rule', { value: alert.rule_title || '-' })}`,
+      `   ${translate('analysis.prompt.severity', { value: severityLabelKeys[alert.severity || ''] ? translate(severityLabelKeys[alert.severity || '']) : alert.severity || '-' })}`,
+      `   ${translate('analysis.prompt.latest', { value: formatTimestamp(alert.last_seen_at) })}`,
+      `   ${translate('analysis.prompt.description', { value: alert.description || '-' })}`
     )
   })
 
   if (timeRange?.[0] && timeRange?.[1]) {
     lines.push(
       '',
-      `分析时间范围：${formatTimestamp(timeRange[0])} 至 ${formatTimestamp(timeRange[1])}`
+      translate('analysis.prompt.timeRange', { start: formatTimestamp(timeRange[0]), end: formatTimestamp(timeRange[1]) })
     )
   }
 
-  lines.push('', '请结合以上真实告警内容判断是否为真实威胁，并给出攻击链路溯源与处置建议。')
+  lines.push('', translate('analysis.prompt.request'))
   return lines.join('\n')
 }
 
 export function normalizeAIAnalysisErrorMessage(message: string) {
   if (message.includes('Maximum iterations reached without final answer')) {
-    return 'AI 已达到最大推理轮数，但仍未生成最终结论。请缩小告警范围、补充问题，或提高最大轮数后重试。'
+    return translate('analysis.prompt.maxIterations')
   }
   return message
 }

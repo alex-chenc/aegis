@@ -1,15 +1,15 @@
 <template>
   <div class="workbench page-shell">
     <section class="page-hero workbench-hero">
-      <h1>规则管理</h1>
-      <p>集中解析基线文档、维护检测与修复脚本，并将选中的规则按指定轮数下发到目标主机。</p>
+      <h1>{{ $t('generated.workbench_rule_management_9cf357') }}</h1>
+      <p>{{ $t('generated.workbench_centrally_parse_baseline_documents_maintain_detection_1543d8') }}</p>
     </section>
 
     <el-card class="toolbar-card">
       <div class="toolbar-row">
         <el-input
           v-model="ruleSearch"
-          placeholder="搜索规则、检查项、修复项、模板"
+          :placeholder="$t('generated.workbench_search_rules_inspection_items_repair_items_047c85')"
           clearable
           class="rule-search"
         >
@@ -18,7 +18,7 @@
           </template>
         </el-input>
 
-        <el-select v-model="templateFilter" placeholder="模板" clearable class="template-filter">
+        <el-select v-model="templateFilter" :placeholder="$t('generated.workbench_template_06d0f3')" clearable class="template-filter">
           <el-option
             v-for="tpl in templates"
             :key="tpl.id"
@@ -33,24 +33,24 @@
           @click="deleteSelectedTemplate"
         >
           <el-icon><Delete /></el-icon>
-          删除模板
+          {{ $t('generated.workbench_delete_template_b31745') }}
         </el-button>
 
         <div class="toolbar-actions">
           <el-button type="primary" @click="parseDialogVisible = true">
             <el-icon><Upload /></el-icon>
-            文件解析
+            {{ $t('generated.workbench_file_parsing_53823f') }}
           </el-button>
           <el-button
             type="success"
             @click="openDispatchDialog"
           >
             <el-icon><Select /></el-icon>
-            任务下发
+            {{ $t('generated.workbench_task_distribution_b43df0') }}
           </el-button>
           <el-button :loading="loading" @click="fetchTemplates">
             <el-icon><Refresh /></el-icon>
-            刷新
+            {{ $t('generated.common_refresh_38108e') }}
           </el-button>
         </div>
       </div>
@@ -68,19 +68,19 @@
 
     <div class="metric-grid">
       <div class="metric-card">
-        <div class="metric-label">模板文件</div>
+        <div class="metric-label">{{ $t('generated.workbench_template_file_df4718') }}</div>
         <div class="metric-value">{{ templates.length }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">规则总数</div>
+        <div class="metric-label">{{ $t('generated.workbench_total_number_of_rules_7e7664') }}</div>
         <div class="metric-value">{{ allRules.length }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">已选规则</div>
+        <div class="metric-label">{{ $t('generated.workbench_selected_rules_2648e2') }}</div>
         <div class="metric-value">{{ selectedRules.length }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">在线主机</div>
+        <div class="metric-label">{{ $t('generated.workbench_online_hosting_0b16f5') }}</div>
         <div class="metric-value">{{ onlineHostCount }}</div>
       </div>
     </div>
@@ -89,8 +89,8 @@
       <template #header>
         <div class="card-header">
           <div>
-            <span class="card-title">规则列表</span>
-            <span class="card-subtitle">{{ ruleViewMode === 'file' ? '按文件查看解析出的规则' : '每页 10 条，支持搜索后勾选下发' }}</span>
+            <span class="card-title">{{ $t('generated.workbench_rule_list_764d4c') }}</span>
+            <span class="card-subtitle">{{ ruleViewMode === 'file' ? $t('dynamic.parsedRulesFile') : $t('dynamic.parsedRulesPaged') }}</span>
           </div>
           <div class="header-actions">
             <el-segmented
@@ -104,7 +104,7 @@
               @click="batchGenerateForSelection('CHECK')"
             >
               <el-icon><MagicStick /></el-icon>
-              生成检测脚本
+              {{ $t('generated.workbench_generate_detection_script_4d4ca7') }}
             </el-button>
             <el-button
               :disabled="selectedRules.length === 0"
@@ -112,7 +112,7 @@
               @click="batchGenerateForSelection('FIX')"
             >
               <el-icon><Tools /></el-icon>
-              生成修复脚本
+              {{ $t('generated.workbench_generate_repair_script_16d182') }}
             </el-button>
           </div>
         </div>
@@ -129,7 +129,7 @@
         @selection-change="handleVisibleSelectionChange"
       >
         <el-table-column type="selection" width="48" />
-        <el-table-column prop="title" label="规则标题" min-width="220" show-overflow-tooltip>
+        <el-table-column prop="title" :label="$t('generated.common_rule_title_298a16')" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="rule-title-cell">
               <strong>{{ row.title }}</strong>
@@ -137,21 +137,21 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="检测内容" min-width="240">
+        <el-table-column :label="$t('generated.workbench_detection_content_51c307')" min-width="240">
           <template #default="{ row }">
             <el-tooltip :content="row.check_content" placement="top" :disabled="!row.check_content || row.check_content.length <= 42">
               <span class="line-clamp">{{ truncate(row.check_content, 42) }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="修复方法" min-width="240">
+        <el-table-column :label="$t('generated.workbench_fix_91bff2')" min-width="240">
           <template #default="{ row }">
             <el-tooltip :content="row.fix_content" placement="top" :disabled="!row.fix_content || row.fix_content.length <= 42">
               <span class="line-clamp">{{ truncate(row.fix_content, 42) }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="脚本状态" width="190">
+        <el-table-column :label="$t('generated.common_script_status_7dbd2a')" width="190">
           <template #default="{ row }">
             <div class="script-status">
               <el-button
@@ -160,7 +160,7 @@
                 :loading="row.check_script_status === 'generating'"
                 @click="openScriptEditor(row, 'CHECK')"
               >
-                检测
+                {{ $t('generated.common_detection_b3ff0c') }}
               </el-button>
               <el-button
                 link
@@ -168,7 +168,7 @@
                 :loading="row.fix_script_status === 'generating'"
                 @click="openScriptEditor(row, 'FIX')"
               >
-                修复
+                {{ $t('generated.common_repair_590253') }}
               </el-button>
             </div>
           </template>
@@ -191,13 +191,13 @@
           <div class="file-rule-header">
             <div>
               <h3>{{ tpl.display_name || tpl.name }}</h3>
-              <span>{{ templateRuleRows(tpl).length }} / {{ tpl.rule_count || 0 }} 条规则</span>
+              <span>{{ templateRuleRows(tpl).length }} / {{ tpl.rule_count || 0 }} {{ $t('generated.workbench_rules_84b6d1') }}</span>
             </div>
             <div class="file-rule-actions">
               <el-tag :type="tpl.status === 'completed' ? 'success' : tpl.status === 'failed' ? 'danger' : 'warning'" effect="plain">
-                {{ tpl.status === 'completed' ? '已解析' : tpl.status === 'failed' ? '失败' : '解析中' }}
+                {{ tpl.status === 'completed' ? $t('dynamic.parsed') : tpl.status === 'failed' ? $t('common.status.failed') : $t('dynamic.parsing') }}
               </el-tag>
-              <el-button link type="danger" @click="confirmDeleteTemplate(tpl)">删除</el-button>
+              <el-button link type="danger" @click="confirmDeleteTemplate(tpl)">{{ $t('generated.common_delete_3755f5') }}</el-button>
             </div>
           </div>
 
@@ -209,15 +209,15 @@
               />
               <div class="file-rule-main">
                 <strong>{{ rule.title }}</strong>
-                <p>{{ truncate(rule.check_content || rule.fix_content || '暂无规则描述', 96) }}</p>
+                <p>{{ truncate(rule.check_content || rule.fix_content || $t('dynamic.noRuleDescription'), 96) }}</p>
                 <div class="file-rule-meta">
-                  <el-tag size="small" effect="plain">检测 {{ scriptStatusText(rule.check_script_status) }}</el-tag>
-                  <el-tag size="small" effect="plain" type="warning">修复 {{ scriptStatusText(rule.fix_script_status) }}</el-tag>
+                  <el-tag size="small" effect="plain">{{ $t('generated.common_detection_b3ff0c') }} {{ scriptStatusText(rule.check_script_status) }}</el-tag>
+                  <el-tag size="small" effect="plain" type="warning">{{ $t('generated.common_repair_590253') }} {{ scriptStatusText(rule.fix_script_status) }}</el-tag>
                 </div>
               </div>
               <div class="file-rule-tools">
-                <el-button link :type="getScriptButtonType(rule.check_script_status)" @click="openScriptEditor(rule, 'CHECK')">检测脚本</el-button>
-                <el-button link :type="getScriptButtonType(rule.fix_script_status)" @click="openScriptEditor(rule, 'FIX')">修复脚本</el-button>
+                <el-button link :type="getScriptButtonType(rule.check_script_status)" @click="openScriptEditor(rule, 'CHECK')">{{ $t('generated.workbench_detection_script_351873') }}</el-button>
+                <el-button link :type="getScriptButtonType(rule.fix_script_status)" @click="openScriptEditor(rule, 'FIX')">{{ $t('generated.workbench_fix_script_f411bd') }}</el-button>
               </div>
             </article>
           </div>
@@ -231,26 +231,26 @@
             background
             @current-change="page => setTemplateRulePage(tpl.id, page)"
           />
-          <el-empty v-if="templateRuleRows(tpl).length === 0" description="该文件下暂无匹配规则" :image-size="72" />
+          <el-empty v-if="templateRuleRows(tpl).length === 0" :description="$t('generated.workbench_there_are_currently_no_matching_rules_601e63')" :image-size="72" />
         </section>
 
-        <el-empty v-if="filteredTemplateGroups.length === 0" description="暂无匹配文件" />
+        <el-empty v-if="filteredTemplateGroups.length === 0" :description="$t('generated.workbench_no_matching_files_yet_a8df5b')" />
       </div>
 
       <el-collapse v-if="failedTemplates.length" class="failed-templates">
         <el-collapse-item name="failed">
           <template #title>
-            <span class="failed-title">解析失败的文件（{{ failedTemplates.length }}）</span>
+            <span class="failed-title">{{ $t('generated.workbench_files_that_failed_to_parse_06e850') }}{{ failedTemplates.length }}）</span>
           </template>
           <div v-for="tpl in failedTemplates" :key="tpl.id" class="failed-item">
             <span class="failed-name">{{ tpl.display_name || tpl.name }}</span>
-            <el-button link type="danger" @click="confirmDeleteTemplate(tpl)">删除</el-button>
+            <el-button link type="danger" @click="confirmDeleteTemplate(tpl)">{{ $t('generated.common_delete_3755f5') }}</el-button>
           </div>
         </el-collapse-item>
       </el-collapse>
     </el-card>
 
-    <el-dialog v-model="parseDialogVisible" title="文件解析" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="parseDialogVisible" :title="$t('generated.workbench_file_parsing_53823f')" width="560px" :close-on-click-modal="false">
       <el-upload
         :auto-upload="true"
         :show-file-list="false"
@@ -260,23 +260,23 @@
         class="upload-dragger"
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">将基线文档拖到此处，或<em>点击上传</em></div>
+        <div class="el-upload__text">{{ $t('generated.workbench_drag_your_baseline_document_here_or_0f57b9') }}<em>{{ $t('generated.common_click_to_upload_69aaf1') }}</em></div>
         <template #tip>
-          <div class="el-upload__tip">支持 PDF、Word、YAML 格式，最大 5MB</div>
+          <div class="el-upload__tip">{{ $t('generated.workbench_supports_pdf_word_yaml_formats_maximum_7badca') }}</div>
         </template>
       </el-upload>
 
       <div v-if="uploading" class="upload-progress">
         <div>
           <strong>{{ activeUploadName }}</strong>
-          <span>上传中 {{ uploadPercent }}%</span>
+          <span>{{ $t('generated.workbench_uploading_6818eb') }} {{ uploadPercent }}%</span>
         </div>
         <el-progress :percentage="uploadPercent" :stroke-width="8" />
       </div>
 
       <div v-if="latestParseStatus" class="upload-progress">
         <div>
-          <strong>解析进度</strong>
+          <strong>{{ $t('generated.workbench_parsing_progress_50e028') }}</strong>
           <span>{{ latestParseStatus.message || parseStageText(latestParseStatus.progress) }} · {{ latestParseStatus.progress }}%</span>
         </div>
         <el-progress
@@ -287,14 +287,14 @@
       </div>
     </el-dialog>
 
-    <el-dialog v-model="dispatchDialogVisible" title="任务下发" width="920px" :close-on-click-modal="false">
+    <el-dialog v-model="dispatchDialogVisible" :title="$t('generated.workbench_task_distribution_b43df0')" width="920px" :close-on-click-modal="false">
       <div class="dispatch-layout">
         <section class="dispatch-panel">
           <div class="dispatch-panel-header">
-            <h3>规则</h3>
+            <h3>{{ $t('generated.common_rule_ed904c') }}</h3>
             <span>{{ selectedRuleIds.length }} / {{ allRules.length }}</span>
           </div>
-          <el-input v-model="dispatchRuleSearch" placeholder="搜索规则" clearable>
+          <el-input v-model="dispatchRuleSearch" :placeholder="$t('generated.workbench_search_rules_64a8cd')" clearable>
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
           <el-checkbox-group v-model="selectedRuleIds" class="dispatch-list">
@@ -321,10 +321,10 @@
 
         <section class="dispatch-panel">
           <div class="dispatch-panel-header">
-            <h3>主机</h3>
+            <h3>{{ $t('generated.common_host_2e8a0c') }}</h3>
             <span>{{ selectedHostIds.length }} / {{ hosts.length }}</span>
           </div>
-          <el-input v-model="hostSearch" placeholder="搜索主机名或 IP" clearable>
+          <el-input v-model="hostSearch" :placeholder="$t('generated.common_search_for_hostname_or_ip_565f3f')" clearable>
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
           <el-checkbox-group v-model="selectedHostIds" class="dispatch-list">
@@ -337,7 +337,7 @@
               <strong>{{ host.hostname }}</strong>
               <span>{{ host.ip_address }}</span>
               <el-tag size="small" :type="host.online ? 'success' : 'danger'" effect="plain">
-                {{ host.online ? '在线' : '离线' }}
+                {{ host.online ? $t('common.status.online') : $t('common.status.offline') }}
               </el-tag>
             </el-checkbox>
           </el-checkbox-group>
@@ -346,13 +346,13 @@
 
       <div class="dispatch-options">
         <el-form label-width="110px">
-          <el-form-item label="最大轮数">
+          <el-form-item :label="$t('generated.common_maximum_number_of_rounds_7b621d')">
             <el-input-number v-model="dispatchMaxRounds" :min="1" :max="10" />
           </el-form-item>
-          <el-form-item label="自动验证">
+          <el-form-item :label="$t('generated.common_automatic_verification_30b2d5')">
             <el-switch v-model="dispatchAutoVerify" />
             <span style="font-size: 12px; color: #666; margin-left: 8px;">
-              检测未通过时自动修复并重新检测，直到通过或达到最大轮数
+              {{ $t('generated.workbench_automatically_repair_and_re_test_when_bb0e32') }}
             </span>
           </el-form-item>
         </el-form>
@@ -363,7 +363,7 @@
       </div>
 
       <template #footer>
-        <el-button @click="dispatchDialogVisible = false">取消</el-button>
+        <el-button @click="dispatchDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
         <el-button
           type="primary"
           :disabled="!canDispatchCheck"
@@ -371,7 +371,7 @@
           @click="executeTask('CHECK')"
         >
           <el-icon><VideoPlay /></el-icon>
-          下发检测
+          {{ $t('generated.workbench_issue_detection_6bb263') }}
         </el-button>
         <el-button
           type="warning"
@@ -380,7 +380,7 @@
           @click="executeTask('FIX')"
         >
           <el-icon><Tools /></el-icon>
-          下发修复
+          {{ $t('generated.workbench_issue_repair_40f204') }}
         </el-button>
       </template>
     </el-dialog>
@@ -395,19 +395,19 @@
     >
       <div v-if="scriptLoading" class="loading-container">
         <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-        <span>正在请求 AI 生成脚本...</span>
+        <span>{{ $t('generated.workbench_requesting_ai_generation_script_eefff6') }}</span>
       </div>
       <template v-else>
         <div class="script-toolbar">
           <el-tabs v-model="scriptActiveTab" class="script-tabs">
-            <el-tab-pane label="编辑器" name="editor" />
+            <el-tab-pane :label="$t('generated.workbench_editor_86362a')" name="editor" />
             <el-tab-pane label="Diff" name="diff" />
           </el-tabs>
           <div class="script-toolbar-actions">
-            <el-tag v-if="scriptReadOnly" type="info" effect="plain">只读</el-tag>
+            <el-tag v-if="scriptReadOnly" type="info" effect="plain">{{ $t('generated.workbench_read_only_ffc1d0') }}</el-tag>
             <el-button v-if="scriptReadOnly" type="primary" plain @click="enableScriptEditing">
               <el-icon><Edit /></el-icon>
-              编辑
+              {{ $t('generated.common_edit_a7f814') }}
             </el-button>
           </div>
         </div>
@@ -422,14 +422,14 @@
       </template>
 
       <template #footer>
-        <el-button @click="scriptDialogVisible = false">取消</el-button>
+        <el-button @click="scriptDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
         <el-button
           type="primary"
           @click="saveScript"
           :loading="scriptSaving"
           :disabled="scriptLoading || scriptReadOnly || !scriptContent"
         >
-          保存
+          {{ $t('generated.workbench_save_fadf24') }}
         </el-button>
       </template>
     </el-dialog>
@@ -437,6 +437,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -501,10 +503,10 @@ const pollingTimers = new Map<string, number>()
 const ruleSearch = ref('')
 const templateFilter = ref('')
 const ruleViewMode = ref<'file' | 'all'>('file')
-const ruleViewOptions = [
-  { label: '文件视角', value: 'file' },
-  { label: '全部视角', value: 'all' }
-]
+const ruleViewOptions = computed(() => [
+  { label: translate('generatedScript.workbench_file_perspective_d6ec8d'), value: 'file' },
+  { label: translate('generatedScript.workbench_all_perspectives_89088b'), value: 'all' }
+])
 const ruleCurrentPage = ref(1)
 const rulePageSize = 10
 const rulesTableRef = ref<any>(null)
@@ -638,8 +640,8 @@ const filteredHosts = computed(() => {
 
 const checkScriptStatus = computed(() => getScriptStatusSummary(selectedRules.value, 'CHECK'))
 const fixScriptStatus = computed(() => getScriptStatusSummary(selectedRules.value, 'FIX'))
-const checkScriptWarning = computed(() => scriptWarningText(checkScriptStatus.value, '检测'))
-const fixScriptWarning = computed(() => scriptWarningText(fixScriptStatus.value, '修复'))
+const checkScriptWarning = computed(() => scriptWarningText(checkScriptStatus.value, translate('generatedScript.common_detection_b3ff0c')))
+const fixScriptWarning = computed(() => scriptWarningText(fixScriptStatus.value, translate('generatedScript.common_repair_590253')))
 const canDispatchCheck = computed(() => selectedRuleIds.value.length > 0 && selectedHostIds.value.length > 0 && checkScriptStatus.value.ready)
 const canDispatchFix = computed(() => selectedRuleIds.value.length > 0 && selectedHostIds.value.length > 0 && fixScriptStatus.value.ready)
 const batchGeneratingCheck = computed(() => Object.entries(batchGeneratingMap).some(([key, value]) => key.endsWith('-CHECK') && value))
@@ -754,17 +756,17 @@ function toggleRuleSelection(ruleId: string, checked: boolean) {
 
 function scriptStatusText(status: string) {
   switch (status) {
-    case 'generated': return '已生成'
-    case 'generating': return '生成中'
-    case 'failed': return '失败'
-    default: return '未生成'
+    case 'generated': return translate('generatedScript.common_generated_79c74f')
+    case 'generating': return translate('generatedScript.common_generating_57c08c')
+    case 'failed': return translate('generatedScript.common_fail_3e3c80')
+    default: return translate('generatedScript.common_not_generated_3c04f9')
   }
 }
 
 function scriptWarningText(status: { ready: boolean; pending: number; generating: number }, label: string) {
   if (status.ready) return ''
-  if (status.generating > 0) return `${status.generating} 个${label}脚本正在生成中`
-  if (status.pending > 0) return `${status.pending} 个${label}脚本未生成`
+  if (status.generating > 0) return translate('generatedScript.workbench_scripts_are_being_generated_0af6d6', { p0: status.generating, p1: label })
+  if (status.pending > 0) return translate('generatedScript.workbench_scripts_not_generated_e9d1be', { p0: status.pending, p1: label })
   return ''
 }
 
@@ -830,10 +832,10 @@ async function pollTemplateStatus(templateId: string) {
       stopTemplatePolling(templateId)
       await fetchTemplates()
       await loadTemplateRules(templateId)
-      ElMessage.success('模板解析完成')
+      ElMessage.success(translate('generatedScript.workbench_template_parsing_completed_6f493d'))
     } else if (status.status === 'failed') {
       stopTemplatePolling(templateId)
-      ElMessage.error(status.message || '模板解析失败')
+      ElMessage.error(status.message || translate('generatedScript.workbench_template_parsing_failed_62a125'))
     }
   } catch (e) {
     console.error('failed to poll template status', e)
@@ -841,21 +843,21 @@ async function pollTemplateStatus(templateId: string) {
 }
 
 function parseStageText(progress: number) {
-  if (progress < 40) return '正在读取模板内容'
-  if (progress < 60) return '正在调用 LLM 提取规则'
-  if (progress < 80) return '正在结构化检查项'
-  if (progress < 100) return '正在写入规则库'
-  return '解析完成'
+  if (progress < 40) return translate('generatedScript.workbench_reading_template_content_206638')
+  if (progress < 60) return translate('generatedScript.workbench_calling_llm_extraction_rules_50ab5a')
+  if (progress < 80) return translate('generatedScript.workbench_structuring_check_items_04ad91')
+  if (progress < 100) return translate('generatedScript.workbench_writing_to_the_rule_base_eff437')
+  return translate('generatedScript.workbench_parsing_completed_65eddd')
 }
 
 function handleBeforeUpload(file: File) {
   if (file.size > 5 * 1024 * 1024) {
-    ElMessage.error('文件大小超过 5MB，无法解析')
+    ElMessage.error(translate('generatedScript.workbench_file_size_exceeds_5mb_and_cannot_e45f64'))
     return false
   }
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!['pdf', 'docx', 'doc', 'yaml', 'yml'].includes(ext || '')) {
-    ElMessage.error('只支持 PDF、Word、YAML 格式的文件')
+    ElMessage.error(translate('generatedScript.workbench_only_supports_files_in_pdf_word_e50bfc'))
     return false
   }
   return true
@@ -875,7 +877,7 @@ function calculateMD5(file: File): Promise<string> {
       if (currentChunk < chunks) loadNext()
       else resolve(spark.end())
     }
-    fileReader.onerror = () => reject(new Error('文件读取失败'))
+    fileReader.onerror = () => reject(new Error(translate('generatedScript.workbench_file_read_failed_ea2e2f')))
 
     const loadNext = () => {
       const start = currentChunk * chunkSize
@@ -898,9 +900,9 @@ async function handleUpload(options: UploadRequestOptions) {
     const checkResult = await checkFileMD5(md5)
     if (checkResult.exists) {
       await ElMessageBox.confirm(
-        `该文件已解析过（${checkResult.filename}），是否继续上传？`,
-        '文件已存在',
-        { confirmButtonText: '继续上传', cancelButtonText: '取消', type: 'info' }
+        translate('generatedScript.workbench_the_file_has_been_parsed_do_bfd01b', { p0: checkResult.filename }),
+        translate('generatedScript.workbench_file_already_exists_ec9089'),
+        { confirmButtonText: translate('generatedScript.workbench_continue_to_upload_ade9a3'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'info' }
       )
     }
 
@@ -911,7 +913,7 @@ async function handleUpload(options: UploadRequestOptions) {
     uploadPercent.value = 100
 
     if (result.exists) {
-      ElMessage.info('文件已存在，跳过解析')
+      ElMessage.info(translate('generatedScript.workbench_file_already_exists_skip_parsing_ae34e6'))
       return
     }
 
@@ -919,13 +921,13 @@ async function handleUpload(options: UploadRequestOptions) {
     templateStatusMap[result.template_id] = {
       status: 'parsing',
       progress: 20,
-      message: '文件上传完成，等待解析'
+      message: translate('generatedScript.workbench_file_upload_completed_waiting_for_parsing_26de7c')
     }
-    ElMessage.success('上传成功，正在解析')
+    ElMessage.success(translate('generatedScript.workbench_uploaded_successfully_parsing_is_in_progress_ae0b16'))
     await fetchTemplates()
     startTemplatePolling(result.template_id)
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e.message || '上传失败')
+    if (e !== 'cancel') ElMessage.error(e.message || translate('generatedScript.common_upload_failed_a6f805'))
   } finally {
     uploading.value = false
   }
@@ -971,13 +973,13 @@ function getScriptButtonType(status: string) {
 async function openScriptEditor(rule: RuleRow, scriptType: 'CHECK' | 'FIX') {
   const statusField = scriptType === 'CHECK' ? 'check_script_status' : 'fix_script_status'
   if (rule[statusField] === 'generating') {
-    ElMessage.info('脚本正在生成中，请稍候')
+    ElMessage.info(translate('generatedScript.workbench_the_script_is_being_generated_please_6ccfbe'))
     return
   }
 
   currentEditRule.value = rule
   currentScriptType.value = scriptType
-  scriptDialogTitle.value = `${scriptType === 'CHECK' ? '检测脚本' : '修复脚本'} - ${rule.title}`
+  scriptDialogTitle.value = `${scriptType === 'CHECK' ? translate('generatedScript.workbench_detection_script_351873') : translate('generatedScript.common_fix_script_f411bd')} - ${rule.title}`
   scriptActiveTab.value = 'editor'
   scriptReadOnly.value = true
 
@@ -1008,12 +1010,12 @@ async function openScriptEditor(rule: RuleRow, scriptType: 'CHECK' | 'FIX') {
       await nextTick()
       mountScriptEditor()
     } else {
-      ElMessage.info('脚本生成任务已提交，请稍后刷新查看')
+      ElMessage.info(translate('generatedScript.workbench_the_script_generation_task_has_been_6b8e75'))
       scriptDialogVisible.value = false
     }
   } catch (e: any) {
     rule[statusField] = 'failed'
-    ElMessage.error(e.message || '生成脚本失败')
+    ElMessage.error(e.message || translate('generatedScript.workbench_build_script_failed_e681f1'))
     scriptDialogVisible.value = false
   } finally {
     scriptLoading.value = false
@@ -1092,10 +1094,10 @@ async function saveScript() {
     }
     originalScriptContent.value = scriptContent.value
     scriptReadOnly.value = true
-    ElMessage.success('脚本保存成功')
+    ElMessage.success(translate('generatedScript.workbench_script_saved_successfully_efd963'))
     scriptDialogVisible.value = false
   } catch (e: any) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || translate('generatedScript.common_save_failed_40525a'))
   } finally {
     scriptSaving.value = false
   }
@@ -1112,7 +1114,7 @@ async function batchGenerateScripts(templateId: string, scriptType: 'CHECK' | 'F
   try {
     const result = await batchGenerateScriptsApi(templateId, scriptType)
     if (result.queued > 0) {
-      ElMessage.success(`已提交 ${result.queued} 个脚本生成任务`)
+      ElMessage.success(translate('generatedScript.workbench_script_generation_tasks_submitted_eaf734', { p0: result.queued }))
       const rules = templateRulesMap[templateId] || []
       rules.forEach(rule => {
         const statusField = scriptType === 'CHECK' ? 'check_script_status' : 'fix_script_status'
@@ -1120,10 +1122,10 @@ async function batchGenerateScripts(templateId: string, scriptType: 'CHECK' | 'F
         if (!hasScript) rule[statusField] = 'generating'
       })
     } else {
-      ElMessage.info('脚本已生成或正在生成中')
+      ElMessage.info(translate('generatedScript.workbench_the_script_has_been_generated_or_ba7f3e'))
     }
   } catch (e: any) {
-    ElMessage.error(e.message || '批量生成失败')
+    ElMessage.error(e.message || translate('generatedScript.workbench_batch_generation_failed_6fbd54'))
   } finally {
     batchGeneratingMap[key] = false
   }
@@ -1135,7 +1137,7 @@ function openDispatchDialog() {
 
 async function executeTask(type: 'CHECK' | 'FIX') {
   if (!selectedRules.value.length || !selectedHostIds.value.length) {
-    ElMessage.warning('请选择规则和主机')
+    ElMessage.warning(translate('generatedScript.workbench_please_select_a_rule_and_host_198b1d'))
     return
   }
   executing.value = true
@@ -1148,15 +1150,15 @@ async function executeTask(type: 'CHECK' | 'FIX') {
     if (result) {
       dispatchDialogVisible.value = false
       await ElMessageBox.confirm(
-        `${type === 'CHECK' ? '检测' : '修复'}任务已下发，任务组: ${result.task_group_id}`,
-        '任务已创建',
-        { confirmButtonText: '查看任务', cancelButtonText: '关闭', type: 'success' }
+        translate('generatedScript.workbench_task_has_been_issued_task_group_630cf3', { p0: type === 'CHECK' ? translate('generatedScript.common_detection_b3ff0c') : translate('generatedScript.common_repair_590253'), p1: result.task_group_id }),
+        translate('generatedScript.common_task_has_been_created_27a0d5'),
+        { confirmButtonText: translate('generatedScript.workbench_view_tasks_ec20be'), cancelButtonText: translate('generatedScript.workbench_closure_6c14bd'), type: 'success' }
       ).then(() => {
         router.push(`/baseline/tasks/${result.task_group_id}`)
       }).catch(() => {})
     }
   } catch (e: any) {
-    ElMessage.error(e.message || '下发失败')
+    ElMessage.error(e.message || translate('generatedScript.workbench_delivery_failed_2d0918'))
   } finally {
     executing.value = false
   }
@@ -1165,18 +1167,18 @@ async function executeTask(type: 'CHECK' | 'FIX') {
 async function confirmDeleteTemplate(tpl: Template) {
   try {
     await ElMessageBox.confirm(
-      `确定要删除文件 "${tpl.display_name || tpl.name}" 及其 ${tpl.rule_count} 条规则吗？`,
-      '确认删除',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+      translate('generatedScript.workbench_are_you_sure_you_want_to_290344', { p0: tpl.display_name || tpl.name, p1: tpl.rule_count }),
+      translate('generatedScript.common_confirm_deletion_3c06ab'),
+      { confirmButtonText: translate('generatedScript.common_delete_3755f5'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'warning' }
     )
     await deleteTemplate(tpl.id)
     delete templateRulesMap[tpl.id]
     delete templateStatusMap[tpl.id]
     stopTemplatePolling(tpl.id)
-    ElMessage.success('删除成功')
+    ElMessage.success(translate('generatedScript.common_delete_successfully_86e8d1'))
     await fetchTemplates()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e.message || '删除失败')
+    if (e !== 'cancel') ElMessage.error(e.message || translate('generatedScript.common_delete_failed_72250c'))
   }
 }
 

@@ -1,12 +1,12 @@
 <template>
   <div class="attack-timeline">
     <div class="section-header">
-      <span class="section-title">攻击时间线</span>
-      <el-tag v-if="events.length" size="small">{{ events.length }} 个事件</el-tag>
+      <span class="section-title">{{ $t('generated.common_attack_timeline_3e8bf0') }}</span>
+      <el-tag v-if="events.length" size="small">{{ events.length }} {{ $t('generated.assistantAttackTimelineCard_events_29cfe3') }}</el-tag>
     </div>
 
     <div v-if="!events.length" class="empty-hint">
-      暂无时间线事件
+      {{ $t('generated.assistantAttackTimelineCard_no_timeline_events_yet_1fac91') }}
     </div>
 
     <!-- 按阶段分组 -->
@@ -15,7 +15,7 @@
         <el-tag :type="phaseTag(phase)" size="small" effect="plain">
           {{ phaseLabel(phase) }}
         </el-tag>
-        <span class="phase-count">{{ group.length }} 个事件</span>
+        <span class="phase-count">{{ group.length }} {{ $t('generated.assistantAttackTimelineCard_events_29cfe3') }}</span>
       </div>
       <el-timeline>
         <el-timeline-item
@@ -30,10 +30,10 @@
             <div class="event-summary">{{ event.summary }}</div>
             <div class="event-meta">
               <span class="event-confidence">
-                置信度 {{ (event.confidence * 100).toFixed(0) }}%
+                {{ $t('generated.common_confidence_b78c2d') }} {{ (event.confidence * 100).toFixed(0) }}%
               </span>
               <span v-if="event.evidence_ids?.length" class="event-evidence">
-                {{ event.evidence_ids.length }} 条证据
+                {{ event.evidence_ids.length }} {{ $t('generated.common_pieces_of_evidence_bf9c74') }}
               </span>
             </div>
           </div>
@@ -44,6 +44,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { computed } from 'vue'
 import type { AttackTimelineEvent } from '@/api/assistant'
 
@@ -103,21 +106,21 @@ function phaseTag(phase: string): string {
 
 function phaseLabel(phase: string): string {
   const map: Record<string, string> = {
-    reconnaissance: '侦察',
-    initial_access: '初始访问',
-    execution: '执行',
-    persistence: '持久化',
-    privilege_escalation: '权限提升',
-    defense_evasion: '防御规避',
-    lateral_movement: '横向移动',
-    impact: '影响',
+    reconnaissance: translate('generatedScript.assistantAttackTimelineCard_reconnaissance_5a0497'),
+    initial_access: translate('generatedScript.assistantAttackTimelineCard_initial_access_798005'),
+    execution: translate('generatedScript.common_implement_28febb'),
+    persistence: translate('generatedScript.common_persistence_63cca6'),
+    privilege_escalation: translate('generatedScript.common_privilege_escalation_b6f22d'),
+    defense_evasion: translate('generatedScript.assistantAttackTimelineCard_defense_evasion_f93ea1'),
+    lateral_movement: translate('generatedScript.assistantAttackTimelineCard_lateral_movement_9e6f0a'),
+    impact: translate('generatedScript.assistantAttackTimelineCard_influence_5be321'),
   }
   return map[phase] || phase
 }
 
 function formatTime(time: string): string {
   if (!time) return ''
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 </script>
 

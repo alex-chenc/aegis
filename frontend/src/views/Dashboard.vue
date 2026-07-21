@@ -1,21 +1,21 @@
 <template>
   <div class="dashboard page-shell">
     <section class="page-hero dashboard-hero">
-      <h1>主机资产态势</h1>
-      <p>集中查看 Agent 在线状态、主机身份和最后心跳，快速定位失联节点与需要处置的资产。</p>
+      <h1>{{ $t('generated.dashboard_host_asset_situation_8cc809') }}</h1>
+      <p>{{ $t('generated.dashboard_centrally_view_the_agent_s_online_b38fea') }}</p>
     </section>
 
     <div class="metric-grid">
       <div class="metric-card">
-        <div class="metric-label">总主机</div>
+        <div class="metric-label">{{ $t('generated.dashboard_master_host_304279') }}</div>
         <div class="metric-value">{{ hosts.length }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">在线 Agent</div>
+        <div class="metric-label">{{ $t('generated.dashboard_online_agent_d30517') }}</div>
         <div class="metric-value">{{ onlineCount }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">离线节点</div>
+        <div class="metric-label">{{ $t('generated.dashboard_offline_node_6fb7be') }}</div>
         <div class="metric-value">{{ offlineCount }}</div>
       </div>
     </div>
@@ -23,31 +23,31 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>主机列表</span>
-          <el-button @click="refresh" :loading="loading">刷新</el-button>
+          <span>{{ $t('generated.dashboard_host_list_510935') }}</span>
+          <el-button @click="refresh" :loading="loading">{{ $t('generated.common_refresh_38108e') }}</el-button>
         </div>
       </template>
       
       <el-table :data="hosts" v-loading="loading" style="width: 100%">
-        <el-table-column prop="ip_address" label="IP 地址">
+        <el-table-column prop="ip_address" :label="$t('generated.common_ip_address_010efa')">
           <template #default="{ row }">
             <el-link type="primary" @click="openAssetDrawer(row)">{{ row.ip_address }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="hostname" label="主机名" />
-        <el-table-column prop="os_type" label="系统类型" />
-        <el-table-column prop="agent_version" label="Agent 版本" />
-        <el-table-column prop="last_heartbeat_at" label="最后心跳" />
-        <el-table-column label="状态">
+        <el-table-column prop="hostname" :label="$t('generated.common_hostname_981e96')" />
+        <el-table-column prop="os_type" :label="$t('generated.dashboard_system_type_96af98')" />
+        <el-table-column prop="agent_version" :label="$t('generated.dashboard_agent_version_042ae5')" />
+        <el-table-column prop="last_heartbeat_at" :label="$t('generated.dashboard_last_heartbeat_cd6eaf')" />
+        <el-table-column :label="$t('generated.common_state_62e951')">
           <template #default="{ row }">
             <span class="status-pill" :class="row.online ? 'status-online' : 'status-offline'">
-              {{ row.online ? '在线' : '离线' }}
+              {{ row.online ? $t('common.status.online') : $t('common.status.offline') }}
             </span>
           </template>
         </el-table-column>
       </el-table>
       
-      <el-empty v-if="!loading && hosts.length === 0" description="暂无数据" />
+      <el-empty v-if="!loading && hosts.length === 0" :description="$t('generated.dashboard_no_data_yet_b24645')" />
     </el-card>
 
     <el-drawer
@@ -58,13 +58,13 @@
     >
       <template #header>
         <div class="asset-drawer-title">
-          <span>{{ selectedHost?.hostname || '资产详情' }}</span>
+          <span>{{ selectedHost?.hostname || $t('dynamic.assetDetails') }}</span>
           <small>{{ selectedHost?.ip_address }}</small>
         </div>
       </template>
 
       <div v-if="selectedHost" class="asset-detail-layout">
-        <aside class="asset-nav" aria-label="资产分类">
+        <aside class="asset-nav" :aria-label="$t('generated.common_asset_classification_74af01')">
           <button
             v-for="item in assetNavItems"
             :key="item.key"
@@ -73,7 +73,7 @@
             @click="activeAssetSection = item.key"
           >
             <span>{{ item.label }}</span>
-            <em v-if="item.loading">加载中</em>
+            <em v-if="item.loading">{{ $t('generated.dashboard_loading_ce56f6') }}</em>
             <em v-else>{{ item.total }}</em>
           </button>
         </aside>
@@ -82,8 +82,8 @@
           <section v-if="activeAssetSection === 'software'" class="asset-section">
           <div class="asset-section-header">
             <div>
-              <h3>软件清单</h3>
-              <span>{{ softwareSection.total }} 项</span>
+              <h3>{{ $t('generated.common_software_manifest_33aa7e') }}</h3>
+              <span>{{ softwareSection.total }} {{ $t('generated.common_item_64728a') }}</span>
             </div>
           </div>
           <el-skeleton v-if="softwareSection.loading" :rows="3" animated />
@@ -99,7 +99,7 @@
               </div>
             </div>
           </div>
-          <el-empty v-else description="暂无软件资产" :image-size="72" />
+          <el-empty v-else :description="$t('generated.dashboard_no_software_assets_yet_32333d')" :image-size="72" />
           <el-pagination
             v-if="softwareSection.total > assetPageSize"
             v-model:current-page="softwareSection.page"
@@ -115,7 +115,7 @@
           <div class="asset-section-header">
             <div>
               <h3>{{ activeApplicationSection.label }}</h3>
-              <span>{{ activeApplicationSection.total }} 项</span>
+              <span>{{ activeApplicationSection.total }} {{ $t('generated.common_item_64728a') }}</span>
             </div>
           </div>
           <el-skeleton v-if="activeApplicationSection.loading" :rows="3" animated />
@@ -129,12 +129,12 @@
                 <el-tag size="small" :type="item.is_container ? 'success' : 'info'" effect="plain">
                   {{ item.is_container ? item.container_runtime || 'container' : item.category }}
                 </el-tag>
-                <span v-if="item.listen_ports?.length">端口 {{ item.listen_ports.slice(0, 4).join(', ') }}</span>
+                <span v-if="item.listen_ports?.length">{{ $t('generated.dashboard_port_6cbb73') }} {{ item.listen_ports.slice(0, 4).join(', ') }}</span>
                 <span v-else>{{ item.run_user || '-' }}</span>
               </div>
             </div>
           </div>
-          <el-empty v-else :description="`暂无${activeApplicationSection.label}`" :image-size="72" />
+          <el-empty v-else :description="$t('dynamic.noCategoryData', { category: activeApplicationSection.label })" :image-size="72" />
           <el-pagination
             v-if="activeApplicationSection.total > assetPageSize"
             v-model:current-page="activeApplicationSection.page"
@@ -152,6 +152,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { computed, onMounted, reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useHostStore } from '@/store/hosts'
@@ -190,10 +193,10 @@ const softwareSection = reactive({
 })
 
 const applicationSections = reactive<ApplicationSection[]>([
-  { key: 'database', label: '数据库', category: 'database', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
-  { key: 'web_service', label: 'Web 服务', category: 'web_service', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
-  { key: 'web_site', label: 'Web 站点', category: 'web_site', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
-  { key: 'web_framework', label: 'Web 框架', category: 'web_framework', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
+  { key: 'database', get label() { return translate('generatedScript.common_database_f4dbbc') }, category: 'database', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
+  { key: 'web_service', get label() { return translate('generatedScript.common_web_services_e3d112') }, category: 'web_service', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
+  { key: 'web_site', get label() { return translate('generatedScript.common_website_671e5d') }, category: 'web_site', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
+  { key: 'web_framework', get label() { return translate('generatedScript.common_web_framework_0d07e2') }, category: 'web_framework', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
   { key: 'llm_service', label: 'AI LLM', category: 'llm_service', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
   { key: 'ai_agent', label: 'AI Agent', category: 'ai_agent', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false },
   { key: 'mcp_server', label: 'MCP', category: 'mcp_server', items: [] as ApplicationAsset[], total: 0, page: 1, loading: false }
@@ -206,7 +209,7 @@ const activeApplicationSection = computed(() =>
 const assetNavItems = computed(() => [
   {
     key: 'software',
-    label: '软件清单',
+    label: translate('generatedScript.common_software_manifest_33aa7e'),
     total: softwareSection.total,
     loading: softwareSection.loading
   },
@@ -282,7 +285,7 @@ async function loadActiveApplicationSection() {
 
 function formatTime(time: string) {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 </script>
 

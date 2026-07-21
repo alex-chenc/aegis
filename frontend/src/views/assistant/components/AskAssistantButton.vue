@@ -6,7 +6,7 @@
     @click="navigateToAssistant"
   >
     <el-icon><MagicStick /></el-icon>
-    <span>问问助手</span>
+    <span>{{ $t('generated.assistantAskAssistantButton_ask_assistant_50785c') }}</span>
   </el-button>
 </template>
 

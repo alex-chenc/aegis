@@ -3,7 +3,7 @@
     <div class="card-header">
       <div class="approval-info">
         <el-icon class="warning-icon"><WarningFilled /></el-icon>
-        <span class="approval-title">{{ approval.title || '需要审批' }}</span>
+        <span class="approval-title">{{ approval.title || $t('dynamic.approvalRequired') }}</span>
       </div>
       <el-tag :type="getRiskTag(approval.risk_level)" size="small">
         {{ approval.risk_level }}
@@ -12,15 +12,15 @@
 
     <div class="card-body">
       <div class="detail-row">
-        <span class="label">工具:</span>
+        <span class="label">{{ $t('generated.assistantAssistantApprovalCard_tool_f7bb5a') }}</span>
         <span class="value">{{ approval.tool_name }}</span>
       </div>
       <div v-if="approval.impact_summary" class="detail-row">
-        <span class="label">影响:</span>
+        <span class="label">{{ $t('generated.common_influence_f198c0') }}</span>
         <span class="value">{{ approval.impact_summary }}</span>
       </div>
       <div v-if="approval.rollback_hint" class="detail-row">
-        <span class="label">回滚:</span>
+        <span class="label">{{ $t('generated.assistantAssistantApprovalCard_rollback_d4f68a') }}</span>
         <span class="value">{{ approval.rollback_hint }}</span>
       </div>
     </div>
@@ -31,14 +31,14 @@
         size="small"
         @click="handleReject"
       >
-        拒绝
+        {{ $t('generated.common_reject_03e210') }}
       </el-button>
       <el-button
         type="primary"
         size="small"
         @click="handleApprove"
       >
-        批准执行
+        {{ $t('generated.assistantAssistantApprovalCard_approval_for_execution_ea39c9') }}
       </el-button>
     </div>
 
@@ -51,6 +51,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { WarningFilled } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import type { AssistantApproval } from '@/api/assistant'
@@ -67,12 +69,12 @@ const emit = defineEmits<{
 async function handleApprove() {
   try {
     const { value } = await ElMessageBox.prompt(
-      '请输入审批备注（可选）',
-      '批准执行',
+      translate('generatedScript.assistantAssistantApprovalCard_please_enter_approval_remarks_optional_f8dee9'),
+      translate('generatedScript.assistantAssistantApprovalCard_approval_for_execution_ea39c9'),
       {
-        confirmButtonText: '批准',
-        cancelButtonText: '取消',
-        inputPlaceholder: '审批备注...',
+        confirmButtonText: translate('generatedScript.assistantAssistantApprovalCard_approve_62e26d'),
+        cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
+        inputPlaceholder: translate('generatedScript.assistantAssistantApprovalCard_approval_remarks_a4c9e3'),
         type: 'warning',
       }
     )
@@ -85,12 +87,12 @@ async function handleApprove() {
 async function handleReject() {
   try {
     const { value } = await ElMessageBox.prompt(
-      '请输入拒绝原因（可选）',
-      '拒绝执行',
+      translate('generatedScript.assistantAssistantApprovalCard_please_enter_a_reason_for_rejection_697a00'),
+      translate('generatedScript.assistantAssistantApprovalCard_refusal_to_execute_35e4b5'),
       {
-        confirmButtonText: '拒绝',
-        cancelButtonText: '取消',
-        inputPlaceholder: '拒绝原因...',
+        confirmButtonText: translate('generatedScript.assistantAssistantApprovalCard_reject_03e210'),
+        cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
+        inputPlaceholder: translate('generatedScript.assistantAssistantApprovalCard_reason_for_rejection_aaa97e'),
         type: 'warning',
       }
     )
@@ -122,11 +124,11 @@ function getStatusTag(status: string): string {
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    approved: '已批准',
-    rejected: '已拒绝',
-    expired: '已过期',
-    executed: '已执行',
-    failed: '执行失败',
+    approved: translate('generatedScript.assistantAssistantApprovalCard_approved_402875'),
+    rejected: translate('generatedScript.common_rejected_4c7c52'),
+    expired: translate('generatedScript.assistantAssistantApprovalCard_expired_135437'),
+    executed: translate('generatedScript.assistantAssistantApprovalCard_executed_ab1f36'),
+    failed: translate('generatedScript.common_execution_failed_9746cf'),
   }
   return map[status] || status
 }

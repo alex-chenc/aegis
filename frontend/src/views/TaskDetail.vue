@@ -1,30 +1,30 @@
 <template>
   <div class="task-detail">
-    <el-page-header @back="goBack" title="返回" :content="'任务详情: ' + taskGroupId" />
+    <el-page-header @back="goBack" :title="$t('generated.common_return_11d024')" :content="$t('dynamic.taskDetailsWithId', { id: taskGroupId })" />
 
     <el-card style="margin-top: 20px" v-loading="loading">
       <template #header>
         <div class="card-header">
-          <span>任务进度</span>
-          <el-button @click="refresh" :loading="refreshing">刷新</el-button>
+          <span>{{ $t('generated.taskDetail_task_progress_01eaf9') }}</span>
+          <el-button @click="refresh" :loading="refreshing">{{ $t('generated.common_refresh_38108e') }}</el-button>
         </div>
       </template>
 
       <el-row :gutter="20" v-if="status">
         <el-col :span="3">
-          <el-statistic title="总任务数" :value="status.total" />
+          <el-statistic :title="$t('generated.taskDetail_total_number_of_tasks_3be5a5')" :value="status.total" />
         </el-col>
         <el-col :span="3">
-          <el-statistic title="待执行" :value="status.pending" />
+          <el-statistic :title="$t('generated.common_to_be_executed_6cf0af')" :value="status.pending" />
         </el-col>
         <el-col :span="3">
-          <el-statistic title="执行中" :value="status.running" />
+          <el-statistic :title="$t('generated.common_executing_1f425b')" :value="status.running" />
         </el-col>
         <el-col :span="3">
-          <el-statistic title="已完成" :value="status.success + status.failed" />
+          <el-statistic :title="$t('generated.taskDetail_completed_e99b48')" :value="status.success + status.failed" />
         </el-col>
         <el-col :span="3">
-          <el-statistic title="超时" :value="status.timeout || 0" />
+          <el-statistic :title="$t('generated.common_time_out_ff06c2')" :value="status.timeout || 0" />
         </el-col>
         <el-col :span="6">
           <el-progress
@@ -40,43 +40,43 @@
     <el-card style="margin-top: 20px">
       <template #header>
         <div class="card-header">
-          <span>任务列表</span>
+          <span>{{ $t('generated.taskDetail_task_list_cfd748') }}</span>
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 13px; color: #666;">类型筛选：</span>
+            <span style="font-size: 13px; color: #666;">{{ $t('generated.taskDetail_type_filter_0aea4f') }}</span>
             <el-select v-model="typeFilter" size="small" style="width: 120px;">
-              <el-option label="全部" value="all" />
-              <el-option v-if="!isVulnerabilityTask" label="检测" value="CHECK" />
-              <el-option v-if="!isVulnerabilityTask" label="修复" value="FIX" />
-              <el-option v-if="isVulnerabilityTask" label="POC验证" value="POC_VERIFY" />
-              <el-option v-if="isVulnerabilityTask" label="漏洞修复" value="VULNERABILITY_FIX" />
+              <el-option :label="$t('generated.taskDetail_all_778fc8')" value="all" />
+              <el-option v-if="!isVulnerabilityTask" :label="$t('generated.common_detection_b3ff0c')" value="CHECK" />
+              <el-option v-if="!isVulnerabilityTask" :label="$t('generated.common_repair_590253')" value="FIX" />
+              <el-option v-if="isVulnerabilityTask" :label="$t('generated.common_poc_verification_2e1c70')" value="POC_VERIFY" />
+              <el-option v-if="isVulnerabilityTask" :label="$t('generated.common_bug_fixes_091102')" value="VULNERABILITY_FIX" />
             </el-select>
           </div>
         </div>
       </template>
 
       <el-table :data="tasksWithState" style="width: 100%">
-        <el-table-column prop="rule_title" label="规则标题" min-width="180">
+        <el-table-column prop="rule_title" :label="$t('generated.common_rule_title_298a16')" min-width="180">
           <template #default="{ row }">
             {{ getRuleTitle(row) }}
           </template>
         </el-table-column>
-        <el-table-column prop="hostname" label="主机" min-width="150">
+        <el-table-column prop="hostname" :label="$t('generated.common_host_2e8a0c')" min-width="150">
           <template #default="{ row }">
             {{ getHostname(row.host_id) }}
           </template>
         </el-table-column>
-        <el-table-column prop="task_type" label="类型" width="100">
+        <el-table-column prop="task_type" :label="$t('generated.common_type_e4e46c')" width="100">
           <template #default="{ row }">
             <el-tag :type="getTaskTypeTag(row.task_type)" size="small">
               {{ getTaskTypeLabel(row.task_type) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="140">
+        <el-table-column :label="$t('generated.common_state_62e951')" width="140">
           <template #default="{ row }">
             <el-tooltip
-              v-if="row.displayState === '大模型修复失败' || row.displayState === '检测失败' || row.displayState === '修复失败'"
-              :content="row.healingStatus?.last_error || row.stderr || '未知错误'"
+              v-if="row.displayState === $t('dynamic.taskState.healingFailed') || row.displayState === $t('dynamic.taskState.checkFailed') || row.displayState === $t('dynamic.taskState.fixFailed')"
+              :content="row.healingStatus?.last_error || row.stderr || $t('dynamic.unknownError')"
               placement="top"
             >
               <el-tag :type="getStateTagType(row.displayState)" size="small">
@@ -84,8 +84,8 @@
               </el-tag>
             </el-tooltip>
             <el-tooltip
-              v-else-if="row.displayState === '审计未通过'"
-              :content="row.audit_info?.error_message || '脚本存在恶意命令，下发已阻止'"
+              v-else-if="row.displayState === $t('dynamic.taskState.auditRejected')"
+              :content="row.audit_info?.error_message || $t('dynamic.maliciousScriptBlocked')"
               placement="top"
             >
               <el-tag type="danger" size="small">
@@ -97,20 +97,20 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="脚本" width="100">
+        <el-table-column :label="$t('generated.taskDetail_script_7fbccb')" width="100">
           <template #default="{ row }">
             <el-button
               link
               type="primary"
               size="small"
               @click="showScript(row, 'script')"
-              :disabled="row.displayState === '大模型修复中'"
+              :disabled="row.displayState === $t('dynamic.taskState.healing')"
             >
-              {{ row.displayState === '大模型修复中' ? '修复中' : '查看脚本' }}
+              {{ row.displayState === $t('dynamic.taskState.healing') ? $t('dynamic.taskState.fixing') : $t('dynamic.viewScript') }}
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column label="结果" width="100">
+        <el-table-column :label="$t('generated.common_result_0a2c91')" width="100">
           <template #default="{ row }">
             <el-button
               v-if="row.stdout || row.stderr"
@@ -119,21 +119,21 @@
               size="small"
               @click="showScript(row, 'result')"
             >
-              查看结果
+              {{ $t('generated.taskDetail_view_results_0ef384') }}
             </el-button>
             <span v-else style="color: #999">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="90">
           <template #default="{ row }">
             <el-button
               link
               type="danger"
               size="small"
               @click="deleteTask(row)"
-              :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === '大模型修复中'"
+              :disabled="row.status === 'running' || row.status === 'pending' || row.displayState === $t('dynamic.taskState.healing')"
             >
-              删除
+              {{ $t('generated.common_delete_3755f5') }}
             </el-button>
           </template>
         </el-table-column>
@@ -142,7 +142,7 @@
 
     <el-card v-if="healingProcessTasks.length" style="margin-top: 20px">
       <template #header>
-        <span>自动修复过程</span>
+        <span>{{ $t('generated.taskDetail_automatic_repair_process_2cb789') }}</span>
       </template>
       <div class="healing-process-list">
         <section v-for="task in healingProcessTasks" :key="task.id" class="healing-process-item">
@@ -156,9 +156,9 @@
             </el-tag>
           </div>
           <div class="healing-process-meta">
-            <span>当前轮次 {{ task.healingStatus?.total_attempts || 0 }} / {{ task.healingStatus?.max_attempts || 0 }}</span>
-            <span v-if="task.healingStatus?.concurrency_limit">并发上限 {{ task.healingStatus.concurrency_limit }}</span>
-            <span v-if="task.healingStatus?.queue_position">排队 {{ task.healingStatus.queue_position }}</span>
+            <span>{{ $t('generated.taskDetail_current_round_0f55b9') }} {{ task.healingStatus?.total_attempts || 0 }} / {{ task.healingStatus?.max_attempts || 0 }}</span>
+            <span v-if="task.healingStatus?.concurrency_limit">{{ $t('generated.taskDetail_concurrency_limit_118e6a') }} {{ task.healingStatus.concurrency_limit }}</span>
+            <span v-if="task.healingStatus?.queue_position">{{ $t('generated.taskDetail_queue_cfb281') }} {{ task.healingStatus.queue_position }}</span>
           </div>
           <ol v-if="task.healingStatus?.steps?.length" class="healing-steps">
             <li v-for="(step, index) in task.healingStatus.steps" :key="index">
@@ -174,16 +174,16 @@
 
     <el-card v-if="tasksWithState.some(t => t.audit_info)" style="margin-top: 20px">
       <template #header>
-        <span>审计拦截信息</span>
+        <span>{{ $t('generated.taskDetail_audit_interception_information_aacfa7') }}</span>
       </template>
       <div v-for="task in tasksWithState.filter(t => t.audit_info)" :key="task.id" style="margin-bottom: 16px; padding: 12px; background: #fef2f2; border-radius: 4px; border: 1px solid #fecaca">
         <div style="font-weight: 600; margin-bottom: 8px">{{ getRuleTitle(task) }} - {{ getHostname(task.host_id) }}</div>
         <div v-if="task.audit_info?.error_message" style="color: #dc2626; margin-bottom: 8px">{{ task.audit_info.error_message }}</div>
         <div v-if="task.audit_info?.hit_rules?.length" style="margin-bottom: 8px">
-          <div style="font-size: 13px; color: #666; margin-bottom: 4px">命中规则:</div>
+          <div style="font-size: 13px; color: #666; margin-bottom: 4px">{{ $t('generated.taskDetail_hit_rules_dca5ee') }}</div>
           <div v-for="(rule, i) in task.audit_info.hit_rules" :key="i" style="font-size: 13px; padding: 2px 0">
             <el-tag :type="rule.severity === 'critical' ? 'danger' : 'warning'" size="small">{{ rule.severity }}</el-tag>
-            <span style="margin-left: 8px">{{ rule.rule_name }} (第{{ rule.line_number }}行)</span>
+            <span style="margin-left: 8px">{{ rule.rule_name }} {{ $t('generated.taskDetail_no_0332ba') }}{{ rule.line_number }}{{ $t('generated.taskDetail_ok_e2040a') }}</span>
           </div>
         </div>
         <el-button
@@ -193,7 +193,7 @@
           size="small"
           @click="router.push('/settings/audit-logs')"
         >
-          查看审计日志
+          {{ $t('generated.taskDetail_view_audit_log_2b8f46') }}
         </el-button>
       </div>
     </el-card>
@@ -208,6 +208,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -223,7 +225,7 @@ import {
 } from '@/api/tasks'
 import { useHostStore } from '@/store/hosts'
 
-type DisplayState = '检测中' | '通过' | '未通过' | '检测失败' | '修复中' | '修复成功' | '修复失败' | '大模型修复中' | '大模型修复成功' | '大模型修复失败' | '大模型修复超时' | '检测超时' | '修复超时' | 'POC验证中' | 'POC验证成功' | 'POC验证失败' | '漏洞修复中' | '漏洞修复成功' | '漏洞修复失败' | '审计未通过'
+type DisplayState = string
 
 const route = useRoute()
 const router = useRouter()
@@ -286,10 +288,10 @@ function getTaskTypeTag(type: string): string {
 function getTaskTypeLabel(type: string): string {
   const normalized = normalizeType(type)
   switch (normalized) {
-    case 'CHECK': return '检测'
-    case 'FIX': return '修复'
-    case 'POC_VERIFY': return 'POC验证'
-    case 'VULNERABILITY_FIX': return '漏洞修复'
+    case 'CHECK': return translate('generatedScript.common_detection_b3ff0c')
+    case 'FIX': return translate('generatedScript.common_repair_590253')
+    case 'POC_VERIFY': return translate('generatedScript.common_poc_verification_2e1c70')
+    case 'VULNERABILITY_FIX': return translate('generatedScript.common_bug_fixes_091102')
     default: return type
   }
 }
@@ -299,66 +301,66 @@ function getDisplayState(taskType: string, taskStatus: string, exitCode: number 
   const isPoc = taskType === 'POC_VERIFY'
 
   if (taskStatus === 'running' || taskStatus === 'pending') {
-    if (isPoc) return 'POC验证中'
-    if (isFix) return '修复中'
-    return '检测中'
+    if (isPoc) return translate('dynamic.taskState.pocRunning')
+    if (isFix) return translate('dynamic.taskState.fixing')
+    return translate('dynamic.taskState.checking')
   }
   if (taskStatus === 'timeout') {
-    if (isPoc) return '检测超时'
-    if (isFix) return '修复超时'
-    return '检测超时'
+    if (isPoc) return translate('dynamic.taskState.checkTimeout')
+    if (isFix) return translate('dynamic.taskState.fixTimeout')
+    return translate('dynamic.taskState.checkTimeout')
   }
   if (taskStatus === 'audit_blocked') {
-    return '审计未通过'
+    return translate('dynamic.taskState.auditRejected')
   }
   if (taskStatus === 'success') {
-    if (isPoc) return exitCode === 0 ? 'POC验证成功' : 'POC验证失败'
-    if (isFix) return (exitCode ?? 0) === 0 ? '修复成功' : '修复失败'
-    if (exitCode === 0) return '通过'
-    return '未通过'
+    if (isPoc) return exitCode === 0 ? translate('dynamic.taskState.pocSuccess') : translate('dynamic.taskState.pocFailed')
+    if (isFix) return (exitCode ?? 0) === 0 ? translate('dynamic.taskState.fixSuccess') : translate('dynamic.taskState.fixFailed')
+    if (exitCode === 0) return translate('dynamic.taskState.passed')
+    return translate('dynamic.taskState.notPassed')
   }
   if (taskStatus === 'failed') {
     if (!healingStatus) {
-      if (isPoc) return 'POC验证失败'
-      if (isFix) return '修复失败'
-      return '检测失败'
+      if (isPoc) return translate('dynamic.taskState.pocFailed')
+      if (isFix) return translate('dynamic.taskState.fixFailed')
+      return translate('dynamic.taskState.checkFailed')
     }
-    if (healingStatus.status === 'healing') return '大模型修复中'
-    if (healingStatus.status === 'queued') return '大模型修复中'
-    if (healingStatus.status === 'healed') return '大模型修复成功'
-    if (healingStatus.status === 'failed') return '大模型修复失败'
-    if (healingStatus.status === 'timeout') return '大模型修复超时'
+    if (healingStatus.status === 'healing') return translate('dynamic.taskState.healing')
+    if (healingStatus.status === 'queued') return translate('dynamic.taskState.healing')
+    if (healingStatus.status === 'healed') return translate('dynamic.taskState.healingSuccess')
+    if (healingStatus.status === 'failed') return translate('dynamic.taskState.healingFailed')
+    if (healingStatus.status === 'timeout') return translate('dynamic.taskState.healingTimeout')
   }
-  if (isPoc) return 'POC验证失败'
-  if (isFix) return '修复失败'
-  return '检测失败'
+  if (isPoc) return translate('dynamic.taskState.pocFailed')
+  if (isFix) return translate('dynamic.taskState.fixFailed')
+  return translate('dynamic.taskState.checkFailed')
 }
 
 function getStateTagType(state: DisplayState): string {
   switch (state) {
-    case '检测中':
-    case '修复中':
-    case 'POC验证中':
-    case '漏洞修复中':
-    case '大模型修复中':
+    case translate('dynamic.taskState.checking'):
+    case translate('dynamic.taskState.fixing'):
+    case translate('dynamic.taskState.pocRunning'):
+    case translate('dynamic.taskState.vulnerabilityFixing'):
+    case translate('dynamic.taskState.healing'):
       return 'warning'
-    case '通过':
-    case '修复成功':
-    case 'POC验证成功':
-    case '漏洞修复成功':
-    case '大模型修复成功':
+    case translate('dynamic.taskState.passed'):
+    case translate('dynamic.taskState.fixSuccess'):
+    case translate('dynamic.taskState.pocSuccess'):
+    case translate('dynamic.taskState.vulnerabilityFixSuccess'):
+    case translate('dynamic.taskState.healingSuccess'):
       return 'success'
-    case '未通过':
+    case translate('dynamic.taskState.notPassed'):
       return 'info'
-    case '检测失败':
-    case '修复失败':
-    case 'POC验证失败':
-    case '漏洞修复失败':
-    case '大模型修复失败':
-    case '大模型修复超时':
-    case '检测超时':
-    case '修复超时':
-    case '审计未通过':
+    case translate('dynamic.taskState.checkFailed'):
+    case translate('dynamic.taskState.fixFailed'):
+    case translate('dynamic.taskState.pocFailed'):
+    case translate('dynamic.taskState.vulnerabilityFixFailed'):
+    case translate('dynamic.taskState.healingFailed'):
+    case translate('dynamic.taskState.healingTimeout'):
+    case translate('dynamic.taskState.checkTimeout'):
+    case translate('dynamic.taskState.fixTimeout'):
+    case translate('dynamic.taskState.auditRejected'):
       return 'danger'
     default: return 'info'
   }
@@ -384,22 +386,22 @@ function getTaskPassRate(task: TaskLog) {
 
 function healingStatusText(status?: string) {
   switch (status) {
-    case 'healed': return '已修复'
-    case 'failed': return '修复失败'
-    case 'timeout': return '修复超时'
-    case 'queued': return '排队中'
-    case 'healing': return '修复中'
-    default: return '未知'
+    case 'healed': return translate('generatedScript.taskDetail_fixed_50138c')
+    case 'failed': return translate('generatedScript.taskDetail_repair_failed_3d6dfb')
+    case 'timeout': return translate('generatedScript.taskDetail_fix_timeout_a9a36a')
+    case 'queued': return translate('generatedScript.taskDetail_queuing_4dcbbc')
+    case 'healing': return translate('generatedScript.taskDetail_under_repair_20ff36')
+    default: return translate('generatedScript.common_unknown_d9c32a')
   }
 }
 
 function healingStepStatusText(status?: string) {
   switch (status) {
-    case 'completed': return '已完成'
-    case 'failed': return '失败'
-    case 'running': return '进行中'
-    case 'queued': return '排队中'
-    default: return status || '未知'
+    case 'completed': return translate('generatedScript.common_completed_e99b48')
+    case 'failed': return translate('generatedScript.common_fail_3e3c80')
+    case 'running': return translate('generatedScript.taskDetail_in_progress_6f1972')
+    case 'queued': return translate('generatedScript.taskDetail_queuing_4dcbbc')
+    default: return status || translate('generatedScript.common_unknown_d9c32a')
   }
 }
 
@@ -425,33 +427,33 @@ const getHostname = (hostId: string) => {
 
 const showScript = (task: TaskLog, type: 'script' | 'result') => {
   if (type === 'script') {
-    scriptDialogTitle.value = '脚本内容'
-    currentScript.value = task.script_content || '// 脚本内容为空'
+    scriptDialogTitle.value = translate('generatedScript.common_script_content_2a33ea')
+    currentScript.value = task.script_content || translate('generatedScript.taskDetail_the_script_content_is_empty_273767')
   } else {
-    scriptDialogTitle.value = '执行结果'
+    scriptDialogTitle.value = translate('generatedScript.taskDetail_execution_result_1b213f')
     let content = ''
     if (task.stdout) content += '=== STDOUT ===\n' + task.stdout + '\n\n'
     if (task.stderr) content += '=== STDERR ===\n' + task.stderr + '\n\n'
     if (task.exit_code !== undefined) content += '=== EXIT CODE: ' + task.exit_code + ' ==='
-    currentScript.value = content || '// 无执行结果'
+    currentScript.value = content || translate('generatedScript.taskDetail_no_execution_result_b8660b')
   }
   scriptDialogVisible.value = true
 }
 
 const deleteTask = async (task: TaskLog) => {
   try {
-    await ElMessageBox.confirm('确定要删除该任务吗？', '删除确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.taskDetail_are_you_sure_you_want_to_2ddd4f'), translate('generatedScript.common_delete_confirmation_726b6e'), {
+      confirmButtonText: translate('generatedScript.common_sure_f526c8'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning'
     })
     await deleteTaskApi(task.id)
-    ElMessage.success('删除成功')
+    ElMessage.success(translate('generatedScript.common_delete_successfully_86e8d1'))
     delete healingStatusMap.value[task.id]
     await refresh()
   } catch (e: any) {
     if (e !== 'cancel') {
-      ElMessage.error(e.message || '删除失败')
+      ElMessage.error(e.message || translate('generatedScript.common_delete_failed_72250c'))
     }
   }
 }
@@ -470,7 +472,7 @@ const refresh = async () => {
       }
     }
   } catch (e: any) {
-    ElMessage.error(e.message || '刷新失败')
+    ElMessage.error(e.message || translate('generatedScript.taskDetail_refresh_failed_be6ff1'))
   } finally {
     refreshing.value = false
   }

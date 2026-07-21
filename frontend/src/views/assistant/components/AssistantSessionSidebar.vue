@@ -2,10 +2,10 @@
   <aside class="session-sidebar">
     <!-- 头部 -->
     <div class="sidebar-header">
-      <h3>智能助手</h3>
+      <h3>{{ $t('generated.assistantAssistantSessionSidebar_smart_assistant_7c11c1') }}</h3>
       <el-button type="primary" size="small" @click="$emit('create')">
         <el-icon><Plus /></el-icon>
-        新会话
+        {{ $t('generated.assistantAssistantSessionSidebar_new_session_db4436') }}
       </el-button>
     </div>
 
@@ -13,7 +13,7 @@
     <div class="sidebar-search">
       <el-input
         v-model="searchKeyword"
-        placeholder="搜索会话..."
+        :placeholder="$t('generated.assistantAssistantSessionSidebar_search_conversation_4e3d01')"
         size="small"
         clearable
         @input="handleSearch"
@@ -26,12 +26,12 @@
 
     <!-- 会话列表 -->
     <div class="session-list">
-      <div class="section-title">历史会话</div>
+      <div class="section-title">{{ $t('generated.common_history_session_60e77b') }}</div>
       <div v-if="loading" class="loading-state">
         <el-skeleton :rows="3" animated />
       </div>
       <div v-else-if="sessions.length === 0" class="empty-state">
-        <el-empty description="暂无会话" :image-size="48" />
+        <el-empty :description="$t('generated.assistantAssistantSessionSidebar_no_session_yet_dc56f7')" :image-size="48" />
       </div>
       <template v-else>
         <div class="session-items">
@@ -60,8 +60,8 @@
               <span class="session-time">{{ formatTime(session.created_at) }}</span>
             </div>
             <div class="session-stats">
-              <span>{{ session.message_count || 0 }} 条消息</span>
-              <span>{{ session.tool_call_count || 0 }} 次工具调用</span>
+              <span>{{ session.message_count || 0 }} {{ $t('generated.assistantAssistantSessionSidebar_messages_3bee8e') }}</span>
+              <span>{{ session.tool_call_count || 0 }} {{ $t('generated.assistantAssistantSessionSidebar_tool_calls_4624e9') }}</span>
             </div>
           </div>
         </div>
@@ -83,6 +83,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref } from 'vue'
 import { Plus, Search, Delete } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
@@ -119,9 +121,9 @@ function handlePageChange(page: number) {
 
 async function handleDelete(sessionId: string) {
   try {
-    await ElMessageBox.confirm('确定删除该会话？删除后不可恢复。', '删除会话', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.assistantAssistantSessionSidebar_are_you_sure_you_want_to_df23a6'), translate('generatedScript.assistantAssistantSessionSidebar_delete_session_19cf29'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
     emit('delete', sessionId)
@@ -144,12 +146,12 @@ function getStatusType(status: string): string {
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    active: '活跃',
-    running: '运行中',
-    waiting_approval: '待审批',
-    completed: '已完成',
-    cancelled: '已取消',
-    failed: '失败',
+    active: translate('generatedScript.common_active_8c0daf'),
+    running: translate('generatedScript.common_running_594249'),
+    waiting_approval: translate('generatedScript.common_pending_approval_57fce0'),
+    completed: translate('generatedScript.common_completed_e99b48'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
   }
   return map[status] || status
 }
@@ -159,9 +161,9 @@ function formatTime(time: string): string {
   const d = new Date(time)
   const now = new Date()
   const diff = now.getTime() - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  if (diff < 60000) return translate('generatedScript.assistantAssistantSessionSidebar_just_9e6366')
+  if (diff < 3600000) return translate('generatedScript.assistantAssistantSessionSidebar_minutes_ago_cca145', { p0: Math.floor(diff / 60000) })
+  if (diff < 86400000) return translate('generatedScript.assistantAssistantSessionSidebar_hours_ago_f43f26', { p0: Math.floor(diff / 3600000) })
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 </script>

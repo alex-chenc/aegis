@@ -3,7 +3,7 @@
     <!-- 头部信息 -->
     <div class="graph-header">
       <div class="header-left">
-        <h3>{{ graphData.title || '攻击溯源图' }}</h3>
+        <h3>{{ graphData.title || $t('dynamic.attackGraph') }}</h3>
         <el-tag :type="threatLevelType" size="small">
           {{ threatLevelLabel }}
         </el-tag>
@@ -11,11 +11,11 @@
       <div class="header-right">
         <el-button size="small" @click="resetZoom">
           <el-icon><Refresh /></el-icon>
-          重置视图
+          {{ $t('generated.attackGraph_reset_view_89c9ee') }}
         </el-button>
         <el-button size="small" @click="fitToScreen">
           <el-icon><FullScreen /></el-icon>
-          适应屏幕
+          {{ $t('generated.attackGraph_adapt_to_screen_47ba68') }}
         </el-button>
       </div>
     </div>
@@ -32,7 +32,7 @@
       <el-col :span="12">
         <el-card class="timeline-card">
           <template #header>
-            <span>攻击时间线</span>
+            <span>{{ $t('generated.common_attack_timeline_3e8bf0') }}</span>
           </template>
           <el-timeline>
             <el-timeline-item
@@ -52,7 +52,7 @@
       <el-col :span="12">
         <el-card class="recommendations-card">
           <template #header>
-            <span>处置建议</span>
+            <span>{{ $t('generated.common_disposal_recommendations_3da99c') }}</span>
           </template>
           <el-alert
             v-for="(rec, index) in graphData.recommendations"
@@ -71,52 +71,55 @@
     </el-row>
 
     <!-- 节点详情弹窗 -->
-    <el-dialog v-model="nodeDetailVisible" title="节点详情" width="600px">
+    <el-dialog v-model="nodeDetailVisible" :title="$t('generated.attackGraph_node_details_47571d')" width="600px">
       <el-descriptions v-if="selectedNode" :column="2" border>
-        <el-descriptions-item label="节点ID">{{ selectedNode.id }}</el-descriptions-item>
-        <el-descriptions-item label="类型">
+        <el-descriptions-item :label="$t('generated.attackGraph_node_id_fe26dc')">{{ selectedNode.id }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.common_type_e4e46c')">
           <el-tag :type="nodeTypeTag(selectedNode.type)" size="small">
             {{ nodeTypeLabel(selectedNode.type) }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="标签" :span="2">{{ selectedNode.label }}</el-descriptions-item>
-        <el-descriptions-item label="详情" :span="2">{{ selectedNode.detail }}</el-descriptions-item>
-        <el-descriptions-item label="严重程度">
+        <el-descriptions-item :label="$t('generated.common_label_ae0a7a')" :span="2">{{ selectedNode.label }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.common_details_4f55ee')" :span="2">{{ selectedNode.detail }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.common_severity_d918e4')">
           <el-tag :type="severityTag(selectedNode.severity)" size="small">
             {{ severityLabel(selectedNode.severity) }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="属性" :span="2">
+        <el-descriptions-item :label="$t('generated.attackGraph_property_7d3c35')" :span="2">
           <pre style="margin: 0; font-size: 12px;">{{ JSON.stringify(selectedNode.properties, null, 2) }}</pre>
         </el-descriptions-item>
       </el-descriptions>
       <template #footer>
-        <el-button @click="nodeDetailVisible = false">关闭</el-button>
+        <el-button @click="nodeDetailVisible = false">{{ $t('generated.common_closure_6c14bd') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 边详情弹窗 -->
-    <el-dialog v-model="edgeDetailVisible" title="攻击链路详情" width="500px">
+    <el-dialog v-model="edgeDetailVisible" :title="$t('generated.attackGraph_attack_link_details_b0f007')" width="500px">
       <el-descriptions v-if="selectedEdge" :column="1" border>
-        <el-descriptions-item label="链路ID">{{ selectedEdge.id }}</el-descriptions-item>
-        <el-descriptions-item label="链路类型">
+        <el-descriptions-item :label="$t('generated.attackGraph_link_id_b2822c')">{{ selectedEdge.id }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.attackGraph_link_type_d66814')">
           <el-tag type="info">{{ edgeTypeLabel(selectedEdge.type) }}</el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="描述">{{ selectedEdge.label }}</el-descriptions-item>
-        <el-descriptions-item label="源节点">{{ selectedEdge.source }}</el-descriptions-item>
-        <el-descriptions-item label="目标节点">{{ selectedEdge.target }}</el-descriptions-item>
-        <el-descriptions-item label="属性">
+        <el-descriptions-item :label="$t('generated.common_describe_412f54')">{{ selectedEdge.label }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.attackGraph_source_node_5c0342')">{{ selectedEdge.source }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.attackGraph_target_node_eba69a')">{{ selectedEdge.target }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.attackGraph_property_7d3c35')">
           <pre style="margin: 0; font-size: 12px;">{{ JSON.stringify(selectedEdge.properties, null, 2) }}</pre>
         </el-descriptions-item>
       </el-descriptions>
       <template #footer>
-        <el-button @click="edgeDetailVisible = false">关闭</el-button>
+        <el-button @click="edgeDetailVisible = false">{{ $t('generated.common_closure_6c14bd') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { currentLocale, translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { ref, onMounted, watch, computed, nextTick } from 'vue'
 import * as d3 from 'd3'
 import { Refresh, FullScreen } from '@element-plus/icons-vue'
@@ -183,51 +186,51 @@ const nodeColors: Record<string, string> = {
   malware: '#cc0000'
 }
 
-const nodeGlyphs: Record<string, string> = {
-  attacker: '攻',
-  victim: '靶',
-  process: '进',
-  file: '文',
-  network: '网',
-  command: '令',
-  malware: '毒'
-}
+const nodeGlyphs = computed<Record<string, string>>(() => ({
+  attacker: translate('analysis.graph.glyph.attacker'),
+  victim: translate('analysis.graph.glyph.victim'),
+  process: translate('analysis.graph.glyph.process'),
+  file: translate('analysis.graph.glyph.file'),
+  network: translate('analysis.graph.glyph.network'),
+  command: translate('analysis.graph.glyph.command'),
+  malware: translate('analysis.graph.glyph.malware')
+}))
 
-const threatLevelLabels: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危'
-}
+const threatLevelLabels = computed<Record<string, string>>(() => ({
+  critical: translate('generatedScript.common_serious_81ffc6'),
+  high: translate('generatedScript.common_high_risk_e62ee8'),
+  medium: translate('generatedScript.common_medium_risk_1098e6'),
+  low: translate('generatedScript.common_low_risk_478c8d')
+}))
 
-const nodeTypeLabels: Record<string, string> = {
-  attacker: '攻击源',
-  victim: '受害主机',
-  process: '进程',
-  file: '文件',
-  network: '网络',
-  command: '命令',
-  malware: '恶意载荷'
-}
+const nodeTypeLabels = computed<Record<string, string>>(() => ({
+  attacker: translate('generatedScript.attackGraph_attack_source_d5dc5d'),
+  victim: translate('generatedScript.attackGraph_victim_host_947142'),
+  process: translate('generatedScript.common_process_4eb476'),
+  file: translate('generatedScript.common_document_49deaf'),
+  network: translate('generatedScript.common_network_0cbda6'),
+  command: translate('generatedScript.attackGraph_order_b114b9'),
+  malware: translate('generatedScript.attackGraph_malicious_payload_bf98f1')
+}))
 
-const edgeTypeLabels: Record<string, string> = {
-  spawns: '派生',
-  connects: '连接',
-  reads: '读取',
-  writes: '写入',
-  executes: '执行',
-  downloads: '下载',
-  encrypts: '加密',
-  exfiltrates: '外传'
-}
+const edgeTypeLabels = computed<Record<string, string>>(() => ({
+  spawns: translate('generatedScript.attackGraph_derived_5d8708'),
+  connects: translate('generatedScript.common_connect_7328de'),
+  reads: translate('generatedScript.attackGraph_read_b6b97a'),
+  writes: translate('generatedScript.attackGraph_write_9e93bd'),
+  executes: translate('generatedScript.common_implement_28febb'),
+  downloads: translate('generatedScript.attackGraph_download_2b9d01'),
+  encrypts: translate('generatedScript.attackGraph_encryption_c51f0d'),
+  exfiltrates: translate('generatedScript.attackGraph_gaiden_d0461f')
+}))
 
-const severityLabels: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危',
-  info: '信息'
-}
+const severityLabels = computed<Record<string, string>>(() => ({
+  critical: translate('generatedScript.common_serious_81ffc6'),
+  high: translate('generatedScript.common_high_risk_e62ee8'),
+  medium: translate('generatedScript.common_medium_risk_1098e6'),
+  low: translate('generatedScript.common_low_risk_478c8d'),
+  info: translate('generatedScript.attackGraph_information_2da40f')
+}))
 
 // Threat level tag type
 const threatLevelType = computed(() => {
@@ -240,7 +243,7 @@ const threatLevelType = computed(() => {
   return map[props.graphData.threatLevel] || 'info'
 })
 
-const threatLevelLabel = computed(() => threatLevelLabels[props.graphData.threatLevel] || props.graphData.threatLevel || '未知')
+const threatLevelLabel = computed(() => threatLevelLabels.value[props.graphData.threatLevel] || props.graphData.threatLevel || translate('generatedScript.common_unknown_d9c32a'))
 
 // Helper functions
 function severityTag(severity: string): string {
@@ -254,7 +257,7 @@ function severityTag(severity: string): string {
 }
 
 function severityLabel(severity: string): string {
-  return severityLabels[severity] || severity
+  return severityLabels.value[severity] || severity
 }
 
 function nodeTypeTag(type: string): string {
@@ -271,15 +274,15 @@ function nodeTypeTag(type: string): string {
 }
 
 function nodeTypeLabel(type: string): string {
-  return nodeTypeLabels[type] || type
+  return nodeTypeLabels.value[type] || type
 }
 
 function edgeTypeLabel(type: string): string {
-  return edgeTypeLabels[type] || type
+  return edgeTypeLabels.value[type] || type
 }
 
 function formatTime(timestamp: string): string {
-  return new Date(timestamp).toLocaleString('zh-CN')
+  return formatDateTime(timestamp)
 }
 
 function getTimelineColor(nodeIds: string[]): string {
@@ -393,7 +396,7 @@ function initGraph() {
     .attr('font-size', 14)
     .attr('font-weight', 700)
     .attr('fill', '#fff')
-    .text(d => nodeGlyphs[d.type] || '?')
+    .text(d => nodeGlyphs.value[d.type] || '?')
 
   // Node labels (below circle)
   node.append('text')
@@ -483,6 +486,10 @@ watch(() => props.graphData, () => {
     initGraph()
   })
 }, { deep: true })
+
+watch(currentLocale, () => {
+  nextTick(() => initGraph())
+})
 </script>
 
 <style scoped>

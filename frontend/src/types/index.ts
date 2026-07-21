@@ -158,37 +158,37 @@ export interface AttackMatrix {
   tactics: AttackTactic[]
 }
 
-export const SeverityLabels: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危',
-  informational: '信息',
-  warning: '警告'
+export const SeverityLabelKeys: Record<string, string> = {
+  critical: 'common.severity.critical',
+  high: 'common.severity.high',
+  medium: 'common.severity.medium',
+  low: 'common.severity.low',
+  informational: 'common.severity.info',
+  warning: 'common.severity.warning'
 }
 
-export const AlertStatusLabels: Record<string, string> = {
-  pending: '待处置',
-  resolved: '已处置'
+export const AlertStatusLabelKeys: Record<string, string> = {
+  pending: 'dynamic.pendingDisposition',
+  resolved: 'dynamic.resolved'
 }
 
-export const BlockStatusLabels: Record<string, string> = {
-  pending: '待阻断',
-  blocking: '阻断中',
-  success: '阻断成功',
-  failed: '阻断失败'
+export const BlockStatusLabelKeys: Record<string, string> = {
+  pending: 'dynamic.pendingBlock',
+  blocking: 'dynamic.blocking',
+  success: 'dynamic.blockSuccess',
+  failed: 'dynamic.blockFailed'
 }
 
-export const JudgmentSourceLabels: Record<string, string> = {
-  system: '系统判定',
-  ai: 'AI判定'
+export const JudgmentSourceLabelKeys: Record<string, string> = {
+  system: 'dynamic.systemJudgment',
+  ai: 'dynamic.aiJudgment'
 }
 
-export const RuleStatusLabels: Record<string, string> = {
-  pending: '待审核',
-  experimental: '实验性',
-  active: '已激活',
-  disabled: '已禁用'
+export const RuleStatusLabelKeys: Record<string, string> = {
+  pending: 'dynamic.pendingReview',
+  experimental: 'dynamic.experimental',
+  active: 'dynamic.activated',
+  disabled: 'common.status.disabled'
 }
 
 export interface LLMAggregation {

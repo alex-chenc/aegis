@@ -75,6 +75,26 @@ func TestAssistantSummarizePromptRequiresEvidenceGroundedResult(t *testing.T) {
 	}
 }
 
+func TestAssistantPromptProviderUsesRequestedResponseLanguage(t *testing.T) {
+	provider := NewAssistantPromptProvider(nil, nil, "analysis", "analyze host security").WithLocale(LocaleEnUS)
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeSummarize})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(bundle.SystemPrompt, "in English") {
+		t.Fatalf("summarize prompt missing English response instruction\n%s", bundle.SystemPrompt)
+	}
+
+	provider.WithLocale(LocaleZhCN)
+	bundle, err = provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: agentruntime.PurposeReact})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(bundle.SystemPrompt, "Simplified Chinese") {
+		t.Fatalf("react prompt missing Chinese response instruction\n%s", bundle.SystemPrompt)
+	}
+}
+
 func TestAssistantReactPromptIncludesExactEnglishArgumentSchema(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{{
 		Name:        "Example.Execute",

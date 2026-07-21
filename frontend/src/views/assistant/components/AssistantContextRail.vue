@@ -6,15 +6,15 @@
     <div v-else class="rail-section">
       <div class="section-header">
         <el-icon><List /></el-icon>
-        <span>执行计划</span>
+        <span>{{ $t('generated.common_execution_plan_822376') }}</span>
       </div>
-      <el-empty description="暂无执行计划" :image-size="48" />
+      <el-empty :description="$t('generated.assistantAssistantContextRail_no_execution_plan_yet_f2c588')" :image-size="48" />
     </div>
 
     <div v-if="approvals.length" class="rail-section">
       <div class="section-header">
         <el-icon><Bell /></el-icon>
-        <span>待审批动作</span>
+        <span>{{ $t('generated.assistantAssistantContextRail_action_pending_approval_80adeb') }}</span>
         <el-badge :value="approvals.length" type="warning" />
       </div>
       <div class="approval-list">
@@ -37,7 +37,7 @@
     <div class="rail-section">
       <div class="section-header">
         <el-icon><Tools /></el-icon>
-        <span>工具调用记录</span>
+        <span>{{ $t('generated.assistantAssistantContextRail_tool_call_record_99f656') }}</span>
       </div>
       <div v-if="toolCalls.length" class="tool-call-list">
         <div
@@ -54,12 +54,14 @@
           </el-tag>
         </div>
       </div>
-      <el-empty v-else description="暂无工具调用" :image-size="48" />
+      <el-empty v-else :description="$t('generated.assistantAssistantContextRail_no_tool_calls_yet_c7c541')" :image-size="48" />
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { Bell, List, Tools } from '@element-plus/icons-vue'
 import ExecutionPlan from '@/components/ExecutionPlan.vue'
 import type { PlanEvent } from '@/api/aiAnalysis'
@@ -98,14 +100,14 @@ function getStatusTag(status: string): string {
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '执行中',
-    completed: '成功',
-    success: '成功',
-    failed: '失败',
-    approval_required: '待审批',
-    rejected: '已拒绝',
-    cancelled: '已取消',
+    pending: translate('generatedScript.common_waiting_bd3488'),
+    running: translate('generatedScript.common_executing_1f425b'),
+    completed: translate('generatedScript.common_success_51991a'),
+    success: translate('generatedScript.common_success_51991a'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    approval_required: translate('generatedScript.common_pending_approval_57fce0'),
+    rejected: translate('generatedScript.common_rejected_4c7c52'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
   }
   return map[status] || status
 }

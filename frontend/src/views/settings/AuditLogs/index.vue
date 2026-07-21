@@ -1,6 +1,6 @@
 <template>
   <div class="audit-logs-page">
-    <h2 style="margin-bottom: 16px">审计日志</h2>
+    <h2 style="margin-bottom: 16px">{{ $t('generated.common_audit_log_7666cd') }}</h2>
 
     <AuditStatsCard :stats="stats" style="margin-bottom: 16px" />
 
@@ -22,6 +22,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AuditStatsCard from './components/AuditStatsCard.vue'
@@ -59,9 +61,9 @@ async function handleFilter(params: Record<string, any>) {
 async function handleDelete(ids: string[]) {
   try {
     const deleted = await deleteLogs(ids)
-    ElMessage.success(`成功删除 ${deleted} 条审计日志`)
+    ElMessage.success(translate('generatedScript.settingsAuditLogsIndex_successfully_deleted_audit_logs_e321a9', { p0: deleted }))
   } catch {
-    ElMessage.error('删除失败，请重试')
+    ElMessage.error(translate('generatedScript.settingsAuditLogsIndex_deletion_failed_please_try_again_a5eae0'))
   }
 }
 </script>

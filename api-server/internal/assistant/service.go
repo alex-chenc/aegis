@@ -66,6 +66,7 @@ type CreateSessionRequest struct {
 	TaskType       string            `json:"task_type"`
 	InitialMessage string            `json:"initial_message"`
 	ContextRefs    []ContextRefInput `json:"context_refs"`
+	Locale         string            `json:"locale,omitempty"`
 }
 
 // ContextRefInput 上下文引用输入
@@ -78,6 +79,7 @@ type ContextRefInput struct {
 type SendMessageRequest struct {
 	Content     string            `json:"content"`
 	ContextRefs []ContextRefInput `json:"context_refs"`
+	Locale      string            `json:"locale,omitempty"`
 }
 
 // RunHandle 运行句柄
@@ -107,6 +109,7 @@ func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest, o
 		title = inferTitle(req.InitialMessage, req.ContextRefs)
 	}
 
+	metadata, _ := json.Marshal(map[string]interface{}{"locale": NormalizeLocale(req.Locale)})
 	session := &model.AssistantSession{
 		ID:         uuid.New(),
 		SessionID:  sessionID,
@@ -115,6 +118,7 @@ func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest, o
 		ModeSource: inferModeSource(req.ContextRefs),
 		Status:     model.SessionStatusActive,
 		CreatedBy:  operator,
+		Metadata:   datatypes.JSON(metadata),
 	}
 
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
@@ -202,6 +206,20 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 	if session.Status == model.SessionStatusRunning {
 		return nil, fmt.Errorf("session is already running")
 	}
+	req.Locale = NormalizeLocale(req.Locale)
+	metadata := unmarshalJSON(session.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	metadata["locale"] = req.Locale
+	session.Metadata = mustMarshalJSON(metadata)
+	if err := s.sessionRepo.Update(ctx, session); err != nil {
+		s.logger.Warn("failed to persist assistant run locale",
+			zap.String("session_id", sessionID),
+			zap.String("locale", req.Locale),
+			zap.Error(err),
+		)
+	}
 
 	// Attach new context refs if provided
 	if len(req.ContextRefs) > 0 {
@@ -268,6 +286,7 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 			UserMessage: req.Content,
 			TaskType:    session.TaskType,
 			ContextRefs: contextRefs,
+			Locale:      req.Locale,
 		})
 		s.completeRun(context.Background(), sessionID, run.RunID, result, err)
 	}()
@@ -317,10 +336,11 @@ func (s *Service) CancelRun(ctx context.Context, sessionID string, operator stri
 
 // CompleteRun 完成运行
 func (s *Service) completeRun(ctx context.Context, sessionID, runID string, result *RunResult, err error) {
+	locale := s.sessionLocale(ctx, sessionID)
 	if errors.Is(err, context.Canceled) {
 		if run, ok := s.runManager.Get(sessionID); ok {
 			if decision := run.RejectedApproval(); decision != nil {
-				msg := "审批已拒绝，运行已停止"
+				msg := localized(locale, "审批已拒绝，运行已停止", "Approval was rejected and the run has stopped")
 				if decision.Comment != "" {
 					msg += ": " + decision.Comment
 				}
@@ -348,7 +368,7 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		s.logger.Info("run cancelled", zap.String("session_id", sessionID), zap.String("run_id", runID))
 		_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusCancelled)
 		s.persistRunOutcomeMetadata(ctx, sessionID, "cancelled", agentruntime.GoalFailed)
-		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, "任务已取消"))
+		s.runManager.Publish(sessionID, EventErrorPayload(sessionID, runID, localized(locale, "任务已取消", "Task cancelled")))
 		s.runManager.Finish(sessionID)
 		return
 	}
@@ -359,7 +379,7 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 		s.persistRunOutcomeMetadata(ctx, sessionID, "failed", agentruntime.GoalFailed)
 
 		// 错误时也保存一条助手消息，避免用户看到空白
-		errMsg := fmt.Sprintf("抱歉，执行过程中出现错误: %s", err.Error())
+		errMsg := fmt.Sprintf(localized(locale, "抱歉，执行过程中出现错误: %s", "Sorry, an error occurred during execution: %s"), err.Error())
 		msgID := "msg_" + runID
 
 		// 从事件历史中提取 thinking 和 plan 数据
@@ -412,6 +432,19 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 	}
 
 	s.runManager.Finish(sessionID)
+}
+
+func (s *Service) sessionLocale(ctx context.Context, sessionID string) string {
+	session, err := s.sessionRepo.FindBySessionID(ctx, sessionID)
+	if err != nil || len(session.Metadata) == 0 {
+		return LocaleZhCN
+	}
+	var metadata map[string]interface{}
+	if json.Unmarshal(session.Metadata, &metadata) != nil {
+		return LocaleZhCN
+	}
+	value, _ := metadata["locale"].(string)
+	return NormalizeLocale(value)
 }
 
 func sessionStatusForGoalOutcome(outcome agentruntime.GoalOutcome) string {

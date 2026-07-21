@@ -3,11 +3,11 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>AI规则更新配置</span>
+          <span>{{ $t('generated.detectionAIConfigPanel_ai_rule_update_configuration_6c4170') }}</span>
           <el-switch
             v-model="localConfig.enabled"
-            active-text="启用"
-            inactive-text="禁用"
+            :active-text="$t('dynamic.activeEnabled')"
+            :inactive-text="$t('dynamic.activeDisabled')"
             @change="handleEnabledChange"
           />
         </div>
@@ -15,17 +15,17 @@
 
       <el-form :model="localConfig" label-width="140px" class="config-form">
         <!-- 模式选择 -->
-        <el-form-item label="自动规则更新">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_automatic_rule_updates_2b2814')">
           <el-radio-group v-model="localConfig.mode" :disabled="!localConfig.enabled" @change="handleConfigChange">
-            <el-radio value="suggest">仅建议（生成待审核规则，不下发）</el-radio>
-            <el-radio value="auto">自动（设为实验性并下发）</el-radio>
+            <el-radio value="suggest">{{ $t('generated.detectionAIConfigPanel_suggestions_only_generate_rules_to_be_12fc31') }}</el-radio>
+            <el-radio value="auto">{{ $t('generated.detectionAIConfigPanel_automatic_set_as_experimental_and_released_2aaaf6') }}</el-radio>
           </el-radio-group>
         </el-form-item>
 
         <!-- 触发条件 -->
-        <el-form-item label="触发条件">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_trigger_condition_f5c950')">
           <div class="trigger-config">
-            <span class="trigger-label">同一MITRE ID在</span>
+            <span class="trigger-label">{{ $t('generated.detectionAIConfigPanel_the_same_miter_id_is_in_f35d9c') }}</span>
             <el-input-number
               v-model="localConfig.thresholds.high_frequency_hours"
               :min="1"
@@ -35,7 +35,7 @@
               class="threshold-input"
               @change="handleConfigChange"
             />
-            <span class="trigger-label">小时内触发</span>
+            <span class="trigger-label">{{ $t('generated.detectionAIConfigPanel_trigger_within_hours_ff704b') }}</span>
             <el-input-number
               v-model="localConfig.thresholds.high_frequency_count"
               :min="10"
@@ -45,14 +45,14 @@
               class="threshold-input"
               @change="handleConfigChange"
             />
-            <span class="trigger-label">次，即进行AI更新规则</span>
+            <span class="trigger-label">{{ $t('generated.detectionAIConfigPanel_times_that_is_the_ai_update_a73a26') }}</span>
           </div>
         </el-form-item>
 
         <!-- 规则生成策略 - 滑块 -->
-        <el-form-item label="规则生成策略">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_rule_generation_strategy_e5bea2')">
           <div class="slider-container">
-            <span class="slider-label">保守</span>
+            <span class="slider-label">{{ $t('generated.detectionAIConfigPanel_keep_581158') }}</span>
             <el-slider
               v-model="localConfig.conservatism"
               :min="0"
@@ -62,53 +62,53 @@
               :format-tooltip="formatConservatism"
               @change="handleConfigChange"
             />
-            <span class="slider-label">激进</span>
+            <span class="slider-label">{{ $t('generated.detectionAIConfigPanel_radical_5a628f') }}</span>
             <span class="slider-value">{{ (localConfig.conservatism * 100).toFixed(0) }}%</span>
           </div>
           <div class="slider-hint">
-            保守模式：只检测明确的恶意行为特征，误报率低<br>
-            激进模式：检测更多可能的威胁模式，覆盖率高但可能有更多误报
+            {{ $t('generated.detectionAIConfigPanel_conservative_mode_only_detects_clear_malicious_24922b') }}<br>
+            {{ $t('generated.detectionAIConfigPanel_aggressive_mode_detects_more_possible_threat_bec1e5') }}
           </div>
         </el-form-item>
 
         <!-- 审核配置 -->
-        <el-form-item label="审核配置">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_audit_configuration_399fde')">
           <el-checkbox
             v-model="localConfig.require_approval"
             :disabled="!localConfig.enabled"
             @change="handleConfigChange"
           >
-            规则生成后发送审核通知
+            {{ $t('generated.detectionAIConfigPanel_send_audit_notification_after_rule_generation_4b88ad') }}
           </el-checkbox>
         </el-form-item>
 
         <!-- 统计信息 -->
-        <el-form-item label="统计信息">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_statistics_5b00a5')">
           <div class="stats-row">
-            <el-statistic title="已生成规则数" :value="localConfig.rules_generated_count" />
-            <el-statistic title="已审核通过数" :value="localConfig.rules_approved_count" />
+            <el-statistic :title="$t('generated.detectionAIConfigPanel_number_of_rules_generated_608d95')" :value="localConfig.rules_generated_count" />
+            <el-statistic :title="$t('generated.detectionAIConfigPanel_number_of_approved_reviews_ba063a')" :value="localConfig.rules_approved_count" />
           </div>
         </el-form-item>
 
         <!-- 操作按钮 -->
         <el-form-item>
           <el-button type="primary" :loading="saving" :disabled="!hasChanges" @click="saveConfig">
-            保存配置
+            {{ $t('generated.common_save_configuration_817af1') }}
           </el-button>
           <el-button :loading="testing" :disabled="!localConfig.enabled" @click="testRuleGeneration">
-            测试规则生成
+            {{ $t('generated.detectionAIConfigPanel_test_rule_generation_687673') }}
           </el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
     <!-- 测试规则生成对话框 -->
-    <el-dialog v-model="testDialogVisible" title="测试规则生成" width="700px">
+    <el-dialog v-model="testDialogVisible" :title="$t('generated.detectionAIConfigPanel_test_rule_generation_687673')" width="700px">
       <el-form :model="testForm" label-width="100px">
-        <el-form-item label="MITRE技术ID" required>
-          <el-input v-model="testForm.mitre_id" placeholder="例如：T1059.004" />
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_miter_technology_id_8d3aee')" required>
+          <el-input v-model="testForm.mitre_id" :placeholder="$t('generated.detectionAIConfigPanel_for_example_t1059_004_887fa2')" />
         </el-form-item>
-        <el-form-item label="保守度">
+        <el-form-item :label="$t('generated.detectionAIConfigPanel_conservatism_aa3dd2')">
           <el-slider
             v-model="testForm.conservatism"
             :min="0"
@@ -121,25 +121,25 @@
       </el-form>
 
       <div v-if="testResult" class="test-result">
-        <el-divider>生成结果</el-divider>
+        <el-divider>{{ $t('generated.common_generate_results_99045f') }}</el-divider>
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="规则ID">{{ testResult.rule_id }}</el-descriptions-item>
-          <el-descriptions-item label="规则标题">{{ testResult.title }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_rule_id_36c0e3')">{{ testResult.rule_id }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_rule_title_298a16')">{{ testResult.title }}</el-descriptions-item>
           <el-descriptions-item label="MITRE">{{ testResult.mitre_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="严重程度">{{ testResult.severity }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
+          <el-descriptions-item :label="$t('generated.common_severity_d918e4')">{{ testResult.severity }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_state_62e951')">
             <el-tag type="info">{{ testResult.status }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="规则内容" :span="2">
+          <el-descriptions-item :label="$t('generated.common_rule_content_3bfca1')" :span="2">
             <pre class="content-block">{{ testResult.content }}</pre>
           </el-descriptions-item>
         </el-descriptions>
       </div>
 
       <template #footer>
-        <el-button @click="testDialogVisible = false">关闭</el-button>
+        <el-button @click="testDialogVisible = false">{{ $t('generated.common_closure_6c14bd') }}</el-button>
         <el-button type="primary" :loading="testing" @click="executeTestGeneration">
-          开始生成
+          {{ $t('generated.detectionAIConfigPanel_start_generating_6793e8') }}
         </el-button>
       </template>
     </el-dialog>
@@ -147,6 +147,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAIConfig, updateAIConfig, generateTestRule, type AIConfig, type UpdateAIConfigRequest } from '@/api/detection'
@@ -208,7 +210,7 @@ async function loadConfig() {
     Object.assign(localConfig, config)
     originalConfig.value = JSON.parse(JSON.stringify(config))
   } catch (error: any) {
-    ElMessage.error('加载AI配置失败: ' + (error.message || '未知错误'))
+    ElMessage.error(translate('generatedScript.detectionAIConfigPanel_failed_to_load_ai_configuration_851795') + (error.message || translate('generatedScript.common_unknown_error_5f76ed')))
   } finally {
     loading.value = false
   }
@@ -239,9 +241,9 @@ async function saveConfig() {
     const updated = await updateAIConfig(request)
     Object.assign(localConfig, updated)
     originalConfig.value = JSON.parse(JSON.stringify(updated))
-    ElMessage.success('配置保存成功')
+    ElMessage.success(translate('generatedScript.common_configuration_saved_successfully_597832'))
   } catch (error: any) {
-    ElMessage.error('保存配置失败: ' + (error.message || '未知错误'))
+    ElMessage.error(translate('generatedScript.detectionAIConfigPanel_failed_to_save_configuration_0afc59') + (error.message || translate('generatedScript.common_unknown_error_5f76ed')))
   } finally {
     saving.value = false
   }
@@ -256,7 +258,7 @@ function testRuleGeneration() {
 
 async function executeTestGeneration() {
   if (!testForm.mitre_id) {
-    ElMessage.warning('请输入MITRE技术ID')
+    ElMessage.warning(translate('generatedScript.detectionAIConfigPanel_please_enter_miter_technology_id_4d1a14'))
     return
   }
 
@@ -267,9 +269,9 @@ async function executeTestGeneration() {
       conservatism: testForm.conservatism
     })
     testResult.value = result
-    ElMessage.success('测试规则生成成功')
+    ElMessage.success(translate('generatedScript.detectionAIConfigPanel_test_rules_generated_successfully_8399de'))
   } catch (error: any) {
-    ElMessage.error('测试规则生成失败: ' + (error.message || '未知错误'))
+    ElMessage.error(translate('generatedScript.detectionAIConfigPanel_test_rule_generation_failed_f83ad2') + (error.message || translate('generatedScript.common_unknown_error_5f76ed')))
   } finally {
     testing.value = false
   }

@@ -30,9 +30,9 @@
             </el-tag>
           </div>
           <div class="header-right">
-            <div class="runtime-metrics" aria-label="智能体运行指标">
+            <div class="runtime-metrics" :aria-label="$t('generated.assistantAssistantWorkspace_agent_operating_indicators_9b1457')">
               <el-tag size="small" effect="plain">
-                最大轮数 {{ maxTurnsLabel }}
+                {{ $t('generated.common_maximum_number_of_rounds_7b621d') }} {{ maxTurnsLabel }}
               </el-tag>
               <el-tag size="small" effect="plain" type="info">
                 Tokens {{ tokenUsageLabel }}
@@ -51,7 +51,7 @@
               @click="cancelCurrentRun"
             >
               <el-icon><VideoPause /></el-icon>
-              取消运行
+              {{ $t('generated.assistantAssistantWorkspace_cancel_run_644b4a') }}
             </el-button>
           </div>
         </div>
@@ -85,8 +85,8 @@
       <div v-else class="welcome-state">
         <div class="welcome-content">
           <el-icon class="welcome-icon"><MagicStick /></el-icon>
-          <h2>智能安全助手</h2>
-          <p>通过自然语言完成安全运营任务</p>
+          <h2>{{ $t('generated.assistantAssistantWorkspace_intelligent_security_assistant_24ac1c') }}</h2>
+          <p>{{ $t('generated.assistantAssistantWorkspace_complete_security_operations_tasks_through_natural_42cec3') }}</p>
           <div class="center-composer">
             <AssistantComposer
               :disabled="false"
@@ -113,6 +113,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
@@ -243,7 +245,7 @@ async function handleSend(content: string) {
       router.replace({ query: { ...route.query, session: currentSession.value.session_id } })
     }
   } catch (err) {
-    console.error('发送消息失败:', err)
+    console.error(translate('generatedScript.assistantAssistantWorkspace_failed_to_send_message_6340f8'), err)
   }
 }
 
@@ -262,10 +264,10 @@ async function handleApprovalModeChange(mode: AssistantToolApprovalMode) {
   approvalModeLoading.value = true
   try {
     await updateToolApprovalPolicy({ mode })
-    ElMessage.success('工具权限模式已更新')
+    ElMessage.success(translate('generatedScript.assistantAssistantWorkspace_tool_permissions_mode_updated_564b52'))
   } catch (err: any) {
     approvalMode.value = previous
-    ElMessage.error(err?.message || '权限模式更新失败')
+    ElMessage.error(err?.message || translate('generatedScript.assistantAssistantWorkspace_permission_mode_update_failed_52a5bc'))
   } finally {
     approvalModeLoading.value = false
   }
@@ -274,16 +276,16 @@ async function handleApprovalModeChange(mode: AssistantToolApprovalMode) {
 async function ensureSessionForUpload(file: File, purpose: AssistantFileUploadPurpose) {
   if (currentSession.value) return currentSession.value
   const titlePrefix: Record<AssistantFileUploadPurpose, string> = {
-    analysis: '文件分析',
-    baseline_template: '基线模板',
-    sigma_rule: 'Sigma 规则',
+    analysis: translate('generatedScript.assistantAssistantWorkspace_file_analysis_1458ef'),
+    baseline_template: translate('generatedScript.assistantAssistantWorkspace_baseline_template_169b50'),
+    sigma_rule: translate('generatedScript.common_sigma_rules_80c495'),
   }
   const session = await store.createSession({
     title: `${titlePrefix[purpose]}：${file.name}`.slice(0, 48),
     task_type: purpose === 'analysis' ? 'explanation' : 'operations',
   })
   if (!session) {
-    throw new Error('创建会话失败')
+    throw new Error(translate('generatedScript.assistantAssistantWorkspace_failed_to_create_session_4335b9'))
   }
   router.replace({ query: { ...route.query, session: session.session_id } })
   return session
@@ -304,10 +306,10 @@ async function handleUploadFile(file: File, purpose: AssistantFileUploadPurpose)
     const title = result.context_ref?.title || file.name
     item.name = title
     item.status = 'success'
-    ElMessage.success(`已上传：${title}`)
+    ElMessage.success(translate('generatedScript.assistantAssistantWorkspace_uploaded_7132e9', { p0: title }))
   } catch (err: any) {
     item.status = 'error'
-    item.error = err?.message || '文件上传失败'
+    item.error = err?.message || translate('generatedScript.assistantAssistantWorkspace_file_upload_failed_e398bb')
     ElMessage.error(item.error)
   } finally {
     uploadingFile.value = false
@@ -323,7 +325,7 @@ async function cancelCurrentRun() {
   try {
     await store.cancelCurrentRun()
   } catch (err) {
-    console.error('取消运行失败:', err)
+    console.error(translate('generatedScript.assistantAssistantWorkspace_cancel_run_failed_b8f64b'), err)
   }
 }
 
@@ -332,7 +334,7 @@ async function handleApprove(approvalId: string, comment?: string) {
   try {
     await store.approveAction(approvalId, comment)
   } catch (err) {
-    console.error('审批失败:', err)
+    console.error(translate('generatedScript.assistantAssistantWorkspace_approval_failed_2e5d48'), err)
   }
 }
 
@@ -340,7 +342,7 @@ async function handleReject(approvalId: string, comment?: string) {
   try {
     await store.rejectAction(approvalId, comment)
   } catch (err) {
-    console.error('拒绝失败:', err)
+    console.error(translate('generatedScript.assistantAssistantWorkspace_reject_failed_8acfe9'), err)
   }
 }
 
@@ -394,12 +396,12 @@ function getStatusType(status: string): string {
 
 function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
-    active: '活跃',
-    running: '运行中',
-    waiting_approval: '待审批',
-    completed: '已完成',
-    cancelled: '已取消',
-    failed: '失败',
+    active: translate('generatedScript.common_active_8c0daf'),
+    running: translate('generatedScript.common_running_594249'),
+    waiting_approval: translate('generatedScript.common_pending_approval_57fce0'),
+    completed: translate('generatedScript.common_completed_e99b48'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
   }
   return map[status] || status
 }
@@ -476,7 +478,7 @@ function setupWorkspaceMotion() {
 onMounted(async () => {
   const auth = getStoredAuth()
   if (!auth) {
-    ElMessage.warning('请先登录系统')
+    ElMessage.warning(translate('generatedScript.assistantAssistantWorkspace_please_log_in_to_the_system_05ff36'))
     router.replace('/login')
     return
   }
@@ -488,7 +490,7 @@ onMounted(async () => {
   try {
     await store.fetchSessions()
   } catch (err) {
-    console.error('加载会话列表失败:', err)
+    console.error(translate('generatedScript.assistantAssistantWorkspace_failed_to_load_session_list_d0bf46'), err)
   }
 
   const sessionId = route.query.session as string
@@ -498,7 +500,7 @@ onMounted(async () => {
       try {
         await store.openSession(sessionId)
       } catch (err) {
-        console.error('恢复会话失败:', err)
+        console.error(translate('generatedScript.assistantAssistantWorkspace_failed_to_restore_session_1ab5c0'), err)
         router.replace({ query: {} })
       }
     } else {

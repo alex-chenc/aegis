@@ -2,47 +2,47 @@
   <div class="weak-dictionary-page">
     <div class="page-toolbar">
       <div>
-        <h1>弱密码字典</h1>
-        <p>内置字典和自定义字典统一管理。</p>
+        <h1>{{ $t('generated.detectionWeakPasswordDictionaries_weak_password_dictionary_716a20') }}</h1>
+        <p>{{ $t('generated.detectionWeakPasswordDictionaries_built_in_dictionaries_and_custom_dictionaries_50eccb') }}</p>
       </div>
       <div class="toolbar-actions">
-        <el-button :icon="Back" @click="router.push('/risk/weak-password')">返回</el-button>
-        <el-button :icon="Refresh" @click="store.fetchDictionaries">刷新</el-button>
-        <el-button type="primary" :icon="MagicStick" @click="drawerVisible = true">AI 一键生成字典</el-button>
+        <el-button :icon="Back" @click="router.push('/risk/weak-password')">{{ $t('generated.common_return_11d024') }}</el-button>
+        <el-button :icon="Refresh" @click="store.fetchDictionaries">{{ $t('generated.common_refresh_38108e') }}</el-button>
+        <el-button type="primary" :icon="MagicStick" @click="drawerVisible = true">{{ $t('generated.detectionWeakPasswordDictionaries_ai_generates_dictionary_with_one_click_6704be') }}</el-button>
       </div>
     </div>
 
     <section class="summary-band">
       <div class="summary-item">
-        <span>内置字典</span>
+        <span>{{ $t('generated.detectionWeakPasswordDictionaries_built_in_dictionary_0db734') }}</span>
         <strong>{{ store.defaultDictionary?.entry_count || 0 }}</strong>
       </div>
       <div class="summary-item">
-        <span>字典总数</span>
+        <span>{{ $t('generated.detectionWeakPasswordDictionaries_total_number_of_dictionaries_9f65e7') }}</span>
         <strong>{{ store.dictionaries.length }}</strong>
       </div>
       <div class="summary-item">
-        <span>自定义字典</span>
+        <span>{{ $t('generated.detectionWeakPasswordDictionaries_custom_dictionary_344b2f') }}</span>
         <strong>{{ customCount }}</strong>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-head">
-        <h2>字典列表</h2>
-        <span class="muted">点击字典可逐条查看弱密码候选。</span>
+        <h2>{{ $t('generated.detectionWeakPasswordDictionaries_dictionary_list_83f2e3') }}</h2>
+        <span class="muted">{{ $t('generated.detectionWeakPasswordDictionaries_click_the_dictionary_to_view_weak_fd19bf') }}</span>
       </div>
       <el-table v-loading="store.dictionaryLoading" :data="store.dictionaries" class="dense-table">
-        <el-table-column label="字典名称" min-width="260" prop="name" />
-        <el-table-column label="类型" width="140">
+        <el-table-column :label="$t('generated.detectionWeakPasswordDictionaries_dictionary_name_32bc83')" min-width="260" prop="name" />
+        <el-table-column :label="$t('generated.common_type_e4e46c')" width="140">
           <template #default="{ row }">
             <el-tag :type="row.dictionary_type === 'default_1000' ? 'success' : 'info'">{{ dictionaryTypeLabel(row.dictionary_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="条数" width="120" prop="entry_count" />
-        <el-table-column label="操作" width="130" fixed="right">
+        <el-table-column :label="$t('generated.detectionWeakPasswordDictionaries_number_of_items_d67cef')" width="120" prop="entry_count" />
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="130" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openEntries(row)">查看条目</el-button>
+            <el-button link type="primary" @click="openEntries(row)">{{ $t('generated.detectionWeakPasswordDictionaries_view_entry_fdcf34') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -59,43 +59,43 @@
       </div>
     </section>
 
-    <el-drawer v-model="drawerVisible" title="AI 一键生成字典" size="620px">
+    <el-drawer v-model="drawerVisible" :title="$t('generated.detectionWeakPasswordDictionaries_ai_generates_dictionary_with_one_click_6704be')" size="620px">
       <el-form label-position="top" class="drawer-form">
-        <el-form-item label="自然语言描述">
+        <el-form-item :label="$t('generated.detectionWeakPasswordDictionaries_natural_language_description_687fc2')">
           <el-input
             v-model="aiForm.natural_language"
             type="textarea"
             :rows="7"
             maxlength="800"
             show-word-limit
-            placeholder="例如：为 Redis 管理员和生产环境生成弱密码字典，包含公司名 aegis、年份、常见符号和 admin/root 等账号习惯"
+            :placeholder="$t('generated.detectionWeakPasswordDictionaries_for_example_generate_a_weak_password_ae6257')"
           />
         </el-form-item>
-        <el-form-item label="生成数量">
+        <el-form-item :label="$t('generated.detectionWeakPasswordDictionaries_generate_quantity_cb7916')">
           <el-input-number v-model="aiForm.count" :min="1" :max="50" />
-          <span class="form-tip">单次最多 50 条，生成过程会等待 AI 实际返回。</span>
+          <span class="form-tip">{{ $t('generated.detectionWeakPasswordDictionaries_the_maximum_number_of_entries_is_1300dc') }}</span>
         </el-form-item>
         <el-form-item>
-          <el-checkbox v-model="aiForm.deduplicate_with_default">与内置字典去重</el-checkbox>
+          <el-checkbox v-model="aiForm.deduplicate_with_default">{{ $t('generated.detectionWeakPasswordDictionaries_deduplication_with_built_in_dictionary_88ccb1') }}</el-checkbox>
         </el-form-item>
       </el-form>
       <div class="drawer-actions">
-        <el-button @click="drawerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="generating" @click="generate">生成并保存</el-button>
+        <el-button @click="drawerVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" :loading="generating" @click="generate">{{ $t('generated.detectionWeakPasswordDictionaries_generate_and_save_1ca174') }}</el-button>
       </div>
       <el-alert
         v-if="generated"
         type="success"
         show-icon
         :closable="false"
-        :title="`已生成 ${generated.entry_count} 条候选`"
+        :title="$t('dynamic.generatedCandidates', { count: generated.entry_count })"
       />
     </el-drawer>
 
-    <el-drawer v-model="entriesVisible" :title="selectedDictionary ? selectedDictionary.name : '字典条目'" size="720px">
+    <el-drawer v-model="entriesVisible" :title="selectedDictionary ? selectedDictionary.name : $t('dynamic.dictionaryEntries')" size="720px">
       <el-table v-loading="store.dictionaryLoading" :data="store.dictionaryEntries" class="dense-table">
         <el-table-column label="#" type="index" width="70" :index="entryIndex" />
-        <el-table-column label="弱密码" min-width="260">
+        <el-table-column :label="$t('generated.detectionWeakPasswordDictionaries_weak_password_65116f')" min-width="260">
           <template #default="{ row }">
             <code class="candidate-value">{{ row.candidate }}</code>
           </template>
@@ -117,6 +117,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -142,7 +144,7 @@ const customCount = computed(() => store.dictionaries.filter(item => item.dictio
 
 async function generate() {
   if (!aiForm.natural_language.trim()) {
-    ElMessage.warning('请输入自然语言描述')
+    ElMessage.warning(translate('generatedScript.detectionWeakPasswordDictionaries_please_enter_a_natural_language_description_e66b20'))
     return
   }
   generating.value = true
@@ -152,7 +154,7 @@ async function generate() {
       count: aiForm.count,
       deduplicate_with_default: aiForm.deduplicate_with_default,
     })
-    ElMessage.success('字典已保存')
+    ElMessage.success(translate('generatedScript.detectionWeakPasswordDictionaries_dictionary_saved_54ada8'))
   } finally {
     generating.value = false
   }
@@ -175,7 +177,7 @@ function entryIndex(index: number) {
 }
 
 function dictionaryTypeLabel(type: string) {
-  return type === 'default_1000' ? '内置' : '自定义'
+  return type === 'default_1000' ? translate('generatedScript.detectionWeakPasswordDictionaries_built_in_09ceea') : translate('generatedScript.common_customize_c49333')
 }
 
 onMounted(() => {

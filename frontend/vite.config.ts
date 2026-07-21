@@ -19,6 +19,7 @@ export default defineConfig({
     }
   },
   test: {
-    exclude: [...configDefaults.exclude, 'e2e/**']
+    exclude: [...configDefaults.exclude, 'e2e/**'],
+    setupFiles: ['./src/test/setup.ts']
   }
 })

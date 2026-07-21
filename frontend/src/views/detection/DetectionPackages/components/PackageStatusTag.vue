@@ -5,6 +5,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -12,36 +14,36 @@ const props = defineProps<{
   effect?: 'dark' | 'light' | 'plain'
 }>()
 
-const statusMap: Record<string, { type: string; text: string }> = {
-  draft: { type: 'info', text: '草稿' },
-  build_pending: { type: 'info', text: '待构建' },
-  build_running: { type: 'warning', text: '构建中' },
-  build_failed: { type: 'danger', text: '构建失败' },
-  build_success: { type: 'success', text: '构建成功' },
-  built: { type: '', text: '已构建' },
-  signed: { type: 'success', text: '已签名' },
-  enabled: { type: 'success', text: '已启用' },
-  active: { type: 'success', text: '运行中' },
-  degraded: { type: 'warning', text: '降级' },
-  load_failed: { type: 'danger', text: '加载失败' },
-  timeout: { type: 'danger', text: '超时' },
-  disabled: { type: 'info', text: '已禁用' },
-  uninstalled: { type: 'info', text: '已卸载' },
-  pending: { type: 'info', text: '待处理' },
-  running: { type: 'warning', text: '运行中' },
-  awaiting_review: { type: 'warning', text: '待审核' },
-  review_rejected: { type: 'danger', text: '审核拒绝' },
-  success: { type: 'success', text: '成功' },
-  failed: { type: 'danger', text: '失败' },
-  downloading: { type: 'warning', text: '下载中' },
-  signature_failed: { type: 'danger', text: '签名验证失败' },
-  blocked_by_hook_allowlist: { type: 'danger', text: 'Hook 受限' },
-  installing: { type: 'warning', text: '安装中' },
-  disabled_by_policy: { type: 'info', text: '策略禁用' },
-  disabled_by_rate: { type: 'warning', text: '限速禁用' },
-  rolled_back: { type: 'warning', text: '已回滚' },
+const statusMap: Record<string, { type: string; textKey: string }> = {
+  draft: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_draft_0f4368' },
+  build_pending: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_to_be_built_099567' },
+  build_running: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_under_construction_556441' },
+  build_failed: { type: 'danger', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_build_failed_6518bf' },
+  build_success: { type: 'success', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_build_successful_ac0ccc' },
+  built: { type: '', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_built_2061e6' },
+  signed: { type: 'success', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_signed_d7dfc4' },
+  enabled: { type: 'success', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_enabled_25d284' },
+  active: { type: 'success', textKey: 'generatedScript.common_running_594249' },
+  degraded: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_downgrade_d85188' },
+  load_failed: { type: 'danger', textKey: 'generatedScript.common_loading_failed_f6b7a4' },
+  timeout: { type: 'danger', textKey: 'generatedScript.common_time_out_ff06c2' },
+  disabled: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_disabled_0fe5a9' },
+  uninstalled: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_uninstalled_c2ad33' },
+  pending: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_pending_59a9eb' },
+  running: { type: 'warning', textKey: 'generatedScript.common_running_594249' },
+  awaiting_review: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_pending_review_f53b68' },
+  review_rejected: { type: 'danger', textKey: 'generatedScript.common_review_rejection_8942f5' },
+  success: { type: 'success', textKey: 'generatedScript.common_success_51991a' },
+  failed: { type: 'danger', textKey: 'generatedScript.common_fail_3e3c80' },
+  downloading: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_downloading_327d59' },
+  signature_failed: { type: 'danger', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_signature_verification_failed_7ef0f1' },
+  blocked_by_hook_allowlist: { type: 'danger', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_hook_is_restricted_6b5d6b' },
+  installing: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_installing_411642' },
+  disabled_by_policy: { type: 'info', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_policy_disabled_91871a' },
+  disabled_by_rate: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_speed_limit_disabled_47d216' },
+  rolled_back: { type: 'warning', textKey: 'generatedScript.detectionDetectionPackagesPackageStatusTag_rolled_back_c4ab8c' },
 }
 
 const tagType = computed(() => statusMap[props.status]?.type || 'info')
-const statusText = computed(() => statusMap[props.status]?.text || props.status)
+const statusText = computed(() => statusMap[props.status] ? translate(statusMap[props.status].textKey) : props.status)
 </script>

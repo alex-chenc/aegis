@@ -35,8 +35,8 @@
     <!-- 缺失证据 -->
     <div v-if="data.missing_evidence?.length" class="missing-evidence-section">
       <div class="section-header">
-        <span class="section-title">缺失证据</span>
-        <el-tag size="small" type="warning">{{ data.missing_evidence.length }} 项</el-tag>
+        <span class="section-title">{{ $t('generated.assistantHostAttackInvestigationPanel_missing_evidence_542df7') }}</span>
+        <el-tag size="small" type="warning">{{ data.missing_evidence.length }} {{ $t('generated.common_item_64728a') }}</el-tag>
       </div>
       <div class="missing-list">
         <div
@@ -47,7 +47,7 @@
           <div class="missing-source">{{ sourceLabel(item.source_type) }}</div>
           <div class="missing-reason">{{ item.reason }}</div>
           <div v-if="item.suggested_tool" class="missing-tool">
-            建议工具: {{ item.suggested_tool }}
+            {{ $t('generated.assistantHostAttackInvestigationPanel_suggested_tools_4de096') }} {{ item.suggested_tool }}
           </div>
         </div>
       </div>
@@ -59,6 +59,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed } from 'vue'
 import type { HostAttackInvestigationCardPayload } from '@/api/assistant'
 import CompromiseScoreCard from './CompromiseScoreCard.vue'
@@ -86,17 +88,17 @@ const evidenceBySource = computed(() => {
 
 function sourceLabel(type: string): string {
   const map: Record<string, string> = {
-    aegis_alert: 'Aegis 告警',
-    runtime_event: '运行时事件',
-    agent_process: 'Agent 进程',
-    agent_network: 'Agent 网络',
-    agent_file: 'Agent 文件',
-    agent_log: 'Agent 日志',
-    baseline: '基线检查',
-    vulnerability: '漏洞数据',
-    external_siem: '外部 SIEM',
-    external_cmdb: '外部 CMDB',
-    external_edr: '外部 EDR',
+    aegis_alert: translate('generatedScript.common_aegis_alert_cc5691'),
+    runtime_event: translate('generatedScript.common_runtime_events_3afbe9'),
+    agent_process: translate('generatedScript.common_agent_process_449f5d'),
+    agent_network: translate('generatedScript.common_agent_network_26dcfa'),
+    agent_file: translate('generatedScript.common_agent_file_fa1097'),
+    agent_log: translate('generatedScript.common_agent_log_b9eb43'),
+    baseline: translate('generatedScript.common_baseline_check_3c75ff'),
+    vulnerability: translate('generatedScript.common_vulnerability_data_792410'),
+    external_siem: translate('generatedScript.common_external_siem_b9a80d'),
+    external_cmdb: translate('generatedScript.common_external_cmdb_a2b97e'),
+    external_edr: translate('generatedScript.common_external_edr_593ae6'),
   }
   return map[type] || type
 }

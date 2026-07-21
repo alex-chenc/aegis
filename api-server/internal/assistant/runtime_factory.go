@@ -69,6 +69,7 @@ type RuntimeBuildRequest struct {
 	ToolDescriptors   []agentruntime.ToolDescriptor `json:"-"`
 	ExecutionPlan     *ToolExecutionPlan            `json:"execution_plan,omitempty"`
 	UseAIAnalysisFlow bool                          `json:"use_ai_analysis_flow,omitempty"`
+	Locale            string                        `json:"locale,omitempty"`
 }
 
 // RuntimeBuildResult 运行时构建结果
@@ -129,11 +130,13 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 
 	// 5. 创建 HookSink
 	hookSink := NewAssistantHookSink(f.runManager, req.SessionID, req.RunID, req.MessageID, f.logger).
+		WithLocale(req.Locale).
 		WithMemoryRepository(f.memoryRepo)
 
 	// 6. 创建 PromptProvider
 	reflectionMemories := f.loadReflectionMemories(ctx, req.SessionID, 5)
 	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput).
+		WithLocale(req.Locale).
 		WithReflectionMemories(reflectionMemories)
 
 	// 7. 创建 LLM 适配器

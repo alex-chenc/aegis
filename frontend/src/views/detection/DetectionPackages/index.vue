@@ -3,10 +3,10 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>动态检测包管理</span>
+          <span>{{ $t('generated.detectionDetectionPackagesIndex_dynamic_detection_package_management_4561f4') }}</span>
           <div>
             <el-button type="primary" @click="$router.push('/detection/packages/new')">
-              <el-icon><Plus /></el-icon>新建检测包
+              <el-icon><Plus /></el-icon>{{ $t('generated.detectionDetectionPackagesIndex_create_a_new_detection_package_6f3c86') }}
             </el-button>
           </div>
         </div>
@@ -15,7 +15,7 @@
       <div class="filter-bar">
         <el-input
           v-model="searchText"
-          placeholder="搜索 Package ID / 标题 / CVE"
+          :placeholder="$t('generated.detectionDetectionPackagesIndex_search_package_id_title_cve_ee4a04')"
           clearable
           style="width: 300px;"
           @clear="handleSearch"
@@ -25,16 +25,16 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 150px; margin-left: 12px;" @change="handleSearch">
-          <el-option label="草稿" value="draft" />
-          <el-option label="构建失败" value="build_failed" />
-          <el-option label="待审核" value="awaiting_review" />
-          <el-option label="审核拒绝" value="review_rejected" />
-          <el-option label="已构建" value="built" />
-          <el-option label="已签名" value="signed" />
-          <el-option label="已启用" value="enabled" />
-          <el-option label="运行中" value="active" />
-          <el-option label="已禁用" value="disabled" />
+        <el-select v-model="statusFilter" :placeholder="$t('generated.detectionDetectionPackagesIndex_status_filter_f0b213')" clearable style="width: 150px; margin-left: 12px;" @change="handleSearch">
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_draft_0f4368')" value="draft" />
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_build_failed_6518bf')" value="build_failed" />
+          <el-option :label="$t('generated.common_pending_review_f53b68')" value="awaiting_review" />
+          <el-option :label="$t('generated.common_review_rejection_8942f5')" value="review_rejected" />
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_built_2061e6')" value="built" />
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_signed_d7dfc4')" value="signed" />
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_enabled_25d284')" value="enabled" />
+          <el-option :label="$t('generated.detectionDetectionPackagesIndex_running_594249')" value="active" />
+          <el-option :label="$t('generated.common_disabled_0fe5a9')" value="disabled" />
         </el-select>
         <el-button
           v-if="selectedPackages.length > 0"
@@ -42,7 +42,7 @@
           style="margin-left: 12px;"
           @click="batchDeleteDialogVisible = true"
         >
-          批量删除 ({{ selectedPackages.length }})
+          {{ $t('generated.common_batch_delete_4edb06') }}{{ selectedPackages.length }})
         </el-button>
       </div>
 
@@ -62,9 +62,9 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="version" label="版本" width="100" />
-        <el-table-column label="状态" width="120">
+        <el-table-column prop="title" :label="$t('generated.common_title_748d7d')" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="version" :label="$t('generated.common_version_989d1a')" width="100" />
+        <el-table-column :label="$t('generated.common_state_62e951')" width="120">
           <template #default="{ row }">
             <PackageStatusTag :status="row.status" />
           </template>
@@ -79,7 +79,7 @@
             {{ (row.hook_summary || []).length }}
           </template>
         </el-table-column>
-        <el-table-column label="安装率" width="120">
+        <el-table-column :label="$t('generated.detectionDetectionPackagesIndex_install_rate_fd1160')" width="120">
           <template #default="{ row }">
             <span v-if="row.host_total">
               {{ row.host_active || 0 }}/{{ row.host_total }}
@@ -87,49 +87,49 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170">
+        <el-table-column :label="$t('generated.common_update_time_093dea')" width="170">
           <template #default="{ row }">
-            {{ new Date(row.updated_at).toLocaleString() }}
+            {{ formatDateTime(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="280" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="$router.push(`/detection/packages/${row.package_id}`)">详情</el-button>
+            <el-button link type="primary" size="small" @click="$router.push(`/detection/packages/${row.package_id}`)">{{ $t('generated.common_details_4f55ee') }}</el-button>
             <el-button
               v-if="row.status === 'draft'"
               link type="primary" size="small"
               @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
-            >构建</el-button>
+            >{{ $t('generated.detectionDetectionPackagesIndex_build_81a94d') }}</el-button>
             <el-button
               v-if="row.status === 'awaiting_review' || buildStatusMap[row.package_id]?.status === 'awaiting_review'"
               link type="warning" size="small"
               @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
-            >审核</el-button>
+            >{{ $t('generated.detectionDetectionPackagesIndex_review_fe945e') }}</el-button>
             <el-button
               v-if="row.status === 'built' || buildStatusMap[row.package_id]?.status === 'success'"
               link type="warning" size="small"
               @click="$router.push(`/detection/packages/${row.package_id}?tab=build`)"
-            >签名</el-button>
+            >{{ $t('generated.detectionDetectionPackagesIndex_sign_8ba46c') }}</el-button>
             <el-button
               v-if="['signed', 'disabled'].includes(row.status)"
               link type="success" size="small"
               @click="handleEnable(row)"
-            >启用</el-button>
+            >{{ $t('generated.common_enable_d4e9ca') }}</el-button>
             <el-button
               v-if="['enabled', 'active'].includes(row.status)"
               link type="warning" size="small"
               @click="handleDisable(row)"
-            >禁用</el-button>
+            >{{ $t('generated.common_disable_be70be') }}</el-button>
             <el-button
               v-if="['enabled', 'active', 'disabled'].includes(row.status)"
               link type="danger" size="small"
               @click="handleUninstall(row)"
-            >卸载</el-button>
+            >{{ $t('generated.common_uninstall_200cf1') }}</el-button>
             <el-button
               v-if="!['enabled', 'active'].includes(row.status)"
               link type="danger" size="small"
               @click="handleDelete(row)"
-            >删除</el-button>
+            >{{ $t('generated.common_delete_3755f5') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -147,65 +147,68 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="enableDialogVisible" title="确认启用" width="500">
+    <el-dialog v-model="enableDialogVisible" :title="$t('generated.common_confirm_enable_62d826')" width="500">
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          该 DetectionPackage 将下发到全部 agent。离线 agent 上线后也会收到安装指令。
+          {{ $t('generated.common_the_detectionpackage_will_be_delivered_to_bc5580') }}
         </template>
       </el-alert>
       <el-descriptions :column="1" border size="small" style="margin-top: 16px;">
         <el-descriptions-item label="Package ID">{{ selectedPackage?.package_id }}</el-descriptions-item>
-        <el-descriptions-item label="版本">{{ selectedPackage?.version }}</el-descriptions-item>
-        <el-descriptions-item label="Hooks">{{ (selectedPackage?.hook_summary || []).length }} 个</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.common_version_989d1a')">{{ selectedPackage?.version }}</el-descriptions-item>
+        <el-descriptions-item label="Hooks">{{ (selectedPackage?.hook_summary || []).length }} {{ $t('generated.common_indivual_f7b2a6') }}</el-descriptions-item>
       </el-descriptions>
       <template #footer>
-        <el-button @click="enableDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="loading" @click="confirmEnable">确认启用</el-button>
+        <el-button @click="enableDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" :loading="loading" @click="confirmEnable">{{ $t('generated.common_confirm_enable_62d826') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="disableDialogVisible" title="确认禁用" width="400">
-      <el-text>确定要禁用该检测包吗？所有 agent 将停止该包的检测。</el-text>
+    <el-dialog v-model="disableDialogVisible" :title="$t('generated.common_confirm_disable_816c68')" width="400">
+      <el-text>{{ $t('generated.detectionDetectionPackagesIndex_are_you_sure_you_want_to_819e7a') }}</el-text>
       <template #footer>
-        <el-button @click="disableDialogVisible = false">取消</el-button>
-        <el-button type="warning" :loading="loading" @click="confirmDisable">确认禁用</el-button>
+        <el-button @click="disableDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="warning" :loading="loading" @click="confirmDisable">{{ $t('generated.common_confirm_disable_816c68') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="uninstallDialogVisible" title="确认卸载" width="400">
-      <el-text type="danger">确定要卸载该检测包吗？所有 agent 将删除该包的本地文件。</el-text>
+    <el-dialog v-model="uninstallDialogVisible" :title="$t('generated.common_confirm_uninstall_c7ff7b')" width="400">
+      <el-text type="danger">{{ $t('generated.detectionDetectionPackagesIndex_are_you_sure_you_want_to_5d6446') }}</el-text>
       <template #footer>
-        <el-button @click="uninstallDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="loading" @click="confirmUninstall">确认卸载</el-button>
+        <el-button @click="uninstallDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmUninstall">{{ $t('generated.common_confirm_uninstall_c7ff7b') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="deleteDialogVisible" title="确认删除" width="400">
-      <el-text type="danger">确定要删除检测包 "{{ selectedPackage?.package_id }}" 吗？此操作不可恢复。</el-text>
+    <el-dialog v-model="deleteDialogVisible" :title="$t('generated.common_confirm_deletion_3c06ab')" width="400">
+      <el-text type="danger">{{ $t('generated.detectionDetectionPackagesIndex_are_you_sure_you_want_to_6f9ac3') }}{{ selectedPackage?.package_id }}{{ $t('generated.detectionDetectionPackagesIndex_this_operation_is_irreversible_e0ce49') }}</el-text>
       <template #footer>
-        <el-button @click="deleteDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="loading" @click="confirmDelete">确认删除</el-button>
+        <el-button @click="deleteDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmDelete">{{ $t('generated.common_confirm_deletion_3c06ab') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchDeleteDialogVisible" title="批量删除" width="500">
+    <el-dialog v-model="batchDeleteDialogVisible" :title="$t('generated.common_batch_delete_362aed')" width="500">
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          确定要删除以下 {{ selectedPackages.length }} 个检测包吗？此操作不可恢复。
+          {{ $t('generated.detectionDetectionPackagesIndex_make_sure_you_want_to_delete_5c7d4b') }} {{ selectedPackages.length }} {{ $t('generated.detectionDetectionPackagesIndex_a_test_kit_this_operation_is_e86a00') }}
         </template>
       </el-alert>
       <div style="margin-top: 12px; max-height: 200px; overflow-y: auto;">
         <el-tag v-for="pkg in selectedPackages" :key="pkg.package_id" style="margin: 2px;">{{ pkg.package_id }}</el-tag>
       </div>
       <template #footer>
-        <el-button @click="batchDeleteDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="loading" @click="confirmBatchDelete">确认删除</el-button>
+        <el-button @click="batchDeleteDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmBatchDelete">{{ $t('generated.common_confirm_deletion_3c06ab') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { ref, onMounted, reactive } from 'vue'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -324,11 +327,11 @@ async function confirmDelete() {
   if (!selectedPackage.value) return
   try {
     await detectionPackageApi.deletePackage(selectedPackage.value.package_id)
-    ElMessage.success('删除成功')
+    ElMessage.success(translate('generatedScript.common_delete_successfully_86e8d1'))
     deleteDialogVisible.value = false
     loadPackages()
   } catch (e: any) {
-    ElMessage.error(e.message || '删除失败')
+    ElMessage.error(e.message || translate('generatedScript.common_delete_failed_72250c'))
   }
 }
 
@@ -336,12 +339,12 @@ async function confirmBatchDelete() {
   if (selectedPackages.value.length === 0) return
   try {
     await detectionPackageApi.batchDeletePackages(selectedPackages.value.map(p => p.package_id))
-    ElMessage.success(`成功删除 ${selectedPackages.value.length} 个检测包`)
+    ElMessage.success(translate('generatedScript.detectionDetectionPackagesIndex_detection_packages_successfully_deleted_795cec', { p0: selectedPackages.value.length }))
     batchDeleteDialogVisible.value = false
     selectedPackages.value = []
     loadPackages()
   } catch (e: any) {
-    ElMessage.error(e.message || '批量删除失败')
+    ElMessage.error(e.message || translate('generatedScript.common_batch_deletion_failed_b59edb'))
   }
 }
 

@@ -1,14 +1,14 @@
 <template>
   <div class="source-coverage">
     <div class="section-header">
-      <span class="section-title">数据源覆盖</span>
+      <span class="section-title">{{ $t('generated.assistantSourceCoveragePanel_data_source_coverage_f28900') }}</span>
       <span v-if="coverage" class="coverage-ratio">
-        {{ coverage.available_sources }}/{{ coverage.total_sources }} 可用
+        {{ coverage.available_sources }}/{{ coverage.total_sources }} {{ $t('generated.assistantSourceCoveragePanel_available_e91365') }}
       </span>
     </div>
 
     <div v-if="!coverage" class="empty-hint">
-      暂无覆盖数据
+      {{ $t('generated.assistantSourceCoveragePanel_no_coverage_data_yet_2cb12d') }}
     </div>
 
     <div v-else class="source-list">
@@ -25,8 +25,8 @@
         <div class="source-info">
           <div class="source-name">{{ sourceLabel(source.source_type) }}</div>
           <div class="source-detail">
-            <span v-if="source.available">{{ source.evidence_count }} 条证据</span>
-            <span v-else class="source-error">{{ source.error || '不可用' }}</span>
+            <span v-if="source.available">{{ source.evidence_count }} {{ $t('generated.common_pieces_of_evidence_bf9c74') }}</span>
+            <span v-else class="source-error">{{ source.error || $t('dynamic.unavailable') }}</span>
           </div>
         </div>
       </div>
@@ -35,6 +35,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { CircleCheck, CircleClose } from '@element-plus/icons-vue'
 
 interface SourceCoverageData {
@@ -55,22 +57,22 @@ defineProps<{
 
 function sourceLabel(type: string): string {
   const map: Record<string, string> = {
-    aegis_alert: 'Aegis 告警',
-    runtime_event: '运行时事件',
-    agent_process: 'Agent 进程',
-    agent_network: 'Agent 网络',
-    agent_file: 'Agent 文件',
-    agent_log: 'Agent 日志',
-    baseline: '基线检查',
-    vulnerability: '漏洞数据',
-    external_siem: '外部 SIEM',
-    external_cmdb: '外部 CMDB',
-    external_edr: '外部 EDR',
-    external_ticket: '外部工单',
-    external_threat_intel: '威胁情报',
-    block_record: '阻断记录',
-    detection_package: '检测包',
-    audit_log: '审计日志',
+    aegis_alert: translate('generatedScript.common_aegis_alert_cc5691'),
+    runtime_event: translate('generatedScript.common_runtime_events_3afbe9'),
+    agent_process: translate('generatedScript.common_agent_process_449f5d'),
+    agent_network: translate('generatedScript.common_agent_network_26dcfa'),
+    agent_file: translate('generatedScript.common_agent_file_fa1097'),
+    agent_log: translate('generatedScript.common_agent_log_b9eb43'),
+    baseline: translate('generatedScript.common_baseline_check_3c75ff'),
+    vulnerability: translate('generatedScript.common_vulnerability_data_792410'),
+    external_siem: translate('generatedScript.common_external_siem_b9a80d'),
+    external_cmdb: translate('generatedScript.common_external_cmdb_a2b97e'),
+    external_edr: translate('generatedScript.common_external_edr_593ae6'),
+    external_ticket: translate('generatedScript.assistantSourceCoveragePanel_external_work_order_1cafbf'),
+    external_threat_intel: translate('generatedScript.assistantSourceCoveragePanel_threat_intelligence_1ed632'),
+    block_record: translate('generatedScript.common_block_recording_729ea3'),
+    detection_package: translate('generatedScript.common_test_kit_757931'),
+    audit_log: translate('generatedScript.common_audit_log_7666cd'),
   }
   return map[type] || type
 }

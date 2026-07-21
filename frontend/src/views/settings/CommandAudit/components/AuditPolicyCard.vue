@@ -3,8 +3,8 @@
     <template #header>
       <div class="card-header">
         <div class="card-header-left">
-          <span class="card-title">审计策略</span>
-          <span class="card-subtitle">配置脚本安全审计的检查级别和行为</span>
+          <span class="card-title">{{ $t('generated.settingsCommandAuditAuditPolicyCard_audit_strategy_c75707') }}</span>
+          <span class="card-subtitle">{{ $t('generated.settingsCommandAuditAuditPolicyCard_configuring_inspection_levels_and_behavior_for_4bf1da') }}</span>
         </div>
       </div>
     </template>
@@ -29,21 +29,23 @@
           </div>
           <span class="policy-item__desc">{{ item.desc }}</span>
           <el-tag v-if="item.key === 'ai_enabled' && !llmAvailable" type="warning" size="small" effect="plain" style="margin-top: 4px">
-            未配置LLM
+            {{ $t('generated.settingsCommandAuditAuditPolicyCard_llm_not_configured_3abb4e') }}
           </el-tag>
         </div>
       </div>
     </div>
     <div class="retry-section">
-      <span class="retry-label">最大重试次数</span>
+      <span class="retry-label">{{ $t('generated.settingsCommandAuditAuditPolicyCard_maximum_number_of_retries_11b03b') }}</span>
       <el-input-number v-model="localSettings.max_retry" :min="1" :max="5" size="small" @change="emitUpdate" />
-      <span class="retry-hint">AI审计失败后重新生成脚本的最大尝试次数</span>
+      <span class="retry-hint">{{ $t('generated.settingsCommandAuditAuditPolicyCard_maximum_number_of_attempts_to_regenerate_b08e81') }}</span>
     </div>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { translate } from '@/i18n'
+
+import { computed, reactive, watch } from 'vue'
 import type { CommandAuditSettings } from '@/api/command-audit'
 
 const props = defineProps<{
@@ -55,12 +57,12 @@ const emit = defineEmits<{
   (e: 'update', data: Partial<CommandAuditSettings>): void
 }>()
 
-const policyItems = [
-  { key: 'blacklist_enabled' as const, label: '黑名单审计', icon: 'B', desc: '基于预置规则的确定性检查，命中即拦截', bgColor: 'rgba(239, 68, 68, 0.1)' },
-  { key: 'ai_enabled' as const, label: 'AI 审计', icon: 'AI', desc: '基于大模型的上下文风险分析，检测隐蔽威胁', bgColor: 'rgba(99, 102, 241, 0.1)' },
-  { key: 'dispatch_check' as const, label: '下发前校验', icon: 'P', desc: '脚本从 API Server 下发前再次校验黑名单', bgColor: 'rgba(245, 158, 11, 0.1)' },
-  { key: 'agent_check' as const, label: 'Agent 侧校验', icon: 'A', desc: 'Agent 执行前的最后一道防线', bgColor: 'rgba(16, 185, 129, 0.1)' }
-]
+const policyItems = computed(() => [
+  { key: 'blacklist_enabled' as const, label: translate('generatedScript.settingsCommandAuditAuditPolicyCard_blacklist_audit_673edd'), icon: 'B', desc: translate('generatedScript.settingsCommandAuditAuditPolicyCard_deterministic_inspection_based_on_preset_rules_a1acb4'), bgColor: 'rgba(239, 68, 68, 0.1)' },
+  { key: 'ai_enabled' as const, label: translate('generatedScript.settingsCommandAuditAuditPolicyCard_ai_audit_efb648'), icon: 'AI', desc: translate('generatedScript.settingsCommandAuditAuditPolicyCard_contextual_risk_analysis_based_on_large_7cf8e0'), bgColor: 'rgba(99, 102, 241, 0.1)' },
+  { key: 'dispatch_check' as const, label: translate('generatedScript.settingsCommandAuditAuditPolicyCard_verification_before_delivery_f5a60f'), icon: 'P', desc: translate('generatedScript.settingsCommandAuditAuditPolicyCard_check_the_blacklist_again_before_sending_928eea'), bgColor: 'rgba(245, 158, 11, 0.1)' },
+  { key: 'agent_check' as const, label: translate('generatedScript.settingsCommandAuditAuditPolicyCard_agent_side_verification_570901'), icon: 'A', desc: translate('generatedScript.settingsCommandAuditAuditPolicyCard_the_last_line_of_defense_before_dea346'), bgColor: 'rgba(16, 185, 129, 0.1)' }
+])
 
 const localSettings = reactive<CommandAuditSettings>({
   blacklist_enabled: true,

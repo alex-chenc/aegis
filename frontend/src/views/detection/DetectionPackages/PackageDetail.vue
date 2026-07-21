@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <el-button link @click="$router.push('/detection/packages')">
-              <el-icon><ArrowLeft /></el-icon> 返回列表
+              <el-icon><ArrowLeft /></el-icon> {{ $t('generated.detectionDetectionPackagesPackageDetail_return_to_list_53505b') }}
             </el-button>
             <span style="margin-left: 12px; font-weight: bold;">{{ currentPackage?.title || currentPackage?.package_id }}</span>
             <PackageStatusTag :status="currentPackage?.status || ''" style="margin-left: 8px;" />
@@ -17,64 +17,64 @@
               :loading="loading"
               :disabled="!canOperate('enable')"
               @click="enableDialogVisible = true"
-            >启用</el-button>
+            >{{ $t('generated.common_enable_d4e9ca') }}</el-button>
             <el-button
               v-if="['enabled', 'active'].includes(currentPackage?.status || '')"
               type="warning"
               :loading="loading"
               :disabled="!canOperate('disable')"
               @click="disableDialogVisible = true"
-            >禁用</el-button>
+            >{{ $t('generated.common_disable_be70be') }}</el-button>
             <el-button
               v-if="['enabled', 'active', 'disabled'].includes(currentPackage?.status || '')"
               type="danger"
               :loading="loading"
               :disabled="!canOperate('uninstall')"
               @click="uninstallDialogVisible = true"
-            >卸载</el-button>
+            >{{ $t('generated.common_uninstall_200cf1') }}</el-button>
             <el-button
               v-if="currentPackage?.status === 'built'"
               type="primary"
               :loading="loading"
               :disabled="!canOperate('sign')"
               @click="signDialogVisible = true"
-            >签名发布</el-button>
+            >{{ $t('generated.common_signature_release_bae7c7') }}</el-button>
             <el-button
               v-if="['draft', 'build_failed', 'review_rejected'].includes(currentPackage?.status || '')"
               type="primary"
               :loading="loading"
               @click="$router.push(`/detection/packages/${packageId}/edit`)"
-            >编辑</el-button>
+            >{{ $t('generated.common_edit_a7f814') }}</el-button>
             <el-button
               :loading="loading"
               @click="activeTab = 'raw'; loadRawDraft()"
-            >原始信息</el-button>
+            >{{ $t('generated.detectionDetectionPackagesPackageDetail_original_information_45b901') }}</el-button>
           </div>
         </div>
       </template>
 
       <el-tabs v-model="activeTab" @tab-change="handleTabChange">
-        <el-tab-pane label="基础信息" name="info">
+        <el-tab-pane :label="$t('generated.common_basic_information_41654e')" name="info">
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="Package ID">{{ currentPackage?.package_id }}</el-descriptions-item>
-            <el-descriptions-item label="版本">{{ currentPackage?.version }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
+            <el-descriptions-item :label="$t('generated.common_version_989d1a')">{{ currentPackage?.version }}</el-descriptions-item>
+            <el-descriptions-item :label="$t('generated.common_state_62e951')">
               <PackageStatusTag :status="currentPackage?.status || ''" />
             </el-descriptions-item>
             <el-descriptions-item label="CVE">
               <el-tag v-for="cve in (currentPackage?.cve_ids || [])" :key="cve" size="small" style="margin: 2px;">{{ cve }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="描述" :span="2">{{ currentPackage?.description || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ currentPackage?.created_at ? new Date(currentPackage.created_at).toLocaleString() : '-' }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ currentPackage?.updated_at ? new Date(currentPackage.updated_at).toLocaleString() : '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="$t('generated.common_describe_412f54')" :span="2">{{ currentPackage?.description || '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="$t('generated.common_creation_time_84e380')">{{ currentPackage?.created_at ? formatDateTime(currentPackage.created_at) : '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="$t('generated.common_update_time_093dea')">{{ currentPackage?.updated_at ? formatDateTime(currentPackage.updated_at) : '-' }}</el-descriptions-item>
           </el-descriptions>
         </el-tab-pane>
 
-        <el-tab-pane label="构建审核" name="build">
+        <el-tab-pane :label="$t('generated.common_build_review_7ebabd')" name="build">
           <div v-if="!currentBuild && currentPackage?.status === 'draft'" style="text-align: center; padding: 40px;">
-            <el-text type="info">草稿状态，尚未构建</el-text>
+            <el-text type="info">{{ $t('generated.detectionDetectionPackagesPackageDetail_draft_status_not_yet_built_87fd4c') }}</el-text>
             <div style="margin-top: 16px;">
-              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">提交构建</el-button>
+              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">{{ $t('generated.detectionDetectionPackagesPackageDetail_submit_build_77f2f5') }}</el-button>
             </div>
           </div>
           <template v-else>
@@ -84,12 +84,12 @@
               @reviewed="loadPackage"
             />
             <div v-if="['failed', 'review_rejected'].includes(currentBuild?.status || '')" style="margin-top: 16px; text-align: center;">
-              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">重新构建</el-button>
+              <el-button type="primary" :loading="loading" :disabled="!canOperate('build')" @click="handleBuild">{{ $t('generated.detectionDetectionPackagesPackageDetail_rebuild_c13dc5') }}</el-button>
             </div>
           </template>
         </el-tab-pane>
 
-        <el-tab-pane label="主机状态" name="hosts">
+        <el-tab-pane :label="$t('generated.detectionDetectionPackagesPackageDetail_host_status_56e199')" name="hosts">
           <HostStatusTable
             :hosts="hostStatuses"
             :total="hostTotal"
@@ -104,8 +104,8 @@
           />
         </el-tab-pane>
 
-        <el-tab-pane label="原始信息" name="raw">
-          <el-empty v-if="!currentDraft" description="暂无草稿原始信息" />
+        <el-tab-pane :label="$t('generated.detectionDetectionPackagesPackageDetail_original_information_45b901')" name="raw">
+          <el-empty v-if="!currentDraft" :description="$t('generated.detectionDetectionPackagesPackageDetail_no_original_draft_information_yet_fae81b')" />
           <el-tabs v-else v-model="rawTab" class="raw-tabs">
             <el-tab-pane label="HookPlan" name="hookplan">
               <CodeEditorPanel
@@ -114,21 +114,21 @@
                 readonly
               />
             </el-tab-pane>
-            <el-tab-pane label="eBPF 源码" name="ebpf">
+            <el-tab-pane :label="$t('generated.common_ebpf_source_code_ada0b4')" name="ebpf">
               <CodeEditorPanel
                 :model-value="currentDraft.ebpf_source || ''"
                 language="c"
                 readonly
               />
             </el-tab-pane>
-            <el-tab-pane label="Sigma 原子规则" name="sigma">
+            <el-tab-pane :label="$t('generated.common_sigma_atomic_rules_0c85cc')" name="sigma">
               <CodeEditorPanel
                 :model-value="currentDraft.sigma_rules_yaml || ''"
                 language="yaml"
                 readonly
               />
             </el-tab-pane>
-            <el-tab-pane label="Correlation 最终规则" name="correlation">
+            <el-tab-pane :label="$t('generated.detectionDetectionPackagesPackageDetail_correlation_final_rule_9425fd')" name="correlation">
               <CodeEditorPanel
                 :model-value="currentDraft.correlation_yaml || ''"
                 language="yaml"
@@ -138,46 +138,46 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane label="关联告警" name="alerts">
+        <el-tab-pane :label="$t('generated.common_associated_alarms_0cf24b')" name="alerts">
           <div v-loading="alertsLoading">
-            <el-empty v-if="!alertsLoading && alerts.length === 0" description="暂无关联告警" />
+            <el-empty v-if="!alertsLoading && alerts.length === 0" :description="$t('generated.detectionDetectionPackagesPackageDetail_no_associated_alarms_yet_865340')" />
             <el-table v-else :data="alerts" border size="small">
               <el-table-column type="expand">
                 <template #default="{ row }">
                   <EvidenceTimeline :evidence="parseEvidence(row.event_data)" />
                 </template>
               </el-table-column>
-              <el-table-column prop="rule_title" label="规则名称" min-width="180" show-overflow-tooltip>
+              <el-table-column prop="rule_title" :label="$t('generated.common_rule_name_1937bc')" min-width="180" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.rule_title || row.matched_rule_id || '-' }}</template>
               </el-table-column>
-              <el-table-column prop="severity" label="严重程度" width="100" />
+              <el-table-column prop="severity" :label="$t('generated.common_severity_d918e4')" width="100" />
               <el-table-column prop="pid" label="PID" width="100" />
-              <el-table-column prop="created_at" label="上报时间" width="180">
-                <template #default="{ row }">{{ row.created_at ? new Date(row.created_at).toLocaleString() : '-' }}</template>
+              <el-table-column prop="created_at" :label="$t('generated.detectionDetectionPackagesPackageDetail_reporting_time_9d4a3f')" width="180">
+                <template #default="{ row }">{{ row.created_at ? formatDateTime(row.created_at) : '-' }}</template>
               </el-table-column>
             </el-table>
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="版本历史" name="versions">
+        <el-tab-pane :label="$t('generated.detectionDetectionPackagesPackageDetail_version_history_877041')" name="versions">
           <el-table :data="versionHistory" border size="small">
-            <el-table-column prop="version" label="版本号" />
-            <el-table-column prop="status" label="状态">
+            <el-table-column prop="version" :label="$t('generated.detectionDetectionPackagesPackageDetail_version_number_5d55e2')" />
+            <el-table-column prop="status" :label="$t('generated.common_state_62e951')">
               <template #default="{ row }">
                 <PackageStatusTag :status="row.status" />
               </template>
             </el-table-column>
-            <el-table-column prop="build_time" label="构建时间">
-              <template #default="{ row }">{{ row.build_time ? new Date(row.build_time).toLocaleString() : '-' }}</template>
+            <el-table-column prop="build_time" :label="$t('generated.common_build_time_ed9e57')">
+              <template #default="{ row }">{{ row.build_time ? formatDateTime(row.build_time) : '-' }}</template>
             </el-table-column>
-            <el-table-column prop="sign_time" label="签名时间">
-              <template #default="{ row }">{{ row.sign_time && row.sign_time !== '-' ? new Date(row.sign_time).toLocaleString() : '-' }}</template>
+            <el-table-column prop="sign_time" :label="$t('generated.detectionDetectionPackagesPackageDetail_signing_time_678d63')">
+              <template #default="{ row }">{{ row.sign_time && row.sign_time !== '-' ? formatDateTime(row.sign_time) : '-' }}</template>
             </el-table-column>
-            <el-table-column prop="enable_time" label="启用时间">
-              <template #default="{ row }">{{ row.enable_time && row.enable_time !== '-' ? new Date(row.enable_time).toLocaleString() : '-' }}</template>
+            <el-table-column prop="enable_time" :label="$t('generated.detectionDetectionPackagesPackageDetail_activation_time_15b6fc')">
+              <template #default="{ row }">{{ row.enable_time && row.enable_time !== '-' ? formatDateTime(row.enable_time) : '-' }}</template>
             </el-table-column>
-            <el-table-column prop="operator" label="操作人" />
-            <el-table-column label="操作" width="160">
+            <el-table-column prop="operator" :label="$t('generated.common_operator_06858d')" />
+            <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="160">
               <template #default="{ row }">
                 <el-button
                   v-if="canOperate('rollback')"
@@ -185,7 +185,7 @@
                   size="small"
                   link
                   @click="handleRollback(row)"
-                >回滚到此版本</el-button>
+                >{{ $t('generated.detectionDetectionPackagesPackageDetail_roll_back_to_this_version_5fad9b') }}</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -193,53 +193,56 @@
       </el-tabs>
     </el-card>
 
-    <el-dialog v-model="signDialogVisible" title="确认签名发布" width="500">
+    <el-dialog v-model="signDialogVisible" :title="$t('generated.detectionDetectionPackagesPackageDetail_confirm_signature_release_e0e3a4')" width="500">
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          签名发布后不可修改。请确认已审核构建结果。
+          {{ $t('generated.detectionDetectionPackagesPackageDetail_the_signature_cannot_be_modified_after_d11427') }}
         </template>
       </el-alert>
       <el-descriptions :column="1" border size="small" style="margin-top: 16px;">
         <el-descriptions-item label="Package ID">{{ currentPackage?.package_id }}</el-descriptions-item>
-        <el-descriptions-item label="版本">{{ currentPackage?.version }}</el-descriptions-item>
+        <el-descriptions-item :label="$t('generated.common_version_989d1a')">{{ currentPackage?.version }}</el-descriptions-item>
       </el-descriptions>
       <template #footer>
-        <el-button @click="signDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="loading" @click="confirmSign">确认签名</el-button>
+        <el-button @click="signDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" :loading="loading" @click="confirmSign">{{ $t('generated.detectionDetectionPackagesPackageDetail_confirm_signature_d670c2') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="enableDialogVisible" title="确认启用" width="500">
+    <el-dialog v-model="enableDialogVisible" :title="$t('generated.common_confirm_enable_62d826')" width="500">
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          该 DetectionPackage 将下发到全部 agent。离线 agent 上线后也会收到安装指令。
+          {{ $t('generated.common_the_detectionpackage_will_be_delivered_to_bc5580') }}
         </template>
       </el-alert>
       <template #footer>
-        <el-button @click="enableDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="loading" @click="confirmEnable">确认启用</el-button>
+        <el-button @click="enableDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" :loading="loading" @click="confirmEnable">{{ $t('generated.common_confirm_enable_62d826') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="disableDialogVisible" title="确认禁用" width="400">
-      <el-text>确定要禁用该检测包吗？</el-text>
+    <el-dialog v-model="disableDialogVisible" :title="$t('generated.common_confirm_disable_816c68')" width="400">
+      <el-text>{{ $t('generated.detectionDetectionPackagesPackageDetail_are_you_sure_you_want_to_6d6fcd') }}</el-text>
       <template #footer>
-        <el-button @click="disableDialogVisible = false">取消</el-button>
-        <el-button type="warning" :loading="loading" @click="confirmDisable">确认禁用</el-button>
+        <el-button @click="disableDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="warning" :loading="loading" @click="confirmDisable">{{ $t('generated.common_confirm_disable_816c68') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="uninstallDialogVisible" title="确认卸载" width="400">
-      <el-text type="danger">确定要卸载该检测包吗？</el-text>
+    <el-dialog v-model="uninstallDialogVisible" :title="$t('generated.common_confirm_uninstall_c7ff7b')" width="400">
+      <el-text type="danger">{{ $t('generated.detectionDetectionPackagesPackageDetail_are_you_sure_you_want_to_c25a81') }}</el-text>
       <template #footer>
-        <el-button @click="uninstallDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="loading" @click="confirmUninstall">确认卸载</el-button>
+        <el-button @click="uninstallDialogVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="danger" :loading="loading" @click="confirmUninstall">{{ $t('generated.common_confirm_uninstall_c7ff7b') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
@@ -302,9 +305,9 @@ async function loadAlerts() {
 async function handleRollback(row: any) {
   try {
     await ElMessageBox.confirm(
-      `确定要回滚到版本 ${row.version} 吗？`,
-      '确认回滚',
-      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' }
+      translate('generatedScript.detectionDetectionPackagesPackageDetail_are_you_sure_you_want_to_3da510', { p0: row.version }),
+      translate('generatedScript.detectionDetectionPackagesPackageDetail_confirm_rollback_2a814f'),
+      { confirmButtonText: translate('generatedScript.common_confirm_b56d9a'), cancelButtonText: translate('generatedScript.common_cancel_4d0b46'), type: 'warning' }
     )
     await detectionPackageApi.rollbackPackage(packageId.value, row.version)
     loadPackage()

@@ -1,6 +1,6 @@
 <template>
   <div class="command-audit-page">
-    <h2 style="margin-bottom: 16px">命令审计配置</h2>
+    <h2 style="margin-bottom: 16px">{{ $t('generated.settingsCommandAuditIndex_command_audit_configuration_39214f') }}</h2>
 
     <AuditPolicyCard :settings="settings" :llm-available="llmAvailable" @update="handleSettingsUpdate" style="margin-bottom: 16px" />
 
@@ -27,6 +27,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AuditPolicyCard from './components/AuditPolicyCard.vue'
@@ -68,14 +70,14 @@ async function handleFormSubmit(data: CreateRulePayload) {
   try {
     if (editingRule.value) {
       await updateRule(editingRule.value.id, data)
-      ElMessage.success('规则已更新')
+      ElMessage.success(translate('generatedScript.settingsCommandAuditIndex_rules_updated_fccd13'))
     } else {
       await createRule(data)
-      ElMessage.success('规则已创建')
+      ElMessage.success(translate('generatedScript.settingsCommandAuditIndex_rule_created_91d42e'))
     }
     dialogVisible.value = false
   } catch (e: any) {
-    ElMessage.error(e.message || '操作失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsCommandAuditIndex_operation_failed_09e424'))
   } finally {
     formSubmitting.value = false
   }
@@ -83,11 +85,11 @@ async function handleFormSubmit(data: CreateRulePayload) {
 
 async function handleDelete(id: string) {
   try {
-    await ElMessageBox.confirm('确定要删除该规则吗？', '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(translate('generatedScript.settingsCommandAuditIndex_are_you_sure_you_want_to_508b11'), translate('generatedScript.common_delete_confirmation_726b6e'), { type: 'warning' })
     await deleteRule(id)
-    ElMessage.success('规则已删除')
+    ElMessage.success(translate('generatedScript.settingsCommandAuditIndex_rule_deleted_91ba56'))
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e.message || '删除失败')
+    if (e !== 'cancel') ElMessage.error(e.message || translate('generatedScript.common_delete_failed_72250c'))
   }
 }
 
@@ -95,7 +97,7 @@ async function handleToggle(id: string) {
   try {
     await toggleRule(id)
   } catch (e: any) {
-    ElMessage.error(e.message || '操作失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsCommandAuditIndex_operation_failed_09e424'))
   }
 }
 
@@ -106,9 +108,9 @@ async function handleFilter(params: Record<string, any>) {
 async function handleSettingsUpdate(data: Partial<CommandAuditSettings>) {
   try {
     await updateSettings(data)
-    ElMessage.success('策略已更新')
+    ElMessage.success(translate('generatedScript.settingsCommandAuditIndex_policy_updated_ed6a75'))
   } catch (e: any) {
-    ElMessage.error(e.message || '更新失败')
+    ElMessage.error(e.message || translate('generatedScript.common_update_failed_8f8818'))
   }
 }
 </script>

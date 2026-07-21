@@ -1,11 +1,11 @@
 <template>
   <div class="recommended-actions">
     <div class="section-header">
-      <span class="section-title">建议动作</span>
+      <span class="section-title">{{ $t('generated.assistantRecommendedActionList_recommended_action_a77d2f') }}</span>
     </div>
 
     <div v-if="!actions?.length" class="empty-hint">
-      暂无建议动作
+      {{ $t('generated.assistantRecommendedActionList_no_suggested_actions_yet_d7f0fb') }}
     </div>
 
     <div v-else class="action-list">
@@ -29,7 +29,7 @@
 
         <div v-if="action.requires_approval" class="action-approval-hint">
           <el-icon><WarningFilled /></el-icon>
-          <span>需要审批才能执行</span>
+          <span>{{ $t('generated.assistantRecommendedActionList_requires_approval_before_execution_89c335') }}</span>
         </div>
       </div>
     </div>
@@ -37,6 +37,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { WarningFilled } from '@element-plus/icons-vue'
 
 interface Action {
@@ -65,10 +67,10 @@ function categoryTag(category: string): string {
 
 function categoryLabel(category: string): string {
   const map: Record<string, string> = {
-    immediate_forensics: '立即取证',
-    temporary_containment: '临时处置',
-    remediation: '修复加固',
-    detection_enhancement: '检测增强',
+    immediate_forensics: translate('generatedScript.assistantRecommendedActionList_obtain_evidence_immediately_77c6fc'),
+    temporary_containment: translate('generatedScript.assistantRecommendedActionList_temporary_disposal_381de2'),
+    remediation: translate('generatedScript.assistantRecommendedActionList_repair_and_reinforcement_800888'),
+    detection_enhancement: translate('generatedScript.assistantRecommendedActionList_detection_enhancement_9d9305'),
   }
   return map[category] || category
 }

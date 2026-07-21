@@ -38,12 +38,14 @@
       class="tool-result-toggle"
       @click="expanded = !expanded"
     >
-      {{ expanded ? '收起结果' : '展开完整结果' }}
+      {{ expanded ? $t('dynamic.collapseResult') : $t('dynamic.expandResult') }}
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, ref } from 'vue'
 import { SetUp } from '@element-plus/icons-vue'
 import AssistantTaskProgressCard from './AssistantTaskProgressCard.vue'
@@ -70,7 +72,7 @@ const summary = computed(() => {
 
   const result = normalizedResult.value
   if (!Object.keys(result).length) {
-    return props.toolCall.status === 'running' ? '工具正在执行，等待返回结果。' : ''
+    return props.toolCall.status === 'running' ? translate('generatedScript.assistantAssistantToolResultCard_the_tool_is_executing_and_waiting_4196c3') : ''
   }
 
   if (result.message) return String(result.message)
@@ -79,21 +81,21 @@ const summary = computed(() => {
     return taskRefSummary(result.task_ref)
   }
   if (result.scan_id) {
-    return `漏洞扫描已启动，扫描ID：${shortId(String(result.scan_id))}`
+    return translate('generatedScript.assistantAssistantToolResultCard_vulnerability_scan_has_been_started_scan_9b3a0f', { p0: shortId(String(result.scan_id)) })
   }
   if (result.task_group_id) {
-    return `任务组已创建：${shortId(String(result.task_group_id))}`
+    return translate('generatedScript.assistantAssistantToolResultCard_task_group_created_b2160c', { p0: shortId(String(result.task_group_id)) })
   }
   if (typeof result.total === 'number') {
-    return `查询完成，共 ${result.total} 条结果。`
+    return translate('generatedScript.assistantAssistantToolResultCard_query_completed_total_results_57ef1d', { p0: result.total })
   }
   if (Array.isArray(result.data)) {
-    return `查询完成，返回 ${result.data.length} 条结果。`
+    return translate('generatedScript.assistantAssistantToolResultCard_the_query_is_completed_and_results_c3c762', { p0: result.data.length })
   }
   if (result.status) {
-    return `执行状态：${result.status}`
+    return translate('generatedScript.assistantAssistantToolResultCard_execution_status_808522', { p0: result.status })
   }
-  return '工具执行完成，详情已折叠。'
+  return translate('generatedScript.assistantAssistantToolResultCard_the_tool_execution_is_complete_and_78498c')
 })
 
 const detailText = computed(() => {
@@ -128,15 +130,15 @@ const displayedDetailText = computed(() => {
 
 const statusLabel = computed(() => {
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '执行中',
-    accepted: '已受理',
-    completed: '成功',
-    success: '成功',
-    failed: '失败',
-    approval_required: '待审批',
-    rejected: '已拒绝',
-    cancelled: '已取消',
+    pending: translate('generatedScript.common_waiting_bd3488'),
+    running: translate('generatedScript.common_executing_1f425b'),
+    accepted: translate('generatedScript.common_accepted_926b04'),
+    completed: translate('generatedScript.common_success_51991a'),
+    success: translate('generatedScript.common_success_51991a'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    approval_required: translate('generatedScript.common_pending_approval_57fce0'),
+    rejected: translate('generatedScript.common_rejected_4c7c52'),
+    cancelled: translate('generatedScript.common_canceled_a5ffdc'),
   }
   return map[props.toolCall.status] || props.toolCall.status
 })
@@ -159,11 +161,11 @@ const statusTagType = computed(() => {
 
 const riskLabel = computed(() => {
   const map: Record<string, string> = {
-    readonly: '只读',
-    low: '低风险',
-    medium: '中风险',
-    high: '高风险',
-    critical: '严重风险',
+    readonly: translate('generatedScript.common_read_only_ffc1d0'),
+    low: translate('generatedScript.assistantAssistantToolResultCard_low_risk_117a43'),
+    medium: translate('generatedScript.assistantAssistantToolResultCard_medium_risk_83a55f'),
+    high: translate('generatedScript.assistantAssistantToolResultCard_high_risk_7a83b6'),
+    critical: translate('generatedScript.assistantAssistantToolResultCard_serious_risk_3e31b1'),
   }
   return map[props.toolCall.risk_level] || props.toolCall.risk_level
 })
@@ -216,12 +218,12 @@ function taskRefSummary(ref: any) {
   const kind = String(ref.kind || '')
   const id = String(ref.task_group_id || ref.id || '')
   const map: Record<string, string> = {
-    asset_collection: '资产采集任务已创建',
-    baseline_task: '基线任务组已创建',
-    vulnerability_scan: '漏洞扫描已启动',
-    vulnerability_task: '漏洞脚本任务已创建',
+    asset_collection: translate('generatedScript.assistantAssistantToolResultCard_asset_collection_task_has_been_created_c06eaa'),
+    baseline_task: translate('generatedScript.assistantAssistantToolResultCard_baseline_task_group_has_been_created_6e989b'),
+    vulnerability_scan: translate('generatedScript.assistantAssistantToolResultCard_vulnerability_scan_started_3c3dff'),
+    vulnerability_task: translate('generatedScript.assistantAssistantToolResultCard_vulnerability_script_task_created_b13dee'),
   }
-  const prefix = map[kind] || '任务已创建'
+  const prefix = map[kind] || translate('generatedScript.common_task_has_been_created_27a0d5')
   return id ? `${prefix}：${shortId(id)}` : prefix
 }
 

@@ -326,12 +326,14 @@ export interface CreateSessionRequest {
     object_type: string
     object_id: string
   }>
+  locale?: 'zh-CN' | 'en-US'
 }
 
 /** 发送消息请求 */
 export interface SendMessageRequest {
   content: string
   context_refs?: Array<{ object_type: string; object_id: string }>
+  locale?: 'zh-CN' | 'en-US'
 }
 
 /** 发送消息响应（运行句柄） */

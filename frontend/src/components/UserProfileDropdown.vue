@@ -3,16 +3,16 @@
     <el-button :icon="UserFilled" circle size="small" class="profile-btn" />
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="version">版本信息</el-dropdown-item>
-        <el-dropdown-item divided command="change-password">修改密码</el-dropdown-item>
-        <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+        <el-dropdown-item command="version">{{ t('app.profile.version') }}</el-dropdown-item>
+        <el-dropdown-item divided command="change-password">{{ t('app.profile.changePassword') }}</el-dropdown-item>
+        <el-dropdown-item command="logout">{{ t('app.profile.logout') }}</el-dropdown-item>
       </el-dropdown-menu>
     </template>
   </el-dropdown>
   <ChangePasswordDialog v-if="showChangePassword" :visible="showChangePassword" @close="showChangePassword = false" @success="showChangePassword = false" />
-  <el-dialog v-model="showVersion" title="版本信息" width="360px" append-to-body>
+  <el-dialog v-model="showVersion" :title="t('app.profile.version')" width="360px" append-to-body>
     <div class="version-detail">
-      <div class="version-product">Aegis 智能主机安全系统</div>
+      <div class="version-product">{{ t('app.brand.product') }}</div>
       <div class="version-number">V5.7</div>
     </div>
   </el-dialog>
@@ -21,6 +21,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { UserFilled } from '@element-plus/icons-vue'
 import { logout } from '@/api/auth'
@@ -28,6 +29,7 @@ import { clearStoredAuth } from '@/utils/auth'
 import ChangePasswordDialog from '@/components/common/ChangePasswordDialog.vue'
 
 const router = useRouter()
+const { t } = useI18n()
 const showChangePassword = ref(false)
 const showVersion = ref(false)
 
@@ -43,7 +45,7 @@ async function handleCommand(command: string) {
       // ignore server errors on logout
     }
     clearStoredAuth()
-    ElMessage.success('已退出登录')
+    ElMessage.success(t('app.profile.logoutSuccess'))
     router.replace('/login')
   }
 }

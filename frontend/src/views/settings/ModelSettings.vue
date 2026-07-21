@@ -3,8 +3,8 @@
     <section class="page-hero settings-hero">
       <div>
         <span class="hero-kicker">Model Control Plane</span>
-        <h1>模型配置</h1>
-        <p>集中配置文本推理模型。文本模型负责安全分析判断、规则生成和结构化溯源图。</p>
+        <h1>{{ $t('generated.settingsModelSettings_model_configuration_4db4aa') }}</h1>
+        <p>{{ $t('generated.settingsModelSettings_centrally_configure_text_reasoning_models_the_4d7b8f') }}</p>
       </div>
     </section>
 
@@ -12,24 +12,24 @@
       <el-card class="aegis-card settings-card">
         <template #header>
           <div class="card-header">
-            <span>文本 LLM 配置</span>
-            <el-tag type="info" size="small">仅通过页面配置</el-tag>
+            <span>{{ $t('generated.settingsModelSettings_text_llm_configuration_e0beda') }}</span>
+            <el-tag type="info" size="small">{{ $t('generated.settingsModelSettings_configure_via_page_only_11de86') }}</el-tag>
           </div>
         </template>
 
         <el-alert
-          title="配置说明"
+          :title="$t('generated.settingsModelSettings_configuration_instructions_3315c3')"
           type="info"
           show-icon
           :closable="false"
           class="settings-alert"
         >
-          <p>LLM 配置仅通过本页面进行设置，配置文件中的相关配置已禁用。</p>
-          <p>选择厂商后会自动填入推荐 Base URL 和模型名称；仍可按实际服务手动调整。</p>
+          <p>{{ $t('generated.settingsModelSettings_llm_configuration_is_only_set_through_5c7ce2') }}</p>
+          <p>{{ $t('generated.settingsModelSettings_after_selecting_the_manufacturer_the_recommended_903801') }}</p>
         </el-alert>
 
         <el-form :model="form" label-width="120px">
-          <el-form-item label="模型厂商">
+          <el-form-item :label="$t('generated.settingsModelSettings_model_manufacturer_27c82a')">
             <el-radio-group v-model="form.provider" class="provider-selector" @change="handleProviderChange">
               <el-radio-button
                 v-for="provider in providerOptions"
@@ -44,7 +44,7 @@
             <el-input
               v-model="form.api_key"
               :type="apiKeyVisible ? 'text' : 'password'"
-              placeholder="请输入 API Key（如显示 **** 表示已保存，可直接输入新值）"
+              :placeholder="$t('generated.settingsModelSettings_please_enter_the_api_key_if_aeac98')"
             >
               <template #suffix>
                 <el-icon class="cursor-pointer" @click="toggleApiKeyVisibility">
@@ -57,12 +57,12 @@
           <el-form-item label="Base URL">
             <el-input v-model="form.base_url" :placeholder="selectedProvider?.baseURL || 'https://api.example.com/v1'" />
           </el-form-item>
-          <el-form-item label="模型名称">
+          <el-form-item :label="$t('generated.settingsModelSettings_model_name_38719c')">
             <el-input v-model="form.model_name" :placeholder="selectedProvider?.modelName || 'model-name'" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
-            <el-button :loading="testing" @click="testConnection">测试连接</el-button>
+            <el-button type="primary" :loading="saving" @click="saveConfig">{{ $t('generated.common_save_configuration_817af1') }}</el-button>
+            <el-button :loading="testing" @click="testConnection">{{ $t('generated.settingsModelSettings_test_connection_10b7d8') }}</el-button>
           </el-form-item>
         </el-form>
       </el-card>
@@ -72,6 +72,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Hide, View } from '@element-plus/icons-vue'
@@ -80,7 +82,7 @@ import { useConfigStore } from '@/store/config'
 
 const configStore = useConfigStore()
 
-const providerOptions = [
+const providerOptions = computed(() => [
   {
     value: 'deepseek',
     label: 'DeepSeek',
@@ -89,7 +91,7 @@ const providerOptions = [
   },
   {
     value: 'dashscope',
-    label: '阿里云百炼',
+    label: translate('generatedScript.settingsModelSettings_alibaba_cloud_bailian_97031b'),
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     modelName: 'qwen-plus'
   },
@@ -107,11 +109,11 @@ const providerOptions = [
   },
   {
     value: 'custom',
-    label: '自定义',
+    label: translate('generatedScript.common_customize_c49333'),
     baseURL: '',
     modelName: ''
   }
-]
+])
 
 const form = ref({
   api_key: '',
@@ -119,7 +121,7 @@ const form = ref({
   base_url: 'https://api.deepseek.com/v1',
   model_name: 'deepseek-chat'
 })
-const selectedProvider = computed(() => providerOptions.find((item) => item.value === form.value.provider))
+const selectedProvider = computed(() => providerOptions.value.find((item) => item.value === form.value.provider))
 const saving = ref(false)
 const testing = ref(false)
 const apiKeyVisible = ref(false)
@@ -144,12 +146,12 @@ const handleProviderChange = () => {
 
 const saveConfig = async () => {
   if (form.value.api_key.includes('****')) {
-    ElMessage.warning('请输入完整的 API Key（当前显示的是脱敏后的值）')
+    ElMessage.warning(translate('generatedScript.settingsModelSettings_please_enter_the_complete_api_key_c49e60'))
     return
   }
 
   if (!form.value.api_key) {
-    ElMessage.warning('请输入 API Key')
+    ElMessage.warning(translate('generatedScript.settingsModelSettings_please_enter_api_key_99a3ab'))
     return
   }
 
@@ -157,9 +159,9 @@ const saveConfig = async () => {
   try {
     await configStore.saveLLMConfig(form.value.api_key, form.value.provider, form.value.base_url, form.value.model_name)
     originalApiKey.value = form.value.api_key
-    ElMessage.success('配置保存成功')
+    ElMessage.success(translate('generatedScript.common_configuration_saved_successfully_597832'))
   } catch (e: any) {
-    ElMessage.error(e.message || '保存失败')
+    ElMessage.error(e.message || translate('generatedScript.common_save_failed_40525a'))
   } finally {
     saving.value = false
   }
@@ -167,7 +169,7 @@ const saveConfig = async () => {
 
 const testConnection = async () => {
   if (!form.value.api_key) {
-    ElMessage.warning('请输入 API Key')
+    ElMessage.warning(translate('generatedScript.settingsModelSettings_please_enter_api_key_99a3ab'))
     return
   }
 
@@ -181,9 +183,9 @@ const testConnection = async () => {
     }
 
     await configStore.testConnection(apiKeyToUse, form.value.provider, form.value.base_url, form.value.model_name)
-    ElMessage.success('连接测试成功')
+    ElMessage.success(translate('generatedScript.settingsModelSettings_connection_test_successful_bfbf35'))
   } catch (e: any) {
-    ElMessage.error(e.message || '连接测试失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsModelSettings_connection_test_failed_6ef134'))
   } finally {
     testing.value = false
   }
@@ -196,7 +198,7 @@ const toggleApiKeyVisibility = async () => {
       originalApiKey.value = data.api_key
       form.value.api_key = originalApiKey.value
     } catch {
-      ElMessage.error('获取 API Key 失败')
+      ElMessage.error(translate('generatedScript.settingsModelSettings_failed_to_obtain_api_key_58fb1d'))
       return
     }
   } else if (!apiKeyVisible.value) {

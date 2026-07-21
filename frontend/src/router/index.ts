@@ -29,13 +29,13 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: Login,
-    meta: { title: '登录认证', public: true, authLayout: true }
+    meta: { titleKey: 'routes.login', public: true, authLayout: true }
   },
   {
     path: '/force-password-change',
     name: 'ForcePasswordChange',
     component: ForcePasswordChange,
-    meta: { title: '设置管理员凭据', authLayout: true, requiresAuth: true }
+    meta: { titleKey: 'routes.forcePasswordChange', authLayout: true, requiresAuth: true }
   },
   {
     path: '/',
@@ -45,249 +45,249 @@ const routes = [
     path: '/hosts',
     name: 'Hosts',
     component: Dashboard,
-    meta: { title: '主机列表' }
+    meta: { titleKey: 'routes.hosts' }
   },
   // V5.8 智能资产采集
   {
     path: '/hosts/assets',
     name: 'AssetsOverview',
     component: () => import('../views/hosts/Assets/Overview.vue'),
-    meta: { title: '智能资产采集' }
+    meta: { titleKey: 'routes.assetsOverview' }
   },
   {
     path: '/hosts/assets/software',
     name: 'AssetsSoftware',
     component: () => import('../views/hosts/Assets/Software.vue'),
-    meta: { title: '软件清单' }
+    meta: { titleKey: 'routes.software' }
   },
   {
     path: '/hosts/assets/applications',
     name: 'AssetsApplications',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: '应用资产' }
+    meta: { titleKey: 'routes.applications' }
   },
   {
     path: '/hosts/assets/databases',
     name: 'AssetsDatabases',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: '数据库资产' },
+    meta: { titleKey: 'routes.databases' },
     props: { defaultCategory: 'database' }
   },
   {
     path: '/hosts/assets/web-services',
     name: 'AssetsWebServices',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'Web 服务资产' },
+    meta: { titleKey: 'routes.webServices' },
     props: { defaultCategory: 'web_service' }
   },
   {
     path: '/hosts/assets/web-frameworks',
     name: 'AssetsWebFrameworks',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'Web 框架资产' },
+    meta: { titleKey: 'routes.webFrameworks' },
     props: { defaultCategory: 'web_framework' }
   },
   {
     path: '/hosts/assets/web-sites',
     name: 'AssetsWebSites',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'Web 站点资产' },
+    meta: { titleKey: 'routes.webSites' },
     props: { defaultCategory: 'web_site' }
   },
   {
     path: '/hosts/assets/llm-services',
     name: 'AssetsLLMServices',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'AI LLM 资产' },
+    meta: { titleKey: 'routes.llmServices' },
     props: { defaultCategory: 'llm_service' }
   },
   {
     path: '/hosts/assets/ai-agents',
     name: 'AssetsAIAgents',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'AI Agent 资产' },
+    meta: { titleKey: 'routes.aiAgents' },
     props: { defaultCategory: 'ai_agent' }
   },
   {
     path: '/hosts/assets/mcp-servers',
     name: 'AssetsMCPServers',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: 'MCP 资产' },
+    meta: { titleKey: 'routes.mcpServers' },
     props: { defaultCategory: 'mcp_server' }
   },
   {
     path: '/hosts/assets/other-applications',
     name: 'AssetsOtherApplications',
     component: () => import('../views/hosts/Assets/Applications.vue'),
-    meta: { title: '其他应用资产' },
+    meta: { titleKey: 'routes.otherApplications' },
     props: { defaultCategory: 'other' }
   },
   {
     path: '/hosts/assets/collections',
     name: 'AssetsCollections',
     redirect: '/hosts/assets',
-    meta: { title: '采集任务' }
+    meta: { titleKey: 'routes.collections' }
   },
   {
     path: '/baseline',
     redirect: '/baseline/workbench',
-    meta: { title: '智能基线检查与修复' }
+    meta: { titleKey: 'routes.baseline' }
   },
   {
     path: '/baseline/workbench',
     name: 'BaselineWorkbench',
     component: Workbench,
-    meta: { title: '规则管理' }
+    meta: { titleKey: 'routes.ruleManagement' }
   },
   {
     path: '/baseline/tasks',
     name: 'BaselineTasks',
     component: TaskCenter,
-    meta: { title: '基线任务中心' }
+    meta: { titleKey: 'routes.baselineTasks' }
   },
   {
     path: '/baseline/tasks/:id',
     name: 'BaselineTaskDetail',
     component: TaskDetail,
-    meta: { title: '任务详情' }
+    meta: { titleKey: 'routes.taskDetail' }
   },
   {
     path: '/vulnerability',
     name: 'Vulnerability',
     component: Vulnerability,
-    meta: { title: '智能漏洞检查与修复' }
+    meta: { titleKey: 'routes.vulnerability' }
   },
   {
     path: '/vulnerability/tasks',
     name: 'VulnerabilityTasks',
     component: TaskCenter,
-    meta: { title: '漏洞任务中心' }
+    meta: { titleKey: 'routes.vulnerabilityTasks' }
   },
   {
     path: '/vulnerability/tasks/:id',
     name: 'VulnerabilityTaskDetail',
     component: TaskDetail,
-    meta: { title: '漏洞任务详情' }
+    meta: { titleKey: 'routes.vulnerabilityTaskDetail' }
   },
   {
     path: '/detection/overview',
     name: 'DetectionOverview',
     component: DetectionOverview,
-    meta: { title: '安全概览' }
+    meta: { titleKey: 'routes.securityOverview' }
   },
   {
     path: '/detection/alerts',
     name: 'DetectionAlerts',
     component: DetectionAlerts,
-    meta: { title: '告警列表' }
+    meta: { titleKey: 'routes.alerts' }
   },
   {
     path: '/detection/ai-analysis',
     name: 'AIAnalysis',
     component: AIAnalysis,
-    meta: { title: 'AI 分析' }
+    meta: { titleKey: 'routes.aiAnalysis' }
   },
   {
     path: '/detection/policies',
     name: 'DetectionPolicies',
     component: DetectionPolicies,
-    meta: { title: '阻断策略' }
+    meta: { titleKey: 'routes.blockingPolicies' }
   },
   {
     path: '/detection/rules',
     name: 'DetectionRules',
     component: DetectionRules,
-    meta: { title: '规则管理' }
+    meta: { titleKey: 'routes.detectionRules' }
   },
   {
     path: '/detection/packages',
     name: 'DetectionPackages',
     component: DetectionPackages,
-    meta: { title: '动态检测包' }
+    meta: { titleKey: 'routes.detectionPackages' }
   },
   {
     path: '/detection/packages/new',
     name: 'DetectionPackageNew',
     component: PackageEditor,
-    meta: { title: '新建检测包' }
+    meta: { titleKey: 'routes.detectionPackageNew' }
   },
   {
     path: '/detection/packages/:id',
     name: 'DetectionPackageDetail',
     component: PackageDetail,
-    meta: { title: '检测包详情' }
+    meta: { titleKey: 'routes.detectionPackageDetail' }
   },
   {
     path: '/detection/packages/:id/edit',
     name: 'DetectionPackageEdit',
     component: PackageEditor,
-    meta: { title: '编辑检测包' }
+    meta: { titleKey: 'routes.detectionPackageEdit' }
   },
   {
     path: '/risk/weak-password',
     name: 'WeakPassword',
     component: WeakPasswordIndex,
-    meta: { title: '智能弱密码检测' }
+    meta: { titleKey: 'routes.weakPassword' }
   },
   {
     path: '/risk/weak-password/tasks/:id',
     name: 'WeakPasswordTaskDetail',
     component: WeakPasswordTaskDetail,
-    meta: { title: '智能弱密码任务详情' }
+    meta: { titleKey: 'routes.weakPasswordTaskDetail' }
   },
   {
     path: '/risk/weak-password/dictionaries',
     name: 'WeakPasswordDictionaries',
     component: WeakPasswordDictionaries,
-    meta: { title: '弱密码字典' }
+    meta: { titleKey: 'routes.weakPasswordDictionaries' }
   },
   {
     path: '/settings/command-audit',
     name: 'CommandAudit',
     component: CommandAudit,
-    meta: { title: '命令审计配置' }
+    meta: { titleKey: 'routes.commandAudit' }
   },
   {
     path: '/settings/audit-logs',
     name: 'AuditLogs',
     component: AuditLogs,
-    meta: { title: '审计日志' }
+    meta: { titleKey: 'routes.auditLogs' }
   },
   {
     path: '/settings',
     redirect: '/settings/models',
-    meta: { title: '系统配置' }
+    meta: { titleKey: 'routes.settings' }
   },
   {
     path: '/settings/models',
     name: 'ModelSettings',
     component: ModelSettings,
-    meta: { title: '模型配置' }
+    meta: { titleKey: 'routes.modelSettings' }
   },
   {
     path: '/settings/agent',
     name: 'AgentInstall',
     component: AgentInstall,
-    meta: { title: 'Agent 安装' }
+    meta: { titleKey: 'routes.agentInstall' }
   },
   {
     path: '/settings/ebpf-hooks',
     name: 'EBPFHooks',
     component: EBPFHooks,
-    meta: { title: 'eBPF Hook 白名单' }
+    meta: { titleKey: 'routes.ebpfHooks' }
   },
   {
     path: '/settings/tool-policy',
     name: 'ToolPolicySettings',
     component: () => import('../views/settings/AssistantToolPolicySettings.vue'),
-    meta: { title: '智能体工具权限' }
+    meta: { titleKey: 'routes.toolPolicy' }
   },
   // V6.0 智能助手
   {
     path: '/assistant',
     name: 'Assistant',
     component: () => import('../views/assistant/AssistantWorkspace.vue'),
-    meta: { title: '智能助手', requiresAuth: true }
+    meta: { titleKey: 'routes.assistant', requiresAuth: true }
   }
 ]
 

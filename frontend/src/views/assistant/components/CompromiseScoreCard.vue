@@ -1,7 +1,7 @@
 <template>
   <div class="compromise-card" :class="verdict">
     <div class="card-header">
-      <span class="card-title">研判结论</span>
+      <span class="card-title">{{ $t('generated.assistantCompromiseScoreCard_research_and_judgment_conclusion_6e1b3d') }}</span>
       <el-tag :type="verdictTagType" size="large" effect="dark">
         {{ verdictLabel }}
       </el-tag>
@@ -9,16 +9,16 @@
 
     <div class="score-section">
       <div class="score-bar">
-        <div class="score-label">风险评分</div>
+        <div class="score-label">{{ $t('generated.assistantCompromiseScoreCard_risk_score_6580b3') }}</div>
         <el-progress
           :percentage="score"
           :color="scoreColor"
           :stroke-width="20"
-          :format="(p: number) => `${p}分`"
+          :format="(p: number) => $t('dynamic.score', { value: p })"
         />
       </div>
       <div class="confidence">
-        <span class="confidence-label">置信度:</span>
+        <span class="confidence-label">{{ $t('generated.assistantCompromiseScoreCard_confidence_55141d') }}</span>
         <span class="confidence-value">{{ (confidence * 100).toFixed(0) }}%</span>
       </div>
     </div>
@@ -28,14 +28,14 @@
     </div>
 
     <div v-if="keyReasons?.length" class="reasons-section">
-      <div class="reasons-title">关键原因</div>
+      <div class="reasons-title">{{ $t('generated.assistantCompromiseScoreCard_key_reasons_750ff4') }}</div>
       <ul class="reasons-list">
         <li v-for="(reason, idx) in keyReasons" :key="idx">{{ reason }}</li>
       </ul>
     </div>
 
     <div v-if="contradictions?.length" class="contradictions-section">
-      <div class="contradictions-title">矛盾点</div>
+      <div class="contradictions-title">{{ $t('generated.assistantCompromiseScoreCard_contradiction_7e8029') }}</div>
       <ul class="contradictions-list">
         <li v-for="(item, idx) in contradictions" :key="idx">{{ item }}</li>
       </ul>
@@ -44,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -57,10 +59,10 @@ const props = defineProps<{
 
 const verdictLabel = computed(() => {
   const map: Record<string, string> = {
-    confirmed_compromised: '确认被攻击',
-    suspicious: '可疑',
-    likely_benign: '可能正常',
-    insufficient_evidence: '证据不足',
+    confirmed_compromised: translate('generatedScript.assistantCompromiseScoreCard_confirmed_to_be_under_attack_d6ec3f'),
+    suspicious: translate('generatedScript.assistantCompromiseScoreCard_suspicious_e931ad'),
+    likely_benign: translate('generatedScript.assistantCompromiseScoreCard_probably_normal_3d7485'),
+    insufficient_evidence: translate('generatedScript.assistantCompromiseScoreCard_insufficient_evidence_70568c'),
   }
   return map[props.verdict] || props.verdict
 })

@@ -4,21 +4,21 @@
     <div class="status-section">
       <div class="section-header">
         <el-icon><Monitor /></el-icon>
-        <span>执行状态</span>
+        <span>{{ $t('generated.taskExecutionResult_execution_status_141ab8') }}</span>
       </div>
       <div class="status-card">
         <div class="status-row">
-          <span class="status-label">任务状态</span>
+          <span class="status-label">{{ $t('generated.common_task_status_b7d412') }}</span>
           <el-tag :type="executionStatusType(displayResult.status)" size="small">
             {{ displayResult.status }}
           </el-tag>
         </div>
         <div class="status-row">
-          <span class="status-label">退出原因</span>
+          <span class="status-label">{{ $t('generated.taskExecutionResult_reason_for_exit_f2a226') }}</span>
           <span class="status-value">{{ displayResult.exit_reason }}</span>
         </div>
         <div v-if="displayResult.total_duration_ms > 0" class="status-row">
-          <span class="status-label">总耗时</span>
+          <span class="status-label">{{ $t('generated.taskExecutionResult_total_time_spent_2db420') }}</span>
           <span class="status-value">{{ formatDuration(displayResult.total_duration_ms) }}</span>
         </div>
       </div>
@@ -28,7 +28,7 @@
     <div v-if="displayResult.steps.length > 0" class="steps-section">
       <div class="section-header">
         <el-icon><List /></el-icon>
-        <span>步骤执行详情</span>
+        <span>{{ $t('generated.taskExecutionResult_step_execution_details_1d6e93') }}</span>
         <el-tag size="small" type="info">{{ completedStepCount }}/{{ displayResult.steps.length }}</el-tag>
       </div>
       <div class="steps-list">
@@ -36,7 +36,7 @@
           v-for="(step, index) in displayResult.steps"
           :key="step.step_id"
           class="step-card"
-          :class="`step-${step.status}`"
+          :class="`step-${stepStatusType(step.status)}`"
         >
           <div class="step-header">
             <span class="step-index">{{ index + 1 }}</span>
@@ -53,7 +53,7 @@
     <div v-if="displayResult.conclusion" class="conclusion-section">
       <div class="section-header">
         <el-icon><Document /></el-icon>
-        <span>分析结论</span>
+        <span>{{ $t('generated.taskExecutionResult_analysis_conclusion_340c08') }}</span>
       </div>
       <div class="conclusion-card" :class="displayResult.conclusion.verdict">
         <div class="conclusion-header">
@@ -71,7 +71,7 @@
     <div v-if="parsedSections.length > 0" class="analysis-section">
       <div class="section-header">
         <el-icon><DataAnalysis /></el-icon>
-        <span>详细分析</span>
+        <span>{{ $t('generated.taskExecutionResult_detailed_analysis_64f5c5') }}</span>
       </div>
       <div v-for="(section, idx) in parsedSections" :key="idx" class="analysis-block">
         <div class="analysis-title">{{ section.title }}</div>
@@ -83,7 +83,7 @@
     <div v-if="remediationItems.length > 0" class="remediation-section">
       <div class="section-header">
         <el-icon><Warning /></el-icon>
-        <span>处置建议</span>
+        <span>{{ $t('generated.common_disposal_recommendations_3da99c') }}</span>
       </div>
       <div class="remediation-card">
         <div v-for="(item, idx) in remediationItems" :key="idx" class="remediation-item">
@@ -97,7 +97,7 @@
     <div v-if="displayResult.errors.length > 0" class="errors-section">
       <div class="section-header">
         <el-icon><CircleClose /></el-icon>
-        <span>错误信息 ({{ displayResult.errors.length }})</span>
+        <span>{{ $t('generated.taskExecutionResult_error_message_f2f62e') }}{{ displayResult.errors.length }})</span>
       </div>
       <div class="errors-card">
         <div v-for="(err, idx) in displayResult.errors" :key="idx" class="error-item">
@@ -110,16 +110,16 @@
     <div v-if="props.aiAutoBlockResult?.triggered" class="ai-auto-block-section">
       <div class="section-header">
         <el-icon><Warning /></el-icon>
-        <span>AI 自动阻断</span>
+        <span>{{ $t('generated.taskExecutionResult_ai_automatic_blocking_9fc672') }}</span>
         <template v-if="props.aiAutoBlockResult.summary">
           <el-tag v-if="props.aiAutoBlockResult.summary.success > 0" type="success" size="small" style="margin-left: 6px;">
-            {{ props.aiAutoBlockResult.summary.success }} 个成功
+            {{ props.aiAutoBlockResult.summary.success }} {{ $t('generated.taskExecutionResult_a_success_4b9771') }}
           </el-tag>
           <el-tag v-if="props.aiAutoBlockResult.summary.failed > 0" type="danger" size="small" style="margin-left: 6px;">
-            {{ props.aiAutoBlockResult.summary.failed }} 个失败
+            {{ props.aiAutoBlockResult.summary.failed }} {{ $t('generated.taskExecutionResult_a_failure_77b561') }}
           </el-tag>
           <el-tag v-if="props.aiAutoBlockResult.summary.skipped > 0" type="info" size="small" style="margin-left: 6px;">
-            {{ props.aiAutoBlockResult.summary.skipped }} 个跳过
+            {{ props.aiAutoBlockResult.summary.skipped }} {{ $t('generated.taskExecutionResult_skipped_e9e54a') }}
           </el-tag>
         </template>
       </div>
@@ -135,7 +135,7 @@
               <el-tag :type="item.status === 'success' ? 'success' : item.status === 'failed' ? 'danger' : 'info'" size="small">
                 {{ item.action || '-' }}
               </el-tag>
-              <el-tag v-if="item.status === 'skipped'" type="info" size="small">跳过</el-tag>
+              <el-tag v-if="item.status === 'skipped'" type="info" size="small">{{ $t('generated.taskExecutionResult_jump_over_31a985') }}</el-tag>
               <span class="ai-auto-block-alert-id">{{ item.alert_id }}</span>
               <span v-if="item.target" class="ai-auto-block-target">{{ item.target }}</span>
             </div>
@@ -151,6 +151,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed } from 'vue'
 import { Monitor, List, Document, DataAnalysis, Warning, CircleClose } from '@element-plus/icons-vue'
 import type { ExecutionResult, AIAutoBlockPayload } from '@/api/aiAnalysis'
@@ -168,7 +170,7 @@ const displayResult = computed(() => {
 
 const completedStepCount = computed(() => {
   if (!displayResult.value) return 0
-  return displayResult.value.steps.filter(s => s.status === '已完成').length
+  return displayResult.value.steps.filter(s => stepStatusType(s.status) === 'success').length
 })
 
 interface AnalysisSection {
@@ -198,8 +200,8 @@ const parsedSections = computed<AnalysisSection[]>(() => {
     const content = reasoning.substring(indices[i].start, end).trim()
     if (content) {
       // 跳过处置建议和判定结论（单独显示）
-      if (indices[i].title.includes('处置建议')) continue
-      if (indices[i].title.includes('判定结论')) continue
+      if (indices[i].title.includes('处置建议') || /remediation|recommendation/i.test(indices[i].title)) continue
+      if (indices[i].title.includes('判定结论') || /verdict|conclusion/i.test(indices[i].title)) continue
       sections.push({ title: indices[i].title, content })
     }
   }
@@ -229,10 +231,10 @@ const remediationItems = computed<string[]>(() => {
   // 如果没有结构化建议，根据verdict生成默认建议
   const verdict = displayResult.value?.conclusion?.verdict
   if (verdict === 'malicious') {
-    return ['立即隔离受影响主机，进行深入取证分析', '检查横向移动迹象', '排查SSH暴力破解来源IP', '禁止root远程登录']
+    return [translate('generatedScript.taskExecutionResult_immediately_isolate_the_affected_host_and_c9e767'), translate('generatedScript.taskExecutionResult_check_for_signs_of_lateral_movement_9abb1a'), translate('generatedScript.taskExecutionResult_troubleshooting_ssh_brute_force_cracking_source_406265'), translate('generatedScript.taskExecutionResult_disable_root_remote_login_e61409')]
   }
   if (verdict === 'suspicious') {
-    return ['进一步监控相关进程和网络活动', '收集更多证据以确认威胁']
+    return [translate('generatedScript.taskExecutionResult_further_monitoring_of_related_processes_and_949e9e'), translate('generatedScript.taskExecutionResult_gather_more_evidence_to_confirm_the_cd80db')]
   }
   return []
 })
@@ -247,11 +249,11 @@ function formatAnalysisContent(content: string): string {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}毫秒`
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}秒`
+  if (ms < 1000) return translate('generatedScript.taskExecutionResult_ms_e9c462', { p0: ms })
+  if (ms < 60000) return translate('generatedScript.taskExecutionResult_seconds_ad7dee', { p0: (ms / 1000).toFixed(1) })
   const minutes = Math.floor(ms / 60000)
   const seconds = Math.round((ms % 60000) / 1000)
-  return `${minutes}分${seconds}秒`
+  return translate('generatedScript.taskExecutionResult_minutes_seconds_b54206', { p0: minutes, p1: seconds })
 }
 </script>
 
@@ -321,11 +323,11 @@ function formatDuration(ms: number): string {
   background: var(--el-bg-color);
 }
 
-.step-card.step-已完成 {
+.step-card.step-success {
   border-left: 3px solid var(--el-color-success);
 }
 
-.step-card.step-失败 {
+.step-card.step-danger {
   border-left: 3px solid var(--el-color-danger);
   background: var(--el-color-danger-light-9);
 }

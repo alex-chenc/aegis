@@ -1,12 +1,12 @@
 <template>
   <div class="entry-candidates">
     <div class="section-header">
-      <span class="section-title">入口推断</span>
-      <el-tag v-if="candidates.length" size="small">{{ candidates.length }} 个候选</el-tag>
+      <span class="section-title">{{ $t('generated.assistantEntryPointCandidateList_entrance_inference_9bbfec') }}</span>
+      <el-tag v-if="candidates.length" size="small">{{ candidates.length }} {{ $t('generated.assistantEntryPointCandidateList_candidates_f4555b') }}</el-tag>
     </div>
 
     <div v-if="!candidates.length" class="empty-hint">
-      暂无入口候选
+      {{ $t('generated.assistantEntryPointCandidateList_no_entrance_candidates_yet_70fa2f') }}
     </div>
 
     <div class="candidate-list">
@@ -23,10 +23,10 @@
           </el-tag>
           <div class="candidate-score">
             <span class="score-value">{{ candidate.score }}</span>
-            <span class="score-unit">分</span>
+            <span class="score-unit">{{ $t('generated.assistantEntryPointCandidateList_point_0d7416') }}</span>
           </div>
           <div class="candidate-confidence">
-            置信度 {{ (candidate.confidence * 100).toFixed(0) }}%
+            {{ $t('generated.common_confidence_b78c2d') }} {{ (candidate.confidence * 100).toFixed(0) }}%
           </div>
         </div>
 
@@ -36,16 +36,16 @@
         <div class="evidence-row">
           <div class="evidence-tag supporting">
             <el-icon><CircleCheck /></el-icon>
-            <span>{{ candidate.evidence_ids?.length || 0 }} 条支持证据</span>
+            <span>{{ candidate.evidence_ids?.length || 0 }} {{ $t('generated.assistantEntryPointCandidateList_piece_of_supporting_evidence_1157df') }}</span>
           </div>
           <div v-if="candidate.counter_evidence_ids?.length" class="evidence-tag counter">
             <el-icon><CircleClose /></el-icon>
-            <span>{{ candidate.counter_evidence_ids.length }} 条反证</span>
+            <span>{{ candidate.counter_evidence_ids.length }} {{ $t('generated.assistantEntryPointCandidateList_evidence_to_the_contrary_f73075') }}</span>
           </div>
         </div>
 
         <div v-if="candidate.first_seen_at" class="first-seen">
-          首次发现: {{ formatTime(candidate.first_seen_at) }}
+          {{ $t('generated.assistantEntryPointCandidateList_first_discovered_f9508b') }} {{ formatTime(candidate.first_seen_at) }}
         </div>
       </div>
     </div>
@@ -53,6 +53,9 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { computed } from 'vue'
 import { CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import type { EntryPointCandidate } from '@/api/assistant'
@@ -81,21 +84,21 @@ function entryTypeTag(type: string): string {
 
 function entryTypeLabel(type: string): string {
   const map: Record<string, string> = {
-    ssh_bruteforce: 'SSH 暴力破解',
-    exposed_service_cve: '服务漏洞',
+    ssh_bruteforce: translate('generatedScript.assistantEntryPointCandidateList_ssh_brute_force_cracking_f76e47'),
+    exposed_service_cve: translate('generatedScript.assistantEntryPointCandidateList_service_vulnerability_fd3544'),
     webshell: 'WebShell',
-    stolen_credential: '凭据窃取',
-    scheduled_task: '计划任务',
-    package_supply_chain: '供应链',
-    weak_config: '弱配置',
-    unknown: '未知',
+    stolen_credential: translate('generatedScript.assistantEntryPointCandidateList_credential_theft_31a10d'),
+    scheduled_task: translate('generatedScript.assistantEntryPointCandidateList_scheduled_tasks_d065d4'),
+    package_supply_chain: translate('generatedScript.assistantEntryPointCandidateList_supply_chain_0978a2'),
+    weak_config: translate('generatedScript.assistantEntryPointCandidateList_weak_configuration_19c953'),
+    unknown: translate('generatedScript.common_unknown_d9c32a'),
   }
   return map[type] || type
 }
 
 function formatTime(time: string): string {
   if (!time) return ''
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 </script>
 

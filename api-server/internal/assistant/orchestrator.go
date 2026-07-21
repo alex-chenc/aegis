@@ -102,6 +102,7 @@ type RunInput struct {
 	UserMessage string
 	TaskType    string
 	ContextRefs []model.AssistantContextRef
+	Locale      string
 }
 
 // RunResult 运行结果
@@ -118,6 +119,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.String("session_id", input.SessionID),
 		zap.String("run_id", input.RunID),
 		zap.String("task_type", input.TaskType),
+		zap.String("locale", NormalizeLocale(input.Locale)),
 	)
 
 	// 1. 发布 run_started 事件
@@ -126,7 +128,8 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	}))
 
 	// 2. 发布 thinking 事件
-	o.runManager.Publish(input.SessionID, EventThinkingPayload(input.SessionID, input.RunID, "正在分析您的问题..."))
+	o.runManager.Publish(input.SessionID, EventThinkingPayload(input.SessionID, input.RunID,
+		localized(input.Locale, "正在分析您的问题...", "Analyzing your request...")))
 
 	// 3. 加载上下文引用（优先使用 RunInput 携带的，避免重复查询）
 	var contextRefs []ContextObject
@@ -312,7 +315,7 @@ func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput
 	msgID := "msg_" + input.RunID
 	response := strings.TrimSpace(plan.ClarifyingQuestion)
 	if response == "" {
-		response = "请补充要操作的对象和范围后再执行。"
+		response = localized(input.Locale, "请补充要操作的对象和范围后再执行。", "Specify the target and scope before continuing.")
 	}
 
 	o.runManager.Publish(input.SessionID, EventMessageDeltaPayload(input.SessionID, input.RunID, msgID, response))
@@ -514,6 +517,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		"current_message_id": msgID,
 		"current_run_status": "running",
 		"run_started_at":     time.Now().UTC().Format(time.RFC3339),
+		"locale":             NormalizeLocale(input.Locale),
 	})
 
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
@@ -530,6 +534,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		MaxIterations:     maxIterations,
 		ExecutionPlan:     nil,
 		UseAIAnalysisFlow: useAIAnalysisFlow,
+		Locale:            NormalizeLocale(input.Locale),
 	})
 	if err != nil {
 		o.logger.Error("failed to build agent-runtime", zap.Error(err))
@@ -545,6 +550,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			"session_id": input.SessionID,
 			"run_id":     input.RunID,
 			"task_type":  input.TaskType,
+			"locale":     NormalizeLocale(input.Locale),
 		},
 	})
 	if run, ok := o.runManager.Get(input.SessionID); ok {

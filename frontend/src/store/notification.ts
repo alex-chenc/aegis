@@ -3,6 +3,7 @@ import { getNotifications, markNotificationRead, markAllNotificationsRead } from
 import type { Notification } from '@/types/notification'
 import { ElMessage } from 'element-plus'
 import { getAuthToken } from '@/utils/auth'
+import { translate } from '@/i18n'
 
 interface NotificationState {
   notifications: Notification[]
@@ -67,7 +68,7 @@ export const useNotificationStore = defineStore('notification', {
         // 回滚
         target.is_read = prevRead
         this.unreadCount += 1
-        ElMessage.error('操作失败，请重试')
+        ElMessage.error(translate('common.messages.operationFailedRetry'))
       }
     },
 
@@ -86,7 +87,7 @@ export const useNotificationStore = defineStore('notification', {
         // 回滚
         this.notifications = prevNotifications
         this.unreadCount = prevCount
-        ElMessage.error('操作失败，请重试')
+        ElMessage.error(translate('common.messages.operationFailedRetry'))
       }
     },
 

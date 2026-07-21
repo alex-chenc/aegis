@@ -7,7 +7,7 @@
     <div class="corner-line corner-line-left" aria-hidden="true"></div>
     <div class="corner-line corner-line-right" aria-hidden="true"></div>
 
-    <section class="brand-panel" aria-label="Aegis 主机安全指挥台">
+    <section class="brand-panel" :aria-label="t('auth.login.brandAria')">
       <div class="brand-header">
         <div class="logo-mark" aria-hidden="true">
           <svg viewBox="0 0 48 56" focusable="false">
@@ -17,14 +17,14 @@
         </div>
         <div>
           <strong>Aegis</strong>
-          <span>主机安全指挥台</span>
+          <span>{{ t('app.brand.subtitle') }}</span>
         </div>
       </div>
 
       <div class="brand-content">
         <p class="kicker">AI-NATIVE HOST SECURITY</p>
-        <h1>智能防护 · <span>安全无界</span></h1>
-        <p class="brand-subtitle">实时感知风险，智能防御威胁，守护每一台主机安全</p>
+        <h1>{{ t('auth.login.heroTitle') }} · <span>{{ t('auth.login.heroAccent') }}</span></h1>
+        <p class="brand-subtitle">{{ t('auth.login.slogan') }}</p>
       </div>
 
       <div class="hologram-wrap" aria-hidden="true">
@@ -59,7 +59,7 @@
         </div>
       </div>
 
-      <div class="feature-list" aria-label="安全能力">
+      <div class="feature-list" :aria-label="t('auth.login.featureAria')">
         <article v-for="feature in features" :key="feature.title" class="feature-item">
           <span class="feature-icon" aria-hidden="true" v-html="feature.icon"></span>
           <span>
@@ -70,12 +70,12 @@
       </div>
     </section>
 
-    <section class="login-shell" aria-label="登录认证">
+    <section class="login-shell" :aria-label="t('auth.login.panelAria')">
       <div class="auth-card">
         <div class="panel-heading">
           <span class="eyebrow">AUTHENTICATION</span>
-          <h2>{{ initialized ? '账号密码登录' : '首次进入控制台' }}</h2>
-          <p>{{ initialized ? '请输入管理员账号和密码。' : '首次部署无需账号密码，进入后必须立即设置管理员凭据。' }}</p>
+          <h2>{{ initialized ? t('auth.login.titleInitialized') : t('auth.login.titleFirstUse') }}</h2>
+          <p>{{ initialized ? t('auth.login.hintInitialized') : t('auth.login.hintFirstUse') }}</p>
         </div>
 
         <el-skeleton v-if="loadingStatus" :rows="5" animated class="auth-skeleton" />
@@ -89,12 +89,12 @@
           class="auth-form"
           @submit.prevent="handleLogin"
         >
-          <el-form-item label="账号" prop="username">
+          <el-form-item :label="t('auth.login.username')" prop="username">
             <el-input
               v-model.trim="loginForm.username"
               autocomplete="username"
               class="aegis-input"
-              placeholder="请输入账号"
+              :placeholder="t('auth.login.usernamePlaceholder')"
               size="large"
             >
               <template #prefix>
@@ -103,13 +103,13 @@
             </el-input>
           </el-form-item>
 
-          <el-form-item label="密码" prop="password">
+          <el-form-item :label="t('auth.login.password')" prop="password">
             <el-input
               v-model="loginForm.password"
               type="password"
               autocomplete="current-password"
               class="aegis-input"
-              placeholder="请输入密码"
+              :placeholder="t('auth.login.passwordPlaceholder')"
               size="large"
               show-password
             >
@@ -122,9 +122,9 @@
           <div class="form-row">
             <label class="remember-option">
               <input v-model="rememberMe" type="checkbox" />
-              <span>记住我</span>
+              <span>{{ t('auth.login.rememberUsername') }}</span>
             </label>
-            <button type="button" class="link-button">忘记密码？</button>
+            <button type="button" class="link-button">{{ t('auth.login.forgotPassword') }}</button>
           </div>
 
           <el-button
@@ -135,13 +135,13 @@
             :loading="submitting"
             :disabled="submitting"
           >
-            登录
+            {{ t('auth.login.signIn') }}
           </el-button>
         </el-form>
 
         <div v-else class="bootstrap-actions">
           <el-alert
-            title="首次进入后只能访问账号密码设置页面。"
+            :title="t('auth.login.bootstrapWarning')"
             type="warning"
             :closable="false"
             show-icon
@@ -154,7 +154,7 @@
             :disabled="submitting"
             @click="handleBootstrap"
           >
-            首次进入控制台
+            {{ t('auth.login.titleFirstUse') }}
           </el-button>
         </div>
       </div>
@@ -163,8 +163,9 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { bootstrapLogin, getAuthStatus, login } from '@/api/auth'
@@ -180,6 +181,7 @@ interface Particle {
 }
 
 const router = useRouter()
+const { t } = useI18n()
 const loadingStatus = ref(true)
 const submitting = ref(false)
 const initialized = ref(false)
@@ -203,28 +205,28 @@ const icons = {
   lock: '<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>'
 }
 
-const features = [
+const features = computed(() => [
   {
-    title: '实时防护',
-    description: '7x24 小时持续监测，无死角防护',
+    title: t('auth.login.realtimeProtection'),
+    description: t('auth.login.featureRealtimeDescription'),
     icon: icons.shield
   },
   {
-    title: '智能检测',
-    description: 'AI 驱动威胁检测，精准识别风险',
+    title: t('auth.login.intelligentDetection'),
+    description: t('auth.login.featureDetectionDescription'),
     icon: icons.zap
   },
   {
-    title: '响应处置',
-    description: '自动化响应处置，快速阻断威胁',
+    title: t('auth.login.response'),
+    description: t('auth.login.featureResponseDescription'),
     icon: icons.network
   }
-]
+])
 
-const loginRules: FormRules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
-}
+const loginRules = computed<FormRules>(() => ({
+  username: [{ required: true, message: t('auth.login.usernamePlaceholder'), trigger: 'blur' }],
+  password: [{ required: true, message: t('auth.login.passwordPlaceholder'), trigger: 'blur' }]
+}))
 
 onMounted(async () => {
   restoreRememberedAccount()
@@ -391,11 +393,11 @@ async function handleLogin() {
     if (session.force_password_change) {
       await router.replace('/force-password-change')
     } else {
-      ElMessage.success('登录成功')
+      ElMessage.success(t('auth.login.success'))
       window.location.assign('/hosts')
     }
   } catch (err: any) {
-    const msg = err?.response?.data?.message || '登录失败'
+    const msg = err?.response?.data?.message || t('auth.login.loginFailed')
     ElMessage.error(msg)
   } finally {
     submitting.value = false

@@ -7,7 +7,7 @@
         size="small"
         @click="copyToClipboard"
       >
-        复制
+        {{ $t('generated.common_copy_4edd1d') }}
       </el-button>
     </div>
     
@@ -31,6 +31,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
@@ -47,7 +49,7 @@ const props = withDefaults(defineProps<{
 const showSecurityWarning = computed(() => props.mode === 'poc')
 
 const warningTitle = computed(() => 
-  props.mode === 'poc' ? '安全验证脚本' : '修复脚本'
+  props.mode === 'poc' ? translate('generatedScript.commonScriptPreview_security_verification_script_ecebad') : translate('generatedScript.common_fix_script_f411bd')
 )
 
 const warningType = computed(() => 
@@ -56,8 +58,8 @@ const warningType = computed(() =>
 
 const warningMessage = computed(() => 
   props.mode === 'poc' 
-    ? '此脚本仅用于验证漏洞是否存在，不会修改系统配置' 
-    : '此脚本将修改系统配置以修复漏洞，请确认后执行'
+    ? translate('generatedScript.commonScriptPreview_this_script_is_only_used_to_75e6ca')
+    : translate('generatedScript.commonScriptPreview_this_script_will_modify_the_system_da2277')
 )
 
 const highlightedCode = computed(() => {
@@ -99,9 +101,9 @@ function escapeHtml(text: string): string {
 async function copyToClipboard() {
   try {
     await navigator.clipboard.writeText(props.script)
-    ElMessage.success('脚本已复制到剪贴板')
+    ElMessage.success(translate('generatedScript.commonScriptPreview_script_copied_to_clipboard_4343f3'))
   } catch {
-    ElMessage.error('复制失败')
+    ElMessage.error(translate('generatedScript.common_copy_failed_f2c6b5'))
   }
 }
 </script>

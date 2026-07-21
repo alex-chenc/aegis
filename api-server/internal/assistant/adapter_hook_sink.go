@@ -22,9 +22,15 @@ type AssistantHookSink struct {
 	messageID  string
 	logger     *zap.Logger
 	memoryRepo repository.AssistantMemoryRepository
+	locale     string
 
 	mu                  sync.Mutex
 	stepResultSummaries map[string]string
+}
+
+func (s *AssistantHookSink) WithLocale(locale string) *AssistantHookSink {
+	s.locale = NormalizeLocale(locale)
+	return s
 }
 
 // NewAssistantHookSink 创建 HookSink
@@ -54,7 +60,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 	case agentruntime.HookTaskStarted:
 		s.publish(EventThinking, map[string]interface{}{
-			"content": "开始执行任务...",
+			"content": localized(s.locale, "开始执行任务...", "Starting task..."),
 		})
 
 	case agentruntime.HookTaskFinished:
@@ -63,19 +69,19 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 	case agentruntime.HookTaskInterrupted:
 		s.publish(EventError, map[string]interface{}{
-			"message": "任务被中断",
+			"message": localized(s.locale, "任务被中断", "Task interrupted"),
 		})
 
 	// --- 经验/计划 ---
 
 	case agentruntime.HookExperienceLoaded:
 		s.publish(EventThinking, map[string]interface{}{
-			"content": "正在加载历史经验...",
+			"content": localized(s.locale, "正在加载历史经验...", "Loading previous experience..."),
 		})
 
 	case agentruntime.HookPlanCreated:
 		s.publish(EventThinking, map[string]interface{}{
-			"content": "正在制定执行计划...",
+			"content": localized(s.locale, "正在制定执行计划...", "Creating an execution plan..."),
 		})
 		// 发送计划事件
 		if event.Snapshot != nil && event.Snapshot.CurrentPlan != nil {
@@ -94,7 +100,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 			"title":   stepTitle,
 		})
 		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("开始执行步骤: %s", stepTitle),
+			"content": fmt.Sprintf(localized(s.locale, "开始执行步骤: %s", "Starting step: %s"), stepTitle),
 		})
 
 	case agentruntime.HookStepCompleted:
@@ -105,7 +111,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 			"result_summary": s.findStepResultSummary(event.StepID, stepTitle),
 		})
 		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("步骤完成: %s", stepTitle),
+			"content": fmt.Sprintf(localized(s.locale, "步骤完成: %s", "Step completed: %s"), stepTitle),
 		})
 
 	case agentruntime.HookStepFailed:
@@ -130,7 +136,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 	case agentruntime.HookStepSkipped:
 		stepTitle := findAssistantStepTitle(event, event.StepID)
 		s.publish(EventThinking, map[string]interface{}{
-			"content": fmt.Sprintf("已跳过步骤: %s", stepTitle),
+			"content": fmt.Sprintf(localized(s.locale, "已跳过步骤: %s", "Skipped step: %s"), stepTitle),
 		})
 
 	// --- 模型调用 ---
@@ -153,7 +159,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		toolName, _ := payload["tool_name"].(string)
 		callID, _ := payload["call_id"].(string)
 		s.publish(EventThinking, map[string]interface{}{
-			"content":   fmt.Sprintf("正在调用工具: %s", toolName),
+			"content":   fmt.Sprintf(localized(s.locale, "正在调用工具: %s", "Calling tool: %s"), toolName),
 			"call_id":   callID,
 			"tool_name": toolName,
 		})
@@ -208,7 +214,7 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 		reason, _ := payload["reason"].(string)
 		if reason != "" {
 			s.publish(EventThinking, map[string]interface{}{
-				"content": fmt.Sprintf("计划纠正: %s", reason),
+				"content": fmt.Sprintf(localized(s.locale, "计划纠正: %s", "Plan correction: %s"), reason),
 			})
 		}
 

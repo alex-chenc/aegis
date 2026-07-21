@@ -2,30 +2,30 @@
   <div class="weak-password-page">
     <div class="page-toolbar">
       <div>
-        <h1>智能弱密码检测</h1>
-        <p>基于在线主机应用资产和字典匹配的凭据检查。</p>
+        <h1>{{ $t('generated.detectionWeakPasswordIndex_intelligent_weak_password_detection_032e9e') }}</h1>
+        <p>{{ $t('generated.detectionWeakPasswordIndex_credential_checking_based_on_online_host_f891ac') }}</p>
       </div>
       <div class="toolbar-actions">
-        <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-        <el-button :icon="Collection" @click="router.push('/risk/weak-password/dictionaries')">字典管理</el-button>
+        <el-button :icon="Refresh" @click="refreshAll">{{ $t('generated.common_refresh_38108e') }}</el-button>
+        <el-button :icon="Collection" @click="router.push('/risk/weak-password/dictionaries')">{{ $t('generated.detectionWeakPasswordIndex_dictionary_management_3bdfb2') }}</el-button>
       </div>
     </div>
 
     <el-tabs v-model="activeTab" class="workspace-tabs">
-      <el-tab-pane label="应用资产分析" name="analysis">
+      <el-tab-pane :label="$t('generated.detectionWeakPasswordIndex_apply_asset_analysis_fb81db')" name="analysis">
         <section class="panel">
           <div class="filter-row">
-            <el-select v-model="scope.application_types" multiple collapse-tags placeholder="应用类型">
+            <el-select v-model="scope.application_types" multiple collapse-tags :placeholder="$t('generated.detectionWeakPasswordIndex_application_type_5865b7')">
               <el-option v-for="item in applicationTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
-            <el-select v-model="store.candidateFilters.confidence" placeholder="置信度" clearable>
-              <el-option label="高" value="high" />
-              <el-option label="中" value="medium" />
-              <el-option label="低" value="low" />
+            <el-select v-model="store.candidateFilters.confidence" :placeholder="$t('generated.common_confidence_b78c2d')" clearable>
+              <el-option :label="$t('generated.common_high_b096b3')" value="high" />
+              <el-option :label="$t('generated.common_middle_086907')" value="medium" />
+              <el-option :label="$t('generated.common_low_b9ee25')" value="low" />
             </el-select>
-            <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索应用、主机或 IP" clearable @keyup.enter="runAnalysis" />
-            <el-button type="primary" :icon="Cpu" :loading="store.analyzing" @click="runAnalysis">一键分析资产应用</el-button>
-            <el-button type="success" :icon="Key" :loading="store.creatingTask" :disabled="store.candidates.length === 0" @click="openBatchCheck">一键检测</el-button>
+            <el-input v-model="keyword" :prefix-icon="Search" :placeholder="$t('generated.detectionWeakPasswordIndex_search_for_an_application_host_or_8e42a4')" clearable @keyup.enter="runAnalysis" />
+            <el-button type="primary" :icon="Cpu" :loading="store.analyzing" @click="runAnalysis">{{ $t('generated.detectionWeakPasswordIndex_one_click_asset_analysis_application_e8f98d') }}</el-button>
+            <el-button type="success" :icon="Key" :loading="store.creatingTask" :disabled="store.candidates.length === 0" @click="openBatchCheck">{{ $t('generated.detectionWeakPasswordIndex_one_click_detection_385bad') }}</el-button>
           </div>
 
           <el-alert
@@ -33,54 +33,54 @@
             type="warning"
             show-icon
             :closable="false"
-            title="暂无可分析的应用资产。"
-            :description="store.analysisResult?.message || '请先执行资产采集，系统将基于采集到的应用资产分析可能存在密码的配置位置。'"
+            :title="$t('generated.detectionWeakPasswordIndex_there_are_currently_no_application_assets_a988ff')"
+            :description="store.analysisResult?.message || $t('dynamic.collectAssetsFirst')"
           >
             <template #default>
               <div class="alert-actions">
-                <el-button type="primary" size="small" @click="router.push('/hosts/assets')">去采集资产</el-button>
-                <el-button size="small" @click="refreshAll">刷新资产状态</el-button>
+                <el-button type="primary" size="small" @click="router.push('/hosts/assets')">{{ $t('generated.detectionWeakPasswordIndex_to_collect_assets_c8bc9c') }}</el-button>
+                <el-button size="small" @click="refreshAll">{{ $t('generated.detectionWeakPasswordIndex_refresh_asset_status_0a5002') }}</el-button>
               </div>
             </template>
           </el-alert>
 
           <el-empty
             v-else-if="!store.loading && store.candidates.length === 0"
-            description="暂无可分析的应用资产。"
+            :description="$t('generated.detectionWeakPasswordIndex_there_are_currently_no_application_assets_a988ff')"
           >
-            <el-button type="primary" @click="router.push('/hosts/assets')">去采集资产</el-button>
-            <el-button @click="refreshAll">刷新资产状态</el-button>
+            <el-button type="primary" @click="router.push('/hosts/assets')">{{ $t('generated.detectionWeakPasswordIndex_to_collect_assets_c8bc9c') }}</el-button>
+            <el-button @click="refreshAll">{{ $t('generated.detectionWeakPasswordIndex_refresh_asset_status_0a5002') }}</el-button>
           </el-empty>
 
           <el-table v-else v-loading="store.loading" :data="store.candidates" class="dense-table">
-            <el-table-column label="主机" min-width="170">
+            <el-table-column :label="$t('generated.common_host_2e8a0c')" min-width="170">
               <template #default="{ row }">
                 <div class="primary-cell">{{ row.hostname || row.host_id }}</div>
                 <div class="secondary-cell">{{ row.ip_address || row.host_id }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="应用" min-width="180">
+            <el-table-column :label="$t('generated.common_application_456202')" min-width="180">
               <template #default="{ row }">
                 <div class="primary-cell">{{ row.application_name }}</div>
                 <div class="secondary-cell">{{ row.application_version || row.application_type }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="标签" width="120">
+            <el-table-column :label="$t('generated.common_label_ae0a7a')" width="120">
               <template #default="{ row }">
                 <el-tag :type="row.is_container ? 'success' : 'info'" size="small" effect="plain">
-                  {{ row.is_container ? '容器应用' : '主机应用' }}
+                  {{ row.is_container ? $t('dynamic.containerApplication') : $t('dynamic.hostApplication') }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="可能密码位置" min-width="260">
+            <el-table-column :label="$t('generated.detectionWeakPasswordIndex_possible_password_location_4d7766')" min-width="260">
               <template #default="{ row }">
                 <div class="path-list">
                   <el-tag v-for="path in row.candidate_paths.slice(0, 2)" :key="path" effect="plain">{{ path }}</el-tag>
-                  <span v-if="row.candidate_paths.length === 0" class="secondary-cell">待受控辅助定位</span>
+                  <span v-if="row.candidate_paths.length === 0" class="secondary-cell">{{ $t('generated.detectionWeakPasswordIndex_to_be_controlled_assisted_positioning_6867b7') }}</span>
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="130">
+            <el-table-column :label="$t('generated.common_state_62e951')" width="130">
               <template #default="{ row }">
                 <el-tag
                   :type="scanStatusType(row.scan_status)"
@@ -91,14 +91,14 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="AI 置信度" width="120">
+            <el-table-column :label="$t('generated.detectionWeakPasswordIndex_ai_confidence_4815bf')" width="120">
               <template #default="{ row }">
                 <el-tag :type="confidenceTag(row.confidence)">{{ confidenceLabel(row.confidence) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140" fixed="right">
+            <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openSingleCheck(row)">检查弱密码</el-button>
+                <el-button link type="primary" @click="openSingleCheck(row)">{{ $t('generated.detectionWeakPasswordIndex_check_for_weak_passwords_a88bb2') }}</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -116,10 +116,10 @@
         </section>
       </el-tab-pane>
 
-      <el-tab-pane label="弱密码检查" name="tasks">
+      <el-tab-pane :label="$t('generated.detectionWeakPasswordIndex_weak_password_check_ebc6ef')" name="tasks">
         <section class="panel">
           <div class="panel-head">
-            <h2>检查任务</h2>
+            <h2>{{ $t('generated.detectionWeakPasswordIndex_check_tasks_95b778') }}</h2>
             <div class="toolbar-actions">
               <el-button
                 type="danger"
@@ -127,9 +127,9 @@
                 :disabled="selectedTaskRows.length === 0"
                 @click="deleteSelectedTasks"
               >
-                批量删除
+                {{ $t('generated.common_batch_delete_362aed') }}
               </el-button>
-              <el-button :icon="Refresh" @click="store.fetchTasks">刷新</el-button>
+              <el-button :icon="Refresh" @click="store.fetchTasks">{{ $t('generated.common_refresh_38108e') }}</el-button>
             </div>
           </div>
           <el-table
@@ -140,13 +140,13 @@
             @selection-change="handleTaskSelectionChange"
           >
             <el-table-column type="selection" width="48" :selectable="isTaskSelectable" />
-            <el-table-column label="任务" min-width="220" prop="name" />
-            <el-table-column label="状态" width="150">
+            <el-table-column :label="$t('generated.detectionWeakPasswordIndex_task_3172b3')" min-width="220" prop="name" />
+            <el-table-column :label="$t('generated.common_state_62e951')" width="150">
               <template #default="{ row }">
                 <el-tag :type="taskStatusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="进度" min-width="180">
+            <el-table-column :label="$t('generated.common_schedule_acf014')" min-width="180">
               <template #default="{ row }">
                 <div class="progress-cell">
                   <el-progress :percentage="row.progress || 0" :stroke-width="10" />
@@ -154,12 +154,12 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="命中" width="90" prop="matched_findings" />
-            <el-table-column label="失败应用" width="100" prop="failed_applications" />
-            <el-table-column label="操作" width="210" fixed="right">
+            <el-table-column :label="$t('generated.common_hit_7a130d')" width="90" prop="matched_findings" />
+            <el-table-column :label="$t('generated.detectionWeakPasswordIndex_failed_application_4385c2')" width="100" prop="failed_applications" />
+            <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="210" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="router.push(`/risk/weak-password/tasks/${row.id}`)">查看详情</el-button>
-                <el-button link type="danger" :disabled="!canDeleteTask(row.status)" @click="deleteTask(row.id)">删除</el-button>
+                <el-button link type="primary" @click="router.push(`/risk/weak-password/tasks/${row.id}`)">{{ $t('generated.detectionWeakPasswordIndex_check_the_details_faea8c') }}</el-button>
+                <el-button link type="danger" :disabled="!canDeleteTask(row.status)" @click="deleteTask(row.id)">{{ $t('generated.common_delete_3755f5') }}</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -178,61 +178,61 @@
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="checkVisible" :title="checkMode === 'batch' ? '一键检测弱密码' : '检查弱密码'" size="560px">
+    <el-drawer v-model="checkVisible" :title="checkMode === 'batch' ? $t('dynamic.oneClickWeakPasswordCheck') : $t('dynamic.weakPasswordCheck')" size="560px">
       <div class="drawer-stack">
         <template v-if="checkMode === 'single' && selectedCandidate">
-          <div class="fact-row"><span>目标主机</span><strong>{{ selectedCandidate.hostname || selectedCandidate.host_id }}</strong></div>
-          <div class="fact-row"><span>目标应用</span><strong>{{ selectedCandidate.application_name }}</strong></div>
+          <div class="fact-row"><span>{{ $t('generated.detectionWeakPasswordIndex_target_host_d24ba7') }}</span><strong>{{ selectedCandidate.hostname || selectedCandidate.host_id }}</strong></div>
+          <div class="fact-row"><span>{{ $t('generated.detectionWeakPasswordIndex_target_application_832078') }}</span><strong>{{ selectedCandidate.application_name }}</strong></div>
         </template>
         <template v-else>
-          <div class="fact-row"><span>检测范围</span><strong>当前 {{ store.candidates.length }} 个应用</strong></div>
+          <div class="fact-row"><span>{{ $t('generated.detectionWeakPasswordIndex_detection_range_05ea8f') }}</span><strong>{{ $t('generated.detectionWeakPasswordIndex_current_25e74d') }} {{ store.candidates.length }} {{ $t('generated.detectionWeakPasswordIndex_apps_d77eb8') }}</strong></div>
         </template>
 
         <el-form label-position="top">
-          <el-form-item label="字典策略">
+          <el-form-item :label="$t('generated.detectionWeakPasswordIndex_dictionary_strategy_28c4d1')">
             <el-checkbox-group v-model="selectedDictionaryIds" class="dictionary-list">
               <el-checkbox v-for="dict in availableDictionaries" :key="dict.id" :label="dict.id">
-                {{ dict.name }}（{{ dict.entry_count }} 条）
+                {{ dict.name }}（{{ dict.entry_count }} {{ $t('generated.detectionWeakPasswordIndex_strip_372545') }}
               </el-checkbox>
             </el-checkbox-group>
           </el-form-item>
-          <el-form-item label="AI 策略">
-            <el-checkbox v-model="repairCollectionErrors">读取失败时 AI 修复定位</el-checkbox>
+          <el-form-item :label="$t('generated.detectionWeakPasswordIndex_ai_strategy_26e7b9')">
+            <el-checkbox v-model="repairCollectionErrors">{{ $t('generated.detectionWeakPasswordIndex_ai_repair_positioning_when_reading_fails_702e33') }}</el-checkbox>
           </el-form-item>
-          <el-form-item label="检测轮数">
+          <el-form-item :label="$t('generated.detectionWeakPasswordIndex_number_of_detection_rounds_da1eca')">
             <el-input-number v-model="detectionRounds" :min="10" :max="50" :step="1" controls-position="right" />
           </el-form-item>
         </el-form>
         <div class="drawer-actions">
-          <el-button @click="checkVisible = false">取消</el-button>
-          <el-button type="primary" :loading="store.creatingTask" @click="confirmCheck">确认检查</el-button>
+          <el-button @click="checkVisible = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+          <el-button type="primary" :loading="store.creatingTask" @click="confirmCheck">{{ $t('generated.detectionWeakPasswordIndex_confirmation_check_641d53') }}</el-button>
         </div>
       </div>
     </el-drawer>
 
-    <el-drawer v-model="findingVisible" title="弱密码详情" size="640px">
+    <el-drawer v-model="findingVisible" :title="$t('generated.detectionWeakPasswordIndex_weak_password_details_95b795')" size="640px">
       <div v-if="selectedCandidate" class="drawer-stack">
-        <div class="fact-row"><span>应用</span><strong>{{ selectedCandidate.application_name }}</strong></div>
-        <div class="fact-row"><span>主机</span><strong>{{ selectedCandidate.hostname || selectedCandidate.host_id }}</strong></div>
+        <div class="fact-row"><span>{{ $t('generated.common_application_456202') }}</span><strong>{{ selectedCandidate.application_name }}</strong></div>
+        <div class="fact-row"><span>{{ $t('generated.common_host_2e8a0c') }}</span><strong>{{ selectedCandidate.hostname || selectedCandidate.host_id }}</strong></div>
         <el-table :data="selectedCandidate.findings || []" class="dense-table">
-          <el-table-column label="账号" prop="account" min-width="120" />
-          <el-table-column label="密码" min-width="160">
+          <el-table-column :label="$t('generated.common_account_901384')" prop="account" min-width="120" />
+          <el-table-column :label="$t('generated.detectionWeakPasswordIndex_password_c839a8')" min-width="160">
             <template #default="{ row }">
               <code class="password-mask">{{ revealedPasswords[row.id] || row.matched_password_mask }}</code>
             </template>
           </el-table-column>
-          <el-table-column label="进程 PID" width="120">
+          <el-table-column :label="$t('generated.detectionWeakPasswordIndex_process_pid_b31aa4')" width="120">
             <template #default="{ row }">{{ row.process_pid || '-' }}</template>
           </el-table-column>
-          <el-table-column label="来源" min-width="220">
+          <el-table-column :label="$t('generated.common_source_c63f79')" min-width="220">
             <template #default="{ row }">
               <div class="secondary-cell">{{ row.source_path }}</div>
               <div class="secondary-cell">{{ row.field_path }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120" fixed="right">
+          <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="120" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="revealFinding(row.id)">查看明文</el-button>
+              <el-button link type="primary" @click="revealFinding(row.id)">{{ $t('generated.detectionWeakPasswordIndex_view_clear_text_cf0ecc') }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -242,6 +242,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -273,19 +275,19 @@ const scope = reactive({
   online_agents_only: true,
 })
 
-const applicationTypeOptions = [
-  { label: '数据库', value: 'database' },
+const applicationTypeOptions = computed(() => [
+  { label: translate('generatedScript.common_database_f4dbbc'), value: 'database' },
   { label: 'Redis', value: 'redis' },
   { label: 'MySQL', value: 'mysql' },
   { label: 'PostgreSQL', value: 'postgresql' },
   { label: 'OpenSSH', value: 'openssh' },
   { label: 'Tomcat', value: 'tomcat' },
   { label: 'FTP', value: 'ftp' },
-  { label: 'Web 服务', value: 'web_service' },
+  { label: translate('generatedScript.common_web_services_e3d112'), value: 'web_service' },
   { label: 'AI Agent', value: 'ai_agent' },
-  { label: 'MCP 服务', value: 'mcp_server' },
-  { label: 'LLM 网关', value: 'llm_service' },
-]
+  { label: translate('generatedScript.detectionWeakPasswordIndex_mcp_service_463f3b'), value: 'mcp_server' },
+  { label: translate('generatedScript.detectionWeakPasswordIndex_llm_gateway_0d3bd6'), value: 'llm_service' },
+])
 
 const availableDictionaries = computed(() => {
   const seen = new Set<string>()
@@ -312,7 +314,7 @@ async function runAnalysis() {
   if (result.error_code === 'no_application_assets') {
     return
   }
-  ElMessage.success(`发现 ${result.candidate_count} 个可检查应用`)
+  ElMessage.success(translate('generatedScript.detectionWeakPasswordIndex_checkable_apps_found_23fe91', { p0: result.candidate_count }))
 }
 
 async function refreshAll() {
@@ -350,7 +352,7 @@ function openFindingDetail(row: WeakPasswordCandidateApplication) {
 
 async function confirmCheck() {
   if (selectedDictionaryIds.value.length === 0) {
-    ElMessage.warning('请至少勾选一个字典')
+    ElMessage.warning(translate('generatedScript.detectionWeakPasswordIndex_please_check_at_least_one_dictionary_a9786c'))
     return
   }
   const dictionary_policy = buildDictionaryPolicy()
@@ -379,7 +381,7 @@ async function confirmCheck() {
   await store.fetchTasks()
   checkVisible.value = false
   activeTab.value = 'tasks'
-  ElMessage.success(`已创建 ${result.created.length} 个检测任务，跳过 ${result.skipped.length} 个离线或不可检测应用`)
+  ElMessage.success(translate('generatedScript.detectionWeakPasswordIndex_detection_tasks_created_offline_or_undetectable_af617c', { p0: result.created.length, p1: result.skipped.length }))
 }
 
 function buildDictionaryPolicy() {
@@ -400,12 +402,12 @@ function ensureDefaultDictionarySelected() {
 
 async function revealFinding(findingId: string) {
   try {
-    const password = await ElMessageBox.prompt('请输入当前系统密码', '查看命中密码', {
-      confirmButtonText: '查看',
-      cancelButtonText: '取消',
+    const password = await ElMessageBox.prompt(translate('generatedScript.common_please_enter_the_current_system_password_bb50b2'), translate('generatedScript.common_view_hit_password_af06b5'), {
+      confirmButtonText: translate('generatedScript.common_check_f7acef'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       inputType: 'password',
       inputPattern: /.+/,
-      inputErrorMessage: '系统密码不能为空',
+      inputErrorMessage: translate('generatedScript.common_system_password_cannot_be_empty_2be9ab'),
     })
     const revealed = await revealWeakPasswordFinding(findingId, password.value)
     revealedPasswords[findingId] = revealed.matched_password
@@ -416,13 +418,13 @@ async function revealFinding(findingId: string) {
 
 async function deleteTask(taskId: string) {
   try {
-    await ElMessageBox.confirm('确定删除此弱密码检测任务吗？', '删除任务', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.common_are_you_sure_you_want_to_be98d5'), translate('generatedScript.common_delete_task_070581'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
     await store.deleteTask(taskId)
-    ElMessage.success('已删除任务')
+    ElMessage.success(translate('generatedScript.common_task_deleted_b3b2ec'))
   } catch {
     // user cancelled
   }
@@ -439,23 +441,23 @@ function isTaskSelectable(row: WeakPasswordTask) {
 async function deleteSelectedTasks() {
   const taskIds = selectedTaskRows.value.filter(row => canDeleteTask(row.status)).map(row => row.id)
   if (taskIds.length === 0) {
-    ElMessage.warning('请选择可删除的任务')
+    ElMessage.warning(translate('generatedScript.detectionWeakPasswordIndex_please_select_a_task_that_can_b42ac8'))
     return
   }
   try {
-    await ElMessageBox.confirm(`确定删除选中的 ${taskIds.length} 个弱密码检测任务吗？`, '批量删除任务', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.detectionWeakPasswordIndex_are_you_sure_you_want_to_077086', { p0: taskIds.length }), translate('generatedScript.detectionWeakPasswordIndex_delete_tasks_in_batches_e8f5fa'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
     const result = await store.deleteTasks(taskIds)
     selectedTaskRows.value = []
     const skipped = result.skipped?.length || 0
     if (skipped > 0) {
-      ElMessage.warning(`已删除 ${result.count} 个任务，跳过 ${skipped} 个任务`)
+      ElMessage.warning(translate('generatedScript.detectionWeakPasswordIndex_tasks_deleted_tasks_skipped_75a23e', { p0: result.count, p1: skipped }))
       return
     }
-    ElMessage.success(`已删除 ${result.count} 个任务`)
+    ElMessage.success(translate('generatedScript.detectionWeakPasswordIndex_tasks_deleted_b14d37', { p0: result.count }))
   } catch {
     // user cancelled
   }
@@ -491,9 +493,9 @@ function syncTaskAutoRefresh() {
 }
 
 function confidenceLabel(value: number) {
-  if (value >= 0.8) return '高'
-  if (value >= 0.5) return '中'
-  return '低'
+  if (value >= 0.8) return translate('generatedScript.common_high_b096b3')
+  if (value >= 0.5) return translate('generatedScript.common_middle_086907')
+  return translate('generatedScript.common_low_b9ee25')
 }
 
 function confidenceTag(value: number) {
@@ -503,9 +505,9 @@ function confidenceTag(value: number) {
 }
 
 function scanStatusLabel(status: string) {
-  if (status === 'alert') return '告警'
-  if (status === 'safe') return '安全'
-  return '未扫描'
+  if (status === 'alert') return translate('generatedScript.common_alarm_507842')
+  if (status === 'safe') return translate('generatedScript.detectionWeakPasswordIndex_safety_8e662a')
+  return translate('generatedScript.detectionWeakPasswordIndex_not_scanned_81d39e')
 }
 
 function scanStatusType(status: string) {

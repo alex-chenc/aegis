@@ -24,6 +24,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref } from 'vue'
 import * as yaml from 'js-yaml'
 
@@ -50,7 +52,7 @@ function validate() {
     try {
       JSON.parse(props.modelValue)
     } catch (e: any) {
-      errorMsg.value = `JSON 格式错误: ${e.message}`
+      errorMsg.value = translate('generatedScript.detectionDetectionPackagesCodeEditorPanel_json_format_error_e5381b', { p0: e.message })
     }
   }
 
@@ -58,7 +60,7 @@ function validate() {
     try {
       yaml.load(props.modelValue)
     } catch (e: any) {
-      errorMsg.value = `YAML 格式错误: ${e.message}`
+      errorMsg.value = translate('generatedScript.detectionDetectionPackagesCodeEditorPanel_yaml_format_error_83238c', { p0: e.message })
     }
   }
 

@@ -2,14 +2,14 @@
   <div class="weak-task-page">
     <div class="page-toolbar">
       <div>
-        <h1>{{ store.currentTask?.name || '弱密码任务详情' }}</h1>
-        <p>{{ store.currentTask ? weakPasswordStatusLabel(store.currentTask.status) : '加载中' }}</p>
+        <h1>{{ store.currentTask?.name || $t('dynamic.weakPasswordTaskDetail') }}</h1>
+        <p>{{ store.currentTask ? weakPasswordStatusLabel(store.currentTask.status) : $t('dynamic.loading') }}</p>
       </div>
       <div class="toolbar-actions">
-        <el-button :icon="Back" @click="router.push('/risk/weak-password')">返回</el-button>
-        <el-button :icon="Refresh" @click="loadDetail">刷新</el-button>
-        <el-button v-if="store.currentTask" type="danger" plain :disabled="!canDeleteTask(store.currentTask.status)" @click="deleteTask">删除</el-button>
-        <el-button v-if="store.currentTask?.status === 'failed'" type="primary" @click="retryFailed">重试失败项</el-button>
+        <el-button :icon="Back" @click="router.push('/risk/weak-password')">{{ $t('generated.common_return_11d024') }}</el-button>
+        <el-button :icon="Refresh" @click="loadDetail">{{ $t('generated.common_refresh_38108e') }}</el-button>
+        <el-button v-if="store.currentTask" type="danger" plain :disabled="!canDeleteTask(store.currentTask.status)" @click="deleteTask">{{ $t('generated.common_delete_3755f5') }}</el-button>
+        <el-button v-if="store.currentTask?.status === 'failed'" type="primary" @click="retryFailed">{{ $t('generated.detectionWeakPasswordTaskDetail_retry_failed_items_5fefad') }}</el-button>
       </div>
     </div>
 
@@ -22,7 +22,7 @@
           </div>
         </div>
         <div class="metric">
-          <span>当前应用</span>
+          <span>{{ $t('generated.detectionWeakPasswordTaskDetail_current_application_f5837b') }}</span>
           <strong>{{ store.progress?.current_application || '-' }}</strong>
         </div>
       </div>
@@ -30,7 +30,7 @@
 
     <section class="panel">
       <div class="panel-head">
-        <h2>主机执行</h2>
+        <h2>{{ $t('generated.detectionWeakPasswordTaskDetail_host_execution_e9b200') }}</h2>
       </div>
       <el-table v-loading="store.loading" :data="store.hosts" class="dense-table">
         <el-table-column label="IP" min-width="150">
@@ -38,22 +38,22 @@
             <div class="primary-cell">{{ row.ip_address || '-' }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="主机名称" min-width="180">
+        <el-table-column :label="$t('generated.common_host_name_823990')" min-width="180">
           <template #default="{ row }">
             <div class="primary-cell">{{ row.hostname || row.host_id }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="Agent 状态" width="120">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_agent_status_70d10b')" width="120">
           <template #default="{ row }">{{ weakPasswordStatusLabel(row.agent_status) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="150">
+        <el-table-column :label="$t('generated.common_state_62e951')" width="150">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="采集记录" prop="collected_records" width="120" />
-        <el-table-column label="命中" prop="matched_findings" width="100" />
-        <el-table-column label="失败原因" min-width="240">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_collection_records_c56530')" prop="collected_records" width="120" />
+        <el-table-column :label="$t('generated.common_hit_7a130d')" prop="matched_findings" width="100" />
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_reason_for_failure_918468')" min-width="240">
           <template #default="{ row }">
             <div>{{ weakPasswordErrorCodeLabel(row.error_code) }}</div>
             <div v-if="row.error_message" class="secondary-cell">{{ row.error_message }}</div>
@@ -75,33 +75,33 @@
 
     <section class="panel">
       <div class="panel-head">
-        <h2>命中结果</h2>
+        <h2>{{ $t('generated.detectionWeakPasswordTaskDetail_hit_result_7b052d') }}</h2>
       </div>
       <el-table :data="store.findings" class="dense-table">
-        <el-table-column label="应用" prop="application_name" min-width="140" />
-        <el-table-column label="账号" prop="account" min-width="120" />
-        <el-table-column label="凭据类型" width="150">
+        <el-table-column :label="$t('generated.common_application_456202')" prop="application_name" min-width="140" />
+        <el-table-column :label="$t('generated.common_account_901384')" prop="account" min-width="120" />
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_credential_type_afeeac')" width="150">
           <template #default="{ row }">{{ weakPasswordCredentialTypeLabel(row.credential_type) }}</template>
         </el-table-column>
-        <el-table-column label="命中密码" width="150">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_hit_code_9035b8')" width="150">
           <template #default="{ row }">
             <span class="password-mask">{{ row.matched_password_mask }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="180">
+        <el-table-column :label="$t('generated.common_state_62e951')" width="180">
           <template #default="{ row }">
             <el-tag :type="row.match_status === 'confirmed' ? 'success' : 'warning'">{{ weakPasswordMatchStatusLabel(row.match_status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="配置来源" min-width="220">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_configuration_source_6055a9')" min-width="220">
           <template #default="{ row }">
             <div class="secondary-cell">{{ row.source_path }}</div>
             <div class="secondary-cell">{{ row.field_path }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="150" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="showFindingDetail(row.id)">详情</el-button>
+            <el-button link type="primary" @click="showFindingDetail(row.id)">{{ $t('generated.common_details_4f55ee') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -120,36 +120,36 @@
 
     <section class="panel">
       <div class="panel-head">
-        <h2>采集进度</h2>
+        <h2>{{ $t('generated.detectionWeakPasswordTaskDetail_collection_progress_ff7bf1') }}</h2>
       </div>
       <el-table :data="store.errors" class="dense-table collection-progress-table" height="420">
-        <el-table-column label="应用" prop="application_name" min-width="140" />
-        <el-table-column label="轮次" prop="round" width="90" />
-        <el-table-column label="工具" min-width="230">
+        <el-table-column :label="$t('generated.common_application_456202')" prop="application_name" min-width="140" />
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_rounds_3d6450')" prop="round" width="90" />
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_tool_a72ef1')" min-width="230">
           <template #default="{ row }">{{ weakPasswordToolNameLabel(row.tool_name) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="130">
+        <el-table-column :label="$t('generated.common_state_62e951')" width="130">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)">{{ weakPasswordStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="错误码" min-width="170">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_error_code_e08c1d')" min-width="170">
           <template #default="{ row }">{{ weakPasswordErrorCodeLabel(row.error_code) }}</template>
         </el-table-column>
-        <el-table-column label="耗时" width="110">
+        <el-table-column :label="$t('generated.common_time_consuming_a9704e')" width="110">
           <template #default="{ row }">{{ row.execution_time_ms || 0 }}ms</template>
         </el-table-column>
-        <el-table-column label="采集路径" min-width="260">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_collection_path_afa1b2')" min-width="260">
           <template #default="{ row }">
-            <el-tooltip :content="collectionCellValue(row.source_path, '未记录路径')" placement="top" :show-after="250">
-              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.source_path, '未记录路径') }}</div>
+            <el-tooltip :content="collectionCellValue(row.source_path, $t('dynamic.pathNotRecorded'))" placement="top" :show-after="250">
+              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.source_path, $t('dynamic.pathNotRecorded')) }}</div>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="采集字段" min-width="220">
+        <el-table-column :label="$t('generated.detectionWeakPasswordTaskDetail_collection_field_2e584e')" min-width="220">
           <template #default="{ row }">
-            <el-tooltip :content="collectionCellValue(row.field_name, '未记录字段')" placement="top" :show-after="250">
-              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.field_name, '未记录字段') }}</div>
+            <el-tooltip :content="collectionCellValue(row.field_name, $t('dynamic.fieldNotRecorded'))" placement="top" :show-after="250">
+              <div class="secondary-cell multiline-cell clipped-multiline-cell">{{ collectionCellValue(row.field_name, $t('dynamic.fieldNotRecorded')) }}</div>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -168,22 +168,24 @@
       </div>
     </section>
 
-    <el-dialog v-model="passwordDialogVisible" title="命中密码详情" width="460px" destroy-on-close>
+    <el-dialog v-model="passwordDialogVisible" :title="$t('generated.detectionWeakPasswordTaskDetail_hit_password_details_16fb7c')" width="460px" destroy-on-close>
       <div v-if="revealedFinding" class="password-detail">
-        <div class="fact-row"><span>应用</span><strong>{{ revealedFinding.application_name }}</strong></div>
-        <div class="fact-row"><span>账号</span><strong>{{ revealedFinding.account || '-' }}</strong></div>
-        <div class="fact-row"><span>凭据类型</span><strong>{{ weakPasswordCredentialTypeLabel(revealedFinding.credential_type) }}</strong></div>
-        <div class="fact-row password-row"><span>完整密码</span><code>{{ revealedFinding.matched_password }}</code></div>
-        <div class="fact-row"><span>配置来源</span><strong>{{ revealedFinding.source_path || '-' }}</strong></div>
+        <div class="fact-row"><span>{{ $t('generated.common_application_456202') }}</span><strong>{{ revealedFinding.application_name }}</strong></div>
+        <div class="fact-row"><span>{{ $t('generated.common_account_901384') }}</span><strong>{{ revealedFinding.account || '-' }}</strong></div>
+        <div class="fact-row"><span>{{ $t('generated.detectionWeakPasswordTaskDetail_credential_type_afeeac') }}</span><strong>{{ weakPasswordCredentialTypeLabel(revealedFinding.credential_type) }}</strong></div>
+        <div class="fact-row password-row"><span>{{ $t('generated.detectionWeakPasswordTaskDetail_full_password_30fbbe') }}</span><code>{{ revealedFinding.matched_password }}</code></div>
+        <div class="fact-row"><span>{{ $t('generated.detectionWeakPasswordTaskDetail_configuration_source_6055a9') }}</span><strong>{{ revealedFinding.source_path || '-' }}</strong></div>
       </div>
       <template #footer>
-        <el-button type="primary" @click="passwordDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="passwordDialogVisible = false">{{ $t('generated.common_closure_6c14bd') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -206,7 +208,7 @@ let timer: number | undefined
 const passwordDialogVisible = ref(false)
 const revealedFinding = ref<RevealedWeakPasswordFinding | null>(null)
 
-const stages = ['资产分析', '连接主机', '读取配置', '密码匹配', '结果入库']
+const stages = [translate('generatedScript.detectionWeakPasswordTaskDetail_asset_analysis_a5ad9a'), translate('generatedScript.detectionWeakPasswordTaskDetail_connect_to_host_a77571'), translate('generatedScript.detectionWeakPasswordTaskDetail_read_configuration_911d44'), translate('generatedScript.detectionWeakPasswordTaskDetail_password_matching_02ba78'), translate('generatedScript.detectionWeakPasswordTaskDetail_results_stored_in_database_88c130')]
 const taskId = computed(() => String(route.params.id || ''))
 
 async function loadDetail() {
@@ -217,19 +219,19 @@ async function loadDetail() {
 
 async function retryFailed() {
   await store.retryFailed(taskId.value)
-  ElMessage.success('已提交重试')
+  ElMessage.success(translate('generatedScript.detectionWeakPasswordTaskDetail_submitted_to_try_again_88b212'))
 }
 
 async function deleteTask() {
   if (!store.currentTask || !canDeleteTask(store.currentTask.status)) return
   try {
-    await ElMessageBox.confirm('确定删除此弱密码检测任务吗？', '删除任务', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(translate('generatedScript.common_are_you_sure_you_want_to_be98d5'), translate('generatedScript.common_delete_task_070581'), {
+      confirmButtonText: translate('generatedScript.common_delete_3755f5'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       type: 'warning',
     })
     await store.deleteTask(store.currentTask.id)
-    ElMessage.success('已删除任务')
+    ElMessage.success(translate('generatedScript.common_task_deleted_b3b2ec'))
     router.push('/risk/weak-password')
   } catch {
     // user cancelled
@@ -238,12 +240,12 @@ async function deleteTask() {
 
 async function showFindingDetail(findingId: string) {
   try {
-    const password = await ElMessageBox.prompt('请输入当前系统密码', '查看命中密码', {
-      confirmButtonText: '查看',
-      cancelButtonText: '取消',
+    const password = await ElMessageBox.prompt(translate('generatedScript.common_please_enter_the_current_system_password_bb50b2'), translate('generatedScript.common_view_hit_password_af06b5'), {
+      confirmButtonText: translate('generatedScript.common_check_f7acef'),
+      cancelButtonText: translate('generatedScript.common_cancel_4d0b46'),
       inputType: 'password',
       inputPattern: /.+/,
-      inputErrorMessage: '系统密码不能为空',
+      inputErrorMessage: translate('generatedScript.common_system_password_cannot_be_empty_2be9ab'),
     })
     revealedFinding.value = await revealWeakPasswordFinding(findingId, password.value)
     passwordDialogVisible.value = true

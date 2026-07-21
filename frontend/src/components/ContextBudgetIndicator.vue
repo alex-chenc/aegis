@@ -31,34 +31,34 @@
       </template>
 
       <div class="budget-popover">
-        <div class="popover-title">上下文预算</div>
+        <div class="popover-title">{{ $t('generated.contextBudgetIndicator_context_budget_74cf16') }}</div>
         <div class="popover-row">
-          <span class="popover-key">使用率</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_usage_rate_8ca02f') }}</span>
           <span class="popover-value" :class="statusClass">{{ percentageLabel }}</span>
         </div>
         <div class="popover-row">
-          <span class="popover-key">已用 Tokens</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_used_tokens_f5ab05') }}</span>
           <span class="popover-value">{{ formatTokens(promptTokensUsed) }}</span>
         </div>
         <div class="popover-row">
-          <span class="popover-key">可用 Tokens</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_available_tokens_a54ddf') }}</span>
           <span class="popover-value">{{ formatTokens(availableTokens) }}</span>
         </div>
         <div class="popover-row">
-          <span class="popover-key">最大上下文</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_maximum_context_dc3be3') }}</span>
           <span class="popover-value">{{ formatTokens(budget.max_context_tokens) }}</span>
         </div>
         <div class="popover-row">
-          <span class="popover-key">预留输出</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_reserved_output_0ad01f') }}</span>
           <span class="popover-value">{{ formatTokens(budget.reserved_output_tokens) }}</span>
         </div>
         <div v-if="compressionCount > 0" class="popover-divider" />
         <div v-if="compressionCount > 0" class="popover-row">
-          <span class="popover-key">压缩次数</span>
-          <span class="popover-value">{{ compressionCount }} 次</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_compression_times_9ca336') }}</span>
+          <span class="popover-value">{{ compressionCount }} {{ $t('generated.contextBudgetIndicator_second_rate_5e5b81') }}</span>
         </div>
         <div v-if="totalTokensUsed > 0" class="popover-row">
-          <span class="popover-key">总 Tokens</span>
+          <span class="popover-key">{{ $t('generated.contextBudgetIndicator_total_tokens_ef7ac3') }}</span>
           <span class="popover-value">{{ formatTokens(totalTokensUsed) }}</span>
         </div>
       </div>

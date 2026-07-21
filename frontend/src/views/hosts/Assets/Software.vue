@@ -5,7 +5,7 @@
       <div class="filter-row">
         <el-input
           v-model="filters.keyword"
-          placeholder="搜索软件名、版本、主机名、IP"
+          :placeholder="$t('generated.hostsAssetsSoftware_search_software_name_version_host_name_c415b5')"
           clearable
           style="width: 300px"
           @keyup.enter="handleSearch"
@@ -17,7 +17,7 @@
 
         <el-select
           v-model="filters.package_manager"
-          placeholder="包管理器"
+          :placeholder="$t('generated.hostsAssetsSoftware_package_manager_672e53')"
           clearable
           style="width: 150px"
         >
@@ -28,7 +28,7 @@
 
         <el-select
           v-model="filters.os_type"
-          placeholder="操作系统"
+          :placeholder="$t('generated.common_operating_system_7c3009')"
           clearable
           style="width: 150px"
         >
@@ -38,12 +38,12 @@
 
         <el-button type="primary" @click="handleSearch">
           <el-icon><Search /></el-icon>
-          查询
+          {{ $t('generated.common_query_711363') }}
         </el-button>
 
         <el-button @click="handleReset">
           <el-icon><RefreshRight /></el-icon>
-          重置
+          {{ $t('generated.common_reset_3d8134') }}
         </el-button>
       </div>
     </el-card>
@@ -52,11 +52,11 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>软件清单</span>
+          <span>{{ $t('generated.common_software_manifest_33aa7e') }}</span>
           <div class="header-actions">
             <el-button type="success" @click="handleExport">
               <el-icon><Download /></el-icon>
-              导出 CSV
+              {{ $t('generated.common_export_csv_7e9cc8') }}
             </el-button>
           </div>
         </div>
@@ -69,7 +69,7 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="hostname" label="主机名称" width="200" show-overflow-tooltip>
+        <el-table-column prop="hostname" :label="$t('generated.common_host_name_823990')" width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <div>
               <div class="hostname">{{ row.hostname }}</div>
@@ -78,29 +78,29 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="ip_address" label="IP 地址" width="140" show-overflow-tooltip />
+        <el-table-column prop="ip_address" :label="$t('generated.common_ip_address_010efa')" width="140" show-overflow-tooltip />
 
-        <el-table-column prop="group_name" label="分组名称" width="120" show-overflow-tooltip />
+        <el-table-column prop="group_name" :label="$t('generated.common_group_name_65731c')" width="120" show-overflow-tooltip />
 
-        <el-table-column prop="os_type" label="操作系统" width="100">
+        <el-table-column prop="os_type" :label="$t('generated.common_operating_system_7c3009')" width="100">
           <template #default="{ row }">
             <el-tag size="small">{{ row.os_type }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="name" label="软件名称" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="name" :label="$t('generated.hostsAssetsSoftware_software_name_c1bad7')" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="software-name">{{ row.name }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="version" label="安装版本" width="150" show-overflow-tooltip>
+        <el-table-column prop="version" :label="$t('generated.common_installed_version_73333c')" width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.version || 'unknown' }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="package_manager" label="包管理器" width="100">
+        <el-table-column prop="package_manager" :label="$t('generated.hostsAssetsSoftware_package_manager_672e53')" width="100">
           <template #default="{ row }">
             <el-tag :type="getPackageManagerType(row.package_manager)" size="small">
               {{ row.package_manager }}
@@ -108,7 +108,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="install_paths" label="安装路径" min-width="200">
+        <el-table-column prop="install_paths" :label="$t('generated.common_installation_path_7e1561')" min-width="200">
           <template #default="{ row }">
             <div v-if="row.install_paths && row.install_paths.length > 0">
               <div>{{ row.install_paths[0] }}</div>
@@ -119,7 +119,7 @@
               >
                 <template #reference>
                   <el-link type="primary" size="small">
-                    +{{ row.install_paths.length - 1 }} 更多
+                    +{{ row.install_paths.length - 1 }} {{ $t('generated.common_more_9b0c6c') }}
                   </el-link>
                 </template>
                 <div class="path-list">
@@ -133,13 +133,13 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="last_modified_at" label="最后更新时间" width="180">
+        <el-table-column prop="last_modified_at" :label="$t('generated.hostsAssetsSoftware_last_updated_a1eac0')" width="180">
           <template #default="{ row }">
             {{ row.last_modified_at ? formatTime(row.last_modified_at) : '-' }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="collected_at" label="记录时间" width="180">
+        <el-table-column prop="collected_at" :label="$t('generated.common_record_time_650b38')" width="180">
           <template #default="{ row }">
             {{ formatTime(row.collected_at) }}
           </template>
@@ -162,6 +162,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatDateTime } from '@/i18n/formatters'
 import { onMounted } from 'vue'
 import { Search, RefreshRight, Download } from '@element-plus/icons-vue'
 import { useAssetStore } from '@/store/assets'
@@ -210,7 +211,7 @@ function handleExport() {
 // 格式化时间
 function formatTime(time: string) {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 
 // 获取包管理器类型

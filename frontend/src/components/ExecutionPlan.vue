@@ -3,7 +3,7 @@
     <div class="plan-header" @click="toggleExpanded">
       <div class="plan-title">
         <el-icon><List /></el-icon>
-        <span>执行计划</span>
+        <span>{{ $t('generated.common_execution_plan_822376') }}</span>
         <el-tag size="small" type="info">{{ completedCount }}/{{ plan.steps.length }}</el-tag>
       </div>
       <el-icon class="expand-icon" :class="{ expanded: isExpanded }">
@@ -54,7 +54,7 @@
       <div v-if="!titleOnly && timelineEvents.length > 0" class="timeline-section">
         <div class="timeline-title">
           <el-icon><Clock /></el-icon>
-          <span>分析事件</span>
+          <span>{{ $t('generated.executionPlan_analyze_events_095f08') }}</span>
         </div>
         <el-timeline>
           <el-timeline-item
@@ -73,6 +73,8 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { ref, computed } from 'vue'
 import { List, ArrowDown, Aim, Clock } from '@element-plus/icons-vue'
 import type { PlanEvent, PlanStep, AuditEvent, ReflectionEvent, CorrectionEvent } from '@/api/aiAnalysis'
@@ -110,11 +112,11 @@ const timelineEvents = computed<TimelineEntry[]>(() => {
   if (props.audits) {
     for (const a of props.audits) {
       const riskLevel = a.risk_level || 'low'
-      const decision = a.decision || '审计完成'
+      const decision = a.decision || translate('generatedScript.executionPlan_audit_completed_8ac138')
       const findings = Array.isArray(a.findings) ? a.findings : []
       events.push({
         type: riskLevel === 'high' ? 'danger' : riskLevel === 'medium' ? 'warning' : 'primary',
-        label: `审计 - ${decision}`,
+        label: translate('generatedScript.executionPlan_audit_e4e455', { p0: decision }),
         summary: findings.length > 0 ? findings.join('; ') : decision
       })
     }
@@ -122,11 +124,11 @@ const timelineEvents = computed<TimelineEntry[]>(() => {
 
   if (props.reflections) {
     for (const r of props.reflections) {
-      const rootCause = r.root_cause || r.summary || '反思完成'
+      const rootCause = r.root_cause || r.summary || translate('generatedScript.executionPlan_reflection_completed_bc6009')
       const recommendation = r.recommendation || ''
       events.push({
         type: 'warning',
-        label: '反思',
+        label: translate('generatedScript.executionPlan_reflection_4086eb'),
         summary: recommendation ? `${rootCause} → ${recommendation}` : rootCause
       })
     }
@@ -134,11 +136,11 @@ const timelineEvents = computed<TimelineEntry[]>(() => {
 
   if (props.corrections) {
     for (const c of props.corrections) {
-      const reason = c.reason || c.summary || '纠正完成'
+      const reason = c.reason || c.summary || translate('generatedScript.executionPlan_correction_completed_fc3d15')
       const actions = Array.isArray(c.actions) ? c.actions : []
       events.push({
         type: 'success',
-        label: '纠正',
+        label: translate('generatedScript.executionPlan_correct_500885'),
         summary: actions.length > 0 ? `${reason}: ${actions.join(', ')}` : reason
       })
     }
@@ -164,21 +166,21 @@ function statusTagType(status: string): string {
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
-    completed: '完成',
-    running: '执行中',
-    waiting_approval: '待审批',
-    retrying: '重试中',
-    failed: '失败',
-    skipped: '跳过',
-    replaced: '替换',
-    invalidated: '无效',
-    pending: '待执行'
+    completed: translate('generatedScript.common_finish_33246f'),
+    running: translate('generatedScript.common_executing_1f425b'),
+    waiting_approval: translate('generatedScript.common_pending_approval_57fce0'),
+    retrying: translate('generatedScript.executionPlan_retrying_b78013'),
+    failed: translate('generatedScript.common_fail_3e3c80'),
+    skipped: translate('generatedScript.executionPlan_jump_over_31a985'),
+    replaced: translate('generatedScript.executionPlan_replace_855241'),
+    invalidated: translate('generatedScript.executionPlan_invalid_eb645a'),
+    pending: translate('generatedScript.common_to_be_executed_6cf0af')
   }
   return map[status] || status
 }
 
 function stepTitle(step: PlanStep, index: number) {
-  return step.title || step.description || step.objective || `步骤 ${index + 1}`
+  return step.title || step.description || step.objective || translate('generatedScript.executionPlan_step_2b7b92', { p0: index + 1 })
 }
 </script>
 

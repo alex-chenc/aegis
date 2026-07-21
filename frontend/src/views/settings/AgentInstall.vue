@@ -3,27 +3,27 @@
     <section class="page-hero agent-hero">
       <div>
         <span class="hero-kicker">Agent Enrollment</span>
-        <h1>Agent 安装</h1>
-        <p>获取当前控制面的 Agent 安装命令，在目标主机执行后即可接入采集、检测与响应链路。</p>
+        <h1>{{ $t('generated.settingsAgentInstall_agent_installation_c8dc62') }}</h1>
+        <p>{{ $t('generated.settingsAgentInstall_obtain_the_agent_installation_command_of_e0113f') }}</p>
       </div>
-      <el-button type="primary" :loading="loading" @click="fetchInstallCmd">刷新安装命令</el-button>
+      <el-button type="primary" :loading="loading" @click="fetchInstallCmd">{{ $t('generated.settingsAgentInstall_refresh_installation_command_b2c31b') }}</el-button>
     </section>
 
     <el-card class="aegis-card install-card">
       <template #header>
         <div class="card-header">
-          <span>安装命令</span>
-          <el-tag type="success" size="small">在线生成</el-tag>
+          <span>{{ $t('generated.settingsAgentInstall_installation_command_5ff833') }}</span>
+          <el-tag type="success" size="small">{{ $t('generated.settingsAgentInstall_online_generation_d6e96a') }}</el-tag>
         </div>
       </template>
 
       <div class="command-panel">
-        <div class="command-label">在目标 Linux 主机执行</div>
+        <div class="command-label">{{ $t('generated.settingsAgentInstall_execute_on_the_target_linux_host_f56864') }}</div>
         <el-input v-model="installCommand" readonly class="command-input">
           <template #append>
             <el-button :disabled="!installCommand" @click="copyCommand">
               <el-icon><CopyDocument /></el-icon>
-              复制
+              {{ $t('generated.common_copy_4edd1d') }}
             </el-button>
           </template>
         </el-input>
@@ -31,33 +31,35 @@
 
       <div class="install-meta">
         <div class="meta-card">
-          <span class="meta-label">服务器地址</span>
+          <span class="meta-label">{{ $t('generated.settingsAgentInstall_server_address_2eb291') }}</span>
           <strong>{{ installInfo?.server_ip || '-' }}:{{ installInfo?.http_port || '-' }}</strong>
         </div>
         <div class="meta-card">
-          <span class="meta-label">gRPC 端口</span>
+          <span class="meta-label">{{ $t('generated.settingsAgentInstall_grpc_port_df9c9a') }}</span>
           <strong>{{ installInfo?.grpc_port || '-' }}</strong>
         </div>
         <div class="meta-card">
-          <span class="meta-label">安装状态</span>
-          <strong>{{ installCommand ? '命令已就绪' : '等待生成' }}</strong>
+          <span class="meta-label">{{ $t('generated.settingsAgentInstall_installation_status_9c7821') }}</span>
+          <strong>{{ installCommand ? $t('dynamic.commandReady') : $t('dynamic.waitingGeneration') }}</strong>
         </div>
       </div>
 
       <el-alert
-        title="部署提示"
+        :title="$t('generated.settingsAgentInstall_deployment_tips_2f7a3c')"
         type="info"
         show-icon
         :closable="false"
         class="install-alert"
       >
-        <p>如果目标主机无法连接控制面，请先确认防火墙、安全组和 gRPC 端口连通性。</p>
+        <p>{{ $t('generated.settingsAgentInstall_if_the_target_host_cannot_connect_40b97d') }}</p>
       </el-alert>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
@@ -70,15 +72,15 @@ const loading = ref(false)
 
 const copyCommand = async () => {
   if (!installCommand.value) {
-    ElMessage.warning('没有可复制的内容')
+    ElMessage.warning(translate('generatedScript.settingsAgentInstall_no_content_to_copy_2241b3'))
     return
   }
 
   const success = await copyToClipboard(installCommand.value)
   if (success) {
-    ElMessage.success('已复制到剪贴板')
+    ElMessage.success(translate('generatedScript.common_copied_to_clipboard_c2bb6d'))
   } else {
-    ElMessage.error('复制失败，请手动复制')
+    ElMessage.error(translate('generatedScript.settingsAgentInstall_copy_failed_please_copy_manually_2b1cae'))
   }
 }
 
@@ -118,7 +120,7 @@ const fetchInstallCmd = async () => {
     installInfo.value = data
     installCommand.value = data.command
   } catch (e: any) {
-    ElMessage.error(e.message || '获取安装命令失败')
+    ElMessage.error(e.message || translate('generatedScript.settingsAgentInstall_failed_to_get_installation_command_b6fbf1'))
   } finally {
     loading.value = false
   }

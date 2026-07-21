@@ -16,7 +16,7 @@
       <div class="filter-row">
         <el-input
           v-model="filters.keyword"
-          placeholder="搜索应用名、主机名、IP"
+          :placeholder="$t('generated.hostsAssetsApplications_search_application_name_host_name_ip_1d7a46')"
           clearable
           style="width: 300px"
           @keyup.enter="handleSearch"
@@ -28,24 +28,24 @@
 
         <el-select
           v-model="filters.review_status"
-          placeholder="复核状态"
+          :placeholder="$t('generated.hostsAssetsApplications_review_status_976e03')"
           clearable
           style="width: 150px"
         >
-          <el-option label="自动" value="auto" />
-          <el-option label="待复核" value="pending" />
-          <el-option label="已确认" value="confirmed" />
-          <el-option label="已拒绝" value="rejected" />
+          <el-option :label="$t('generated.hostsAssetsApplications_automatic_4afad8')" value="auto" />
+          <el-option :label="$t('generated.common_to_be_reviewed_4607ba')" value="pending" />
+          <el-option :label="$t('generated.hostsAssetsApplications_confirmed_d9fea6')" value="confirmed" />
+          <el-option :label="$t('generated.hostsAssetsApplications_rejected_4c7c52')" value="rejected" />
         </el-select>
 
         <el-button type="primary" @click="handleSearch">
           <el-icon><Search /></el-icon>
-          查询
+          {{ $t('generated.common_query_711363') }}
         </el-button>
 
         <el-button @click="handleReset">
           <el-icon><RefreshRight /></el-icon>
-          重置
+          {{ $t('generated.common_reset_3d8134') }}
         </el-button>
       </div>
     </el-card>
@@ -58,7 +58,7 @@
           <div class="header-actions">
             <el-button type="success" @click="handleExport" :loading="exporting">
               <el-icon><Download /></el-icon>
-              导出 CSV
+              {{ $t('generated.common_export_csv_7e9cc8') }}
             </el-button>
           </div>
         </div>
@@ -71,7 +71,7 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="hostname" label="主机名称" width="200" show-overflow-tooltip>
+        <el-table-column prop="hostname" :label="$t('generated.common_host_name_823990')" width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <div>
               <div class="hostname">{{ row.hostname }}</div>
@@ -80,23 +80,23 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="ip_address" label="IP 地址" width="140" show-overflow-tooltip />
+        <el-table-column prop="ip_address" :label="$t('generated.common_ip_address_010efa')" width="140" show-overflow-tooltip />
 
-        <el-table-column prop="group_name" label="分组名称" width="120" show-overflow-tooltip />
+        <el-table-column prop="group_name" :label="$t('generated.common_group_name_65731c')" width="120" show-overflow-tooltip />
 
-        <el-table-column prop="os_type" label="操作系统" width="100">
+        <el-table-column prop="os_type" :label="$t('generated.common_operating_system_7c3009')" width="100">
           <template #default="{ row }">
             <el-tag size="small">{{ row.os_type }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="name" label="应用名称" min-width="180" show-overflow-tooltip>
+        <el-table-column prop="name" :label="$t('generated.hostsAssetsApplications_application_name_2d87d5')" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="app-name">{{ row.display_name || row.name }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="category" label="分类" width="120">
+        <el-table-column prop="category" :label="$t('generated.common_classification_435c52')" width="120">
           <template #default="{ row }">
             <el-tag :type="getCategoryType(row.category)" size="small">
               {{ getCategoryLabel(row.category) }}
@@ -104,7 +104,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="标签" width="120">
+        <el-table-column :label="$t('generated.common_label_ae0a7a')" width="120">
           <template #default="{ row }">
             <el-tag :type="row.is_container ? 'success' : 'info'" size="small" effect="plain">
               {{ applicationRuntimeLabel(row) }}
@@ -112,7 +112,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="version" label="安装版本" width="150" show-overflow-tooltip>
+        <el-table-column prop="version" :label="$t('generated.common_installed_version_73333c')" width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ row.version || 'unknown' }}</span>
           </template>
@@ -137,7 +137,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="listen_ports" label="监听端口" width="150">
+        <el-table-column prop="listen_ports" :label="$t('generated.hostsAssetsApplications_listening_port_7e95f4')" width="150">
           <template #default="{ row }">
             <div v-if="row.listen_ports && row.listen_ports.length > 0">
               <el-tag
@@ -156,11 +156,11 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="run_user" label="启动用户" width="100" show-overflow-tooltip />
+        <el-table-column prop="run_user" :label="$t('generated.hostsAssetsApplications_start_user_c1334d')" width="100" show-overflow-tooltip />
 
-        <el-table-column prop="start_path" label="启动路径" width="180" show-overflow-tooltip />
+        <el-table-column prop="start_path" :label="$t('generated.common_startup_path_b782b1')" width="180" show-overflow-tooltip />
 
-        <el-table-column prop="confidence" label="置信度" width="120">
+        <el-table-column prop="confidence" :label="$t('generated.common_confidence_b78c2d')" width="120">
           <template #default="{ row }">
             <el-progress
               :percentage="Math.round(getConfidence(row) * 100)"
@@ -170,7 +170,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="review_status" label="状态" width="100">
+        <el-table-column prop="review_status" :label="$t('generated.common_state_62e951')" width="100">
           <template #default="{ row }">
             <el-tag :type="getReviewStatusType(row.review_status)" size="small">
               {{ getReviewStatusLabel(row.review_status) }}
@@ -178,19 +178,19 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="collected_at" label="记录时间" width="180">
+        <el-table-column prop="collected_at" :label="$t('generated.common_record_time_650b38')" width="180">
           <template #default="{ row }">
             {{ formatTime(row.collected_at) }}
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="120" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="viewDetail(row.id)">
-              详情
+              {{ $t('generated.common_details_4f55ee') }}
             </el-button>
             <el-button link type="warning" @click="openReview(row)">
-              复核
+              {{ $t('generated.hostsAssetsApplications_review_b38c92') }}
             </el-button>
           </template>
         </el-table-column>
@@ -212,26 +212,26 @@
     <!-- 详情抽屉 -->
     <el-drawer
       v-model="showDetailDrawer"
-      title="应用详情"
+      :title="$t('generated.hostsAssetsApplications_application_details_5c1aa2')"
       size="600px"
     >
       <div v-if="selectedApp" class="app-detail">
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="应用名称">{{ selectedApp.display_name || selectedApp.name }}</el-descriptions-item>
-          <el-descriptions-item label="分类">
+          <el-descriptions-item :label="$t('generated.hostsAssetsApplications_application_name_2d87d5')">{{ selectedApp.display_name || selectedApp.name }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_classification_435c52')">
             <el-tag :type="getCategoryType(selectedApp.category)">
               {{ getCategoryLabel(selectedApp.category) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="版本">{{ selectedApp.version || 'unknown' }}</el-descriptions-item>
-          <el-descriptions-item label="标签">
+          <el-descriptions-item :label="$t('generated.common_version_989d1a')">{{ selectedApp.version || 'unknown' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_label_ae0a7a')">
             <el-tag :type="selectedApp.is_container ? 'success' : 'info'" size="small" effect="plain">
               {{ applicationRuntimeLabel(selectedApp) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="置信度">{{ Math.round(getConfidence(selectedApp) * 100) }}%</el-descriptions-item>
-          <el-descriptions-item label="主机名">{{ selectedApp.hostname }}</el-descriptions-item>
-          <el-descriptions-item label="IP 地址">{{ selectedApp.ip_address }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_confidence_b78c2d')">{{ Math.round(getConfidence(selectedApp) * 100) }}%</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_hostname_981e96')">{{ selectedApp.hostname }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_ip_address_010efa')">{{ selectedApp.ip_address }}</el-descriptions-item>
           <el-descriptions-item label="PID">
             <template v-if="displayPids(selectedApp).length">
               <el-tag v-for="pid in displayPids(selectedApp)" :key="pid" class="pid-tag">
@@ -240,15 +240,15 @@
             </template>
             <span v-else>-</span>
           </el-descriptions-item>
-          <el-descriptions-item label="启动用户">{{ selectedApp.run_user || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="启动路径">{{ selectedApp.start_path || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="监听端口" :span="2">
+          <el-descriptions-item :label="$t('generated.hostsAssetsApplications_start_user_c1334d')">{{ selectedApp.run_user || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.common_startup_path_b782b1')">{{ selectedApp.start_path || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('generated.hostsAssetsApplications_listening_port_7e95f4')" :span="2">
             <el-tag v-for="port in selectedApp.listen_ports" :key="port" class="port-tag">
               {{ port }}
             </el-tag>
             <span v-if="!selectedApp.listen_ports?.length">-</span>
           </el-descriptions-item>
-          <el-descriptions-item label="配置路径" :span="2">
+          <el-descriptions-item :label="$t('generated.hostsAssetsApplications_configuration_path_3902cc')" :span="2">
             <div v-if="selectedApp.config_paths?.length">
               <div v-for="path in selectedApp.config_paths" :key="path">{{ path }}</div>
             </div>
@@ -257,66 +257,69 @@
         </el-descriptions>
 
         <!-- AI 证据 -->
-        <div class="section-title">AI 识别证据</div>
+        <div class="section-title">{{ $t('generated.hostsAssetsApplications_ai_identifies_evidence_e5ef6a') }}</div>
         <div v-if="appDetail?.tool_calls?.length" class="evidence-list">
           <div v-for="call in appDetail.tool_calls" :key="call.id" class="evidence-item">
             <div class="evidence-header">
               <span class="tool-name">{{ call.tool_name }}</span>
               <el-tag :type="call.success ? 'success' : 'danger'" size="small">
-                {{ call.success ? '成功' : '失败' }}
+                {{ call.success ? $t('common.status.success') : $t('common.status.failed') }}
               </el-tag>
             </div>
             <div class="evidence-time">{{ formatTime(call.created_at) }}</div>
           </div>
         </div>
-        <el-empty v-else description="暂无工具调用记录" />
+        <el-empty v-else :description="$t('generated.hostsAssetsApplications_no_tool_call_record_yet_7987fe')" />
       </div>
     </el-drawer>
 
     <!-- 复核对话框 -->
     <el-dialog
       v-model="showReviewDialog"
-      title="人工复核"
+      :title="$t('generated.hostsAssetsApplications_manual_review_2d5939')"
       width="500px"
     >
       <el-form :model="reviewForm" label-width="100px">
-        <el-form-item label="应用名称">
+        <el-form-item :label="$t('generated.hostsAssetsApplications_application_name_2d87d5')">
           <el-input v-model="reviewForm.name" />
         </el-form-item>
-        <el-form-item label="分类">
+        <el-form-item :label="$t('generated.common_classification_435c52')">
           <el-select v-model="reviewForm.category" style="width: 100%">
-            <el-option label="数据库" value="database" />
-            <el-option label="Web 服务" value="web_service" />
-            <el-option label="Web 框架" value="web_framework" />
-            <el-option label="Web 站点" value="web_site" />
+            <el-option :label="$t('generated.common_database_f4dbbc')" value="database" />
+            <el-option :label="$t('generated.common_web_services_e3d112')" value="web_service" />
+            <el-option :label="$t('generated.common_web_framework_0d07e2')" value="web_framework" />
+            <el-option :label="$t('generated.common_website_671e5d')" value="web_site" />
             <el-option label="AI LLM" value="llm_service" />
             <el-option label="AI Agent" value="ai_agent" />
             <el-option label="MCP" value="mcp_server" />
-            <el-option label="其他" value="other" />
+            <el-option :label="$t('generated.hostsAssetsApplications_other_1a26ed')" value="other" />
           </el-select>
         </el-form-item>
-        <el-form-item label="版本">
+        <el-form-item :label="$t('generated.common_version_989d1a')">
           <el-input v-model="reviewForm.version" />
         </el-form-item>
-        <el-form-item label="安装路径">
+        <el-form-item :label="$t('generated.common_installation_path_7e1561')">
           <el-input v-model="reviewForm.install_path" />
         </el-form-item>
-        <el-form-item label="复核状态">
+        <el-form-item :label="$t('generated.hostsAssetsApplications_review_status_976e03')">
           <el-radio-group v-model="reviewForm.review_status">
-            <el-radio label="confirmed">确认</el-radio>
-            <el-radio label="rejected">拒绝</el-radio>
+            <el-radio label="confirmed">{{ $t('generated.hostsAssetsApplications_confirm_b56d9a') }}</el-radio>
+            <el-radio label="rejected">{{ $t('generated.common_reject_03e210') }}</el-radio>
           </el-radio-group>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showReviewDialog = false">取消</el-button>
-        <el-button type="primary" @click="submitReview" :loading="submitting">确定</el-button>
+        <el-button @click="showReviewDialog = false">{{ $t('generated.common_cancel_4d0b46') }}</el-button>
+        <el-button type="primary" @click="submitReview" :loading="submitting">{{ $t('generated.common_sure_f526c8') }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { computed, ref, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, RefreshRight, Download } from '@element-plus/icons-vue'
@@ -346,33 +349,33 @@ const exporting = ref(false)
 const selectedApp = ref<ApplicationAsset | null>(null)
 const appDetail = ref<any>(null)
 
-const categoryTabs = [
-  { label: '全部应用', value: '', path: '/hosts/assets/applications' },
-  { label: '数据库', value: 'database', path: '/hosts/assets/databases' },
-  { label: 'Web 服务', value: 'web_service', path: '/hosts/assets/web-services' },
-  { label: 'Web 框架', value: 'web_framework', path: '/hosts/assets/web-frameworks' },
-  { label: 'Web 站点', value: 'web_site', path: '/hosts/assets/web-sites' },
+const categoryTabs = computed(() => [
+  { label: translate('generatedScript.hostsAssetsApplications_all_applications_cf2c50'), value: '', path: '/hosts/assets/applications' },
+  { label: translate('generatedScript.common_database_f4dbbc'), value: 'database', path: '/hosts/assets/databases' },
+  { label: translate('generatedScript.common_web_services_e3d112'), value: 'web_service', path: '/hosts/assets/web-services' },
+  { label: translate('generatedScript.common_web_framework_0d07e2'), value: 'web_framework', path: '/hosts/assets/web-frameworks' },
+  { label: translate('generatedScript.common_website_671e5d'), value: 'web_site', path: '/hosts/assets/web-sites' },
   { label: 'AI LLM', value: 'llm_service', path: '/hosts/assets/llm-services' },
   { label: 'AI Agent', value: 'ai_agent', path: '/hosts/assets/ai-agents' },
   { label: 'MCP', value: 'mcp_server', path: '/hosts/assets/mcp-servers' },
-  { label: '其他', value: 'other', path: '/hosts/assets/other-applications' },
-]
+  { label: translate('generatedScript.hostsAssetsApplications_other_1a26ed'), value: 'other', path: '/hosts/assets/other-applications' },
+])
 
-const categoryTitles: Record<string, string> = {
-  database: '数据库资产',
-  web_service: 'Web 服务资产',
-  web_framework: 'Web 框架资产',
-  web_site: 'Web 站点资产',
-  llm_service: 'AI LLM 资产',
-  ai_agent: 'AI Agent 资产',
-  mcp_server: 'MCP 资产',
-  other: '其他应用资产',
-}
+const categoryTitles = computed<Record<string, string>>(() => ({
+  database: translate('generatedScript.hostsAssetsApplications_database_assets_4bcda1'),
+  web_service: translate('generatedScript.hostsAssetsApplications_web_service_assets_4c4456'),
+  web_framework: translate('generatedScript.hostsAssetsApplications_web_framework_assets_be088e'),
+  web_site: translate('generatedScript.hostsAssetsApplications_web_site_assets_f18909'),
+  llm_service: translate('generatedScript.hostsAssetsApplications_ai_llm_assets_9c8404'),
+  ai_agent: translate('generatedScript.hostsAssetsApplications_ai_agent_assets_a8c3ef'),
+  mcp_server: translate('generatedScript.hostsAssetsApplications_mcp_assets_09f37f'),
+  other: translate('generatedScript.hostsAssetsApplications_other_application_assets_90a01d'),
+}))
 
 const activeTab = computed(() => props.defaultCategory || filters.value.category || '')
 
 const pageTitle = computed(() => {
-  return categoryTitles[props.defaultCategory || ''] || '应用资产'
+  return categoryTitles.value[props.defaultCategory || ''] || translate('generatedScript.hostsAssetsApplications_other_1a26ed')
 })
 
 const reviewForm = reactive({
@@ -392,7 +395,7 @@ watch(() => props.defaultCategory, (category) => {
 
 function handleCategoryTabChange(name: string | number) {
   const category = String(name)
-  const tab = categoryTabs.find(item => item.value === category)
+  const tab = categoryTabs.value.find(item => item.value === category)
   if (!tab) return
   router.push(tab.path)
 }
@@ -433,14 +436,14 @@ async function handleExport() {
     })
     const items = result.items || []
     if (items.length === 0) {
-      ElMessage.warning('当前筛选条件下没有可导出的应用资产')
+      ElMessage.warning(translate('generatedScript.hostsAssetsApplications_there_are_no_exportable_app_assets_9986ee'))
       return
     }
 
     const headers = [
-      '主机名称', '主机ID', 'IP地址', '分组名称', '操作系统',
-      '应用名称', '分类', '标签', '安装版本', 'PID',
-      '监听端口', '启动用户', '启动路径', '置信度', '状态', '记录时间',
+      translate('generatedScript.hostsAssetsApplications_host_name_823990'), translate('generatedScript.common_host_id_62fac9'), translate('generatedScript.hostsAssetsApplications_ip_address_ae92a6'), translate('generatedScript.hostsAssetsApplications_group_name_65731c'), translate('generatedScript.hostsAssetsApplications_operating_system_7c3009'),
+      translate('generatedScript.hostsAssetsApplications_application_name_2d87d5'), translate('generatedScript.hostsAssetsApplications_classification_435c52'), translate('generatedScript.hostsAssetsApplications_label_ae0a7a'), translate('generatedScript.hostsAssetsApplications_installed_version_73333c'), 'PID',
+      translate('generatedScript.hostsAssetsApplications_listening_port_7e95f4'), translate('generatedScript.hostsAssetsApplications_start_user_c1334d'), translate('generatedScript.hostsAssetsApplications_startup_path_b782b1'), translate('generatedScript.hostsAssetsApplications_confidence_b78c2d'), translate('generatedScript.common_state_62e951'), translate('generatedScript.hostsAssetsApplications_record_time_650b38'),
     ]
     const rows = items.map((app: ApplicationAsset) => [
       app.hostname,
@@ -463,11 +466,11 @@ async function handleExport() {
 
     const csv = buildCsv(headers, rows)
     const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
-    downloadCsv(`应用资产_${ts}.csv`, csv)
-    ElMessage.success(`已导出 ${items.length} 条应用资产`)
+    downloadCsv(translate('generatedScript.hostsAssetsApplications_application_assets_csv_f298d3', { p0: ts }), csv)
+    ElMessage.success(translate('generatedScript.hostsAssetsApplications_application_assets_have_been_exported_f087a2', { p0: items.length }))
   } catch (error) {
-    console.error('导出应用资产 CSV 失败', error)
-    ElMessage.error('导出 CSV 失败')
+    console.error(translate('generatedScript.hostsAssetsApplications_exporting_app_assets_csv_failed_a3f295'), error)
+    ElMessage.error(translate('generatedScript.hostsAssetsApplications_export_to_csv_failed_79f5a6'))
   } finally {
     exporting.value = false
   }
@@ -480,7 +483,7 @@ async function viewDetail(id: string) {
     selectedApp.value = appDetail.value.application
     showDetailDrawer.value = true
   } catch (error) {
-    ElMessage.error('获取详情失败')
+    ElMessage.error(translate('generatedScript.common_failed_to_get_details_b8ba3a'))
   }
 }
 
@@ -501,11 +504,11 @@ async function submitReview() {
   submitting.value = true
   try {
     await reviewApplication(reviewForm.id, reviewForm)
-    ElMessage.success('复核已提交')
+    ElMessage.success(translate('generatedScript.hostsAssetsApplications_review_submitted_361cd5'))
     showReviewDialog.value = false
     assetStore.fetchApplicationAssets()
   } catch (error) {
-    ElMessage.error('复核提交失败')
+    ElMessage.error(translate('generatedScript.hostsAssetsApplications_review_submission_failed_b77ca5'))
   } finally {
     submitting.value = false
   }
@@ -514,7 +517,7 @@ async function submitReview() {
 // 格式化时间
 function formatTime(time: string) {
   if (!time) return '-'
-  return new Date(time).toLocaleString('zh-CN')
+  return formatDateTime(time)
 }
 
 // 获取分类类型
@@ -536,15 +539,15 @@ function getCategoryType(category: string) {
 // 获取分类标签
 function getCategoryLabel(category: string) {
   const labels: Record<string, string> = {
-    database: '数据库',
-    web_service: 'Web 服务',
-    web_framework: 'Web 框架',
-    web_site: 'Web 站点',
+    database: translate('generatedScript.common_database_f4dbbc'),
+    web_service: translate('generatedScript.common_web_services_e3d112'),
+    web_framework: translate('generatedScript.common_web_framework_0d07e2'),
+    web_site: translate('generatedScript.common_website_671e5d'),
     llm_service: 'AI LLM',
     ai_agent: 'AI Agent',
     mcp_server: 'MCP',
-    other: '其他',
-    unknown: '未知',
+    other: translate('generatedScript.hostsAssetsApplications_other_1a26ed'),
+    unknown: translate('generatedScript.common_unknown_d9c32a'),
   }
   return labels[category] || category
 }
@@ -566,8 +569,8 @@ function displayPids(app: ApplicationAsset | null) {
 }
 
 function applicationRuntimeLabel(app: ApplicationAsset | null) {
-  if (!app?.is_container) return '主机应用'
-  return '容器应用'
+  if (!app?.is_container) return translate('generatedScript.hostsAssetsApplications_host_application_baeb1b')
+  return translate('generatedScript.hostsAssetsApplications_container_application_023b6e')
 }
 
 // 获取复核状态类型
@@ -584,10 +587,10 @@ function getReviewStatusType(status: string) {
 // 获取复核状态标签
 function getReviewStatusLabel(status: string) {
   const labels: Record<string, string> = {
-    auto: '自动',
-    pending: '待复核',
-    confirmed: '已确认',
-    rejected: '已拒绝',
+    auto: translate('generatedScript.hostsAssetsApplications_automatic_4afad8'),
+    pending: translate('generatedScript.hostsAssetsApplications_to_be_reviewed_4607ba'),
+    confirmed: translate('generatedScript.hostsAssetsApplications_confirmed_d9fea6'),
+    rejected: translate('generatedScript.common_rejected_4c7c52'),
   }
   return labels[status] || status
 }

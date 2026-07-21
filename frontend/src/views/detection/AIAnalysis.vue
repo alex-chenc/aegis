@@ -1,41 +1,41 @@
 <template>
   <div class="ai-analysis-page">
-    <el-row :gutter="20">
+    <div class="analysis-layout">
       <!-- 左侧：告警列表选择 -->
-      <el-col :span="8">
+      <section class="alert-selection-column">
         <el-card class="alert-selection-card">
           <template #header>
             <div class="card-header">
-              <span>选择要分析的告警</span>
-              <el-button size="small" @click="loadAlerts()">刷新</el-button>
+              <span>{{ $t('generated.detectionAIAnalysis_select_alarms_to_analyze_0c6c92') }}</span>
+              <el-button size="small" @click="loadAlerts()">{{ $t('generated.common_refresh_38108e') }}</el-button>
             </div>
           </template>
 
           <div class="alert-selection-scroll">
-            <el-form label-width="80px" class="filter-form">
-              <el-form-item label="时间范围">
+            <el-form :label-width="filterLabelWidth" class="filter-form">
+              <el-form-item :label="$t('generated.detectionAIAnalysis_time_range_2be904')">
                 <el-date-picker
                   v-model="timeRange"
                   type="datetimerange"
-                  range-separator="至"
-                  start-placeholder="开始时间"
-                  end-placeholder="结束时间"
+                  :range-separator="$t('dynamic.rangeTo')"
+                  :start-placeholder="$t('dynamic.startTime')"
+                  :end-placeholder="$t('dynamic.endTime')"
                   :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 1, 1, 23, 59, 59)]"
                   @change="handleTimeRangeChange"
                 />
               </el-form-item>
-              <el-form-item label="主机过滤">
-                <el-select v-model="hostFilter" multiple filterable placeholder="选择在线主机" clearable :loading="hostLoading">
+              <el-form-item :label="$t('generated.detectionAIAnalysis_host_filtering_0a93d3')">
+                <el-select v-model="hostFilter" multiple filterable :placeholder="$t('generated.detectionAIAnalysis_choose_an_online_host_5968e7')" clearable :loading="hostLoading">
                   <el-option v-for="host in hosts" :key="host" :label="host" :value="host" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="最大轮数">
+              <el-form-item :label="$t('generated.common_maximum_number_of_rounds_7b621d')">
                 <el-input-number v-model="maxIterations" :min="1" :max="1000" size="default" />
               </el-form-item>
             </el-form>
 
             <div v-if="isAnalysisSnapshotActive" class="analysis-snapshot-hint">
-              当前展示的是本次 AI 分析保留的事件快照，共 {{ analysisAlertSnapshot.length }} 条。
+              {{ $t('generated.detectionAIAnalysis_currently_displayed_are_the_event_snapshots_ad4605') }} {{ analysisAlertSnapshot.length }} {{ $t('generated.detectionAIAnalysis_strip_d758f3') }}
             </div>
 
             <el-table
@@ -44,28 +44,29 @@
               :data="visibleAlertRows"
               border
               stripe
+              scrollbar-always-on
               height="400"
               row-key="id"
               @selection-change="handleAlertSelection"
             >
               <el-table-column type="selection" width="40" />
-              <el-table-column prop="hostname" label="主机" min-width="100" />
-              <el-table-column prop="rule_title" label="规则" min-width="150" show-overflow-tooltip>
+              <el-table-column prop="hostname" :label="$t('generated.common_host_2e8a0c')" min-width="90" show-overflow-tooltip />
+              <el-table-column prop="rule_title" :label="$t('generated.common_rule_ed904c')" min-width="140" show-overflow-tooltip>
                 <template #default="{ row }">
                   {{ row.rule_title || row.mitre_id || '-' }}
                 </template>
               </el-table-column>
-              <el-table-column label="MITRE" width="120">
+              <el-table-column label="MITRE" width="80">
                 <template #default="{ row }">
                   {{ row.mitre_id || '-' }}
                 </template>
               </el-table-column>
-              <el-table-column prop="last_seen_at" label="最近时间" min-width="150">
+              <el-table-column prop="last_seen_at" :label="$t('generated.detectionAIAnalysis_latest_time_ee30ea')" min-width="130">
                 <template #default="{ row }">
                   {{ formatTime(row.last_seen_at) }}
                 </template>
               </el-table-column>
-              <el-table-column prop="severity" label="级别" width="80" align="center">
+              <el-table-column prop="severity" :label="$t('generated.detectionAIAnalysis_level_254849')" width="80" align="center">
                 <template #default="{ row }">
                   <el-tag :type="severityTagType(row.severity)" size="small">
                     {{ severityLabel(row.severity) }}
@@ -77,19 +78,19 @@
             <div
               v-if="!isAnalysisSnapshotActive && alertTotal > alertPageSize"
               class="alert-pagination"
-              aria-label="告警分页"
+              :aria-label="$t('generated.detectionAIAnalysis_alarm_paging_1cf659')"
             >
               <div class="alert-pagination-summary">
-                <span class="alert-pagination-total">共 {{ alertTotal }} 条</span>
+                <span class="alert-pagination-total">{{ $t('generated.common_common_3b6ef8') }} {{ alertTotal }} {{ $t('generated.common_strip_bce2ef') }}</span>
                 <el-select
                   v-model="alertPageSize"
                   class="alert-page-size-select"
                   size="small"
                   @change="handleAlertSizeChange"
                 >
-                  <el-option label="10 条/页" :value="10" />
-                  <el-option label="20 条/页" :value="20" />
-                  <el-option label="50 条/页" :value="50" />
+                  <el-option :label="$t('generated.detectionAIAnalysis_10_items_page_cb79ef')" :value="10" />
+                  <el-option :label="$t('generated.detectionAIAnalysis_20_items_page_8f7267')" :value="20" />
+                  <el-option :label="$t('generated.detectionAIAnalysis_50_items_page_c8747d')" :value="50" />
                 </el-select>
               </div>
               <el-pagination
@@ -106,9 +107,9 @@
             </div>
 
             <div class="selection-info">
-              已选择 {{ selectedAlertIds.length }} 个告警
+              {{ $t('generated.detectionAIAnalysis_selected_743aaf') }} {{ selectedAlertIds.length }} {{ $t('generated.detectionAIAnalysis_alarm_e72dcd') }}
               <el-button type="primary" :disabled="selectedAlertIds.length === 0 || isAnalysisSnapshotActive" @click="startAnalysis">
-                开始 AI 分析
+                {{ $t('generated.detectionAIAnalysis_start_ai_analysis_2f34a0') }}
               </el-button>
             </div>
 
@@ -121,14 +122,14 @@
             />
           </div>
         </el-card>
-      </el-col>
+      </section>
 
       <!-- 右侧：AI 分析对话 -->
-      <el-col :span="16">
+      <section class="chat-column">
         <el-card class="chat-card">
           <template #header>
             <div class="card-header">
-              <span>AI 安全分析助手</span>
+              <span>{{ $t('generated.detectionAIAnalysis_ai_security_analysis_assistant_26b4ad') }}</span>
               <div class="header-actions">
                 <ContextBudgetIndicator
                   :budget="contextBudget"
@@ -137,14 +138,14 @@
                   :total-completion-tokens="totalCompletionTokens"
                 />
                 <el-button size="small" @click="showSessionHistory">
-                  历史会话
+                  {{ $t('generated.common_history_session_60e77b') }}
                 </el-button>
               </div>
             </div>
           </template>
 
           <div v-if="!sessionId" class="no-session">
-            <el-empty description="请先在左侧选择告警并点击「开始 AI 分析」">
+            <el-empty :description="$t('generated.detectionAIAnalysis_please_select_the_alarm_on_the_b357d1')">
               <template #image>
                 <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#409EFF"/>
@@ -235,15 +236,15 @@
                     <div v-if="msg.type === 'audit' && msg.auditResult" class="audit-block">
                       <div class="block-header">
                         <el-icon><Warning /></el-icon>
-                        <span>审计结果</span>
+                        <span>{{ $t('generated.detectionAIAnalysis_audit_results_8aead9') }}</span>
                         <el-tag :type="msg.auditResult.risk_level === 'high' ? 'danger' : msg.auditResult.risk_level === 'medium' ? 'warning' : 'info'" size="small">
                           {{ msg.auditResult.risk_level }}
                         </el-tag>
                       </div>
                       <div class="block-content">
-                        <div><strong>决策:</strong> {{ msg.auditResult.decision }}</div>
+                        <div><strong>{{ $t('generated.detectionAIAnalysis_decision_making_001bc8') }}</strong> {{ msg.auditResult.decision }}</div>
                         <div v-if="msg.auditResult.findings?.length">
-                          <strong>发现:</strong>
+                          <strong>{{ $t('generated.detectionAIAnalysis_discover_8b4fbc') }}</strong>
                           <ul>
                             <li v-for="(f, i) in msg.auditResult.findings" :key="i">{{ f }}</li>
                           </ul>
@@ -255,12 +256,12 @@
                     <div v-if="msg.type === 'reflection' && msg.reflectionResult" class="reflection-block">
                       <div class="block-header">
                         <el-icon><RefreshRight /></el-icon>
-                        <span>反思</span>
+                        <span>{{ $t('generated.detectionAIAnalysis_reflection_4086eb') }}</span>
                       </div>
                       <div class="block-content">
-                        <div><strong>根因:</strong> {{ msg.reflectionResult.root_cause }}</div>
-                        <div><strong>影响:</strong> {{ msg.reflectionResult.impact }}</div>
-                        <div><strong>建议:</strong> {{ msg.reflectionResult.recommendation }}</div>
+                        <div><strong>{{ $t('generated.detectionAIAnalysis_root_cause_33c85d') }}</strong> {{ msg.reflectionResult.root_cause }}</div>
+                        <div><strong>{{ $t('generated.common_influence_f198c0') }}</strong> {{ msg.reflectionResult.impact }}</div>
+                        <div><strong>{{ $t('generated.common_suggestion_aeb940') }}</strong> {{ msg.reflectionResult.recommendation }}</div>
                       </div>
                     </div>
 
@@ -268,12 +269,12 @@
                     <div v-if="msg.type === 'correction' && msg.correctionResult" class="correction-block">
                       <div class="block-header">
                         <el-icon><CircleCheck /></el-icon>
-                        <span>纠正</span>
+                        <span>{{ $t('generated.detectionAIAnalysis_correct_500885') }}</span>
                       </div>
                       <div class="block-content">
-                        <div><strong>原因:</strong> {{ msg.correctionResult.reason }}</div>
+                        <div><strong>{{ $t('generated.detectionAIAnalysis_reason_21ddfa') }}</strong> {{ msg.correctionResult.reason }}</div>
                         <div v-if="msg.correctionResult.actions?.length">
-                          <strong>操作:</strong>
+                          <strong>{{ $t('generated.detectionAIAnalysis_operate_89c58d') }}</strong>
                           <ul>
                             <li v-for="(a, i) in msg.correctionResult.actions" :key="i">{{ a }}</li>
                           </ul>
@@ -292,7 +293,7 @@
                 <div class="message-content">
                   <div class="loading-indicator">
                     <el-icon class="is-loading"><Loading /></el-icon>
-                    <span>AI 思考中...</span>
+                    <span>{{ $t('generated.detectionAIAnalysis_ai_thinking_81033c') }}</span>
                   </div>
                 </div>
               </div>
@@ -304,7 +305,7 @@
                 v-model="inputMessage"
                 type="textarea"
                 :rows="2"
-                placeholder="输入您的问题..."
+                :placeholder="$t('generated.detectionAIAnalysis_enter_your_question_e61de3')"
                 @keydown.enter.ctrl="handleEnterKey"
               />
               <el-button
@@ -312,7 +313,7 @@
                 type="warning"
                 @click="pauseAnalysis"
               >
-                暂停
+                {{ $t('generated.detectionAIAnalysis_pause_130448') }}
               </el-button>
               <el-button
                 v-else
@@ -320,7 +321,7 @@
                 :disabled="!inputMessage.trim()"
                 @click="sendMessage"
               >
-                发送 (Ctrl+Enter)
+                {{ $t('generated.detectionAIAnalysis_send_ctrl_enter_5f4275') }}
               </el-button>
             </div>
           </div>
@@ -328,9 +329,9 @@
           <!-- 执行结果展示区域 -->
           <div v-if="currentSessionStatus === 'completed' && executionResult && !hasMessageExecutionResult" class="execution-result-panel">
             <div class="execution-result-header">
-              <span>任务执行结果</span>
+              <span>{{ $t('generated.detectionAIAnalysis_task_execution_results_0eecd9') }}</span>
               <el-button size="small" type="danger" @click="executionResult = null">
-                关闭
+                {{ $t('generated.common_closure_6c14bd') }}
               </el-button>
             </div>
             <TaskExecutionResult :result="executionResult" :ai-auto-block-result="aiAutoBlockResult" />
@@ -340,14 +341,14 @@
           <el-card v-if="currentSessionStatus === 'completed' && attackGraph" class="attack-graph-card" style="margin-top: 16px;">
             <template #header>
               <div class="card-header">
-                <span>攻击溯源图</span>
+                <span>{{ $t('generated.detectionAIAnalysis_attack_traceability_map_5dc75b') }}</span>
                 <div class="header-actions">
                   <el-button size="small" @click="downloadFlowchartImage">
                     <el-icon><Download /></el-icon>
-                    下载流程图
+                    {{ $t('generated.detectionAIAnalysis_download_flowchart_34dbae') }}
                   </el-button>
                   <el-button size="small" type="danger" @click="closeFlowchart">
-                    关闭
+                    {{ $t('generated.common_closure_6c14bd') }}
                   </el-button>
                 </div>
               </div>
@@ -357,7 +358,7 @@
         </el-card>
 
         <!-- 历史会话对话框 -->
-        <el-dialog v-model="sessionHistoryVisible" title="历史会话" width="800px">
+        <el-dialog v-model="sessionHistoryVisible" :title="$t('generated.common_history_session_60e77b')" width="800px">
           <el-table
             v-loading="sessionListLoading"
             :data="sessionList"
@@ -366,34 +367,34 @@
             @row-click="handleSelectSession"
             style="cursor: pointer;"
           >
-            <el-table-column prop="session_id" label="会话ID" width="200" />
-            <el-table-column prop="alert_ids" label="关联告警" width="120">
+            <el-table-column prop="session_id" :label="$t('generated.detectionAIAnalysis_session_id_e6cb12')" width="200" />
+            <el-table-column prop="alert_ids" :label="$t('generated.common_associated_alarms_0cf24b')" width="120">
               <template #default="{ row }">
-                {{ Array.isArray(row.alert_ids) ? row.alert_ids.length : 0 }} 个
+                {{ Array.isArray(row.alert_ids) ? row.alert_ids.length : 0 }} {{ $t('generated.common_indivual_f7b2a6') }}
               </template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="100">
+            <el-table-column prop="status" :label="$t('generated.common_state_62e951')" width="100">
               <template #default="{ row }">
                 <el-tag :type="getDisplayStatus(row) === 'completed' ? 'success' : 'info'" size="small">
-                  {{ getDisplayStatus(row) === 'completed' ? '已完成' : '未完成' }}
+                  {{ getDisplayStatus(row) === 'completed' ? $t('common.status.completed') : $t('dynamic.notCompleted') }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="max_iterations" label="最大轮数" width="100" />
-            <el-table-column prop="message_count" label="消息数" width="80" />
-            <el-table-column prop="created_at" label="创建时间" width="180">
+            <el-table-column prop="max_iterations" :label="$t('generated.common_maximum_number_of_rounds_7b621d')" width="100" />
+            <el-table-column prop="message_count" :label="$t('generated.detectionAIAnalysis_number_of_messages_8ae0e3')" width="80" />
+            <el-table-column prop="created_at" :label="$t('generated.common_creation_time_84e380')" width="180">
               <template #default="{ row }">
                 {{ formatTime(row.created_at) }}
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column :label="$t('generated.common_operate_f3ea6d')" width="150" fixed="right">
               <template #default="{ row }">
                 <div style="display: flex; gap: 8px; justify-content: center;">
                   <el-button size="small" type="primary" @click.stop="loadSession(row)">
-                    加载
+                    {{ $t('generated.detectionAIAnalysis_load_3363f3') }}
                   </el-button>
                   <el-button size="small" type="danger" @click.stop="deleteSessionById(row)">
-                    删除
+                    {{ $t('generated.common_delete_3755f5') }}
                   </el-button>
                 </div>
               </template>
@@ -409,17 +410,21 @@
             style="margin-top: 16px; text-align: center;"
           />
           <template #footer>
-            <el-button @click="sessionHistoryVisible = false">关闭</el-button>
+            <el-button @click="sessionHistoryVisible = false">{{ $t('generated.common_closure_6c14bd') }}</el-button>
           </template>
         </el-dialog>
-      </el-col>
-    </el-row>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { translate } from '@/i18n'
+import { formatDateTime } from '@/i18n/formatters'
+
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { User, ChatDotRound, Tools, Loading, Aim, Check, CircleClose, View, Edit, Download, Warning, RefreshRight, CircleCheck } from '@element-plus/icons-vue'
 import { getAlerts } from '@/api/detection'
@@ -442,9 +447,12 @@ import { buildAnalysisAlertQuery, buildAnalysisAlertSnapshot, filterOnlineHostna
 import { applyPlanStepStatus, getActionButtonType, normalizePlanEvent } from '@/utils/aiAnalysisRuntime'
 import { parseExecutionResultText, normalizeExecutionResult } from '@/utils/taskExecutionResult'
 import { getDisplayStatus, isFalsePositive, getRemediationSuggestion, getVerdictType, getVerdictText } from '@/utils/sessionStatus'
+import { getAIAnalysisFilterLabelWidth } from '@/utils/aiAnalysisLayout'
 
 const route = useRoute()
 const router = useRouter()
+const { locale } = useI18n()
+const filterLabelWidth = computed(() => getAIAnalysisFilterLabelWidth(locale.value))
 
 // Types
 interface Alert {
@@ -552,7 +560,7 @@ const aiAutoBlockResult = ref<AIAutoBlockPayload | null>(null)
 
 // LocalStorage keys
 const CURRENT_SESSION_KEY = 'aegis_current_session_id'
-const STRUCTURED_FINAL_PENDING_TEXT = '正在整理最终结论与溯源图...'
+const STRUCTURED_FINAL_PENDING_TEXT = translate('generatedScript.detectionAIAnalysis_the_final_conclusion_and_traceability_diagram_2b5977')
 const savedSessionId = ref<string | null>(null)
 const getStorageKey = () => `aegis_ai_session_${savedSessionId.value}`
 
@@ -663,7 +671,7 @@ async function loadHosts() {
     const response = await getHosts({ page: 1, pageSize: 1000 })
     hosts.value = filterOnlineHostnames(response)
   } catch (error: any) {
-    ElMessage.error(error.message || '加载在线主机失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_failed_to_load_online_host_6c4a9f'))
   } finally {
     hostLoading.value = false
   }
@@ -693,7 +701,7 @@ async function loadAlerts(force = false) {
     alertTotal.value = response.total || 0
   } catch (error: any) {
     if (currentSeq === alertLoadSeq) {
-      ElMessage.error(error.message || '加载告警失败')
+      ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_failed_to_load_alert_4f1850'))
     }
   } finally {
     if (currentSeq === alertLoadSeq) {
@@ -746,7 +754,7 @@ watch(alerts, () => {
 
 function formatTime(timestamp: string): string {
   if (!timestamp) return '-'
-  return new Date(timestamp).toLocaleString('zh-CN')
+  return formatDateTime(timestamp)
 }
 
 // Session history functions
@@ -766,7 +774,7 @@ async function loadSessionList(page: number = 1) {
     sessionList.value = payload.sessions || []
     sessionTotal.value = payload.total || 0
   } catch (error: any) {
-    ElMessage.error(error.message || '加载历史会话失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_failed_to_load_historical_sessions_523fea'))
   } finally {
     sessionListLoading.value = false
   }
@@ -954,10 +962,10 @@ async function deleteSessionById(session: SessionListItem) {
       clearCurrentSessionId()
       clearSavedConversation()
     }
-    ElMessage.success('会话已删除')
+    ElMessage.success(translate('generatedScript.detectionAIAnalysis_conversation_deleted_81b7d5'))
     loadSessionList(sessionPage.value)
   } catch (error: any) {
-    ElMessage.error(error.message || '删除会话失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_failed_to_delete_session_09c3d2'))
   }
 }
 
@@ -1046,7 +1054,7 @@ async function loadSession(session: SessionListItem) {
       appendHistoryRuntimeEventMessages(auditResults.value, reflectionResults.value, correctionResults.value)
     }
   } catch (error: any) {
-    ElMessage.error(error.message || '加载会话消息失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_failed_to_load_session_messages_213fd8'))
   }
 
   // 加载执行结果：仅用于填充上下文预算和token统计，不改变会话状态
@@ -1083,7 +1091,7 @@ async function loadSession(session: SessionListItem) {
     aiAutoBlockResult.value = payload.conclusion.ai_auto_block as AIAutoBlockPayload
   }
 
-  ElMessage.success('已加载会话')
+  ElMessage.success(translate('generatedScript.detectionAIAnalysis_session_loaded_36bf70'))
 }
 
 function handleSelectSession(row: SessionListItem) {
@@ -1205,14 +1213,14 @@ function rebuildMessagesFromHistory(historyMessages: any[]): Message[] {
 
 async function startAnalysis() {
   if (selectedAlertIds.value.length === 0) {
-    ElMessage.warning('请先选择要分析的告警')
+    ElMessage.warning(translate('generatedScript.detectionAIAnalysis_please_select_the_alarm_to_be_60c065'))
     return
   }
 
   try {
     const analysisSnapshot = buildAnalysisAlertSnapshot(filteredAlerts.value, selectedAlertIds.value)
     if (analysisSnapshot.length === 0) {
-      ElMessage.warning('当前筛选条件下没有可分析的告警')
+      ElMessage.warning(translate('generatedScript.detectionAIAnalysis_there_are_no_alarms_that_can_74ea51'))
       return
     }
 
@@ -1257,7 +1265,7 @@ async function startAnalysis() {
 
     // Try to load saved conversation if exists
     if (!loadConversation()) {
-      ElMessage.success('AI 分析会话已创建')
+      ElMessage.success(translate('generatedScript.detectionAIAnalysis_ai_analysis_session_created_196f3b'))
 
       // Automatically send initial analysis request
       const initialMessage = buildInitialAnalysisMessage(
@@ -1273,10 +1281,10 @@ async function startAnalysis() {
       )
       sendInitialMessage(initialMessage)
     } else {
-      ElMessage.success('已恢复会话')
+      ElMessage.success(translate('generatedScript.detectionAIAnalysis_session_restored_cacaf4'))
     }
   } catch (error: any) {
-    ElMessage.error(error.message || '创建 AI 分析会话失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_creating_ai_analysis_session_failed_328b7f'))
   }
 }
 
@@ -1463,11 +1471,11 @@ function createSSEHandler(message: string) {
         break
 
       case 'step_retrying':
-        applyPlanStepStatus(executionPlan.value, event.call_id, 'retrying', '正在重试...')
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'retrying', translate('generatedScript.detectionAIAnalysis_trying_again_898d55'))
         break
 
       case 'step_skipped':
-        applyPlanStepStatus(executionPlan.value, event.call_id, 'skipped', '已跳过')
+        applyPlanStepStatus(executionPlan.value, event.call_id, 'skipped', translate('generatedScript.detectionAIAnalysis_skipped_9f38af'))
         break
 
       case 'audit':
@@ -1541,7 +1549,7 @@ function createSSEHandler(message: string) {
           if (compData) {
             compressionRecords.value.push(compData as ContextCompressedEvent)
             const strategy = (compData as ContextCompressedEvent).strategy || 'unknown'
-            ElMessage({ message: `上下文已压缩 (${strategy})`, type: 'info', duration: 3000 })
+            ElMessage({ message: translate('generatedScript.detectionAIAnalysis_context_compressed_1110f5', { p0: strategy }), type: 'info', duration: 3000 })
           }
         } catch {
           // ignore parse errors
@@ -1549,7 +1557,7 @@ function createSSEHandler(message: string) {
         break
 
       case 'context_compression_failed':
-        ElMessage({ message: `上下文压缩失败: ${event.error || '未知错误'}`, type: 'warning', duration: 5000 })
+        ElMessage({ message: translate('generatedScript.detectionAIAnalysis_context_compression_failed_af09f4', { p0: event.error || translate('generatedScript.common_unknown_error_5f76ed') }), type: 'warning', duration: 5000 })
         break
 
       case 'ai_auto_block':
@@ -1560,11 +1568,11 @@ function createSSEHandler(message: string) {
             const payload = blockData as AIAutoBlockPayload
             if (payload.triggered && payload.summary) {
               const parts: string[] = []
-              if (payload.summary.success > 0) parts.push(`${payload.summary.success} 个成功`)
-              if (payload.summary.failed > 0) parts.push(`${payload.summary.failed} 个失败`)
-              if (payload.summary.skipped > 0) parts.push(`${payload.summary.skipped} 个跳过`)
+              if (payload.summary.success > 0) parts.push(translate('generatedScript.detectionAIAnalysis_successes_5b0ae2', { p0: payload.summary.success }))
+              if (payload.summary.failed > 0) parts.push(translate('generatedScript.detectionAIAnalysis_failures_649dc6', { p0: payload.summary.failed }))
+              if (payload.summary.skipped > 0) parts.push(translate('generatedScript.detectionAIAnalysis_skipped_ebf63c', { p0: payload.summary.skipped }))
               ElMessage({
-                message: `AI 自动阻断: ${parts.join('，')}`,
+                message: translate('generatedScript.detectionAIAnalysis_ai_automatic_blocking_2aca9b', { p0: parts.join('，') }),
                 type: payload.summary.failed > 0 ? 'warning' : 'success',
                 duration: 5000
               })
@@ -1609,7 +1617,7 @@ function createSSEHandler(message: string) {
         break
 
       case 'error':
-        const normalizedError = normalizeAIAnalysisErrorMessage(event.content || 'AI 分析出错')
+        const normalizedError = normalizeAIAnalysisErrorMessage(event.content || translate('generatedScript.detectionAIAnalysis_ai_analysis_gone_wrong_d57da6'))
         ElMessage.error(normalizedError)
         cleanup()
         flushThought(true)
@@ -1619,7 +1627,7 @@ function createSSEHandler(message: string) {
         thoughtMsgIndex = -1
         messages.value.push({
           role: 'assistant',
-          content: `AI 分析失败: ${normalizedError}`,
+          content: translate('generatedScript.detectionAIAnalysis_ai_analysis_failed_a348a9', { p0: normalizedError }),
           isError: true
         })
         isLoading.value = false
@@ -1690,9 +1698,9 @@ async function pauseAnalysis() {
   if (!sessionId.value) return
   try {
     await pauseSession(sessionId.value)
-    ElMessage.success('AI 分析已暂停')
+    ElMessage.success(translate('generatedScript.detectionAIAnalysis_ai_analysis_is_paused_a4363f'))
   } catch (error: any) {
-    ElMessage.error(error.message || '暂停 AI 分析失败')
+    ElMessage.error(error.message || translate('generatedScript.detectionAIAnalysis_pausing_ai_analysis_failed_0a50da'))
   } finally {
     closeCurrentStreamSilently()
     isLoading.value = false
@@ -1749,10 +1757,10 @@ function severityTagType(severity: string) {
 
 function severityLabel(severity: string) {
   const map: Record<string, string> = {
-    critical: '严重',
-    high: '高危',
-    medium: '中危',
-    low: '低危'
+    critical: translate('generatedScript.common_serious_81ffc6'),
+    high: translate('generatedScript.common_high_risk_e62ee8'),
+    medium: translate('generatedScript.common_medium_risk_1098e6'),
+    low: translate('generatedScript.common_low_risk_478c8d')
   }
   return map[severity] || severity
 }
@@ -1813,7 +1821,7 @@ onMounted(() => {
           // Load execution result to restore context budget, token data, and attach to message
           loadExecutionResultForSession(savedId, true)
           nextTick(() => {
-            ElMessage.success('已恢复之前的会话')
+            ElMessage.success(translate('generatedScript.detectionAIAnalysis_previous_session_restored_dcd471'))
           })
         }
       }
@@ -1826,6 +1834,17 @@ onMounted(() => {
 .ai-analysis-page {
   padding: 20px;
   height: calc(100vh - 120px);
+}
+
+.analysis-layout {
+  display: grid;
+  grid-template-columns: minmax(620px, 3fr) minmax(0, 5fr);
+  gap: 20px;
+}
+
+.alert-selection-column,
+.chat-column {
+  min-width: 0;
 }
 
 .alert-selection-card,
@@ -1888,6 +1907,10 @@ onMounted(() => {
 
 .filter-form {
   margin-bottom: 16px;
+}
+
+.filter-form :deep(.el-form-item__label) {
+  white-space: nowrap;
 }
 
 .analysis-snapshot-hint {
@@ -2489,5 +2512,15 @@ onMounted(() => {
 .correction-block .block-content ul {
   margin: 4px 0 0 0;
   padding-left: 18px;
+}
+
+@media (max-width: 1500px) {
+  .ai-analysis-page {
+    height: auto;
+  }
+
+  .analysis-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

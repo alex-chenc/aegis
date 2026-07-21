@@ -129,6 +129,10 @@ func (h *AssistantHandler) CreateSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
+	if req.Locale == "" {
+		req.Locale = c.GetHeader("Accept-Language")
+	}
+	req.Locale = assistant.NormalizeLocale(req.Locale)
 
 	operator := c.GetString("username")
 	session, err := h.assistantService.CreateSession(c.Request.Context(), req, operator)
@@ -187,6 +191,10 @@ func (h *AssistantHandler) SendMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
+	if req.Locale == "" {
+		req.Locale = c.GetHeader("Accept-Language")
+	}
+	req.Locale = assistant.NormalizeLocale(req.Locale)
 
 	operator := c.GetString("username")
 	handle, err := h.assistantService.SendMessage(c.Request.Context(), sessionID, req, operator)

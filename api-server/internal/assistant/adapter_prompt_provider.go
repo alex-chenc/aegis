@@ -18,6 +18,12 @@ type AssistantPromptProvider struct {
 	taskType           string
 	userMessage        string
 	reflectionMemories []string
+	locale             string
+}
+
+func (p *AssistantPromptProvider) WithLocale(locale string) *AssistantPromptProvider {
+	p.locale = NormalizeLocale(locale)
+	return p
 }
 
 // NewAssistantPromptProvider 创建提示词提供者
@@ -63,6 +69,7 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 	reflectionGuide := p.formatReflectionGuide()
 	contextBlock := p.formatContextRefs()
 	reasoningGuide := genericAgentReasoningGuide()
+	languageGuide := responseLanguageInstruction(p.locale)
 
 	systemPrompt := fmt.Sprintf(`You are the Aegis assistant planner. Plan from the user's goal, context, and current dynamic tool set.
 
@@ -81,6 +88,9 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 
 %s
 
+## Response language
+%s
+
 ## Rules
 1. Perform operations only through available tools. Never execute commands directly.
 2. High-risk operations require user approval.
@@ -92,13 +102,13 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 8. If the same tool must be called with different arguments, give every step a unique title that reflects its purpose or parameter dimension.
 9. Keep titles short and distinct. Put detailed goals, conditions, argument sources, and evidence requirements in objective and expected_output.
 10. Do not create a separate tool step merely to summarize or output the final conclusion. The summarization stage produces the final answer and must reuse successful evidence.
-11. Natural-language plan fields should follow the user's language. Tool names and machine identifiers must remain exact English catalog values.
+11. Follow the Response language instruction for natural-language plan fields. Tool names and machine identifiers must remain exact English catalog values.
 
 ## Output requirements
 Return exactly one JSON object. Do not output explanations, greetings, prose, or Markdown. Start with { and end with }.
 
 JSON schema:
-{"goal":"goal description","assumptions":["assumption"],"steps":[{"step_id":"step_1","title":"unique concise title","objective":"goal, conditions, and argument sources","expected_output":"expected output","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, contextBlock, reasoningGuide)
+{"goal":"goal description","assumptions":["assumption"],"steps":[{"step_id":"step_1","title":"unique concise title","objective":"goal, conditions, and argument sources","expected_output":"expected output","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, contextBlock, reasoningGuide, languageGuide)
 
 	userPrompt := p.userMessage
 	if contextBlock != "" {
@@ -120,6 +130,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 	reflectionGuide := p.formatReflectionGuide()
 	contextBlock := p.formatContextRefs()
 	reasoningGuide := genericAgentReasoningGuide()
+	languageGuide := responseLanguageInstruction(p.locale)
 
 	systemPrompt := fmt.Sprintf(`You are the Aegis assistant executing the current user task.
 
@@ -131,6 +142,9 @@ Use only the exact names listed here. Never invent a tool.
 
 %s
 
+%s
+
+## Response language
 %s
 
 ## Strict output format
@@ -164,14 +178,14 @@ Choose tool names and arguments only from Available tools, user input, context, 
 - If the current step only summarizes or organizes existing results, return step_result and do not call another tool.
 - An intermediate step_result contains only that step's output. The final report is produced once by the summarization stage.
 - Never apply a fixed workflow based on a tool name or business keyword. Decide from the user's goal and observed results.
-- Natural-language fields must follow the user's language. Tool names, arguments, enum values, and machine identifiers must remain exact catalog values.
+- Natural-language fields must follow the Response language instruction. Tool names, arguments, enum values, and machine identifiers must remain exact catalog values.
 
 ## Forbidden output
 - Do not output prose when a tool call is required.
 - Do not use {"name":"...","arguments":...}.
 - Do not output Markdown fences.
 - Do not add text before or after the JSON object.
-- Use "action", never "name" or "type", as the discriminator field.`, toolList, reflectionGuide, contextBlock, reasoningGuide)
+- Use "action", never "name" or "type", as the discriminator field.`, toolList, reflectionGuide, contextBlock, reasoningGuide, languageGuide)
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
@@ -195,7 +209,7 @@ func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBund
 7. If evidence conflicts, state the conflict and use the more conservative conclusion.
 8. Deduplicate evidence and provide the final conclusion only once, with the conclusion first.
 9. A descriptor validation failure means the model proposed a tool name outside the current catalog. An arguments validation failure means the model request did not satisfy the registered tool schema. If an authorized catalog tool can provide the requested capability, either failure must not be described as a missing platform capability or an undeployed module.
-10. Write the user-facing answer in the same language as the user's request.`, p.formatToolListDetail())
+10. %s`, p.formatToolListDetail(), responseLanguageInstruction(p.locale))
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
