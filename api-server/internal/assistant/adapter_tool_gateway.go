@@ -21,6 +21,7 @@ import (
 type capturedStepOutcome struct {
 	operationRef map[string]string
 	sideEffects  []map[string]interface{}
+	facts        []map[string]interface{}
 	terminal     bool
 }
 
@@ -650,6 +651,7 @@ func (a *AssistantToolGatewayAdapter) captureStepOutcome(stepID, toolName string
 	captured := capturedStepOutcome{
 		operationRef: outcome.OperationRef,
 		sideEffects:  outcome.SideEffects,
+		facts:        outcome.Facts,
 		terminal:     outcome.Terminal,
 	}
 	a.outcomesMu.Lock()
@@ -714,6 +716,24 @@ func (a *AssistantToolGatewayAdapter) resolvePreviousStepArgs(stepID, toolName s
 					zap.String("step_id", stepID),
 					zap.String("tool_name", toolName),
 					zap.String("arg_name", argName),
+				)
+			}
+			continue
+		}
+		// Fallback for *_ids arguments: aggregate entity IDs from prior step
+		// facts (e.g. host_resolved facts[].id -> host_ids). This lets the
+		// asset_inventory compiler bind host_ids from a Host.Resolve outcome
+		// without the model regenerating UUIDs.
+		if ids, ok := resolveEntityIDsFromFacts(priorOutcomes, argName); ok {
+			resolved[argName] = ids
+			if a.logger != nil {
+				a.logger.Debug("assistant previous_step ids argument bound from prior step facts",
+					zap.String("session_id", a.sessionID),
+					zap.String("run_id", a.runID),
+					zap.String("step_id", stepID),
+					zap.String("tool_name", toolName),
+					zap.String("arg_name", argName),
+					zap.Int("id_count", len(ids)),
 				)
 			}
 			continue
@@ -820,6 +840,34 @@ func resolveRefFromOutcomes(outcomes []capturedStepOutcome, argName string) (str
 		}
 	}
 	return "", false
+}
+
+// resolveEntityIDsFromFacts aggregates entity IDs from prior step outcome facts.
+// For a *_ids argument (e.g. host_ids) it looks for facts whose kind matches
+// the entity resolution pattern (e.g. host_resolved) and collects their id
+// fields. This lets the asset_inventory compiler bind host_ids from a
+// Host.Resolve outcome without the model regenerating UUIDs.
+func resolveEntityIDsFromFacts(outcomes []capturedStepOutcome, argName string) ([]string, bool) {
+	entity := strings.TrimSuffix(strings.ToLower(argName), "_ids")
+	if entity == argName || entity == "" {
+		return nil, false
+	}
+	factKind := entity + "_resolved"
+	var ids []string
+	for _, outcome := range outcomes {
+		for _, fact := range outcome.facts {
+			if fact == nil {
+				continue
+			}
+			if !strings.EqualFold(stringValue(fact["kind"]), factKind) {
+				continue
+			}
+			if id := stringValue(fact["id"]); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return dedupeStrings(ids), len(ids) > 0
 }
 
 func refKeys(ref map[string]string) []string {

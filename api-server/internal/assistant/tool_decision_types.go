@@ -137,11 +137,15 @@ type ToolUseContract struct {
 }
 
 type ArgBindingRule struct {
-	ArgName       string   `json:"arg_name"`
-	Entity        string   `json:"entity"`
-	SourceOrder   []string `json:"source_order"`
-	Required      bool     `json:"required"`
-	DefaultPolicy string   `json:"default_policy,omitempty"`
+	ArgName       string       `json:"arg_name"`
+	Entity        string       `json:"entity"`
+	SourceOrder   []string     `json:"source_order"`
+	Required      bool         `json:"required"`
+	DefaultPolicy string       `json:"default_policy,omitempty"`
+	// ValueKind constrains how a bound value may be typed. A business scope
+	// (e.g. "all") must never be coerced into an entity_id or entity_ids
+	// argument. When empty the kind is inferred from the arg name.
+	ValueKind ArgValueKind `json:"value_kind,omitempty"`
 }
 
 type ToolStateTransition struct {

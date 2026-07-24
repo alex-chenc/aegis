@@ -132,11 +132,16 @@ func RegisterAssetTools(registry *assistant.ToolRegistry, deps AssetToolDeps) er
 		Idempotent:         false,
 		Enabled:            true,
 		DefaultWhitelisted: false,
+		ExecutionContract: assistant.ToolExecutionContract{
+			Mode:                 assistant.ToolExecutionAsynchronous,
+			CompletionCapability: "get_asset_collection_task",
+		},
 		ResultContract: assistant.ToolResultContract{
-			// task_id is the durable reference a downstream Asset.Collection.Get
-			// step consumes. Declaring it as an operation ref lets the runtime
-			// deterministically bind the next step's task_id from this result
-			// instead of requiring the model to regenerate it.
+			// Trigger creates a background collection task and returns task_id.
+			// Declaring AcceptedOnSuccess keeps the step non-terminal so the
+			// mapped completion tool (Asset.Collection.Get) polls the real
+			// task_id until a terminal status is reached.
+			AcceptedOnSuccess:  true,
 			OperationRefFields: []string{"task_id"},
 		},
 		ArgsSchema: map[string]interface{}{
@@ -207,6 +212,14 @@ func RegisterAssetTools(registry *assistant.ToolRegistry, deps AssetToolDeps) er
 		Idempotent:         true,
 		Enabled:            true,
 		DefaultWhitelisted: true,
+		ResultContract: assistant.ToolResultContract{
+			OperationStatusField:  "status",
+			PendingValues:         []string{"pending", "collecting", "analyzing"},
+			SuccessValues:         []string{"completed"},
+			FailureValues:         []string{"failed", "cancelled"},
+			OperationRefFields:    []string{"task_id"},
+			SatisfiesCapabilities: []string{"trigger_asset_collection"},
+		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -381,7 +394,17 @@ func makeAssetCollectionGetHandler(repo *repository.AssetCollectionRepository) a
 			return nil, fmt.Errorf("failed to get asset collection task hosts: %w", err)
 		}
 		id := task.ID.String()
+		// Stable top-level fields let the declarative ResultContract resolve
+		// terminal status and task_id without coupling to nested model shapes.
 		return map[string]interface{}{
+			"task_id": id,
+			"status":  task.Status,
+			"progress": map[string]interface{}{
+				"total_hosts":   task.TotalHosts,
+				"success_hosts": task.SuccessHosts,
+				"failed_hosts":  task.FailedHosts,
+				"current_stage": task.CurrentStage,
+			},
 			"task":  task,
 			"hosts": hosts,
 			"task_ref": buildTaskRef(

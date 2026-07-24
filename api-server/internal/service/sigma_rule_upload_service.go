@@ -132,7 +132,7 @@ func (s *SigmaRuleUploadService) parseSingleFile(file io.Reader, fileName string
 		}, nil
 	}
 
-	// 提取MITRE ID用于验证和去重
+	// 提取 MITRE ID 用于验证和标准化
 	mitreID := s.extractMitreID(parsedRule.Tags)
 
 	// 验证MITRE ID不能为空
@@ -146,26 +146,12 @@ func (s *SigmaRuleUploadService) parseSingleFile(file io.Reader, fileName string
 		}, nil
 	}
 
-	// 检查MITRE ID是否已存在（去重）
+	// 同一 MITRE technique 可以对应多条不同的检测规则（例如不同二进制、
+	// 命令模式或日志源），不能把 MITRE ID 当作规则唯一键。文件哈希和
+	// rule_id 才是导入去重边界。
 	upperMitreID := strings.ToUpper(mitreID)
 	if !strings.HasPrefix(upperMitreID, "T") {
 		upperMitreID = "T" + upperMitreID
-	}
-	exists, err := s.ruleRepo.ExistsByMitreID(upperMitreID)
-	if err == nil && exists {
-		return &UploadResult{
-			Success:      true,
-			ParsedCount:  0,
-			SkippedCount: 1,
-			Rules: []ParsedRule{
-				{
-					RuleID:  parsedRule.ID,
-					Title:   parsedRule.Title,
-					Status:  "skipped_duplicate",
-					MitreID: upperMitreID,
-				},
-			},
-		}, nil
 	}
 
 	// 保存到数据库

@@ -116,6 +116,31 @@ func TestAssistantPromptProviderUsesRequestedResponseLanguage(t *testing.T) {
 	}
 }
 
+func TestAssistantDirectReplyPromptIncludesAttachedFileAndRequiresPlainText(t *testing.T) {
+	provider := NewAssistantPromptProvider(nil, []ContextRefResult{{
+		ObjectType: "file",
+		ObjectID:   "file-1",
+		Title:      "rule.yml",
+		Summary:    "title: SSH shell\nid: rule-123",
+	}}, "explanation", "你能看到我上传的文件吗").WithLocale(LocaleZhCN)
+
+	prompt := provider.buildDirectReplyPrompt()
+	for _, want := range []string{
+		"rule.yml",
+		"file-1",
+		"title: SSH shell",
+		"plain user-facing text",
+		"Simplified Chinese",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("direct reply prompt missing %q\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, `"action":"step_result"`) {
+		t.Fatalf("direct reply prompt must not request runtime control JSON\n%s", prompt)
+	}
+}
+
 func TestAssistantReactPromptExposesOnlyMappedToolsForCurrentRuntimeStep(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
 		{Name: "Host.Resolve", Description: "Resolve hosts."},

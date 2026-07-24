@@ -128,6 +128,37 @@ func TestNormalizeIntentBreakdownDoesNotInjectScenarioCapabilities(t *testing.T)
 	}
 }
 
+func TestNormalizeIntentBreakdownCompletesVulnerabilityRemediationCapabilities(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:          "针对主机192.168.152.159进行CVE-2023-29484的POC验证，如果存在漏洞则进行修复",
+		Actions:       []string{"poc_verification", "remediation"},
+		Objects:       []IntentObject{{Type: "host", ID: "192.168.152.159"}, {Type: "vulnerability", ID: "CVE-2023-29484"}},
+		Scope:         IntentScope{Kind: "specific", ObjectIDs: []string{"192.168.152.159", "CVE-2023-29484"}},
+		RequiresWrite: true,
+		WorkflowIDs:   []string{vulnerabilityRemediationWorkflowID},
+		CandidateCapabilities: []string{
+			"resolve_hosts",
+			"list_vulnerabilities",
+			"execute_vulnerability_host_scripts",
+		},
+	}
+
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: breakdown.Goal})
+
+	for _, required := range []string{
+		"resolve_hosts",
+		"generate_vulnerability_script",
+		"execute_vulnerability_host_scripts",
+	} {
+		if !containsExactString(breakdown.CandidateCapabilities, required) {
+			t.Fatalf("required workflow capability %q missing from %#v", required, breakdown.CandidateCapabilities)
+		}
+	}
+	if containsExactString(breakdown.CandidateCapabilities, "start_vulnerability_scan") {
+		t.Fatalf("vulnerability remediation normalization must not inject scan capability: %#v", breakdown.CandidateCapabilities)
+	}
+}
+
 func TestNormalizeIntentBreakdownCanonicalizesCapturedBaselineAliases(t *testing.T) {
 	breakdown := &IntentBreakdown{
 		Goal:                  "run baseline checks and repair every live machine",

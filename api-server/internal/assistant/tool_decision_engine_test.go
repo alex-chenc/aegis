@@ -77,6 +77,73 @@ func TestToolDecisionEngineAuthorizesOnlySelectedToolsWithoutWorkflowExpansion(t
 	}
 }
 
+func TestToolDecisionEngineOrdersSigmaImportBeforeEnableAndBindsRealRuleID(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{
+			Name: "SigmaRule.Import", Domain: DomainSigmaRule, Operation: OpCreate,
+			Capability: "import_sigma_rule", Description: "Import a Sigma rule.",
+			ObjectTypes: []string{"file", "sigma_rule"}, Risk: ToolRiskMedium,
+			DefaultWhitelisted: false,
+			ArgsSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file_id": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"file_id"},
+			},
+			ResultContract: ToolResultContract{OperationRefFields: []string{"rule_id"}},
+		},
+		{
+			Name: "SigmaRule.Enable", Domain: DomainSigmaRule, Operation: OpUpdate,
+			Capability: "enable_sigma_rule", Description: "Enable a Sigma rule.",
+			ObjectTypes: []string{"sigma_rule"}, Risk: ToolRiskMedium,
+			DefaultWhitelisted: false,
+			ArgsSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"rule_id": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"rule_id"},
+			},
+		},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+	breakdown := makeDecisionBreakdown(t,
+		"解析附件并开启这个规则的检测",
+		IntentResult{Domains: []string{"sigma_rule"}, Action: "enable", Object: "sigma_rule", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.9},
+		nil,
+		[]string{"enable_sigma_rule", "import_sigma_rule"},
+	)
+	breakdown.Objects = []IntentObject{
+		{Type: "file", ID: "file-1"},
+		{Type: "sigma_rule", ID: "rule-from-yaml"},
+	}
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:       "解析附件并开启这个规则的检测",
+		Intent:      IntentResult{Domains: []string{"sigma_rule"}, Action: "enable", Object: "sigma_rule", NeedWrite: true, RiskHint: ToolRiskMedium, Confidence: 0.9},
+		Breakdown:   breakdown,
+		ContextRefs: []ContextRefInput{{ObjectType: "file", ObjectID: "file-1", Title: "rule.yml", Summary: "id: rule-from-yaml"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.ToolNames(); len(got) != 2 || got[0] != "SigmaRule.Import" || got[1] != "SigmaRule.Enable" {
+		t.Fatalf("sigma lifecycle order = %v", got)
+	}
+	enable := findPlanStep(plan, "SigmaRule.Enable")
+	if enable == nil {
+		t.Fatal("SigmaRule.Enable step missing")
+	}
+	if _, exists := enable.Args["rule_id"]; exists {
+		t.Fatalf("enable must not reuse an unpersisted YAML rule ID: %#v", enable.Args)
+	}
+	if source := enable.ArgSources["rule_id"]; source.SourceType != "previous_step" {
+		t.Fatalf("enable rule_id source = %#v, want previous_step", source)
+	}
+}
+
 func TestToolDecisionEngineDoesNotUseDomainRecallOrWrongPreselection(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, spec := range []*ToolSpec{

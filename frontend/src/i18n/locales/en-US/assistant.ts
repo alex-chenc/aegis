@@ -13,6 +13,13 @@ export default {
     failed: 'The operation failed. See the result for details.',
     skipped: 'The operation was skipped.',
   },
+  step: {
+    completed: 'Completed',
+    failed: 'Step failed',
+    skipped: 'Skipped',
+    retrying: 'Retrying',
+    compileError: 'Asset collection not started: the compiled host scope does not satisfy the tool contract.',
+  },
   errors: {
     fetchSessions: 'Failed to retrieve sessions',
     deleteSession: 'Failed to delete session',

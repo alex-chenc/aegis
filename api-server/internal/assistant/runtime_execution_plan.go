@@ -202,6 +202,10 @@ func runtimeBusinessStepContract(source ToolPlanStep, allowedTools []string) (st
 		return "Run and verify baseline compliance",
 			"Start the mapped baseline compliance operation with the backend-bound scope, template, and remediation policy. Then use only the mapped Operation.Get completion tool with the real returned operation_id until the operation reaches a terminal state.",
 			"Return terminal operation evidence with coverage, task references, and remediation results. Complete this step only after the mapped completion tool reports a terminal outcome."
+	case "trigger_asset_collection":
+		return "Refresh and verify asset inventory",
+			"Start the mapped asset collection operation with the backend-bound scope. Then use only the mapped Asset.Collection.Get completion tool with the real returned task_id until the task reaches a terminal state (completed, failed, or cancelled).",
+			"Return terminal asset collection evidence with task_id, host coverage (total/success/failed), and terminal status. Complete this step only after the mapped completion tool reports a terminal outcome."
 	case "get_operation_status":
 		return "Monitor operation status",
 			"Query only the mapped operation reference from prior tool evidence until the operation reaches a terminal state.",

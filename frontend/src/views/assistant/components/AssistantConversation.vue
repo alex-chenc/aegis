@@ -71,9 +71,15 @@
                   v-for="(result, index) in segment.results"
                   :key="`${segment.key}-result-${index}`"
                   class="step-result-card"
+                  :class="`step-result-${result.status}`"
                 >
                   <div class="step-result-header">
-                    <el-icon><CircleCheck /></el-icon>
+                    <el-icon>
+                      <CircleClose v-if="result.status === 'failed'" />
+                      <RemoveFilled v-else-if="result.status === 'skipped'" />
+                      <Refresh v-else-if="result.status === 'retrying'" />
+                      <CircleCheck v-else />
+                    </el-icon>
                     <span>{{ result.title }}</span>
                   </div>
                   <div class="step-result-content">{{ result.summary }}</div>
@@ -122,7 +128,7 @@
 import { translate } from '@/i18n'
 
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { User, Monitor, InfoFilled, CircleCheck } from '@element-plus/icons-vue'
+import { User, Monitor, InfoFilled, CircleCheck, CircleClose, RemoveFilled, Refresh } from '@element-plus/icons-vue'
 import { gsap } from 'gsap'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
@@ -146,7 +152,9 @@ const containerRef = ref<HTMLElement>()
 let motionContext: ReturnType<typeof gsap.context> | null = null
 let motionMedia: ReturnType<typeof gsap.matchMedia> | null = null
 
-type StepResult = { key: string; title: string; summary: string }
+type StepResultStatus = 'completed' | 'failed' | 'skipped' | 'retrying'
+
+type StepResult = { key: string; title: string; summary: string; status: StepResultStatus }
 type AssistantSegment =
   | { type: 'thinking'; key: string; steps: string[] }
   | { type: 'content'; key: string; content: string }
@@ -275,13 +283,31 @@ function isToolCallDisplaySettled(toolCall: AssistantToolCall): boolean {
 
 function getStepResults(msg: AssistantMessage): StepResult[] {
   if (!shouldRenderStepResults(msg)) return []
+  const terminalStatuses: string[] = ['completed', 'failed', 'skipped', 'retrying']
   return msg.plan.steps
-    .filter(step => step.result_summary)
-    .map(step => ({
-      key: step.step_id || step.title,
-      title: step.title,
-      summary: step.result_summary || ''
-    }))
+    .filter(step => step.result_summary || terminalStatuses.includes(step.status))
+    .map(step => {
+      const status = (terminalStatuses.includes(step.status) ? step.status : 'completed') as StepResultStatus
+      return {
+        key: step.step_id || step.title,
+        title: step.title,
+        summary: step.result_summary || defaultStepSummary(status),
+        status,
+      }
+    })
+}
+
+function defaultStepSummary(status: StepResultStatus): string {
+  switch (status) {
+    case 'failed':
+      return translate('assistant.step.failed')
+    case 'skipped':
+      return translate('assistant.step.skipped')
+    case 'retrying':
+      return translate('assistant.step.retrying')
+    default:
+      return translate('assistant.step.completed')
+  }
 }
 
 function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
@@ -358,6 +384,7 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
       key: `fallback-${index}-${normalizedTitle}`,
       title: normalizedTitle,
       summary: translate('generatedScript.assistantAssistantConversation_completed_steps_00a764', { p0: normalizedTitle }),
+      status: 'completed' as StepResultStatus,
     }
   }
 
@@ -402,20 +429,20 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
       })
     }
 
-    if (msg.content) {
-      segments.push({
-        type: 'content',
-        key: `${baseKey}-content`,
-        content: msg.content,
-      })
-    }
-
     const remainingStepResults = stepResults.filter(result => !usedStepResults.has(result.key))
     if (remainingStepResults.length) {
       segments.push({
         type: 'step-results',
         key: `${baseKey}-step-results`,
         results: remainingStepResults,
+      })
+    }
+
+    if (msg.content) {
+      segments.push({
+        type: 'content',
+        key: `${baseKey}-content`,
+        content: msg.content,
       })
     }
 
@@ -656,6 +683,45 @@ onUnmounted(() => {
   border: 1px solid #86efac;
   border-radius: 8px;
   padding: 10px 12px;
+}
+
+.step-result-card.step-result-failed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.step-result-card.step-result-failed .step-result-header {
+  color: #991b1b;
+}
+
+.step-result-card.step-result-failed .step-result-header .el-icon {
+  color: #ef4444;
+}
+
+.step-result-card.step-result-skipped {
+  background: #f9fafb;
+  border-color: #d1d5db;
+}
+
+.step-result-card.step-result-skipped .step-result-header {
+  color: #4b5563;
+}
+
+.step-result-card.step-result-skipped .step-result-header .el-icon {
+  color: #9ca3af;
+}
+
+.step-result-card.step-result-retrying {
+  background: #fffbeb;
+  border-color: #fcd34d;
+}
+
+.step-result-card.step-result-retrying .step-result-header {
+  color: #92400e;
+}
+
+.step-result-card.step-result-retrying .step-result-header .el-icon {
+  color: #f59e0b;
 }
 
 .step-result-header {

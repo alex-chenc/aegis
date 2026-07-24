@@ -197,9 +197,25 @@ func defaultArgBindings(tool *ToolSpec) []ArgBindingRule {
 			Entity:      inferEntityFromArgName(argName),
 			SourceOrder: []string{"user_message", "page_context", "session_context", "previous_step"},
 			Required:    true,
+			ValueKind:   inferArgValueKind(argName),
 		})
 	}
 	return bindings
+}
+
+// inferArgValueKind derives the typed value constraint from the argument name.
+// *_ids args require arrays, *_id args accept a single ID, and everything else
+// is unconstrained. A business scope string must never satisfy an entity ID
+// or entity IDs binding.
+func inferArgValueKind(argName string) ArgValueKind {
+	lower := strings.ToLower(strings.TrimSpace(argName))
+	if strings.HasSuffix(lower, "_ids") {
+		return ArgValueEntityIDs
+	}
+	if strings.HasSuffix(lower, "_id") {
+		return ArgValueEntityID
+	}
+	return ""
 }
 
 func requiredArgsFromToolSchema(schema map[string]interface{}) []string {
@@ -234,12 +250,22 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 		contract.DeniedIntents = []string{"explain_asset_collection", "query_asset_collection_history"}
 		contract.RequiredEntities = []string{"scope|host_ids"}
 		contract.Preconditions = []string{"user_explicit_execute_intent", "scope_resolved"}
-		contract.ArgBindings = []ArgBindingRule{{
-			ArgName:     "host_ids",
-			Entity:      "host",
-			SourceOrder: []string{"user_message", "page_context", "previous_step"},
-			Required:    false,
-		}}
+		contract.ArgBindings = []ArgBindingRule{
+			{
+				ArgName:     "scope",
+				Entity:      "scope",
+				SourceOrder: []string{"user_message", "page_context", "session_context"},
+				Required:    false,
+				ValueKind:   ArgValueBusinessScope,
+			},
+			{
+				ArgName:     "host_ids",
+				Entity:      "host",
+				SourceOrder: []string{"user_message", "page_context", "previous_step"},
+				Required:    false,
+				ValueKind:   ArgValueEntityIDs,
+			},
+		}
 		contract.NegativeCases = []string{
 			"Do not call when the user only asks about the asset collection concept.",
 			"Do not call when the user only wants collection history.",

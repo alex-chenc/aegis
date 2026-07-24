@@ -122,6 +122,7 @@ func normalizeExposureIdentifier(value string) string {
 
 func builtinToolExposurePolicy(name string) ToolExposurePolicy {
 	exposure := ToolExposureContextual
+	var workflowIDs []string
 	switch name {
 	case "Context.Get", "Session.Summarize",
 		"Asset.Collection.Get", "Task.GetDetail",
@@ -132,11 +133,14 @@ func builtinToolExposurePolicy(name string) ToolExposurePolicy {
 		exposure = ToolExposureInternal
 	case "Host.Resolve", "Baseline.Compliance.Run":
 		exposure = ToolExposurePrimary
+	case "Vulnerability.Script.Generate", "Vulnerability.Script.Execute":
+		workflowIDs = []string{vulnerabilityRemediationWorkflowID}
 	case "":
 		exposure = ToolExposureInternal
 	}
 	return ToolExposurePolicy{
 		Exposure:       exposure,
+		WorkflowIDs:    workflowIDs,
 		Discoverable:   exposure == ToolExposurePrimary || exposure == ToolExposureContextual,
 		DirectCallable: exposure != ToolExposureInternal,
 		CatalogPriority: func() int {

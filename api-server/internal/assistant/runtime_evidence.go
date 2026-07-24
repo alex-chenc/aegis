@@ -20,14 +20,17 @@ type runtimeToolEvidence struct {
 }
 
 type runtimeEvidenceLedger struct {
-	Calls                 []runtimeToolEvidence `json:"calls"`
-	ActualToolNames       []string              `json:"actual_tool_names"`
-	FailedToolNames       []string              `json:"failed_tool_names,omitempty"`
-	VulnerabilityCount    int                   `json:"vulnerability_count"`
-	OnlineHostCount       int                   `json:"online_host_count"`
-	GeneratedScriptTypes  []string              `json:"generated_script_types,omitempty"`
-	TaskGroupIDs          []string              `json:"task_group_ids,omitempty"`
-	VulnerabilityWorkflow bool                  `json:"vulnerability_workflow"`
+	Calls                   []runtimeToolEvidence `json:"calls"`
+	ActualToolNames         []string              `json:"actual_tool_names"`
+	FailedToolNames         []string              `json:"failed_tool_names,omitempty"`
+	VulnerabilityCount      int                   `json:"vulnerability_count"`
+	OnlineHostCount         int                   `json:"online_host_count"`
+	GeneratedScriptTypes    []string              `json:"generated_script_types,omitempty"`
+	TaskGroupIDs            []string              `json:"task_group_ids,omitempty"`
+	VulnerabilityWorkflow   bool                  `json:"vulnerability_workflow"`
+	AssetCollectionTaskIDs  []string              `json:"asset_collection_task_ids,omitempty"`
+	AssetCollectionTerminal bool                  `json:"asset_collection_terminal,omitempty"`
+	AssetCollectionCoverage map[string]int        `json:"asset_collection_coverage,omitempty"`
 }
 
 func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidenceLedger {
@@ -40,6 +43,9 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 	generatedTypes := make(map[string]bool)
 	taskGroups := make(map[string]bool)
 	onlineHostIDs := make(map[string]bool)
+	assetTaskIDs := make(map[string]bool)
+	assetCoverage := make(map[string]int)
+	assetTerminal := false
 
 	validationByCall := make(map[string]agentruntime.ToolCallRecord, len(result.ToolCalls))
 	for _, call := range result.ToolCalls {
@@ -133,6 +139,30 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 					}
 				}
 			}
+			// Track asset collection task references, terminal status, and
+			// coverage so the final summary cannot claim completion without a
+			// real task_id and terminal evidence.
+			if strings.Contains(strings.ToLower(outcome.Capability), "asset_collection") {
+				if taskID := outcome.OperationRef["task_id"]; taskID != "" {
+					assetTaskIDs[taskID] = true
+				}
+				if outcome.Terminal {
+					assetTerminal = true
+				}
+				if contentMap, ok := content.(map[string]interface{}); ok {
+					if progress, ok := contentMap["progress"].(map[string]interface{}); ok {
+						if v, ok := numericValue(progress["total_hosts"]); ok && v > 0 {
+							assetCoverage["total_hosts"] = int(v)
+						}
+						if v, ok := numericValue(progress["success_hosts"]); ok && v > 0 {
+							assetCoverage["success_hosts"] = int(v)
+						}
+						if v, ok := numericValue(progress["failed_hosts"]); ok && v > 0 {
+							assetCoverage["failed_hosts"] = int(v)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -143,12 +173,17 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 	ledger.FailedToolNames = sortedStringSet(failedNames)
 	ledger.GeneratedScriptTypes = sortedStringSet(generatedTypes)
 	ledger.TaskGroupIDs = sortedStringSet(taskGroups)
+	ledger.AssetCollectionTaskIDs = sortedStringSet(assetTaskIDs)
+	ledger.AssetCollectionTerminal = assetTerminal
+	if len(assetCoverage) > 0 {
+		ledger.AssetCollectionCoverage = assetCoverage
+	}
 	return ledger
 }
 
 func validateRuntimeEvidenceConsistency(answer string, ledger runtimeEvidenceLedger) []string {
 	normalized := strings.ToLower(strings.TrimSpace(answer))
-	conflicts := make([]string, 0, 4)
+	conflicts := make([]string, 0, 6)
 	if ledger.OnlineHostCount > 0 && containsAnyFold(normalized,
 		"没有在线主机", "无在线主机", "没有处于在线状态的主机", "当前环境没有在线主机") {
 		conflicts = append(conflicts, "online_hosts_contradiction")
@@ -164,6 +199,16 @@ func validateRuntimeEvidenceConsistency(answer string, ledger runtimeEvidenceLed
 	if ledger.VulnerabilityWorkflow && len(ledger.GeneratedScriptTypes) == 0 &&
 		containsAnyFold(normalized, "脚本已生成", "脚本生成成功", "poc生成成功", "修复脚本生成成功") {
 		conflicts = append(conflicts, "script_generated_without_terminal_evidence")
+	}
+	// Asset collection: the answer must not claim completion without a real
+	// task_id and terminal evidence from Asset.Collection.Get.
+	if len(ledger.AssetCollectionTaskIDs) > 0 && !ledger.AssetCollectionTerminal &&
+		containsAnyFold(normalized, "资产采集完成", "采集已完成", "资产重采集完成", "asset collection completed") {
+		conflicts = append(conflicts, "asset_collection_completed_without_terminal")
+	}
+	if len(ledger.AssetCollectionTaskIDs) == 0 &&
+		containsAnyFold(normalized, "资产采集完成", "采集已完成", "资产重采集完成", "已创建采集任务") {
+		conflicts = append(conflicts, "asset_collection_claimed_without_task_id")
 	}
 	return dedupeStrings(conflicts)
 }
@@ -187,6 +232,17 @@ func buildEvidenceGroundedFallback(ledger runtimeEvidenceLedger) string {
 	} else if ledger.VulnerabilityWorkflow {
 		b.WriteString("\n- 尚未取得任务组 ID，不能认定任务已经下发。")
 	}
+	if len(ledger.AssetCollectionTaskIDs) > 0 {
+		b.WriteString("\n- 资产采集任务：" + strings.Join(ledger.AssetCollectionTaskIDs, "、") + "。")
+		if !ledger.AssetCollectionTerminal {
+			b.WriteString("\n- 资产采集任务尚未达到终态，不能认定采集完成。")
+		} else if len(ledger.AssetCollectionCoverage) > 0 {
+			total := ledger.AssetCollectionCoverage["total_hosts"]
+			success := ledger.AssetCollectionCoverage["success_hosts"]
+			failed := ledger.AssetCollectionCoverage["failed_hosts"]
+			b.WriteString(fmt.Sprintf("\n- 采集覆盖：目标 %d 台 / 成功 %d 台 / 失败 %d 台。", total, success, failed))
+		}
+	}
 	if len(ledger.FailedToolNames) > 0 {
 		b.WriteString("\n- 实际失败的工具：" + strings.Join(ledger.FailedToolNames, "、") + "。")
 	}
@@ -205,10 +261,22 @@ func buildFailedGoalFallback(ledger runtimeEvidenceLedger) string {
 	if len(ledger.FailedToolNames) > 0 {
 		b.WriteString("\n\n- 失败工具：" + strings.Join(ledger.FailedToolNames, "、") + "。")
 	}
-	if len(ledger.TaskGroupIDs) == 0 {
-		b.WriteString("\n- 未取得任务组证据，未下发任务。")
-	} else {
-		b.WriteString("\n- 已创建任务组，但本轮目标未达到成功终态。")
+	if len(ledger.AssetCollectionTaskIDs) > 0 {
+		b.WriteString("\n- 已创建资产采集任务：" + strings.Join(ledger.AssetCollectionTaskIDs, "、") + "。")
+		if !ledger.AssetCollectionTerminal {
+			b.WriteString("\n- 资产采集任务仍在后台运行，但本轮监控提前结束，暂时不能认定采集完成。")
+		} else if len(ledger.AssetCollectionCoverage) > 0 {
+			total := ledger.AssetCollectionCoverage["total_hosts"]
+			success := ledger.AssetCollectionCoverage["success_hosts"]
+			failed := ledger.AssetCollectionCoverage["failed_hosts"]
+			b.WriteString(fmt.Sprintf("\n- 采集覆盖：目标 %d 台 / 成功 %d 台 / 失败 %d 台。", total, success, failed))
+		}
+	} else if ledger.VulnerabilityWorkflow {
+		if len(ledger.TaskGroupIDs) == 0 {
+			b.WriteString("\n- 未取得任务组证据，未下发任务。")
+		} else {
+			b.WriteString("\n- 已创建任务组，但本轮目标未达到成功终态。")
+		}
 	}
 	if len(ledger.ActualToolNames) > 0 {
 		b.WriteString("\n- 实际调用：" + strings.Join(ledger.ActualToolNames, "、") + "。")

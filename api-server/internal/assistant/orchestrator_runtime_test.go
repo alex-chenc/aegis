@@ -42,6 +42,28 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 	}
 }
 
+func TestApplyFixedPlanRuntimeLimitsPreservesAsyncPollingBudget(t *testing.T) {
+	cfg := DefaultAIAnalysisRuntimeConfig(0)
+
+	applyFixedPlanRuntimeLimits(&cfg, 2)
+
+	if cfg.MaxAsyncPollAttempts < 24 {
+		t.Fatalf("fixed plan async poll attempts = %d, want at least 24", cfg.MaxAsyncPollAttempts)
+	}
+	requiredPerStep := cfg.MaxAsyncPollAttempts + 2
+	if cfg.MaxToolCallsPerStep < requiredPerStep {
+		t.Fatalf(
+			"fixed plan per-step tool budget = %d, want at least %d for trigger, completion lookup, and automatic polls",
+			cfg.MaxToolCallsPerStep,
+			requiredPerStep,
+		)
+	}
+	requiredTotal := 2*cfg.MaxToolCallsPerStep + 4
+	if cfg.MaxToolCalls < requiredTotal {
+		t.Fatalf("fixed plan total tool budget = %d, want at least %d", cfg.MaxToolCalls, requiredTotal)
+	}
+}
+
 func TestEffectiveRuntimeContextBudgetUsesObservedPromptTokens(t *testing.T) {
 	result := &agentruntime.TaskResult{
 		ContextBudget: &agentruntime.ContextBudgetSnapshot{
@@ -248,6 +270,43 @@ func TestValidateRuntimeFinalAnswerRejectsInternalJSONObject(t *testing.T) {
 	}
 	if err := validateRuntimeFinalAnswer("任务未创建，未执行任何修复。"); err != nil {
 		t.Fatalf("natural-language final answer rejected: %v", err)
+	}
+}
+
+func TestNormalizeRuntimeFinalAnswerUnwrapsDirectStepResult(t *testing.T) {
+	answer, err := normalizeRuntimeFinalAnswer(`{"action":"step_result","summary":"direct response","step_result":{"result":"可以看到 rule.yml。","evidence":[],"confidence":"high"}}`)
+	if err != nil {
+		t.Fatalf("normalize direct step result: %v", err)
+	}
+	if answer != "可以看到 rule.yml。" {
+		t.Fatalf("normalized answer = %q", answer)
+	}
+
+	answer, err = normalizeRuntimeFinalAnswer(`{"final_answer":"附件已成功解析。"}`)
+	if err != nil {
+		t.Fatalf("normalize wrapped final answer: %v", err)
+	}
+	if answer != "附件已成功解析。" {
+		t.Fatalf("wrapped answer = %q", answer)
+	}
+}
+
+func TestBuildIntentContextRefsIncludesBoundedTrustedAttachmentMetadata(t *testing.T) {
+	longSummary := strings.Repeat("规", intentContextSummaryMaxRunes+10)
+	refs := buildIntentContextRefs([]ContextObject{{
+		ObjectType: "file",
+		ObjectID:   "file-1",
+		Title:      "rule.yml",
+		Summary:    longSummary,
+	}})
+	if len(refs) != 1 {
+		t.Fatalf("context refs = %#v", refs)
+	}
+	if refs[0].Title != "rule.yml" || refs[0].ObjectID != "file-1" {
+		t.Fatalf("attachment metadata missing: %#v", refs[0])
+	}
+	if len([]rune(refs[0].Summary)) != intentContextSummaryMaxRunes+4 || !strings.HasSuffix(refs[0].Summary, "\n...") {
+		t.Fatalf("intent attachment summary was not bounded: length=%d suffix=%q", len([]rune(refs[0].Summary)), refs[0].Summary[len(refs[0].Summary)-4:])
 	}
 }
 

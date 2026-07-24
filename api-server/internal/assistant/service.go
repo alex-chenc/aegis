@@ -73,6 +73,11 @@ type CreateSessionRequest struct {
 type ContextRefInput struct {
 	ObjectType string `json:"object_type"`
 	ObjectID   string `json:"object_id"`
+	// Title and Summary are populated from server-side session context before
+	// intent classification. AttachContextRefs deliberately ignores
+	// client-supplied values so callers cannot forge trusted object metadata.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // SendMessageRequest 发送消息请求

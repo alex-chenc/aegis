@@ -17,6 +17,14 @@ func NewToolCatalog(registry *ToolRegistry) *ToolCatalog {
 	return &ToolCatalog{registry: registry}
 }
 
+// Registry returns the underlying tool registry.
+func (c *ToolCatalog) Registry() *ToolRegistry {
+	if c == nil {
+		return nil
+	}
+	return c.registry
+}
+
 // Resolve 按名称解析工具
 func (c *ToolCatalog) Resolve(name string) (ToolSpec, bool) {
 	tool, ok := c.registry.Get(name)

@@ -9,10 +9,16 @@ const baselineComplianceWorkflowID = "baseline_compliance"
 // contract remains open; normalization is intentionally scoped to workflows
 // whose backend compiler has a closed input contract.
 func normalizeWorkflowIntentBreakdown(value *IntentBreakdown) {
-	if value == nil || !isBaselineComplianceIntent(value) {
+	if value == nil {
 		return
 	}
+	if isBaselineComplianceIntent(value) {
+		normalizeBaselineComplianceIntent(value)
+	}
+	normalizeVulnerabilityRemediationIntent(value)
+}
 
+func normalizeBaselineComplianceIntent(value *IntentBreakdown) {
 	for index := range value.Objects {
 		objectType := strings.ToLower(strings.TrimSpace(value.Objects[index].Type))
 		switch objectType {
@@ -53,6 +59,39 @@ func normalizeWorkflowIntentBreakdown(value *IntentBreakdown) {
 		"auto_repair_rounds",
 		"max_repair_rounds",
 	)
+}
+
+// normalizeVulnerabilityRemediationIntent completes the closed capability
+// contract for an explicitly selected POC/remediation workflow. The model may
+// identify the final execution capability while omitting the prerequisite
+// script-generation capability. Completing that dependency before Mapping
+// keeps every tool inside the normal authorization hard gates and lets Mapping
+// derive the read-only asynchronous status companion from the Generate tool.
+func normalizeVulnerabilityRemediationIntent(value *IntentBreakdown) {
+	if value == nil ||
+		!value.RequiresWrite ||
+		!workflowSelected(value, vulnerabilityRemediationWorkflowID) ||
+		!hasVulnerabilityPOCOrRemediationAction(value) {
+		return
+	}
+	value.CandidateCapabilities = dedupeStrings(append(
+		value.CandidateCapabilities,
+		"resolve_hosts",
+		"generate_vulnerability_script",
+		"execute_vulnerability_host_scripts",
+	))
+}
+
+func workflowSelected(value *IntentBreakdown, workflowID string) bool {
+	if value == nil {
+		return false
+	}
+	for _, candidate := range value.WorkflowIDs {
+		if strings.EqualFold(strings.TrimSpace(candidate), workflowID) {
+			return true
+		}
+	}
+	return false
 }
 
 func isBaselineComplianceIntent(value *IntentBreakdown) bool {

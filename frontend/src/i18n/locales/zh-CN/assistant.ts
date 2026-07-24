@@ -13,6 +13,13 @@ export default {
     failed: '业务操作执行失败，详情见返回结果。',
     skipped: '业务操作已跳过。',
   },
+  step: {
+    completed: '已完成',
+    failed: '步骤失败',
+    skipped: '已跳过',
+    retrying: '正在重试',
+    compileError: '资产采集未启动：后端编译的主机范围参数不符合工具契约。',
+  },
   errors: {
     fetchSessions: '获取会话列表失败',
     deleteSession: '删除会话失败',

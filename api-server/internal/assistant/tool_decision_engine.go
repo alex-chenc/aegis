@@ -19,28 +19,31 @@ const (
 )
 
 type ToolDecisionConfig struct {
-	Enabled                    bool
-	TraceEnabled               bool
-	ClarificationRequiredWrite bool
-	PostconditionCheckEnabled  bool
-	DryRunForWrite             bool
+	Enabled                      bool
+	TraceEnabled                 bool
+	ClarificationRequiredWrite   bool
+	PostconditionCheckEnabled    bool
+	DryRunForWrite               bool
+	AssetWorkflowCompilerEnabled bool
 }
 
 func DefaultToolDecisionConfigFromEnv() ToolDecisionConfig {
 	return ToolDecisionConfig{
-		Enabled:                    envBool("ASSISTANT_TOOL_DECISION_ENGINE_ENABLED", true),
-		TraceEnabled:               envBool("ASSISTANT_TOOL_DECISION_TRACE", false),
-		ClarificationRequiredWrite: envBool("ASSISTANT_CLARIFICATION_REQUIRED_FOR_WRITE", true),
-		PostconditionCheckEnabled:  envBool("ASSISTANT_TOOL_POSTCONDITION_CHECK_ENABLED", true),
-		DryRunForWrite:             envBool("ASSISTANT_TOOL_DRY_RUN_FOR_WRITE", false),
+		Enabled:                      envBool("ASSISTANT_TOOL_DECISION_ENGINE_ENABLED", true),
+		TraceEnabled:                 envBool("ASSISTANT_TOOL_DECISION_TRACE", false),
+		ClarificationRequiredWrite:   envBool("ASSISTANT_CLARIFICATION_REQUIRED_FOR_WRITE", true),
+		PostconditionCheckEnabled:    envBool("ASSISTANT_TOOL_POSTCONDITION_CHECK_ENABLED", true),
+		DryRunForWrite:               envBool("ASSISTANT_TOOL_DRY_RUN_FOR_WRITE", false),
+		AssetWorkflowCompilerEnabled: envBool("ASSISTANT_ASSET_WORKFLOW_COMPILER_ENABLED", true),
 	}
 }
 
 type ToolDecisionEngineDeps struct {
-	Registry *ToolRegistry
-	Mapper   *ToolCapabilityMapper
-	Config   ToolDecisionConfig
-	Logger   *zap.Logger
+	Registry         *ToolRegistry
+	Mapper           *ToolCapabilityMapper
+	Config           ToolDecisionConfig
+	Logger           *zap.Logger
+	CompilerRegistry *WorkflowPlanCompilerRegistry
 }
 
 type ToolDecisionEngine struct {
@@ -49,6 +52,7 @@ type ToolDecisionEngine struct {
 	config            ToolDecisionConfig
 	clarificationGate *ClarificationGate
 	logger            *zap.Logger
+	compilerRegistry  *WorkflowPlanCompilerRegistry
 }
 
 type ToolDecisionInput struct {
@@ -69,12 +73,17 @@ func NewToolDecisionEngine(deps ToolDecisionEngineDeps) *ToolDecisionEngine {
 	if deps.Mapper == nil {
 		deps.Mapper = NewToolCapabilityMapper(deps.Registry)
 	}
+	compilerRegistry := deps.CompilerRegistry
+	if compilerRegistry == nil && deps.Config.AssetWorkflowCompilerEnabled {
+		compilerRegistry = NewWorkflowPlanCompilerRegistry()
+	}
 	return &ToolDecisionEngine{
 		registry:          deps.Registry,
 		mapper:            deps.Mapper,
 		config:            config,
 		clarificationGate: NewClarificationGate(config, logger),
 		logger:            logger,
+		compilerRegistry:  compilerRegistry,
 	}
 }
 
@@ -164,7 +173,24 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	// where an Assistant tool may enter an executable plan. agent-runtime must
 	// receive these Mapping-bound steps as its initial plan and must never run a
 	// second free tool_name election. Do not restore a dynamic-tool fallback.
-	steps := e.buildPlanSteps(dedupeStrings(accepted), input, breakdown)
+	acceptedTools := dedupeStrings(accepted)
+	steps, compileClarification := e.compileWorkflowPlan(acceptedTools, input, breakdown, traceID)
+	if compileClarification != "" {
+		e.logger.Info("assistant workflow compiler requires clarification",
+			zap.String("trace_id", traceID),
+			zap.Strings("workflow_ids", breakdown.WorkflowIDs),
+			zap.String("reason", compileClarification),
+		)
+		return &ToolExecutionPlan{
+			Goal:                breakdown.Goal,
+			NeedClarification:   true,
+			ClarifyingQuestion:  compileClarification,
+			EvidencePolicy:      defaultEvidencePolicy(e.config.PostconditionCheckEnabled),
+			DecisionTraceID:     traceID,
+			DecisionRecords:     records,
+			RejectedToolRecords: rejectedRecords,
+		}, nil
+	}
 
 	e.logger.Info("assistant tool authorization completed",
 		zap.String("trace_id", traceID),
@@ -185,6 +211,54 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	}, nil
 }
 
+// compileWorkflowPlan selects a workflow compiler from the breakdown's declared
+// workflow IDs. When a compiler matches it produces the deterministic business
+// DAG (reordered, pruned, typed args). When no compiler matches the generic
+// capability-driven path is used. The returned clarification string is non-empty
+// when the compiler could not safely compile the intent.
+func (e *ToolDecisionEngine) compileWorkflowPlan(acceptedTools []string, input ToolDecisionInput, breakdown *IntentBreakdown, traceID string) ([]ToolPlanStep, string) {
+	if e.compilerRegistry != nil && breakdown != nil {
+		result, compiled, err := e.compilerRegistry.CompileForBreakdown(WorkflowCompileInput{
+			Breakdown:       breakdown,
+			AcceptedTools:   acceptedTools,
+			DecisionRecords: nil,
+			Registry:        e.registry,
+			Mapper:          e.mapper,
+		})
+		if err != nil {
+			e.logger.Warn("assistant compiled plan rejected",
+				zap.String("trace_id", traceID),
+				zap.Strings("workflow_ids", breakdown.WorkflowIDs),
+				zap.String("error_code", "compiled_plan_invalid"),
+				zap.String("stage", "mapping_compile"),
+				zap.Error(err),
+			)
+			return nil, err.Error()
+		}
+		if compiled && result != nil {
+			if result.Clarification != "" {
+				return nil, result.Clarification
+			}
+			steps := assignPlanStepIDs(result.Steps)
+			e.logger.Info("assistant workflow plan compiled",
+				zap.String("trace_id", traceID),
+				zap.Strings("workflow_ids", breakdown.WorkflowIDs),
+				zap.Int("mapped_tool_count", len(acceptedTools)),
+				zap.Int("compiled_step_count", len(steps)),
+			)
+			return steps, ""
+		}
+	}
+	return e.buildPlanSteps(acceptedTools, input, breakdown), ""
+}
+
+func assignPlanStepIDs(steps []ToolPlanStep) []ToolPlanStep {
+	for index := range steps {
+		steps[index].StepID = fmt.Sprintf("authorized_%02d", index+1)
+	}
+	return steps
+}
+
 func (e *ToolDecisionEngine) buildPlanSteps(names []string, input ToolDecisionInput, breakdown *IntentBreakdown) []ToolPlanStep {
 	names = orderDeterministicWorkflowTools(names)
 	steps := make([]ToolPlanStep, 0, len(names))
@@ -194,6 +268,7 @@ func (e *ToolDecisionEngine) buildPlanSteps(names []string, input ToolDecisionIn
 			steps = append(steps, step)
 		}
 	}
+	steps = bindSigmaImportEnableDependency(steps)
 	return steps
 }
 
@@ -257,15 +332,21 @@ func previousStepCondition(tool *ToolSpec, argSources map[string]ArgSource) stri
 	return "requires previous step to produce: " + strings.Join(deps, ", ")
 }
 
-// orderDeterministicWorkflowTools only orders the V6.1 baseline workflow. The
-// generic agent path remains capability-driven and dynamic for every other
-// request. Host resolution must complete before the approved write operation,
-// while operation polling must follow it.
+// orderDeterministicWorkflowTools orders only workflows whose write dependency
+// is a strict backend invariant. Host resolution must precede baseline
+// execution; Sigma import must persist a rule before that exact rule can be
+// enabled.
 func orderDeterministicWorkflowTools(names []string) []string {
-	if !containsExactString(names, "Baseline.Compliance.Run") {
+	priority := make([]string, 0, 5)
+	if containsExactString(names, "Baseline.Compliance.Run") {
+		priority = append(priority, "Host.Resolve", "Baseline.Compliance.Run", "Operation.Get")
+	}
+	if containsExactString(names, "SigmaRule.Import") && containsExactString(names, "SigmaRule.Enable") {
+		priority = append(priority, "SigmaRule.Import", "SigmaRule.Enable")
+	}
+	if len(priority) == 0 {
 		return names
 	}
-	priority := []string{"Host.Resolve", "Baseline.Compliance.Run", "Operation.Get"}
 	ordered := make([]string, 0, len(names))
 	seen := make(map[string]bool, len(names))
 	for _, name := range priority {
@@ -283,6 +364,35 @@ func orderDeterministicWorkflowTools(names []string) []string {
 		}
 	}
 	return ordered
+}
+
+func bindSigmaImportEnableDependency(steps []ToolPlanStep) []ToolPlanStep {
+	importIndex, enableIndex := -1, -1
+	for index := range steps {
+		switch steps[index].ToolName {
+		case "SigmaRule.Import":
+			importIndex = index
+		case "SigmaRule.Enable":
+			enableIndex = index
+		}
+	}
+	if importIndex < 0 || enableIndex <= importIndex {
+		return steps
+	}
+	if steps[enableIndex].Args == nil {
+		steps[enableIndex].Args = make(map[string]interface{})
+	}
+	if steps[enableIndex].ArgSources == nil {
+		steps[enableIndex].ArgSources = make(map[string]ArgSource)
+	}
+	delete(steps[enableIndex].Args, "rule_id")
+	steps[enableIndex].ArgSources["rule_id"] = ArgSource{
+		SourceType: "previous_step",
+		SourceRef:  "rule",
+		Confidence: 1,
+	}
+	steps[enableIndex].Condition = "requires previous step to produce: rule_id"
+	return steps
 }
 
 func containsExactString(values []string, target string) bool {
@@ -722,7 +832,16 @@ func extractArgFromBreakdown(binding ArgBindingRule, breakdown *IntentBreakdown)
 			if len(breakdown.Scope.ObjectIDs) > 1 {
 				return append([]string{}, breakdown.Scope.ObjectIDs...), "scope:object_ids"
 			}
-			return breakdown.Scope.Kind, "scope:" + breakdown.Scope.Kind
+			// Business scope (e.g. "all", "all_online_hosts") is only valid for
+			// scope-type parameters. It must never be coerced into an entity ID
+			// or entity IDs argument — that was the root cause of
+			// host_ids="all" failing schema validation at runtime.
+			if entity == "scope" {
+				return breakdown.Scope.Kind, "scope:" + breakdown.Scope.Kind
+			}
+			// entity == "host" with a business scope and no object_ids: the
+			// workflow compiler or user must provide explicit host identifiers.
+			return nil, ""
 		}
 	}
 	return nil, ""

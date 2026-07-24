@@ -1579,15 +1579,23 @@ export const useAssistantStore = defineStore('assistant', () => {
       }
 
       case 'step_failed':
+      case 'step_skipped':
       case 'step_retrying': {
         const stepEventId = event.message_id || payload.message_id || (event.run_id ? `msg_${event.run_id}` : '')
         if (stepEventId) {
           const stepEventMsg = findMessage(stepEventId)
           const step = stepEventMsg?.plan?.steps?.find(s => s.step_id === payload.step_id)
           if (step) {
-            step.status = event.type === 'step_retrying' ? 'retrying' : 'failed'
-            if (payload.error) {
-              step.result_summary = payload.error
+            if (event.type === 'step_retrying') {
+              step.status = 'retrying'
+            } else if (event.type === 'step_skipped') {
+              step.status = 'skipped'
+            } else {
+              step.status = 'failed'
+            }
+            const summary = payload.error || payload.result_summary || payload.summary
+            if (summary && !step.result_summary) {
+              step.result_summary = summary
             }
           }
         }

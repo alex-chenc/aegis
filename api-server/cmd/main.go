@@ -495,7 +495,12 @@ func main() {
 		logger.Warn("failed to register config tools", zap.Error(err))
 	}
 	// Sigma rule tools
-	if err := assistantTools.RegisterSigmaRuleTools(toolRegistry, assistantTools.SigmaRuleToolDeps{SigmaRuleRepo: sigmaRuleRepo, RuleGenService: ruleGenerationService}); err != nil {
+	if err := assistantTools.RegisterSigmaRuleTools(toolRegistry, assistantTools.SigmaRuleToolDeps{
+		SigmaRuleRepo:    sigmaRuleRepo,
+		RuleGenService:   ruleGenerationService,
+		ContextRefReader: assistantContextRefRepo,
+		LifecycleService: sigmaRuleUploadService,
+	}); err != nil {
 		logger.Warn("failed to register sigma rule tools", zap.Error(err))
 	}
 	if err := toolRegistry.ValidateModelFacingEnglish(); err != nil {

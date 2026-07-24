@@ -108,6 +108,22 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		)
 		return nil, err
 	}
+	// Compiled plan validation: catch bad argument types, missing previous_step
+	// producers, and unclosed async completion contracts before the plan reaches
+	// the runtime. A deterministic compile error must surface once, not as a
+	// repeated identical runtime tool-call failure.
+	if f.catalog != nil {
+		validator := NewCompiledPlanValidator(f.catalog.Registry(), f.logger)
+		if err := validator.Validate(req.ExecutionPlan, toolDescriptors); err != nil {
+			f.logger.Error("assistant compiled plan rejected before runtime",
+				zap.String("session_id", req.SessionID),
+				zap.String("run_id", req.RunID),
+				zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
+				zap.Error(err),
+			)
+			return nil, err
+		}
+	}
 	runtimeStepToolBindings := buildRuntimeStepToolBindings(req.ExecutionPlan, toolDescriptors)
 
 	// 4. 创建 ToolGateway（实现 agentruntime.ToolGateway）
@@ -172,8 +188,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		if len(req.ExecutionPlan.Steps) > runtimeConfig.MaxPlanSteps {
 			runtimeConfig.MaxPlanSteps = len(req.ExecutionPlan.Steps)
 		}
-		runtimeConfig.MaxToolCalls = len(req.ExecutionPlan.Steps)*4 + 4
-		runtimeConfig.MaxToolCallsPerStep = 6
+		applyFixedPlanRuntimeLimits(&runtimeConfig, len(req.ExecutionPlan.Steps))
 		runtimeConfig.MaxToolFailures = 3
 		runtimeConfig.EnableAudit = false
 		runtimeConfig.EnableCorrection = false
@@ -197,6 +212,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	}
 	f.logger.Info("assistant runtime config selected",
 		zap.String("session_id", req.SessionID),
+		zap.String("run_id", req.RunID),
 		zap.String("profile", profile),
 		zap.String("approval_mode", normalizeAssistantApprovalMode(req.ApprovalMode)),
 		zap.Int("max_total_turns", runtimeConfig.MaxTotalTurns),
@@ -204,6 +220,9 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
 		zap.Int("plan_step_count", toolExecutionPlanStepCount(req.ExecutionPlan)),
 		zap.Int("runtime_step_count", runtimeExecutionStepCount(req.ExecutionPlan, toolDescriptors)),
+		zap.Int("max_tool_calls", runtimeConfig.MaxToolCalls),
+		zap.Int("max_tool_calls_per_step", runtimeConfig.MaxToolCallsPerStep),
+		zap.Int("max_async_poll_attempts", runtimeConfig.MaxAsyncPollAttempts),
 	)
 
 	// 9. 创建 TaskRouter（智能提示词路由）
@@ -212,7 +231,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		LLMTemperature:    0.1,
 		LLMTimeout:        30 * time.Second,
 		DirectReplyMaxLen: 15,
-	})
+	}).WithDirectReplyPrompt(promptProvider.buildDirectReplyPrompt())
 
 	// 10. 创建 agent-runtime 实例
 	runtimeOptions := []agentruntime.Option{
@@ -381,6 +400,37 @@ func (f *RuntimeFactory) buildUserContext(contextRefs []ContextRefResult) map[st
 		userContext["context_refs"] = refsData
 	}
 	return userContext
+}
+
+const (
+	fixedPlanBaseToolCallsPerStep = 6
+	// Fixed workflows include operations such as asset application analysis that
+	// normally take several minutes. With the bounded exponential backoff in the
+	// runtime, 24 automatic polls provide roughly a ten-minute observation
+	// window without turning a stuck operation into an unbounded session.
+	fixedPlanMaxAsyncPollAttempts = 24
+	fixedPlanAsyncCallOverhead    = 2 // primary operation plus initial completion lookup
+	fixedPlanTotalCallReserve     = 4
+)
+
+// applyFixedPlanRuntimeLimits keeps the generic tool-call limiter from
+// pre-empting the separately bounded asynchronous completion loop. Runtime
+// counts automatic completion polls as ordinary tool calls, so both the
+// per-step and total budgets must be large enough for every configured poll.
+func applyFixedPlanRuntimeLimits(config *agentruntime.RuntimeConfig, stepCount int) {
+	if config == nil || stepCount <= 0 {
+		return
+	}
+	if config.MaxAsyncPollAttempts < fixedPlanMaxAsyncPollAttempts {
+		config.MaxAsyncPollAttempts = fixedPlanMaxAsyncPollAttempts
+	}
+	perStepBudget := fixedPlanBaseToolCallsPerStep
+	asyncBudget := config.MaxAsyncPollAttempts + fixedPlanAsyncCallOverhead
+	if asyncBudget > perStepBudget {
+		perStepBudget = asyncBudget
+	}
+	config.MaxToolCallsPerStep = perStepBudget
+	config.MaxToolCalls = stepCount*perStepBudget + fixedPlanTotalCallReserve
 }
 
 // DefaultAgentRuntimeConfig 默认 agent-runtime 配置（对齐设计文档 4.4 节）

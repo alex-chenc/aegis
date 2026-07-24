@@ -92,14 +92,33 @@ func TestRuntimeEvidenceCountsResolvedOnlineHostAndExcludesRejectedCandidate(t *
 
 func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
 	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{
-		ActualToolNames: []string{"Host.Resolve"},
-		FailedToolNames: []string{"Host.Resolve"},
+		ActualToolNames:       []string{"Host.Resolve"},
+		FailedToolNames:       []string{"Host.Resolve"},
+		VulnerabilityWorkflow: true,
 	})
 	if !strings.Contains(fallback, "任务未完成") || strings.Contains(strings.ToLower(fallback), "completed") {
 		t.Fatalf("failed-goal fallback = %q", fallback)
 	}
 	if !strings.Contains(fallback, "未下发任务") {
 		t.Fatalf("fallback must state missing task dispatch evidence: %q", fallback)
+	}
+}
+
+func TestBuildFailedGoalFallbackReportsRunningAssetCollection(t *testing.T) {
+	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{
+		ActualToolNames:         []string{"Asset.Collection.Get", "Asset.Collection.Trigger"},
+		AssetCollectionTaskIDs:  []string{"asset-task-1"},
+		AssetCollectionTerminal: false,
+	})
+
+	if !strings.Contains(fallback, "asset-task-1") {
+		t.Fatalf("asset task ID missing from fallback: %q", fallback)
+	}
+	if !strings.Contains(fallback, "仍在后台运行") {
+		t.Fatalf("running asset task must be reported truthfully: %q", fallback)
+	}
+	if strings.Contains(fallback, "未下发任务") {
+		t.Fatalf("created asset task must not be reported as undispatched: %q", fallback)
 	}
 }
 

@@ -167,12 +167,9 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	}
 
 	// 4. 意图识别
-	intentInput := IntentInput{Query: input.UserMessage}
-	for _, ref := range contextRefs {
-		intentInput.ContextRefs = append(intentInput.ContextRefs, ContextRefInput{
-			ObjectType: ref.ObjectType,
-			ObjectID:   ref.ObjectID,
-		})
+	intentInput := IntentInput{
+		Query:       input.UserMessage,
+		ContextRefs: buildIntentContextRefs(contextRefs),
 	}
 	intent, err := o.intentRouter.Classify(ctx, intentInput)
 	if err != nil {
@@ -665,7 +662,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	evidence := buildRuntimeEvidenceLedger(taskResult)
 	response := taskResult.FinalAnswer
 	evidenceConflicts := make([]string, 0, 4)
-	if err := validateRuntimeFinalAnswer(response); err != nil {
+	if normalized, err := normalizeRuntimeFinalAnswer(response); err != nil {
 		o.logger.Warn("assistant final answer violated the output contract",
 			zap.String("session_id", input.SessionID),
 			zap.String("run_id", input.RunID),
@@ -674,6 +671,8 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		)
 		evidenceConflicts = append(evidenceConflicts, "invalid_final_answer_contract")
 		response = buildEvidenceGroundedFallback(evidence)
+	} else {
+		response = normalized
 	}
 	evidenceConflicts = append(evidenceConflicts, validateRuntimeEvidenceConsistency(response, evidence)...)
 	evidenceConflicts = dedupeStrings(evidenceConflicts)
@@ -829,25 +828,59 @@ func effectiveRuntimeContextBudget(result *agentruntime.TaskResult) *agentruntim
 	return &effective
 }
 
-func validateRuntimeFinalAnswer(answer string) error {
+func normalizeRuntimeFinalAnswer(answer string) (string, error) {
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return fmt.Errorf("agent runtime returned an empty final answer")
+		return "", fmt.Errorf("agent runtime returned an empty final answer")
 	}
 	var control map[string]interface{}
 	if err := json.Unmarshal([]byte(answer), &control); err != nil {
-		return nil
+		return answer, nil
+	}
+	if wrapped, _ := control["final_answer"].(string); strings.TrimSpace(wrapped) != "" {
+		return strings.TrimSpace(wrapped), nil
 	}
 	action, _ := control["action"].(string)
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "tool_call", "additional_capability_request", "need_user_input", "clarification_required":
-		return fmt.Errorf("agent runtime ended with unfinished control action %q", action)
+		return "", fmt.Errorf("agent runtime ended with unfinished control action %q", action)
+	case "step_result":
+		if stepResult, ok := control["step_result"].(map[string]interface{}); ok {
+			if result, _ := stepResult["result"].(string); strings.TrimSpace(result) != "" {
+				return strings.TrimSpace(result), nil
+			}
+		}
+		return "", fmt.Errorf("agent runtime returned step_result without a user-facing result")
 	}
-	// The runtime parser unwraps a valid {"final_answer":"..."} response before
-	// returning it. Any JSON object that reaches this boundary therefore uses an
-	// unexpected top-level shape (for example tool arguments) and must never be
-	// shown as the user-facing conclusion.
-	return fmt.Errorf("agent runtime returned a JSON object without a valid final_answer wrapper")
+	return "", fmt.Errorf("agent runtime returned a JSON object without a valid final_answer wrapper")
+}
+
+func validateRuntimeFinalAnswer(answer string) error {
+	_, err := normalizeRuntimeFinalAnswer(answer)
+	return err
+}
+
+const intentContextSummaryMaxRunes = 4000
+
+func buildIntentContextRefs(refs []ContextObject) []ContextRefInput {
+	result := make([]ContextRefInput, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, ContextRefInput{
+			ObjectType: ref.ObjectType,
+			ObjectID:   ref.ObjectID,
+			Title:      strings.TrimSpace(ref.Title),
+			Summary:    truncateIntentContextSummary(ref.Summary),
+		})
+	}
+	return result
+}
+
+func truncateIntentContextSummary(summary string) string {
+	runes := []rune(strings.TrimSpace(summary))
+	if len(runes) <= intentContextSummaryMaxRunes {
+		return string(runes)
+	}
+	return string(runes[:intentContextSummaryMaxRunes]) + "\n..."
 }
 
 func (o *Orchestrator) persistRuntimeToolCallRecords(
