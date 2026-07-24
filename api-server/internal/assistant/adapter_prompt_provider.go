@@ -13,13 +13,14 @@ import (
 // AssistantPromptProvider 适配 agent-runtime PromptProvider 接口
 // 为智能助手生成特定的 Plan/React/Summarize 提示词
 type AssistantPromptProvider struct {
-	toolDescriptors    []agentruntime.ToolDescriptor
-	contextRefs        []ContextRefResult
-	taskType           string
-	userMessage        string
-	reflectionMemories []string
-	locale             string
-	approvalMode       string
+	toolDescriptors         []agentruntime.ToolDescriptor
+	contextRefs             []ContextRefResult
+	taskType                string
+	userMessage             string
+	reflectionMemories      []string
+	locale                  string
+	approvalMode            string
+	runtimeStepToolBindings map[string][]string
 }
 
 func (p *AssistantPromptProvider) WithLocale(locale string) *AssistantPromptProvider {
@@ -29,6 +30,11 @@ func (p *AssistantPromptProvider) WithLocale(locale string) *AssistantPromptProv
 
 func (p *AssistantPromptProvider) WithApprovalMode(mode string) *AssistantPromptProvider {
 	p.approvalMode = normalizeAssistantApprovalMode(mode)
+	return p
+}
+
+func (p *AssistantPromptProvider) WithRuntimeStepToolBindings(bindings map[string][]string) *AssistantPromptProvider {
+	p.runtimeStepToolBindings = cloneRuntimeStepToolBindings(bindings)
 	return p
 }
 
@@ -58,7 +64,7 @@ func (p *AssistantPromptProvider) Build(ctx context.Context, req agentruntime.Pr
 	case agentruntime.PurposePlan:
 		return p.buildPlanPrompt(), nil
 	case agentruntime.PurposeReact:
-		return p.buildReactPrompt(), nil
+		return p.buildReactPrompt(req.StepID), nil
 	case agentruntime.PurposeSummarize:
 		return p.buildSummarizePrompt(), nil
 	case agentruntime.PurposeAudit, agentruntime.PurposeReflect, agentruntime.PurposeCorrect:
@@ -132,8 +138,8 @@ JSON schema:
 }
 
 // buildReactPrompt 构建 ReAct 阶段提示词
-func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
-	toolList := p.formatToolListDetail()
+func (p *AssistantPromptProvider) buildReactPrompt(stepID string) agentruntime.PromptBundle {
+	toolList := p.formatToolListDetailForStep(stepID)
 	reflectionGuide := p.formatReflectionGuide()
 	contextBlock := p.formatContextRefs()
 	reasoningGuide := genericAgentReasoningGuide(p.approvalMode)
@@ -172,11 +178,13 @@ Choose tool names and arguments only from Available tools, user input, context, 
 {"action":"fail_step","summary":"failure summary","failure":{"reason":"failure reason","recoverable":true}}
 
 ## Decision rules
-- The current Mapping-bound plan is the tool authority. You must not elect, add, replace, or reorder tools.
-- The tool_name field is a wire-format copy of the one tool already bound to the current step, not a tool-selection decision.
+- The Available tools list above is the complete Mapping boundary for this current step. Tools assigned to later steps are intentionally hidden.
+- You must not elect, add, replace, reorder, or invent tools. tool_name is only a wire-format copy of one exact name currently listed above.
+- Work only on the current step objective. Never start a later plan step early, even when the overall user goal requires it.
 - For greetings, casual conversation, capability questions, or conceptual explanations, return a concise step_result without a plan.
 - For a simple data query, call only the necessary tools and return the result without an unnecessary report.
-- For a complex goal, follow the current plan and ground every step in actual tool results.
+- For an asynchronous primary call, use only its listed mapped completion tool with the operation reference returned by the backend until a terminal result is observed.
+- After a successful terminal observation satisfies the current step, immediately return step_result with that exact call_id. Do not call another tool.
 - Cover the complete set or scope requested by the user. If pagination, offline targets, permissions, or tool failures leave partial coverage, list the exact gap and reason.
 - When a tool fails, an asynchronous task is incomplete, or a result is empty, use its contract and actual result to decide whether to retry, query status, use an authorized alternative, or record an evidence gap.
 - A successful tool transport can still have operation_status=accepted or running. These non-terminal outcomes never satisfy a step.
@@ -186,7 +194,7 @@ Choose tool names and arguments only from Available tools, user input, context, 
 - Reuse a successful result for the same tool and arguments. Do not issue duplicate calls.
 - If the current step only summarizes or organizes existing results, return step_result and do not call another tool.
 - An intermediate step_result contains only that step's output. The final report is produced once by the summarization stage.
-- Never apply a fixed workflow based on a tool name or business keyword. Decide from the user's goal and observed results.
+- Follow the backend-compiled current-step workflow and decide only whether to invoke its listed primary/completion tool or complete/fail the step from observed results.
 - Natural-language fields must follow the Response language instruction. Tool names, arguments, enum values, and machine identifiers must remain exact catalog values.
 
 ## Forbidden output
@@ -252,8 +260,30 @@ func (p *AssistantPromptProvider) formatToolList() string {
 
 // formatToolListDetail 格式化工具列表（详细版，含参数）
 func (p *AssistantPromptProvider) formatToolListDetail() string {
+	return formatRuntimeToolDescriptors(p.toolDescriptors)
+}
+
+func (p *AssistantPromptProvider) formatToolListDetailForStep(stepID string) string {
+	allowed, bound := p.runtimeStepToolBindings[stepID]
+	if !bound {
+		return p.formatToolListDetail()
+	}
+	descriptorByName := make(map[string]agentruntime.ToolDescriptor, len(p.toolDescriptors))
+	for _, descriptor := range p.toolDescriptors {
+		descriptorByName[descriptor.Name] = descriptor
+	}
+	filtered := make([]agentruntime.ToolDescriptor, 0, len(allowed))
+	for _, toolName := range allowed {
+		if descriptor, ok := descriptorByName[toolName]; ok {
+			filtered = append(filtered, descriptor)
+		}
+	}
+	return formatRuntimeToolDescriptors(filtered)
+}
+
+func formatRuntimeToolDescriptors(descriptors []agentruntime.ToolDescriptor) string {
 	var buf strings.Builder
-	for _, desc := range p.toolDescriptors {
+	for _, desc := range descriptors {
 		buf.WriteString(fmt.Sprintf("- %s: %s", desc.Name, modelSafeRuntimeDescription(desc)))
 		if desc.ArgsSchema != nil {
 			if schema := modelSafeRuntimeArgsSchema(desc.ArgsSchema); len(schema) > 0 {

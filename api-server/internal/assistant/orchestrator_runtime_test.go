@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,17 +139,38 @@ func TestAssistantRuntimeUsesFixedPlanForBaselineCompliance(t *testing.T) {
 	authorization := &ToolExecutionPlan{
 		Goal: "run baseline compliance",
 		Steps: []ToolPlanStep{
-			{StepID: "authorized_01", ToolName: "Host.Resolve", Args: map[string]interface{}{"target_scope": "all_online_hosts"}},
-			{StepID: "authorized_02", ToolName: "Baseline.Compliance.Run", Args: map[string]interface{}{"target_scope": "all_online_hosts", "template_selector": "cis-ubuntu"}},
-			{StepID: "authorized_03", ToolName: "Operation.Get"},
+			{StepID: "authorized_01", Capability: "resolve_hosts", ToolName: "Host.Resolve", Args: map[string]interface{}{"target_scope": "all_online_hosts"}},
+			{StepID: "authorized_02", Capability: "run_baseline_compliance", ToolName: "Baseline.Compliance.Run", Args: map[string]interface{}{"target_scope": "all_online_hosts", "template_selector": "cis-ubuntu"}},
+			{StepID: "authorized_03", Capability: "get_operation_status", ToolName: "Operation.Get"},
 		},
 	}
-	plan := runtimeInitialPlanForAssistant(authorization)
-	if plan == nil || len(plan.Steps) != 3 {
-		t.Fatalf("baseline workflow must use a fixed plan, got %#v", plan)
+	descriptors := []agentruntime.ToolDescriptor{
+		{Name: "Host.Resolve"},
+		{Name: "Baseline.Compliance.Run", CompletionTools: []string{"Operation.Get"}},
+		{Name: "Operation.Get"},
 	}
-	if plan.Steps[0].ToolArgs["target_scope"] != "all_online_hosts" || plan.Steps[1].ToolArgs["template_selector"] != "cis-ubuntu" {
+	plan := runtimeInitialPlanForAssistantWithDescriptors(authorization, descriptors)
+	if plan == nil || len(plan.Steps) != 2 {
+		t.Fatalf("baseline workflow must group its mapped completion tool, got %#v", plan)
+	}
+	if plan.Steps[0].ToolArgs["target_scope"] != "all_online_hosts" {
 		t.Fatalf("fixed plan lost deterministic arguments: %#v", plan.Steps)
+	}
+	if len(plan.Steps[1].AllowedTools) != 2 ||
+		plan.Steps[1].AllowedTools[0] != "Baseline.Compliance.Run" ||
+		plan.Steps[1].AllowedTools[1] != "Operation.Get" {
+		t.Fatalf("async step did not retain its mapped completion boundary: %#v", plan.Steps[1].AllowedTools)
+	}
+	if plan.Steps[1].ToolArgs != nil {
+		t.Fatalf("grouped async step args must be bound per tool by the gateway: %#v", plan.Steps[1].ToolArgs)
+	}
+	if strings.Contains(plan.Steps[0].Title, "Host.Resolve") ||
+		strings.Contains(plan.Steps[1].Title, "Baseline.Compliance.Run") {
+		t.Fatalf("plan titles must describe business actions, not expose tool names: %#v", plan.Steps)
+	}
+	if !strings.Contains(plan.Steps[0].ExpectedOutput, "immediately complete") ||
+		!strings.Contains(plan.Steps[1].Objective, "Operation.Get") {
+		t.Fatalf("runtime steps lack deterministic completion instructions: %#v", plan.Steps)
 	}
 }
 

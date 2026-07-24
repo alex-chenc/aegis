@@ -35,14 +35,17 @@ LLM intent -> capability identifiers -> exact backend mapping
 The runtime must never receive a free tool catalog and then perform a second
 tool election using model-authored `tool_name`. When mapped tools exist, the
 backend authorization artifact is always converted to the runtime initial
-plan. Every runtime step is bound to exactly one mapped tool, and the gateway
-rejects a different tool name before durable execution.
+plan. A synchronous runtime step is bound to exactly one mapped tool. An
+asynchronous runtime step may additionally contain only the producer's
+registered completion tool when that completion tool was independently
+accepted by the same Mapping artifact. The gateway rejects every name outside
+that immutable per-step set before durable execution.
 
 The ReAct `tool_name` field may remain as an agent-runtime wire-format field,
-but it is not an election input: the model must copy the single caller-bound
-tool name for the current step. It cannot add, replace, or reorder tools outside
-the mapped plan. Runs without mapped tools receive no tool descriptors and may
-only produce a direct answer.
+but it is not an election input: the model may copy only a name exposed for the
+current step. Tools from later steps are hidden. It cannot add, replace, or
+reorder tools outside the mapped plan. Runs without mapped tools receive no
+tool descriptors and may only produce a direct answer.
 
 This invariant is fail-closed and must be protected by code comments and
 regression tests. Future prompt, planner, router, or agent-runtime changes may
@@ -124,6 +127,7 @@ include:
 - `machine` to `host`;
 - `baseline` to `baseline_template`;
 - `auto_repair` to `auto_remediate`;
+- `remediation_enabled` to `auto_remediate`;
 - `repair_rounds` to `remediation_rounds`;
 - live, alive, or online host selectors to `all_online_hosts`.
 
@@ -134,13 +138,16 @@ not guessed.
 
 ## Acceptance tests
 
-- The captured production intent shape compiles to the fixed three-step
-  `Host.Resolve -> Baseline.Compliance.Run -> Operation.Get` plan.
+- The captured production intent shape maps the fixed three-tool sequence
+  `Host.Resolve -> Baseline.Compliance.Run -> Operation.Get`, then compiles it
+  into two business runtime steps: host resolution and baseline execution plus
+  its mapped completion query.
 - Every non-empty mapped authorization plan is supplied as the runtime initial
   plan; arbitrary non-baseline tools are not replanned by the model.
 - Runtime construction fails closed if tool descriptors exist without a mapped
   execution plan.
-- A runtime step cannot invoke a tool other than the exact Mapping-bound tool.
+- A runtime step cannot invoke a tool outside its exact Mapping-bound primary
+  and optional registered completion pair.
 - If a mapped dependency fails, transitively blocked steps are persisted as
   `skipped` instead of remaining misleadingly `pending`.
 - Fixed plan preparation removes legacy model fields and preserves compiled

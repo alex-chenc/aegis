@@ -37,9 +37,13 @@ type AssistantToolGatewayAdapter struct {
 	logger            *zap.Logger
 	runManager        *RunManager
 
-	// executionPlan is retained for non-Assistant compatibility callers that
-	// explicitly supply a fixed plan. Pure-agent Assistant runs always leave it nil.
+	// executionPlan is the immutable capability-to-tool Mapping artifact. Every
+	// Assistant tool call must remain inside this backend-compiled authority.
 	executionPlan *ToolExecutionPlan
+	// runtimeStepToolBindings is the immutable per-runtime-step allowlist
+	// compiled from Mapping. An asynchronous producer step may contain its
+	// already-mapped completion tool; no other tool can enter that boundary.
+	runtimeStepToolBindings map[string][]string
 
 	// priorStepOutcomes captures each Mapping-bound step's extracted operation
 	// and side-effect references, keyed by step_id. It is the deterministic
@@ -60,23 +64,24 @@ type AssistantToolGatewayAdapter struct {
 
 // AssistantToolGatewayConfig 适配器配置
 type AssistantToolGatewayConfig struct {
-	Dispatcher        *ToolDispatcher
-	SessionID         string
-	MessageID         string
-	RunID             string
-	Operator          string
-	ApprovalMode      string
-	RequireMappedPlan bool
-	Logger            *zap.Logger
-	RunManager        *RunManager
-	UserInput         string
-	ContextRefs       []ContextRefResult
-	ExecutionPlan     *ToolExecutionPlan
-	OnToolCall        func(callID, toolName string, args interface{})
-	OnToolResult      func(callID string, result interface{}, outcome *agentruntime.ToolOutcome)
-	OnToolError       func(callID, errMsg string)
-	OnApproval        func(approval interface{})
-	OnApprovalUpdated func(approval interface{})
+	Dispatcher              *ToolDispatcher
+	SessionID               string
+	MessageID               string
+	RunID                   string
+	Operator                string
+	ApprovalMode            string
+	RequireMappedPlan       bool
+	Logger                  *zap.Logger
+	RunManager              *RunManager
+	UserInput               string
+	ContextRefs             []ContextRefResult
+	ExecutionPlan           *ToolExecutionPlan
+	RuntimeStepToolBindings map[string][]string
+	OnToolCall              func(callID, toolName string, args interface{})
+	OnToolResult            func(callID string, result interface{}, outcome *agentruntime.ToolOutcome)
+	OnToolError             func(callID, errMsg string)
+	OnApproval              func(approval interface{})
+	OnApprovalUpdated       func(approval interface{})
 }
 
 // NewAssistantToolGatewayAdapter 创建适配器
@@ -86,22 +91,23 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 		approvalMode = normalizeAssistantApprovalMode(approvalMode)
 	}
 	return &AssistantToolGatewayAdapter{
-		dispatcher:        cfg.Dispatcher,
-		sessionID:         cfg.SessionID,
-		messageID:         cfg.MessageID,
-		runID:             cfg.RunID,
-		operator:          cfg.Operator,
-		approvalMode:      cfg.ApprovalMode,
-		requireMappedPlan: cfg.RequireMappedPlan,
-		logger:            cfg.Logger,
-		runManager:        cfg.RunManager,
-		executionPlan:     cfg.ExecutionPlan,
-		priorStepOutcomes: make(map[string]capturedStepOutcome),
-		onToolCall:        cfg.OnToolCall,
-		onToolResult:      cfg.OnToolResult,
-		onToolError:       cfg.OnToolError,
-		onApproval:        cfg.OnApproval,
-		onApprovalUpdated: cfg.OnApprovalUpdated,
+		dispatcher:              cfg.Dispatcher,
+		sessionID:               cfg.SessionID,
+		messageID:               cfg.MessageID,
+		runID:                   cfg.RunID,
+		operator:                cfg.Operator,
+		approvalMode:            approvalMode,
+		requireMappedPlan:       cfg.RequireMappedPlan,
+		logger:                  cfg.Logger,
+		runManager:              cfg.RunManager,
+		executionPlan:           cfg.ExecutionPlan,
+		runtimeStepToolBindings: cloneRuntimeStepToolBindings(cfg.RuntimeStepToolBindings),
+		priorStepOutcomes:       make(map[string]capturedStepOutcome),
+		onToolCall:              cfg.OnToolCall,
+		onToolResult:            cfg.OnToolResult,
+		onToolError:             cfg.OnToolError,
+		onApproval:              cfg.OnApproval,
+		onApprovalUpdated:       cfg.OnApprovalUpdated,
 	}
 }
 
@@ -332,6 +338,14 @@ func (a *AssistantToolGatewayAdapter) validateMappedToolSelection(req agentrunti
 		return fmt.Errorf("assistant tool invocation requires a Mapping-bound step_id")
 	}
 	if strings.TrimSpace(req.StepID) != "" {
+		if allowed, exists := a.runtimeStepToolBindings[req.StepID]; exists {
+			for _, toolName := range allowed {
+				if toolName == req.ToolName {
+					return nil
+				}
+			}
+			return fmt.Errorf("tool %s is not Mapping-bound to runtime step %s", req.ToolName, req.StepID)
+		}
 		for _, step := range a.executionPlan.Steps {
 			if step.StepID != req.StepID {
 				continue
@@ -593,26 +607,26 @@ func (a *AssistantToolGatewayAdapter) applyPlanArgs(stepID, toolName string, arg
 		return args
 	}
 	var matched *ToolPlanStep
+	var toolMatches int
 	for _, step := range a.executionPlan.Steps {
-		if step.ToolName != toolName || len(step.Args) == 0 {
+		if step.ToolName != toolName {
 			continue
 		}
+		toolMatches++
 		if stepID != "" && step.StepID == stepID {
 			stepCopy := step
 			matched = &stepCopy
 			break
 		}
-		if stepID == "" {
-			if matched != nil {
-				// Ambiguous legacy request: do not select an arbitrary repeated
-				// step. agent-runtime always supplies step_id for fixed plans.
-				return args
-			}
+		if matched == nil {
 			stepCopy := step
 			matched = &stepCopy
 		}
 	}
-	if matched == nil {
+	if matched == nil || (toolMatches > 1 && (stepID == "" || matched.StepID != stepID)) {
+		return args
+	}
+	if stepID != "" && matched.StepID != stepID && !runtimeStepAllowsTool(a.runtimeStepToolBindings, stepID, toolName) {
 		return args
 	}
 	// A fixed step is already authorized and fully bound by the backend.
@@ -679,7 +693,9 @@ func (a *AssistantToolGatewayAdapter) resolvePreviousStepArgs(stepID, toolName s
 	}
 
 	resolved := cloneInvocationArgs(args)
-	priorOutcomes := a.orderedPriorOutcomes(stepID)
+	includeCurrentOutcome := step.StepID != stepID &&
+		runtimeStepAllowsTool(a.runtimeStepToolBindings, stepID, toolName)
+	priorOutcomes := a.orderedPriorOutcomes(stepID, includeCurrentOutcome)
 	var missingRequired []string
 	for argName, source := range step.ArgSources {
 		if !strings.EqualFold(strings.TrimSpace(source.SourceType), "previous_step") {
@@ -743,11 +759,10 @@ func (a *AssistantToolGatewayAdapter) findPlanStep(stepID, toolName string) *Too
 	return nil
 }
 
-// orderedPriorOutcomes returns captured prior step outcomes in plan order,
-// excluding the current step's own outcome. The runtime executes Mapping-bound
-// steps in dependency order, so this naturally yields only previously executed
-// producers.
-func (a *AssistantToolGatewayAdapter) orderedPriorOutcomes(currentStepID string) []capturedStepOutcome {
+// orderedPriorOutcomes returns captured outcomes in Mapping order. The current
+// runtime step is included only for an explicitly mapped completion tool that
+// shares its asynchronous producer's backend-authorized runtime step.
+func (a *AssistantToolGatewayAdapter) orderedPriorOutcomes(currentStepID string, includeCurrent bool) []capturedStepOutcome {
 	if a == nil || a.executionPlan == nil {
 		return nil
 	}
@@ -755,7 +770,7 @@ func (a *AssistantToolGatewayAdapter) orderedPriorOutcomes(currentStepID string)
 	defer a.outcomesMu.Unlock()
 	var ordered []capturedStepOutcome
 	for _, step := range a.executionPlan.Steps {
-		if step.StepID == currentStepID {
+		if step.StepID == currentStepID && !includeCurrent {
 			continue
 		}
 		if outcome, ok := a.priorStepOutcomes[step.StepID]; ok {
@@ -763,6 +778,26 @@ func (a *AssistantToolGatewayAdapter) orderedPriorOutcomes(currentStepID string)
 		}
 	}
 	return ordered
+}
+
+func cloneRuntimeStepToolBindings(source map[string][]string) map[string][]string {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string][]string, len(source))
+	for stepID, tools := range source {
+		cloned[stepID] = append([]string{}, tools...)
+	}
+	return cloned
+}
+
+func runtimeStepAllowsTool(bindings map[string][]string, stepID, toolName string) bool {
+	for _, candidate := range bindings[stepID] {
+		if candidate == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveRefFromOutcomes searches captured prior step outcomes (most recent

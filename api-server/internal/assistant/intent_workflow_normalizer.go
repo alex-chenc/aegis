@@ -43,6 +43,9 @@ func normalizeWorkflowIntentBreakdown(value *IntentBreakdown) {
 		"automatic_repair",
 		"enable_auto_repair",
 		"enable_automatic_repair",
+		"remediation_enabled",
+		"enable_remediation",
+		"automatic_remediation",
 	)
 	copyIntentParameterAlias(value.Parameters, "remediation_rounds",
 		"repair_rounds",

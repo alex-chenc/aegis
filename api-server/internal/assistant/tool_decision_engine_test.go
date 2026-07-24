@@ -268,7 +268,7 @@ func TestToolDecisionEngineCompilesLatestProductionBaselineAliases(t *testing.T)
 		{Type: "host", Selector: "alive"},
 		{Type: "baseline_template", Selector: "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf"},
 	}
-	breakdown.Parameters = IntentParameters{"auto_remediate": true, "retry_rounds": float64(5)}
+	breakdown.Parameters = IntentParameters{"remediation_enabled": true, "retry_rounds": float64(5)}
 	breakdown.WorkflowIDs = []string{"baseline_compliance"}
 	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: "给存活机器下发基线并自动修复5轮", Intent: intent})
 
@@ -288,8 +288,8 @@ func TestToolDecisionEngineCompilesLatestProductionBaselineAliases(t *testing.T)
 		t.Fatalf("template selector was not compiled: %#v", baseline)
 	}
 	remediation, ok := baseline.Args["remediation"].(map[string]interface{})
-	if !ok || remediation["max_rounds"] != 5 {
-		t.Fatalf("retry_rounds alias did not preserve five rounds: %#v", baseline.Args)
+	if !ok || remediation["enabled"] != true || remediation["max_rounds"] != 5 {
+		t.Fatalf("latest remediation aliases did not preserve enabled five-round repair: %#v", baseline.Args)
 	}
 }
 

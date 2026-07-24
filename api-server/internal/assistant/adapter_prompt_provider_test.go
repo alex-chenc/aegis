@@ -116,6 +116,34 @@ func TestAssistantPromptProviderUsesRequestedResponseLanguage(t *testing.T) {
 	}
 }
 
+func TestAssistantReactPromptExposesOnlyMappedToolsForCurrentRuntimeStep(t *testing.T) {
+	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{
+		{Name: "Host.Resolve", Description: "Resolve hosts."},
+		{Name: "Baseline.Compliance.Run", Description: "Run baseline compliance."},
+		{Name: "Operation.Get", Description: "Get operation status."},
+	}, nil, "operations", "run baseline").
+		WithRuntimeStepToolBindings(map[string][]string{
+			"authorized_01": {"Host.Resolve"},
+			"authorized_02": {"Baseline.Compliance.Run", "Operation.Get"},
+		})
+
+	bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{
+		Purpose: agentruntime.PurposeReact,
+		StepID:  "authorized_01",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bundle.SystemPrompt, "Host.Resolve") ||
+		strings.Contains(bundle.SystemPrompt, "Baseline.Compliance.Run") ||
+		strings.Contains(bundle.SystemPrompt, "Operation.Get") {
+		t.Fatalf("current step prompt leaked tools from later steps:\n%s", bundle.SystemPrompt)
+	}
+	if !strings.Contains(bundle.SystemPrompt, "immediately return step_result") {
+		t.Fatalf("react prompt lacks terminal current-step completion rule:\n%s", bundle.SystemPrompt)
+	}
+}
+
 func TestAssistantReactPromptIncludesExactEnglishArgumentSchema(t *testing.T) {
 	provider := NewAssistantPromptProvider([]agentruntime.ToolDescriptor{{
 		Name:        "Example.Execute",

@@ -150,7 +150,8 @@
 
 - 工作流检索和工具暴露范围；
 - capability 到工具的精确映射；
-- Mapping 结果的执行顺序、单步骤工具绑定和不可变运行快照；
+- Mapping 结果的执行顺序、单步骤工具边界和不可变运行快照；同步步骤只绑定一个
+  primary tool，异步步骤只可附带同一 Mapping 已授权的 registered completion tool；
 - 实体解析、参数补全来源和类型校验；
 - RBAC、租户、风险、审批和范围约束；
 - 高层业务工具内部的领域状态机；
@@ -161,7 +162,8 @@
 ### 4.3 agent-runtime 负责
 
 - 执行后端传入的 Mapping-bound initial plan；
-- 在每个步骤中复制唯一绑定的工具名并产生合法参数，不能选举工具；
+- 在每个步骤中只能复制后端当前步骤暴露的 primary/completion 工具名，不能选举工具；
+- 不生成可信执行参数；所有静态参数和跨工具 operation reference 由后端绑定并覆盖；
 - 展示真实 observation、call ID 和错误；
 - 对通用异步状态工具执行有界轮询；
 - 只有终态证据满足步骤条件时完成步骤。
@@ -330,7 +332,8 @@ User request
   -> freeze ExposureSnapshot
   -> compile immutable Mapping-bound execution plan
   -> agent-runtime receives the plan and selected descriptors
-  -> every step allows exactly one mapped tool
+  -> every synchronous step allows exactly one mapped primary tool
+  -> an asynchronous step may also allow its registered mapped completion tool
 ```
 
 每轮运行持久化 `ExposureSnapshot`，至少包含：
@@ -343,8 +346,8 @@ User request
 
 ToolGateway 必须校验调用来源：
 
-- `source=model` 只能调用当前 Mapping-bound step 唯一绑定且
-  `DirectCallable=true` 的工具；
+- `source=model` 只能调用当前 Mapping-bound step 绑定的 primary tool，或该 primary
+  明确声明、且同一 Mapping 已授权的 completion tool；
 - `source=workflow_engine` 只能调用当前高层操作授权令牌中声明的内部 capability；
 - 模型即使猜出隐藏工具名，也返回 `tool_not_exposed_for_current_run`；
 - 暴露校验失败必须发生在 Handler 之前，且不得产生业务副作用。
@@ -355,7 +358,10 @@ ToolGateway 必须校验调用来源：
 
 ```text
 tool_name ∈ exact_mapping(intent.capability)
-tool_name == current_mapping_bound_step.tool_name
+tool_name ∈ current_mapping_bound_step.allowed_tools
+current_mapping_bound_step.allowed_tools
+  == {mapped_primary_tool}
+     ∪ {registered_completion_tool if independently mapped}
 ```
 
 禁止以下路径：

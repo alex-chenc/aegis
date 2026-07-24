@@ -146,6 +146,97 @@ func TestAssistantToolGatewayBindsPreviousStepArgFromPriorOutcome(t *testing.T) 
 	}
 }
 
+func TestAssistantToolGatewayAllowsOnlyMappedCompletionToolAndBindsCurrentStepOutcome(t *testing.T) {
+	registry := NewToolRegistry()
+	var operationID string
+	if err := registry.Register(&ToolSpec{
+		Name:               "Example.Start",
+		Domain:             DomainSystem,
+		Operation:          OpExecute,
+		Capability:         "start_example",
+		Description:        "Start an asynchronous operation.",
+		Risk:               ToolRiskLow,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		ResultContract: ToolResultContract{
+			AcceptedOnSuccess:  true,
+			OperationRefFields: []string{"operation_id"},
+		},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"operation_id": "op-123", "operation_status": "accepted"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(&ToolSpec{
+		Name:               "Example.Get",
+		Domain:             DomainSystem,
+		Operation:          OpGet,
+		Capability:         "get_example",
+		Description:        "Get operation status.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		ArgsSchema: map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{"operation_id": map[string]interface{}{"type": "string"}},
+			"required":             []string{"operation_id"},
+			"additionalProperties": false,
+		},
+		Handler: func(_ context.Context, args map[string]interface{}) (interface{}, error) {
+			operationID, _ = args["operation_id"].(string)
+			return map[string]interface{}{"operation_id": operationID, "operation_status": "succeeded"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	plan := &ToolExecutionPlan{Steps: []ToolPlanStep{
+		{StepID: "authorized_01", ToolName: "Example.Start", Args: map[string]interface{}{"scope": "all"}},
+		{StepID: "authorized_02", ToolName: "Example.Get", ArgSources: map[string]ArgSource{
+			"operation_id": {SourceType: "previous_step", SourceRef: "operation"},
+		}},
+	}}
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher:        dispatcher,
+		SessionID:         "session-async",
+		MessageID:         "message-async",
+		RunID:             "run-async",
+		RequireMappedPlan: true,
+		ExecutionPlan:     plan,
+		RuntimeStepToolBindings: map[string][]string{
+			"authorized_01": {"Example.Start", "Example.Get"},
+		},
+		Logger: zap.NewNop(),
+	})
+
+	if _, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "call-start",
+		StepID:   "authorized_01",
+		ToolName: "Example.Start",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Call(context.Background(), agentruntime.ToolRequest{
+		CallID:   "call-get",
+		StepID:   "authorized_01",
+		ToolName: "Example.Get",
+		Args:     map[string]interface{}{"scope": "invented", "operation_id": "model-invented"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if operationID != "op-123" {
+		t.Fatalf("mapped completion tool operation_id = %q, want op-123", operationID)
+	}
+
+	if _, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "authorized_01",
+		ToolName: "Example.Other",
+	}); err == nil {
+		t.Fatal("unmapped tool must remain rejected from grouped async step")
+	}
+}
+
 // TestAssistantToolGatewaySkipsStepWhenPreviousStepArgUnresolvable verifies
 // that a step whose required previous_step argument cannot be resolved (its
 // producer did not run) is skipped rather than dispatched with a model-invented

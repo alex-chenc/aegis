@@ -173,23 +173,3 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | MinIO Console | 9001 |
 | Kafka | 29092 |
 
-
-## ChatGPT 5.6-assisted Development Workflow and Evaluation
-
-This project uses a design-driven, test-constrained, and human-reviewed development workflow assisted by ChatGPT 5.6. AI accelerates cross-component analysis, implementation, and verification, while architecture decisions, security boundaries, and final releases remain under maintainer control.
-
-### Development Workflow
-
-1. **Requirements and design**: Clarify user scenarios, impact scope, acceptance criteria, test strategy, and rollback options before documenting cross-component features in the versioned design specifications.
-2. **Code-path analysis**: Trace behavior from the frontend entry point through APIs, services, storage, and external dependencies to identify existing contracts and affected modules before changing code.
-3. **Test design**: Add automated coverage for core logic, resource integrity, API contracts, and discovered regressions. For UI issues, capture actual DOM dimensions and overflow evidence as well.
-4. **Incremental implementation**: Build shared infrastructure first, then migrate pages and services in bounded stages. Run focused tests after each stage to keep changes reviewable and reversible.
-5. **Build and integration verification**: Run frontend unit tests, focused Go tests, production builds, Docker Compose rebuilds, service health checks, and browser smoke tests.
-6. **Human review and release**: Maintainers review security impact, product terminology, translation quality, compatibility, and release scope before merge and deployment.
-
-### Practical Evaluation
-
-- **Strengths**: Rapidly understands Aegis across Vue, Go, and multi-service call paths; handles broad consistency changes effectively; and produces traceable evidence through tests, builds, and browser measurements.
-- **Current outcome**: Delivered full Chinese/English switching, API and agent locale propagation, and English layout adaptation. All 280 tests across 42 frontend test files pass, production builds succeed, and the Frontend and API Server containers are healthy.
-- **Limitations**: Machine-generated translations still require security and product-domain review. Long text, different resolutions, and real-data states require human visual acceptance. AI does not automatically remove existing type debt, historical test failures, or business risk.
-- **Conclusion**: ChatGPT 5.6 is effective as a high-productivity engineering collaborator, but it does not replace code review, security audit, or release approval. The recommended guardrail is “design documentation + automated tests + build verification + human review.”

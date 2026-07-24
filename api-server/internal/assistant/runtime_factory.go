@@ -108,21 +108,23 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		)
 		return nil, err
 	}
+	runtimeStepToolBindings := buildRuntimeStepToolBindings(req.ExecutionPlan, toolDescriptors)
 
 	// 4. 创建 ToolGateway（实现 agentruntime.ToolGateway）
 	toolGateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
-		Dispatcher:        f.toolDispatcher,
-		SessionID:         req.SessionID,
-		MessageID:         req.MessageID,
-		RunID:             req.RunID,
-		Operator:          req.Operator,
-		ApprovalMode:      normalizeAssistantApprovalMode(req.ApprovalMode),
-		RequireMappedPlan: true,
-		Logger:            f.logger,
-		RunManager:        f.runManager,
-		UserInput:         req.UserInput,
-		ContextRefs:       req.ContextRefs,
-		ExecutionPlan:     req.ExecutionPlan,
+		Dispatcher:              f.toolDispatcher,
+		SessionID:               req.SessionID,
+		MessageID:               req.MessageID,
+		RunID:                   req.RunID,
+		Operator:                req.Operator,
+		ApprovalMode:            normalizeAssistantApprovalMode(req.ApprovalMode),
+		RequireMappedPlan:       true,
+		Logger:                  f.logger,
+		RunManager:              f.runManager,
+		UserInput:               req.UserInput,
+		ContextRefs:             req.ContextRefs,
+		ExecutionPlan:           req.ExecutionPlan,
+		RuntimeStepToolBindings: runtimeStepToolBindings,
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
@@ -153,6 +155,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput).
 		WithLocale(req.Locale).
 		WithApprovalMode(req.ApprovalMode).
+		WithRuntimeStepToolBindings(runtimeStepToolBindings).
 		WithReflectionMemories(reflectionMemories)
 
 	// 7. 创建 LLM 适配器
@@ -200,6 +203,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		zap.Int("tool_count", len(toolDescriptors)),
 		zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
 		zap.Int("plan_step_count", toolExecutionPlanStepCount(req.ExecutionPlan)),
+		zap.Int("runtime_step_count", runtimeExecutionStepCount(req.ExecutionPlan, toolDescriptors)),
 	)
 
 	// 9. 创建 TaskRouter（智能提示词路由）
@@ -297,6 +301,14 @@ func toolExecutionPlanStepCount(plan *ToolExecutionPlan) int {
 		return 0
 	}
 	return len(plan.Steps)
+}
+
+func runtimeExecutionStepCount(plan *ToolExecutionPlan, descriptors []agentruntime.ToolDescriptor) int {
+	runtimePlan := runtimePlanFromToolExecutionPlanWithDescriptors(plan, descriptors)
+	if runtimePlan == nil {
+		return 0
+	}
+	return len(runtimePlan.Steps)
 }
 
 func toolExecutionPlanID(plan *ToolExecutionPlan) string {

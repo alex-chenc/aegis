@@ -44,6 +44,11 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 	validationByCall := make(map[string]agentruntime.ToolCallRecord, len(result.ToolCalls))
 	for _, call := range result.ToolCalls {
 		validationByCall[call.CallID] = call
+		if strings.TrimSpace(call.ValidationStage) != "" {
+			// A validation-stage record is a rejected model candidate, not a
+			// backend tool execution. Keep it in runtime diagnostics only.
+			continue
+		}
 		toolNames[call.ToolName] = true
 		if call.Status != agentruntime.ToolCallSuccess {
 			failedNames[call.ToolName] = true
@@ -54,6 +59,10 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 		for _, turn := range step.ReactTurns {
 			observation := turn.Observation
 			if observation == nil {
+				continue
+			}
+			if record, ok := validationByCall[observation.CallID]; ok &&
+				strings.TrimSpace(record.ValidationStage) != "" {
 				continue
 			}
 			toolNames[observation.ToolName] = true
@@ -95,6 +104,12 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 				case "host_online":
 					if id := stringValue(fact["id"]); id != "" {
 						onlineHostIDs[id] = true
+					}
+				case "host_resolved":
+					if strings.EqualFold(stringValue(fact["state"]), "online") {
+						if id := stringValue(fact["id"]); id != "" {
+							onlineHostIDs[id] = true
+						}
 					}
 				case "vulnerability_record":
 					ledger.VulnerabilityWorkflow = true

@@ -45,6 +45,51 @@ func TestRuntimeEvidenceRejectsOnlineHostContradiction(t *testing.T) {
 	}
 }
 
+func TestRuntimeEvidenceCountsResolvedOnlineHostAndExcludesRejectedCandidate(t *testing.T) {
+	result := &agentruntime.TaskResult{
+		ToolCalls: []agentruntime.ToolCallRecord{
+			{CallID: "call-host", ToolName: "Host.Resolve", Status: agentruntime.ToolCallSuccess},
+			{CallID: "call-rejected", ToolName: "Baseline.Compliance.Run", Status: agentruntime.ToolCallFailed, ValidationStage: "step_tool_scope"},
+		},
+		StepExecutions: []agentruntime.StepExecution{{
+			ReactTurns: []agentruntime.ReactTurn{
+				{Observation: &agentruntime.Observation{
+					CallID:   "call-host",
+					ToolName: "Host.Resolve",
+					Status:   agentruntime.ToolCallSuccess,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "resolve_hosts",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						Facts: []map[string]any{{
+							"kind":  "host_resolved",
+							"id":    "host-1",
+							"state": "online",
+						}},
+					},
+				}},
+				{Observation: &agentruntime.Observation{
+					CallID:   "call-rejected",
+					ToolName: "Baseline.Compliance.Run",
+					Status:   agentruntime.ToolCallFailed,
+					Error:    "tool is outside step allowlist",
+				}},
+			},
+		}},
+	}
+
+	ledger := buildRuntimeEvidenceLedger(result)
+	if ledger.OnlineHostCount != 1 {
+		t.Fatalf("resolved online host count = %d, want 1", ledger.OnlineHostCount)
+	}
+	if len(ledger.ActualToolNames) != 1 || ledger.ActualToolNames[0] != "Host.Resolve" {
+		t.Fatalf("pre-gateway candidate leaked into actual tools: %#v", ledger.ActualToolNames)
+	}
+	if len(ledger.FailedToolNames) != 0 || len(ledger.Calls) != 1 {
+		t.Fatalf("pre-gateway candidate leaked into evidence: %#v", ledger)
+	}
+}
+
 func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
 	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{
 		ActualToolNames: []string{"Host.Resolve"},

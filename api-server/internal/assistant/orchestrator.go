@@ -605,7 +605,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	taskResult, err := buildResult.Runtime.Run(ctx, agentruntime.TaskInput{
 		UserInput:   input.UserMessage,
 		UserContext: buildResult.UserContext,
-		InitialPlan: runtimeInitialPlanForAssistant(executionPlan),
+		InitialPlan: runtimeInitialPlanForAssistantWithDescriptors(executionPlan, toolDescriptors),
 		Metadata: map[string]string{
 			"session_id":    input.SessionID,
 			"run_id":        input.RunID,
