@@ -26,7 +26,7 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpUpdate,
 		Capability:         "resolve_detection_alert",
-		Description:        "将异常检测告警标记为已解决",
+		Description:        "Mark an anomaly-detection alert as resolved.",
 		Aliases:            []string{"处置告警", "解决告警", "关闭异常事件", "标记已解决"},
 		Tags:               []string{"detection", "alert", "resolve", "operation"},
 		ObjectTypes:        []string{"alert", "detection", "event"},
@@ -41,7 +41,7 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 			"properties": map[string]interface{}{
 				"alert_id": map[string]interface{}{
 					"type":        "string",
-					"description": "告警ID",
+					"description": "Exact alert ID.",
 				},
 			},
 			"required": []string{"alert_id"},
@@ -56,7 +56,7 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpExecute,
 		Capability:         "block_detection_alert",
-		Description:        "对异常检测告警关联的进程、文件或连接执行阻断操作（高风险，需审批）",
+		Description:        "Execute an approved high-risk block action against a process, file, or connection associated with an alert.",
 		Aliases:            []string{"阻断告警", "阻断异常事件", "kill 进程", "隔离文件", "阻断连接"},
 		Tags:               []string{"detection", "alert", "block", "response", "critical"},
 		ObjectTypes:        []string{"alert", "detection", "event", "block"},
@@ -71,11 +71,11 @@ func RegisterDetectionWriteTools(registry *assistant.ToolRegistry, deps Detectio
 			"properties": map[string]interface{}{
 				"alert_id": map[string]interface{}{
 					"type":        "string",
-					"description": "告警ID",
+					"description": "Exact alert ID.",
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
-					"description": "阻断动作（kill_process/quarantine_file/block_connection），默认kill_process",
+					"description": "Block action: kill_process, quarantine_file, or block_connection; defaults to kill_process.",
 				},
 			},
 			"required": []string{"alert_id"},

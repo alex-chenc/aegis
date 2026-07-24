@@ -29,7 +29,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpGenerate,
 		Capability:         "generate_detection_package_draft",
-		Description:        "根据 Hook 计划和 Sigma 规则生成动态检测包草稿",
+		Description:        "Create a dynamic detection package draft from an eBPF hook plan and Sigma rules.",
 		Aliases:            []string{"生成检测包", "生成动态检测包", "检测包草稿", "创建规则包", "动态包草稿"},
 		Tags:               []string{"package", "detection_package", "dynamic", "draft", "sigma", "ebpf"},
 		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
@@ -44,32 +44,32 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 			"properties": map[string]interface{}{
 				"title": map[string]interface{}{
 					"type":        "string",
-					"description": "检测包标题",
+					"description": "Detection package title.",
 				},
 				"target_version": map[string]interface{}{
 					"type":        "string",
-					"description": "目标版本号",
+					"description": "Target package version.",
 				},
 				"description": map[string]interface{}{
 					"type":        "string",
-					"description": "检测包描述",
+					"description": "Detection package description.",
 				},
 				"cve_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "关联的CVE ID列表",
+					"description": "Related CVE IDs.",
 				},
 				"hook_plan_yaml": map[string]interface{}{
 					"type":        "string",
-					"description": "eBPF Hook计划YAML",
+					"description": "eBPF hook plan in YAML.",
 				},
 				"sigma_rules_yaml": map[string]interface{}{
 					"type":        "string",
-					"description": "Sigma规则YAML",
+					"description": "Sigma rules in YAML.",
 				},
 				"operator": map[string]interface{}{
 					"type":        "string",
-					"description": "操作者名称",
+					"description": "Operator name for the audit record.",
 				},
 			},
 			"required": []string{"title", "target_version"},
@@ -84,7 +84,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpExecute,
 		Capability:         "start_detection_package_build",
-		Description:        "启动动态检测包构建任务",
+		Description:        "Start a dynamic detection package build.",
 		Aliases:            []string{"构建检测包", "启动构建", "编译动态检测包", "检测包构建"},
 		Tags:               []string{"package", "detection_package", "dynamic", "build", "task"},
 		ObjectTypes:        []string{"detection_package", "package", "task"},
@@ -99,11 +99,11 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 			"properties": map[string]interface{}{
 				"package_id": map[string]interface{}{
 					"type":        "string",
-					"description": "检测包ID",
+					"description": "Exact detection package ID.",
 				},
 				"operator": map[string]interface{}{
 					"type":        "string",
-					"description": "操作者名称",
+					"description": "Operator name for the audit record.",
 				},
 			},
 			"required": []string{"package_id"},
@@ -118,7 +118,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpApprove,
 		Capability:         "sign_detection_package",
-		Description:        "签名动态检测包（高风险操作，需审批）",
+		Description:        "Sign a dynamic detection package after approval.",
 		Aliases:            []string{"签名检测包", "检测包签名", "批准检测包", "发布签名"},
 		Tags:               []string{"package", "detection_package", "dynamic", "sign", "critical"},
 		ObjectTypes:        []string{"detection_package", "package"},
@@ -133,11 +133,11 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 			"properties": map[string]interface{}{
 				"package_id": map[string]interface{}{
 					"type":        "string",
-					"description": "检测包ID",
+					"description": "Exact detection package ID.",
 				},
 				"operator": map[string]interface{}{
 					"type":        "string",
-					"description": "操作者名称",
+					"description": "Operator name for the audit record.",
 				},
 			},
 			"required": []string{"package_id"},
@@ -152,7 +152,7 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpDispatch,
 		Capability:         "enable_detection_package",
-		Description:        "启用动态检测包并分发到 Agent（高风险操作，需审批）",
+		Description:        "Enable a dynamic detection package and distribute it to agents after approval.",
 		Aliases:            []string{"启用检测包", "分发检测包", "下发动态检测包", "启用规则包", "发布检测包"},
 		Tags:               []string{"package", "detection_package", "dynamic", "enable", "dispatch", "critical"},
 		ObjectTypes:        []string{"detection_package", "package", "agent"},
@@ -167,11 +167,11 @@ func RegisterPackageWriteTools(registry *assistant.ToolRegistry, deps PackageWri
 			"properties": map[string]interface{}{
 				"package_id": map[string]interface{}{
 					"type":        "string",
-					"description": "检测包ID",
+					"description": "Exact detection package ID.",
 				},
 				"operator": map[string]interface{}{
 					"type":        "string",
-					"description": "操作者名称",
+					"description": "Operator name for the audit record.",
 				},
 			},
 			"required": []string{"package_id"},

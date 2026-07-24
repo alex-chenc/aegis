@@ -116,16 +116,162 @@ func TestRuntimePlanFromToolExecutionPlanKeepsRepeatedToolArgs(t *testing.T) {
 	}
 }
 
-func TestAssistantRuntimeDoesNotUseAuthorizationAsInitialPlan(t *testing.T) {
+func TestAssistantRuntimeAlwaysUsesMappedAuthorizationAsInitialPlan(t *testing.T) {
 	authorization := &ToolExecutionPlan{
 		Goal: "arbitrary user goal",
 		Steps: []ToolPlanStep{{
-			StepID:   "authorized_01",
-			ToolName: "Example.Apply",
+			StepID:     "authorized_01",
+			ToolName:   "Example.Apply",
+			Capability: "apply_example",
 		}},
 	}
-	if plan := runtimeInitialPlanForAssistant(authorization); plan != nil {
-		t.Fatalf("pure agent mode must let agent-runtime create the only plan, got %#v", plan)
+	plan := runtimeInitialPlanForAssistant(authorization)
+	if plan == nil || len(plan.Steps) != 1 {
+		t.Fatalf("mapped authorization must be the runtime plan, got %#v", plan)
+	}
+	if got := plan.Steps[0].AllowedTools; len(got) != 1 || got[0] != "Example.Apply" {
+		t.Fatalf("runtime step is not bound to the mapped tool: %#v", got)
+	}
+}
+
+func TestAssistantRuntimeUsesFixedPlanForBaselineCompliance(t *testing.T) {
+	authorization := &ToolExecutionPlan{
+		Goal: "run baseline compliance",
+		Steps: []ToolPlanStep{
+			{StepID: "authorized_01", ToolName: "Host.Resolve", Args: map[string]interface{}{"target_scope": "all_online_hosts"}},
+			{StepID: "authorized_02", ToolName: "Baseline.Compliance.Run", Args: map[string]interface{}{"target_scope": "all_online_hosts", "template_selector": "cis-ubuntu"}},
+			{StepID: "authorized_03", ToolName: "Operation.Get"},
+		},
+	}
+	plan := runtimeInitialPlanForAssistant(authorization)
+	if plan == nil || len(plan.Steps) != 3 {
+		t.Fatalf("baseline workflow must use a fixed plan, got %#v", plan)
+	}
+	if plan.Steps[0].ToolArgs["target_scope"] != "all_online_hosts" || plan.Steps[1].ToolArgs["template_selector"] != "cis-ubuntu" {
+		t.Fatalf("fixed plan lost deterministic arguments: %#v", plan.Steps)
+	}
+}
+
+func TestRuntimeToolElectionInvariantRejectsDescriptorsWithoutMappedPlan(t *testing.T) {
+	err := validateRuntimeToolElectionInvariant(RuntimeBuildRequest{
+		ToolDescriptors: []agentruntime.ToolDescriptor{{Name: "Example.Apply"}},
+	})
+	if err == nil {
+		t.Fatal("tool descriptors without a Mapping-bound execution plan must fail closed")
+	}
+
+	err = validateRuntimeToolElectionInvariant(RuntimeBuildRequest{
+		ToolDescriptors: []agentruntime.ToolDescriptor{{Name: "Example.Apply"}},
+		ExecutionPlan: &ToolExecutionPlan{
+			DecisionTraceID: "td_test",
+			Steps: []ToolPlanStep{{
+				StepID:     "authorized_01",
+				ToolName:   "Example.Apply",
+				Capability: "apply_example",
+			}},
+			DecisionRecords: []ToolDecisionRecord{{
+				ToolName:   "Example.Apply",
+				Capability: "apply_example",
+				Decision:   toolDecisionAccepted,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("mapped runtime request rejected: %v", err)
+	}
+
+	err = validateRuntimeToolElectionInvariant(RuntimeBuildRequest{
+		ToolDescriptors: []agentruntime.ToolDescriptor{{Name: "Example.Discover"}},
+		ExecutionPlan: &ToolExecutionPlan{
+			DecisionTraceID: "td_test",
+			Steps: []ToolPlanStep{{
+				StepID:     "authorized_01",
+				ToolName:   "Example.Apply",
+				Capability: "apply_example",
+			}},
+			DecisionRecords: []ToolDecisionRecord{{
+				ToolName:   "Example.Apply",
+				Capability: "apply_example",
+				Decision:   toolDecisionAccepted,
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("descriptor and Mapping plan must have the exact same tool set")
+	}
+
+	err = validateRuntimeToolElectionInvariant(RuntimeBuildRequest{
+		ToolDescriptors: []agentruntime.ToolDescriptor{{Name: "Example.Apply"}},
+		ExecutionPlan: &ToolExecutionPlan{
+			DecisionTraceID: "td_test",
+			Steps: []ToolPlanStep{
+				{StepID: "authorized_01", ToolName: "Example.Apply", Capability: "apply_example"},
+				{StepID: "authorized_01", ToolName: "Example.Apply", Capability: "apply_example"},
+			},
+			DecisionRecords: []ToolDecisionRecord{{
+				ToolName:   "Example.Apply",
+				Capability: "apply_example",
+				Decision:   toolDecisionAccepted,
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("duplicate Mapping step IDs must fail closed")
+	}
+}
+
+func TestValidateRuntimeFinalAnswerRejectsInternalJSONObject(t *testing.T) {
+	if err := validateRuntimeFinalAnswer(`{"enabled":true,"max_rounds":3}`); err == nil {
+		t.Fatal("internal JSON object must not be accepted as the final user answer")
+	}
+	if err := validateRuntimeFinalAnswer("任务未创建，未执行任何修复。"); err != nil {
+		t.Fatalf("natural-language final answer rejected: %v", err)
+	}
+}
+
+func TestNormalizeBlockedMappingPlanStepsMarksTransitiveDependenciesSkipped(t *testing.T) {
+	result := &agentruntime.TaskResult{
+		FinalPlan: &agentruntime.Plan{Steps: []agentruntime.PlanStep{
+			{StepID: "step_1", Status: agentruntime.StepFailed},
+			{StepID: "step_2", Status: agentruntime.StepPending, Dependencies: []string{"step_1"}},
+			{StepID: "step_3", Status: agentruntime.StepPending, Dependencies: []string{"step_2"}},
+			{StepID: "step_independent", Status: agentruntime.StepPending},
+		}},
+	}
+
+	skipped := normalizeBlockedMappingPlanSteps(result)
+	if len(skipped) != 2 {
+		t.Fatalf("expected two blocked steps, got %#v", skipped)
+	}
+	if result.FinalPlan.Steps[1].Status != agentruntime.StepSkipped ||
+		result.FinalPlan.Steps[2].Status != agentruntime.StepSkipped {
+		t.Fatalf("transitive blocked steps were not normalized: %#v", result.FinalPlan.Steps)
+	}
+	if result.FinalPlan.Steps[3].Status != agentruntime.StepPending {
+		t.Fatalf("independent pending step must not be changed: %#v", result.FinalPlan.Steps[3])
+	}
+}
+
+func TestApplyEffectiveApprovalModeUpdatesAuthorizationArtifact(t *testing.T) {
+	plan := &ToolExecutionPlan{
+		Steps: []ToolPlanStep{{ToolName: "Baseline.Compliance.Run", RequiresApproval: true}},
+		DecisionRecords: []ToolDecisionRecord{{
+			ToolName:      "Baseline.Compliance.Run",
+			Decision:      toolDecisionAccepted,
+			ApprovalState: "required",
+		}},
+	}
+
+	applyEffectiveApprovalMode(plan, "full_access")
+
+	if plan.Steps[0].RequiresApproval {
+		t.Fatal("full-access authorization step must not require approval")
+	}
+	if plan.DecisionRecords[0].ApprovalState != "not_required" {
+		t.Fatalf("approval state = %q, want not_required", plan.DecisionRecords[0].ApprovalState)
+	}
+	if plan.DecisionRecords[0].Evidence["approval_mode"] != "full_access" {
+		t.Fatalf("approval mode evidence missing: %#v", plan.DecisionRecords[0].Evidence)
 	}
 }
 

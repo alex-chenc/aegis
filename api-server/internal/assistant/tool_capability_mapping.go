@@ -241,8 +241,8 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 			Required:    false,
 		}}
 		contract.NegativeCases = []string{
-			"用户只询问资产采集概念时不要调用",
-			"用户只查看采集历史时不要调用",
+			"Do not call when the user only asks about the asset collection concept.",
+			"Do not call when the user only wants collection history.",
 		}
 		contract.Postconditions = []string{"task_id_created"}
 		contract.ResultValidators = []string{"asset_collection_task_id_present"}
@@ -262,8 +262,8 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 		contract.RequiredEntities = []string{"alert_id"}
 		contract.Preconditions = []string{"user_explicit_block_intent", "alert_id_resolved", "approval_required"}
 		contract.NegativeCases = []string{
-			"用户只询问告警详情时不要调用阻断",
-			"用户只查看告警趋势时不要调用阻断",
+			"Do not block when the user only asks for alert details.",
+			"Do not block when the user only asks for alert trends.",
 		}
 		contract.Postconditions = []string{"block_action_created"}
 		contract.ResultValidators = []string{"block_action_result_present"}
@@ -278,8 +278,8 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 		contract.RequiredEntities = []string{"rule_ids", "host_ids"}
 		contract.Preconditions = []string{"user_explicit_fix_intent", "rule_ids_resolved", "host_ids_resolved", "approval_required"}
 		contract.NegativeCases = []string{
-			"用户只询问基线修复概念时不要调用",
-			"用户只查看修复历史时不要调用",
+			"Do not remediate when the user only asks about the remediation concept.",
+			"Do not remediate when the user only asks for remediation history.",
 		}
 		contract.Postconditions = []string{"task_id_created"}
 		contract.RequiresExplicitUserIntent = true

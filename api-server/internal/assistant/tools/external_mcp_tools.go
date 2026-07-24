@@ -28,7 +28,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpList,
 		Capability:         "list_mcp_sources",
-		Description:        "列出当前用户有权限使用的外接 MCP 数据源",
+		Description:        "List external MCP data sources available to the current user.",
 		Aliases:            []string{"外部数据源", "MCP数据源", "list mcp sources"},
 		Tags:               []string{"v6.0", "external_mcp", "source"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -41,7 +41,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 			"properties": map[string]interface{}{
 				"source_type": map[string]interface{}{
 					"type":        "string",
-					"description": "数据源类型过滤",
+					"description": "Optional data-source type filter.",
 					"enum":        []string{"siem", "cmdb", "edr", "ticket", "threat_intel", "log_warehouse", "custom"},
 				},
 			},
@@ -62,7 +62,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpGet,
 		Capability:         "get_mcp_source_schema",
-		Description:        "获取单个外接 MCP 数据源的 schema 和可用工具摘要",
+		Description:        "Get the schema and available-tool summary for one external MCP data source.",
 		Aliases:            []string{"MCP schema", "数据源详情"},
 		Tags:               []string{"v6.0", "external_mcp", "schema"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -75,7 +75,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 			"properties": map[string]interface{}{
 				"source_id": map[string]interface{}{
 					"type":        "string",
-					"description": "数据源 ID",
+					"description": "Exact external data-source UUID.",
 				},
 			},
 			"required": []string{"source_id"},
@@ -91,7 +91,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpExecute,
 		Capability:         "test_mcp_connection",
-		Description:        "测试与外接 MCP 数据源的连接",
+		Description:        "Test connectivity to one external MCP data source.",
 		Aliases:            []string{"测试连接", "test connection"},
 		Tags:               []string{"v6.0", "external_mcp", "test"},
 		Risk:               assistant.ToolRiskLow,
@@ -104,7 +104,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 			"properties": map[string]interface{}{
 				"source_id": map[string]interface{}{
 					"type":        "string",
-					"description": "数据源 ID",
+					"description": "Exact external data-source UUID.",
 				},
 			},
 			"required": []string{"source_id"},
@@ -120,7 +120,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpSearch,
 		Capability:         "query_mcp_source",
-		Description:        "查询单个外接 MCP 数据源，返回归一化和脱敏后的结果",
+		Description:        "Query one external MCP data source and return normalized, redacted results.",
 		Aliases:            []string{"查询外部数据", "MCP查询"},
 		Tags:               []string{"v6.0", "external_mcp", "query"},
 		Risk:               assistant.ToolRiskMedium,
@@ -133,26 +133,26 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 			"properties": map[string]interface{}{
 				"source_id": map[string]interface{}{
 					"type":        "string",
-					"description": "数据源 ID",
+					"description": "Exact external data-source UUID.",
 				},
 				"query_goal": map[string]interface{}{
 					"type":        "string",
-					"description": "查询目标描述",
+					"description": "Natural-language description of the query objective.",
 				},
 				"time_range": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"from": map[string]interface{}{"type": "string", "description": "开始时间（RFC3339）"},
-						"to":   map[string]interface{}{"type": "string", "description": "结束时间（RFC3339）"},
+						"from": map[string]interface{}{"type": "string", "format": "date-time", "description": "Inclusive RFC3339 start time."},
+						"to":   map[string]interface{}{"type": "string", "format": "date-time", "description": "Inclusive RFC3339 end time."},
 					},
 				},
 				"filters": map[string]interface{}{
 					"type":        "object",
-					"description": "过滤条件",
+					"description": "Source-specific query filters allowed by the source schema.",
 				},
 				"max_rows": map[string]interface{}{
 					"type":        "integer",
-					"description": "最大返回行数，默认50",
+					"description": "Maximum rows to return; defaults to 50.",
 				},
 			},
 			"required": []string{"source_id", "query_goal"},
@@ -168,7 +168,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpSearch,
 		Capability:         "multi_query_mcp_sources",
-		Description:        "并发查询多个外接 MCP 数据源，返回归一化和脱敏后的结果",
+		Description:        "Query multiple external MCP data sources concurrently and return normalized, redacted results.",
 		Aliases:            []string{"多源查询", "关联查询"},
 		Tags:               []string{"v6.0", "external_mcp", "multi_query"},
 		Risk:               assistant.ToolRiskMedium,
@@ -190,11 +190,11 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 						},
 						"required": []string{"source_id", "query_goal"},
 					},
-					"description": "查询列表",
+					"description": "Per-source query requests.",
 				},
 				"max_rows_per_source": map[string]interface{}{
 					"type":        "integer",
-					"description": "每个数据源最大返回行数，默认50",
+					"description": "Maximum rows per data source; defaults to 50.",
 				},
 			},
 			"required": []string{"queries"},
@@ -210,7 +210,7 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 		Domain:             assistant.DomainExternalMCP,
 		Operation:          assistant.OpGenerate,
 		Capability:         "analyze_mcp_evidence",
-		Description:        "对已查询的外部 MCP 结果做证据融合分析，不再次访问外部",
+		Description:        "Analyze and correlate previously queried external MCP results without accessing external sources again.",
 		Aliases:            []string{"证据融合", "MCP分析"},
 		Tags:               []string{"v6.0", "external_mcp", "analyze"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -224,11 +224,11 @@ func RegisterExternalMCPTools(registry *assistant.ToolRegistry, deps ExternalMCP
 				"query_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "要分析的查询 ID 列表",
+					"description": "Query IDs whose persisted results should be analyzed.",
 				},
 				"analysis_goal": map[string]interface{}{
 					"type":        "string",
-					"description": "分析目标",
+					"description": "Analysis objective.",
 				},
 			},
 			"required": []string{"query_ids"},
@@ -522,7 +522,7 @@ func makeExternalMCPAnalyzeHandler(
 
 		analysisGoal, _ := args["analysis_goal"].(string)
 		if analysisGoal == "" {
-			analysisGoal = "综合分析外部数据"
+			analysisGoal = "Correlate and analyze external evidence."
 		}
 
 		// 获取查询日志
@@ -551,7 +551,7 @@ func makeExternalMCPAnalyzeHandler(
 			"success":   true,
 			"prompt":    analysisPrompt,
 			"query_ids": queryIDs,
-			"message":   "分析提示词已生成，请使用 LLM 进行分析",
+			"message":   "The analysis prompt is ready for LLM evidence synthesis.",
 		}, nil
 	}
 }

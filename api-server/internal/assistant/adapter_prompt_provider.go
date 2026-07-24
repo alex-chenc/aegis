@@ -19,10 +19,16 @@ type AssistantPromptProvider struct {
 	userMessage        string
 	reflectionMemories []string
 	locale             string
+	approvalMode       string
 }
 
 func (p *AssistantPromptProvider) WithLocale(locale string) *AssistantPromptProvider {
 	p.locale = NormalizeLocale(locale)
+	return p
+}
+
+func (p *AssistantPromptProvider) WithApprovalMode(mode string) *AssistantPromptProvider {
+	p.approvalMode = normalizeAssistantApprovalMode(mode)
 	return p
 }
 
@@ -68,10 +74,11 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 	toolList := p.formatToolList()
 	reflectionGuide := p.formatReflectionGuide()
 	contextBlock := p.formatContextRefs()
-	reasoningGuide := genericAgentReasoningGuide()
+	reasoningGuide := genericAgentReasoningGuide(p.approvalMode)
 	languageGuide := responseLanguageInstruction(p.locale)
+	permissionGuide := approvalModePromptRule(p.approvalMode)
 
-	systemPrompt := fmt.Sprintf(`You are the Aegis assistant planner. Plan from the user's goal, context, and current dynamic tool set.
+	systemPrompt := fmt.Sprintf(`You are the Aegis assistant planner. Follow the backend Mapping-bound plan for the user's goal and context.
 
 ## Capabilities
 - Understand arbitrary goals, objects, scope, constraints, and completion criteria.
@@ -93,11 +100,11 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 
 ## Rules
 1. Perform operations only through available tools. Never execute commands directly.
-2. High-risk operations require user approval.
+2. %s
 3. Base every conclusion on data and evidence.
 4. State uncertainty explicitly and never invent information.
-5. Generate the minimum complete steps from the final goal, dependencies, conditional branches, asynchronous states, and verification requirements. Never apply a predefined business workflow.
-6. suggested_tools may contain only exact names from Available tools. Record unavailable capabilities as evidence gaps; never invent a tool.
+5. The Mapping-bound plan is the tool authority. Never elect, add, replace, or reorder tools. If no Mapping-bound tool step exists, produce a direct answer without tools.
+6. A tool-enabled run already has caller-bound steps. suggested_tools may only copy the exact tool bound by the backend Mapping plan.
 7. Arguments may come from the user message, context, or actual prior tool results. Do not ask the user to repeat an ID that a tool can discover.
 8. If the same tool must be called with different arguments, give every step a unique title that reflects its purpose or parameter dimension.
 9. Keep titles short and distinct. Put detailed goals, conditions, argument sources, and evidence requirements in objective and expected_output.
@@ -108,7 +115,7 @@ func (p *AssistantPromptProvider) buildPlanPrompt() agentruntime.PromptBundle {
 Return exactly one JSON object. Do not output explanations, greetings, prose, or Markdown. Start with { and end with }.
 
 JSON schema:
-{"goal":"goal description","assumptions":["assumption"],"steps":[{"step_id":"step_1","title":"unique concise title","objective":"goal, conditions, and argument sources","expected_output":"expected output","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, contextBlock, reasoningGuide, languageGuide)
+{"goal":"goal description","assumptions":["assumption"],"steps":[{"step_id":"step_1","title":"unique concise title","objective":"goal, conditions, and argument sources","expected_output":"expected output","suggested_tools":["ToolName1","ToolName2"]}]}`, toolList, reflectionGuide, contextBlock, reasoningGuide, languageGuide, permissionGuide)
 
 	userPrompt := p.userMessage
 	if contextBlock != "" {
@@ -129,7 +136,7 @@ func (p *AssistantPromptProvider) buildReactPrompt() agentruntime.PromptBundle {
 	toolList := p.formatToolListDetail()
 	reflectionGuide := p.formatReflectionGuide()
 	contextBlock := p.formatContextRefs()
-	reasoningGuide := genericAgentReasoningGuide()
+	reasoningGuide := genericAgentReasoningGuide(p.approvalMode)
 	languageGuide := responseLanguageInstruction(p.locale)
 
 	systemPrompt := fmt.Sprintf(`You are the Aegis assistant executing the current user task.
@@ -165,6 +172,8 @@ Choose tool names and arguments only from Available tools, user input, context, 
 {"action":"fail_step","summary":"failure summary","failure":{"reason":"failure reason","recoverable":true}}
 
 ## Decision rules
+- The current Mapping-bound plan is the tool authority. You must not elect, add, replace, or reorder tools.
+- The tool_name field is a wire-format copy of the one tool already bound to the current step, not a tool-selection decision.
 - For greetings, casual conversation, capability questions, or conceptual explanations, return a concise step_result without a plan.
 - For a simple data query, call only the necessary tools and return the result without an unnecessary report.
 - For a complex goal, follow the current plan and ground every step in actual tool results.
@@ -209,20 +218,25 @@ func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBund
 7. If evidence conflicts, state the conflict and use the more conservative conclusion.
 8. Deduplicate evidence and provide the final conclusion only once, with the conclusion first.
 9. A descriptor validation failure means the model proposed a tool name outside the current catalog. An arguments validation failure means the model request did not satisfy the registered tool schema. If an authorized catalog tool can provide the requested capability, either failure must not be described as a missing platform capability or an undeployed module.
-10. %s`, p.formatToolListDetail(), responseLanguageInstruction(p.locale))
+10. %s
+
+## Strict output contract
+Return exactly one JSON object with one non-empty string field:
+{"final_answer":"user-facing conclusion"}
+Do not return tool arguments, remediation settings, control actions, Markdown fences, or any other top-level JSON shape.`, p.formatToolListDetail(), responseLanguageInstruction(p.locale))
 
 	return agentruntime.PromptBundle{
 		SystemPrompt: systemPrompt,
 	}
 }
 
-func genericAgentReasoningGuide() string {
+func genericAgentReasoningGuide(approvalMode string) string {
 	return `## Generic agent reasoning
 1. Understand the final goal, objects, scope, constraints, and completion criteria before deciding whether tools or decomposition are needed.
-2. The dynamic tool catalog is the capability boundary. Use only supplied tools and never apply a fixed workflow from names or keywords.
+2. The Mapping-bound plan is the tool authority. The model must not elect, add, replace, or reorder tools.
 3. Treat IDs, objects, and states from actual prior results as candidate arguments. Re-evaluate the next action after every result.
 4. Handle asynchronous state, pagination, conditional fallback, multiple targets, and verification dynamically from tool schemas, contracts, and results.
-5. Write operations require explicit user intent and approval. Ask only when the target is unsafe or cannot be discovered from context or read-only tools.
+5. ` + approvalModePromptRule(approvalMode) + `
 6. The same tool may be called with different arguments, but plan titles must remain unique and successful identical calls must not be repeated.
 7. If authorized tools cannot complete the goal, report the missing capability and available evidence. Never invent a tool or result.`
 }
@@ -282,7 +296,7 @@ func sanitizeModelSchemaValue(value interface{}) interface{} {
 		sanitized := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
 			switch strings.ToLower(strings.TrimSpace(key)) {
-			case "description", "title", "$comment", "examples":
+			case "$comment":
 				continue
 			default:
 				sanitized[key] = sanitizeModelSchemaValue(item)

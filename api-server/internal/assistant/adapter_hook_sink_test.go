@@ -112,12 +112,22 @@ func TestAssistantHookSinkDoesNotPublishModelOutputAsMessageDelta(t *testing.T) 
 	}
 }
 
-func TestAssistantHookSinkPublishesPreGatewayValidationFailure(t *testing.T) {
+func TestAssistantHookSinkKeepsPreGatewayValidationFailureInternal(t *testing.T) {
 	manager := NewRunManager()
 	run := manager.Start("session-1")
 	sink := NewAssistantHookSink(manager, "session-1", run.RunID, "msg-1", zap.NewNop())
 
 	err := sink.Handle(context.Background(), agentruntime.HookEvent{
+		Type: agentruntime.HookToolCallStarted,
+		Payload: map[string]interface{}{
+			"call_id":   "call-invalid",
+			"tool_name": "Vulnerability.GenerateShell",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sink.Handle(context.Background(), agentruntime.HookEvent{
 		Type: agentruntime.HookToolCallFinished,
 		Payload: map[string]interface{}{
 			"call_id":          "call-invalid",
@@ -135,13 +145,10 @@ func TestAssistantHookSinkPublishesPreGatewayValidationFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unsubscribe()
-	event := receiveEvent(t, ch)
-	if event.Type != EventToolError {
-		t.Fatalf("event type = %q", event.Type)
-	}
-	payload := toMap(event.Payload)
-	if payload["validation_stage"] != "descriptor" {
-		t.Fatalf("validation_stage = %#v", payload["validation_stage"])
+	select {
+	case event := <-ch:
+		t.Fatalf("pre-gateway validation must stay internal, got event %q", event.Type)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

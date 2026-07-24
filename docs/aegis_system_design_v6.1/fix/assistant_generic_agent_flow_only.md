@@ -1,5 +1,13 @@
 # 智能体模式统一通用流程改造
 
+> **工具选举设计已废弃（2026-07-24）**：本文中“动态规划模式”、
+> `InitialPlan=nil`、`planning_mode=agent_runtime_dynamic` 以及 Runtime 可自由选择
+> `tool_name` 的内容不得再作为实现依据。V6.1 的强制架构边界以
+> `assistant_workflow_knowledge_high_level_tools_and_deterministic_execution_design_v6.1.md`
+> 和 `assistant_baseline_tool_contract_and_full_access_fix.md` 为准：所有工具必须由
+> capability Mapping 选举，Mapping 结果必须作为不可变 initial plan，Runtime
+> 只能执行绑定步骤。该边界是代码级 fail-closed 不变量，不得恢复动态工具选举。
+>
 > 2026-07-10 补充：工具授权、异步结果、步骤完成和最终证据的后续修正见
 > `assistant_mapping_authorization_and_truthful_completion_fix.md`。相关定义冲突时，
 > 以后者为准。

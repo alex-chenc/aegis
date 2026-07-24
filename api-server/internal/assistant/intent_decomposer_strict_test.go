@@ -127,3 +127,31 @@ func TestNormalizeIntentBreakdownDoesNotInjectScenarioCapabilities(t *testing.T)
 		t.Fatalf("normalized breakdown should be valid: %v", err)
 	}
 }
+
+func TestNormalizeIntentBreakdownCanonicalizesCapturedBaselineAliases(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:                  "run baseline checks and repair every live machine",
+		Domains:               []string{"security_baseline"},
+		Actions:               []string{"apply_baseline", "enable_auto_repair"},
+		Objects:               []IntentObject{{Type: "machine", Selector: "live"}, {Type: "baseline", ID: "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf"}},
+		Scope:                 IntentScope{Kind: "unspecified"},
+		Parameters:            IntentParameters{"auto_repair": true, "repair_rounds": float64(5)},
+		WorkflowIDs:           []string{"baseline_compliance"},
+		CandidateCapabilities: []string{"resolve_hosts", "run_baseline_compliance"},
+		RequiresWrite:         true,
+		RiskHint:              "critical",
+		Confidence:            0.95,
+	}
+
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: "给存活的机器下发基线，开启自动修复5轮"})
+
+	if breakdown.Scope.Kind != "all_online_hosts" {
+		t.Fatalf("scope.kind = %q, want all_online_hosts", breakdown.Scope.Kind)
+	}
+	if len(breakdown.Objects) != 2 || breakdown.Objects[0].Type != "host" || breakdown.Objects[1].Type != "baseline_template" {
+		t.Fatalf("objects were not canonicalized: %#v", breakdown.Objects)
+	}
+	if breakdown.Parameters["auto_remediate"] != true || breakdown.Parameters["remediation_rounds"] != float64(5) {
+		t.Fatalf("parameters were not canonicalized: %#v", breakdown.Parameters)
+	}
+}

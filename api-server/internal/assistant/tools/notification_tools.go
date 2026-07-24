@@ -19,7 +19,7 @@ func RegisterNotificationTools(registry *assistant.ToolRegistry, deps Notificati
 		Domain:             assistant.DomainNotification,
 		Operation:          assistant.OpList,
 		Capability:         "list_notifications",
-		Description:        "获取系统通知列表，包括告警通知、任务完成通知、审批通知等",
+		Description:        "List system notifications, including alerts, task completion, and approval notifications.",
 		Aliases:            []string{"通知列表", "消息列表", "list notifications"},
 		Tags:               []string{"v6.0", "notification"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -30,9 +30,9 @@ func RegisterNotificationTools(registry *assistant.ToolRegistry, deps Notificati
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
-				"type":      map[string]interface{}{"type": "string", "description": "通知类型过滤"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page."},
+				"type":      map[string]interface{}{"type": "string", "description": "Notification type filter."},
 			},
 		},
 		Handler: makeNotificationListHandler(),

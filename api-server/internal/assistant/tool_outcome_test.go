@@ -29,6 +29,26 @@ func TestNormalizeToolOutcomeKeepsAsyncTriggerNonTerminal(t *testing.T) {
 	}
 }
 
+// TestNormalizeToolOutcomeExtractsSynchronousProducerRef verifies that a
+// synchronous producer (e.g. Asset.Collection.Trigger) that returns a durable
+// reference on terminal success exposes it in OperationRef so a downstream step
+// can deterministically bind it as a previous_step argument.
+func TestNormalizeToolOutcomeExtractsSynchronousProducerRef(t *testing.T) {
+	tool := &ToolSpec{
+		Capability: "trigger_asset_collection",
+		ResultContract: ToolResultContract{
+			OperationRefFields: []string{"task_id"},
+		},
+	}
+	outcome := normalizeToolOutcome(tool, map[string]interface{}{"task_id": "T-123", "status": "done"})
+	if !outcome.Terminal || outcome.OperationStatus != agentruntime.OperationSucceeded {
+		t.Fatalf("expected terminal success, got %#v", outcome)
+	}
+	if outcome.OperationRef["task_id"] != "T-123" {
+		t.Fatalf("expected OperationRef to carry task_id=T-123, got %#v", outcome.OperationRef)
+	}
+}
+
 func TestNormalizeToolOutcomeUsesTerminalStatusEvidence(t *testing.T) {
 	tool := &ToolSpec{
 		Capability: "get_example_status",

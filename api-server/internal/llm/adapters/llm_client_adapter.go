@@ -60,6 +60,12 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 	// Prefer the exact structured-output contract supplied by agent-runtime.
 	// ResponseSchema remains as a compatibility hint for older callers.
 	responseFormat := translateResponseFormat(req.ResponseFormat)
+	if responseFormat == nil && req.Purpose == agentruntime.PurposeSummarize && req.ResponseSchema == "final_summary" {
+		// Assistant summaries have a strict {"final_answer":"..."} contract.
+		// Enforce JSON mode for every OpenAI-compatible provider; the existing
+		// fallback below preserves compatibility with providers that reject it.
+		responseFormat = &llm.ResponseFormat{Type: "json_object"}
+	}
 	if responseFormat == nil && req.ResponseSchema != "" && a.client.IsDashScope() && containsJSONKeyword(messages) {
 		responseFormat = &llm.ResponseFormat{Type: "json_object"}
 	}

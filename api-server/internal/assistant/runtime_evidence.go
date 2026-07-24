@@ -181,6 +181,26 @@ func buildEvidenceGroundedFallback(ledger runtimeEvidenceLedger) string {
 	return b.String()
 }
 
+// buildFailedGoalFallback prevents a normal runtime-loop completion from being
+// presented as a successful business task. It intentionally reports only
+// durable evidence summaries and never echoes model reasoning or raw payloads.
+func buildFailedGoalFallback(ledger runtimeEvidenceLedger) string {
+	var b strings.Builder
+	b.WriteString("任务未完成，不能认定扫描、修复或验证已经执行成功。")
+	if len(ledger.FailedToolNames) > 0 {
+		b.WriteString("\n\n- 失败工具：" + strings.Join(ledger.FailedToolNames, "、") + "。")
+	}
+	if len(ledger.TaskGroupIDs) == 0 {
+		b.WriteString("\n- 未取得任务组证据，未下发任务。")
+	} else {
+		b.WriteString("\n- 已创建任务组，但本轮目标未达到成功终态。")
+	}
+	if len(ledger.ActualToolNames) > 0 {
+		b.WriteString("\n- 实际调用：" + strings.Join(ledger.ActualToolNames, "、") + "。")
+	}
+	return b.String()
+}
+
 func sortedStringSet(values map[string]bool) []string {
 	result := make([]string, 0, len(values))
 	for value := range values {

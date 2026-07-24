@@ -42,6 +42,9 @@ func (c *ToolCatalog) Search(query string, opts SearchOptions) []*ToolSpec {
 		if !tool.Enabled {
 			continue
 		}
+		if !tool.ExposurePolicy.Discoverable || (tool.ExposurePolicy.Exposure != ToolExposurePrimary && tool.ExposurePolicy.Exposure != ToolExposureContextual) {
+			continue
+		}
 		if opts.Domain != "" && string(tool.Domain) != opts.Domain {
 			continue
 		}
@@ -259,7 +262,11 @@ func modelFacingToolDescription(tool *ToolSpec) string {
 	}
 	contract := BuildToolUseContract(tool)
 	parts := make([]string, 0, 8)
-	if description := strings.TrimSpace(tool.ModelDescription); description != "" && !containsHan(description) {
+	description := strings.TrimSpace(tool.ModelDescription)
+	if description == "" {
+		description = strings.TrimSpace(tool.Description)
+	}
+	if description != "" && !containsHan(description) {
 		parts = append(parts, description)
 	}
 	parts = append(parts,
@@ -297,9 +304,6 @@ func normalizeRuntimeArgsSchema(schema map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(schema)+1)
 	for k, v := range schema {
-		if k == "description" {
-			continue
-		}
 		out[k] = normalizeRuntimeSchemaValue(k, v)
 	}
 	// A schema with declared properties is a closed model-facing contract.

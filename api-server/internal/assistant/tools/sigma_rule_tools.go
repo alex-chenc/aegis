@@ -27,7 +27,7 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 		Domain:             assistant.DomainSigmaRule,
 		Operation:          assistant.OpList,
 		Capability:         "list_sigma_rules",
-		Description:        "列出异常检测 Sigma 规则，支持按状态、关键字筛选",
+		Description:        "List anomaly-detection Sigma rules with status and keyword filters.",
 		Aliases:            []string{"规则识别", "Sigma 规则", "异常检测规则", "检测规则列表", "规则命中"},
 		Tags:               []string{"sigma", "sigma_rule", "detection", "rule", "abnormal"},
 		ObjectTypes:        []string{"sigma_rule", "detection", "alert"},
@@ -40,10 +40,10 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
-				"status":    map[string]interface{}{"type": "string", "description": "状态筛选（active/experimental/pending/disabled）"},
-				"query":     map[string]interface{}{"type": "string", "description": "搜索关键字"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page."},
+				"status":    map[string]interface{}{"type": "string", "description": "Status filter: active, experimental, pending, or disabled."},
+				"query":     map[string]interface{}{"type": "string", "description": "Rule search keyword."},
 			},
 		},
 		Handler: makeSigmaRuleListHandler(deps.SigmaRuleRepo),
@@ -56,7 +56,7 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 		Domain:             assistant.DomainSigmaRule,
 		Operation:          assistant.OpGenerate,
 		Capability:         "generate_sigma_rule",
-		Description:        "基于异常告警样本和 MITRE 技术使用 AI 生成 Sigma 检测规则",
+		Description:        "Generate a Sigma detection rule from anomaly-alert samples and a MITRE technique using AI.",
 		Aliases:            []string{"生成 Sigma 规则", "规则自动生成", "异常检测规则生成", "AI 规则生成", "规则识别生成"},
 		Tags:               []string{"sigma", "sigma_rule", "detection", "rule", "generate", "ai-analysis"},
 		ObjectTypes:        []string{"sigma_rule", "detection", "alert"},
@@ -71,16 +71,16 @@ func RegisterSigmaRuleTools(registry *assistant.ToolRegistry, deps SigmaRuleTool
 			"properties": map[string]interface{}{
 				"mitre_id": map[string]interface{}{
 					"type":        "string",
-					"description": "MITRE技术ID",
+					"description": "Exact MITRE technique ID.",
 				},
 				"sample_alert_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "样本告警ID列表",
+					"description": "Alert IDs used as generation samples.",
 				},
 				"conservatism": map[string]interface{}{
 					"type":        "number",
-					"description": "保守度（0.0-1.0），越低越保守，默认0.5",
+					"description": "Conservatism from 0.0 to 1.0; lower is more conservative and the default is 0.5.",
 				},
 			},
 			"required": []string{"mitre_id"},

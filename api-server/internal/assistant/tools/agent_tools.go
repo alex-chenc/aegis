@@ -23,7 +23,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		Domain:             assistant.DomainAgent,
 		Operation:          assistant.OpList,
 		Capability:         "list_running_processes",
-		Description:        "获取目标主机上正在运行的进程列表，包含 PID、用户、命令行、CPU/内存使用率",
+		Description:        "Get running processes on a target host, including PID, user, command line, CPU utilization, and memory utilization.",
 		Aliases:            []string{"进程列表", "运行进程", "list processes"},
 		Tags:               []string{"v5.5", "agent", "process", "forensics"},
 		ObjectTypes:        []string{"host"},
@@ -35,7 +35,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id": map[string]interface{}{"type": "string", "description": "目标主机 ID"},
+				"host_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact target host UUID."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -56,7 +56,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		Domain:             assistant.DomainAgent,
 		Operation:          assistant.OpGet,
 		Capability:         "get_process_tree",
-		Description:        "获取目标主机的进程树，展示指定 PID 的父子进程关系；未提供 pid 时默认使用 PID 1",
+		Description:        "Get the process tree for a target host and show parent-child relationships for a PID; defaults to PID 1.",
 		Aliases:            []string{"进程树", "process tree"},
 		Tags:               []string{"v5.5", "agent", "process", "forensics"},
 		ObjectTypes:        []string{"host"},
@@ -68,8 +68,8 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id": map[string]interface{}{"type": "string", "description": "目标主机 ID"},
-				"pid":     map[string]interface{}{"type": "number", "description": "进程 PID；可选，默认 1"},
+				"host_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact target host UUID."},
+				"pid":     map[string]interface{}{"type": "number", "description": "Optional process PID; defaults to 1."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -90,7 +90,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		Domain:             assistant.DomainAgent,
 		Operation:          assistant.OpList,
 		Capability:         "list_network_connections",
-		Description:        "获取目标主机的网络连接列表，包含源/目的 IP、端口、状态；可选传 pid 按进程过滤",
+		Description:        "Get network connections on a target host, including source and destination addresses, ports, and state, with an optional PID filter.",
 		Aliases:            []string{"网络连接", "网络状态", "list connections"},
 		Tags:               []string{"v5.5", "agent", "network", "forensics"},
 		ObjectTypes:        []string{"host"},
@@ -102,8 +102,8 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id": map[string]interface{}{"type": "string", "description": "目标主机 ID"},
-				"pid":     map[string]interface{}{"type": "number", "description": "进程 PID；可选，不传则返回全量连接"},
+				"host_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact target host UUID."},
+				"pid":     map[string]interface{}{"type": "number", "description": "Optional process PID; omit it to return all connections."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -124,7 +124,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		Domain:             assistant.DomainAgent,
 		Operation:          assistant.OpList,
 		Capability:         "list_open_files",
-		Description:        "获取目标主机上打开的文件列表",
+		Description:        "Get the list of open files on a target host.",
 		Aliases:            []string{"打开文件", "文件句柄", "open files"},
 		Tags:               []string{"v5.5", "agent", "file", "forensics"},
 		ObjectTypes:        []string{"host"},
@@ -136,7 +136,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id": map[string]interface{}{"type": "string", "description": "目标主机 ID"},
+				"host_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact target host UUID."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -157,7 +157,7 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		Domain:             assistant.DomainAgent,
 		Operation:          assistant.OpSearch,
 		Capability:         "query_historical_logs",
-		Description:        "查询目标主机的历史日志，支持时间范围和关键字过滤",
+		Description:        "Query historical logs from a target host with optional time-range and keyword filters.",
 		Aliases:            []string{"日志查询", "历史日志", "query logs"},
 		Tags:               []string{"v5.5", "agent", "log", "forensics"},
 		ObjectTypes:        []string{"host"},
@@ -169,10 +169,10 @@ func RegisterAgentTools(registry *assistant.ToolRegistry, deps AgentToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id":    map[string]interface{}{"type": "string", "description": "目标主机 ID"},
-				"start_time": map[string]interface{}{"type": "string", "description": "开始时间（RFC3339）"},
-				"end_time":   map[string]interface{}{"type": "string", "description": "结束时间（RFC3339）"},
-				"keyword":    map[string]interface{}{"type": "string", "description": "搜索关键字"},
+				"host_id":    map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact target host UUID."},
+				"start_time": map[string]interface{}{"type": "string", "format": "date-time", "description": "Inclusive RFC3339 start time."},
+				"end_time":   map[string]interface{}{"type": "string", "format": "date-time", "description": "Inclusive RFC3339 end time."},
+				"keyword":    map[string]interface{}{"type": "string", "description": "Log search keyword."},
 			},
 			"required": []string{"host_id"},
 		},

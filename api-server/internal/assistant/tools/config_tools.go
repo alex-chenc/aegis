@@ -21,7 +21,7 @@ func RegisterConfigTools(registry *assistant.ToolRegistry, deps ConfigToolDeps) 
 		Domain:             "config",
 		Operation:          "get",
 		Capability:         "get_system_config",
-		Description:        "获取系统配置信息，支持按配置键查询",
+		Description:        "Get system configuration, optionally by an exact configuration key.",
 		ModelDescription:   "Get system configuration values, optionally restricted to one configuration key.",
 		Risk:               assistant.ToolRiskLow,
 		Enabled:            true,
@@ -29,7 +29,7 @@ func RegisterConfigTools(registry *assistant.ToolRegistry, deps ConfigToolDeps) 
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"config_key": map[string]interface{}{"type": "string", "description": "配置键名称"},
+				"config_key": map[string]interface{}{"type": "string", "description": "Exact configuration key name."},
 			},
 			"required": []string{"config_key"},
 		},

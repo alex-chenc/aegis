@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -102,20 +103,102 @@ func (f *fakeSessionRepo) IncrementToolCallCount(_ context.Context, _ string) er
 func (f *fakeSessionRepo) IncrementApprovalCount(_ context.Context, _ string) error  { return nil }
 func (f *fakeSessionRepo) Delete(_ context.Context, _ string) error                  { return nil }
 
+// fakeSystemConfigQuerier implements SystemConfigQuerier for tests.
+type fakeSystemConfigQuerier struct {
+	configs map[string]*model.SystemConfig
+}
+
+func (f *fakeSystemConfigQuerier) GetByKey(key string) (*model.SystemConfig, error) {
+	if cfg, ok := f.configs[key]; ok {
+		return cfg, nil
+	}
+	return nil, fmt.Errorf("config key %s not found", key)
+}
+
+func (f *fakeSystemConfigQuerier) Upsert(key string, value interface{}, description, category string) error {
+	b, _ := json.Marshal(value)
+	f.configs[key] = &model.SystemConfig{
+		ConfigKey:   key,
+		ConfigValue: b,
+		Description: description,
+		Category:    category,
+	}
+	return nil
+}
+
+// fakeApprovalRepo implements repository.AssistantApprovalRepository for tests.
+type fakeApprovalRepo struct {
+	approvals map[string]*model.AssistantApproval
+}
+
+func newFakeApprovalRepo() *fakeApprovalRepo {
+	return &fakeApprovalRepo{approvals: make(map[string]*model.AssistantApproval)}
+}
+
+func (f *fakeApprovalRepo) Create(_ context.Context, approval *model.AssistantApproval) error {
+	f.approvals[approval.ApprovalID] = approval
+	return nil
+}
+func (f *fakeApprovalRepo) FindByApprovalID(_ context.Context, approvalID string) (*model.AssistantApproval, error) {
+	if a, ok := f.approvals[approvalID]; ok {
+		return a, nil
+	}
+	return nil, fmt.Errorf("approval %s not found", approvalID)
+}
+func (f *fakeApprovalRepo) ListBySession(_ context.Context, _ string, _, _ int) ([]model.AssistantApproval, int64, error) {
+	return nil, 0, nil
+}
+func (f *fakeApprovalRepo) ListPending(_ context.Context, _ string) ([]model.AssistantApproval, error) {
+	return nil, nil
+}
+func (f *fakeApprovalRepo) MarkApproved(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeApprovalRepo) MarkRejected(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeApprovalRepo) MarkExecuted(_ context.Context, _ string) error       { return nil }
+func (f *fakeApprovalRepo) MarkFailed(_ context.Context, _, _ string) error      { return nil }
+func (f *fakeApprovalRepo) MarkExpired(_ context.Context, _ string) error        { return nil }
+
 // --- tests ---
 
 func newTestToolDispatcher(t *testing.T, registry *ToolRegistry) (*ToolDispatcher, *fakeToolCallRepo) {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
 	approvalGate := NewApprovalGate(ApprovalGateDeps{
-		RiskPolicy: NewRiskPolicy(RiskPolicyDeps{}),
-		Logger:     logger,
+		ApprovalRepo: newFakeApprovalRepo(),
+		RiskPolicy:   NewRiskPolicy(RiskPolicyDeps{}),
+		Logger:       logger,
 	})
 	toolCallRepo := &fakeToolCallRepo{}
 	sessionRepo := &fakeSessionRepo{}
 	policyService := NewToolPolicyService(ToolPolicyServiceDeps{
 		Registry: registry,
 		Logger:   logger,
+	})
+	dispatcher := NewToolDispatcher(registry, approvalGate, toolCallRepo, sessionRepo, policyService, logger)
+	return dispatcher, toolCallRepo
+}
+
+func newTestToolDispatcherWithMode(t *testing.T, registry *ToolRegistry, mode string) (*ToolDispatcher, *fakeToolCallRepo) {
+	t.Helper()
+	logger, _ := zap.NewDevelopment()
+	approvalGate := NewApprovalGate(ApprovalGateDeps{
+		ApprovalRepo: newFakeApprovalRepo(),
+		RiskPolicy:   NewRiskPolicy(RiskPolicyDeps{}),
+		Logger:       logger,
+	})
+	toolCallRepo := &fakeToolCallRepo{}
+	sessionRepo := &fakeSessionRepo{}
+	modeJSON, _ := json.Marshal(mode)
+	policyService := NewToolPolicyService(ToolPolicyServiceDeps{
+		Registry: registry,
+		SystemConfig: &fakeSystemConfigQuerier{
+			configs: map[string]*model.SystemConfig{
+				"assistant.tool_approval_mode": {
+					ConfigKey:   "assistant.tool_approval_mode",
+					ConfigValue: modeJSON,
+				},
+			},
+		},
+		Logger: logger,
 	})
 	dispatcher := NewToolDispatcher(registry, approvalGate, toolCallRepo, sessionRepo, policyService, logger)
 	return dispatcher, toolCallRepo
@@ -891,6 +974,151 @@ func TestGatewayPlanArgsOverrideLLMArgs(t *testing.T) {
 	}
 }
 
+func TestGatewayFixedPlanArgsDiscardUnknownModelFields(t *testing.T) {
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		ExecutionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{{
+			StepID:   "authorized_02",
+			ToolName: "Baseline.Compliance.Run",
+			Args: map[string]interface{}{
+				"target_scope":      "all_online_hosts",
+				"template_selector": "cis-ubuntu",
+				"scope":             "all_rules",
+			},
+		}}},
+	})
+
+	prepared, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "authorized_02",
+		ToolName: "Baseline.Compliance.Run",
+		Args: map[string]interface{}{
+			"host_ids":       []string{"host-1"},
+			"baseline_name":  "legacy-name",
+			"auto_remediate": true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"host_ids", "baseline_name", "auto_remediate"} {
+		if _, exists := prepared.Args[forbidden]; exists {
+			t.Fatalf("fixed plan retained unauthorized model field %q: %#v", forbidden, prepared.Args)
+		}
+	}
+}
+
+func TestGatewayPrepareUsesInvocationFilters(t *testing.T) {
+	registry := newInvocationFilterTestRegistry(t)
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		SessionID:  "session-1",
+		MessageID:  "message-1",
+		RunID:      "run-1",
+	})
+
+	prepared, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "step-1",
+		ToolName: "Host.Resolve",
+		Args:     map[string]interface{}{"selector": "live"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Args["target_scope"] != "all_online_hosts" || prepared.Args["require_online"] != true {
+		t.Fatalf("gateway did not use the invocation filter result: %#v", prepared.Args)
+	}
+}
+
+func TestGatewayRejectsToolOutsideMappedStep(t *testing.T) {
+	registry := NewToolRegistry()
+	for _, name := range []string{"Example.Allowed", "Example.Invented"} {
+		if err := registry.Register(&ToolSpec{
+			Name:       name,
+			Domain:     DomainSystem,
+			Operation:  OpGet,
+			Capability: strings.ToLower(strings.ReplaceAll(name, ".", "_")),
+			Risk:       ToolRiskReadonly,
+			Enabled:    true,
+			ExposurePolicy: ToolExposurePolicy{
+				Exposure:       ToolExposurePrimary,
+				Discoverable:   true,
+				DirectCallable: true,
+			},
+			ArgsSchema: map[string]interface{}{"type": "object"},
+			Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+				return map[string]interface{}{"ok": true}, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		Dispatcher: dispatcher,
+		ExecutionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{{
+			StepID:     "authorized_01",
+			ToolName:   "Example.Allowed",
+			Capability: "example_allowed",
+		}}},
+	})
+
+	_, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "authorized_01",
+		ToolName: "Example.Invented",
+		Args:     map[string]interface{}{},
+	})
+	if err == nil {
+		t.Fatal("runtime must not replace the Mapping-bound tool")
+	}
+}
+
+func TestToolDispatcherRejectsInvalidArgsBeforeDurableCall(t *testing.T) {
+	registry := NewToolRegistry()
+	handlerCalls := 0
+	if err := registry.Register(&ToolSpec{
+		Name:      "Example.Strict",
+		Domain:    DomainSystem,
+		Operation: OpGet,
+		Risk:      ToolRiskReadonly,
+		Enabled:   true,
+		ExposurePolicy: ToolExposurePolicy{
+			Exposure:       ToolExposurePrimary,
+			Discoverable:   true,
+			DirectCallable: true,
+		},
+		ArgsSchema: map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{"query": map[string]interface{}{"type": "string"}},
+			"required":             []interface{}{"query"},
+			"additionalProperties": false,
+		},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			handlerCalls++
+			return map[string]interface{}{"ok": true}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatcher, toolCalls := newTestToolDispatcher(t, registry)
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		MessageID: "message-1",
+		ToolName:  "Example.Strict",
+		Args:      map[string]interface{}{"expression": "all"},
+	})
+	if err == nil {
+		t.Fatalf("expected pre-invocation rejection, got result %#v", result)
+	}
+	if handlerCalls != 0 {
+		t.Fatalf("invalid arguments invoked handler %d times", handlerCalls)
+	}
+	if toolCalls.createdCall != nil || len(toolCalls.calls) != 0 {
+		t.Fatalf("invalid arguments created a durable tool call: %#v", toolCalls.calls)
+	}
+}
+
 func TestGatewayUsesStepIDForRepeatedToolArgs(t *testing.T) {
 	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
 		ExecutionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{
@@ -914,6 +1142,24 @@ func TestGatewayUsesStepIDForRepeatedToolArgs(t *testing.T) {
 
 func TestGatewayPrepareDoesNotInferScenarioArgsFromPriorCalls(t *testing.T) {
 	registry := NewToolRegistry()
+	if err := registry.Register(&ToolSpec{
+		Name:      "Example.Apply",
+		Domain:    DomainSystem,
+		Operation: OpExecute,
+		Risk:      ToolRiskLow,
+		Enabled:   true,
+		ArgsSchema: map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{"resource_id": map[string]interface{}{"type": "string"}},
+			"required":             []interface{}{"resource_id"},
+			"additionalProperties": false,
+		},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	dispatcher, toolRepo := newTestToolDispatcher(t, registry)
 	toolRepo.calls = []model.AssistantToolCall{{
 		SessionID: "session-1", MessageID: "msg-1", ToolName: "Example.Discover",
@@ -979,5 +1225,152 @@ func TestGatewayNilPlanDoesNotAffectArgs(t *testing.T) {
 	}
 	if receivedArgs["status"] != "online" {
 		t.Fatalf("expected status=online from LLM, got %v", receivedArgs["status"])
+	}
+}
+
+func TestGatewayRequiresMappedPlanAndStepInAssistantMode(t *testing.T) {
+	gateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		RequireMappedPlan: true,
+	})
+	if _, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		StepID:   "step_1",
+		ToolName: "Host.List",
+	}); err == nil {
+		t.Fatal("assistant mode must reject a tool request without a Mapping-bound plan")
+	}
+
+	gateway = NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
+		RequireMappedPlan: true,
+		ExecutionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{{
+			StepID:   "step_1",
+			ToolName: "Host.List",
+		}}},
+	})
+	if _, err := gateway.Prepare(context.Background(), agentruntime.ToolRequest{
+		ToolName: "Host.List",
+	}); err == nil {
+		t.Fatal("assistant mode must reject a mapped tool request without step_id")
+	}
+}
+
+// TestToolDispatcher_RequiresApprovalTriggersApprovalInWhitelistMode verifies that
+// a tool flagged RequiresApproval: true still triggers an approval request when the
+// approval mode is the default whitelist (no full_access override). This guards
+// against accidentally dropping the tool-level approval override.
+func TestToolDispatcher_RequiresApprovalTriggersApprovalInWhitelistMode(t *testing.T) {
+	registry := NewToolRegistry()
+	_ = registry.Register(&ToolSpec{
+		Name:               "Requires.Approval.Tool",
+		Risk:               ToolRiskMedium,
+		RequiresApproval:   true,
+		DefaultWhitelisted: false,
+		Enabled:            true,
+		ExposurePolicy: ToolExposurePolicy{
+			DirectCallable: true,
+		},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"result": "ok"}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcher(t, registry)
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID: "test-session",
+		ToolName:  "Requires.Approval.Tool",
+		Args:      map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.ApprovalRequired {
+		t.Fatalf("expected RequiresApproval tool to trigger approval in whitelist mode, got direct execution")
+	}
+	if result.ApprovalID == "" {
+		t.Fatalf("expected non-empty approval ID")
+	}
+}
+
+// TestToolDispatcher_FullAccessBypassesApprovalForRequiresApprovalTool verifies the
+// core regression: when approval mode is full_access, a tool flagged
+// RequiresApproval: true executes directly without creating an approval.
+func TestToolDispatcher_FullAccessBypassesApprovalForRequiresApprovalTool(t *testing.T) {
+	registry := NewToolRegistry()
+	_ = registry.Register(&ToolSpec{
+		Name:               "Requires.Approval.Tool",
+		Risk:               ToolRiskHigh,
+		RequiresApproval:   true,
+		DefaultWhitelisted: false,
+		Enabled:            true,
+		ExposurePolicy: ToolExposurePolicy{
+			DirectCallable: true,
+		},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"result": "ok"}, nil
+		},
+	})
+
+	dispatcher, _ := newTestToolDispatcherWithMode(t, registry, model.ApprovalModeFullAccess)
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID: "test-session",
+		ToolName:  "Requires.Approval.Tool",
+		Args:      map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ApprovalRequired {
+		t.Fatalf("full_access must not require approval for RequiresApproval tool, got ApprovalRequired=true (id=%s)", result.ApprovalID)
+	}
+	if !result.Success {
+		t.Fatalf("expected direct execution success in full_access mode, got failure: %s", result.Error)
+	}
+}
+
+func TestToolDispatcherUsesRunApprovalModeSnapshot(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.Register(&ToolSpec{
+		Name:               "Snapshot.HighRisk.Tool",
+		Risk:               ToolRiskHigh,
+		RequiresApproval:   true,
+		DefaultWhitelisted: false,
+		Enabled:            true,
+		ExposurePolicy:     ToolExposurePolicy{DirectCallable: true},
+		Handler: func(context.Context, map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"result": "ok"}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatcher, _ := newTestToolDispatcherWithMode(t, registry, model.ApprovalModeWhitelist)
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID:    "test-session",
+		RunID:        "run-full-access",
+		ToolName:     "Snapshot.HighRisk.Tool",
+		Args:         map[string]interface{}{},
+		ApprovalMode: model.ApprovalModeFullAccess,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ApprovalRequired || !result.Success {
+		t.Fatalf("run full-access snapshot must execute directly: %#v", result)
+	}
+
+	dispatcher, _ = newTestToolDispatcherWithMode(t, registry, model.ApprovalModeFullAccess)
+	result, err = dispatcher.Dispatch(context.Background(), DispatchRequest{
+		SessionID:    "test-session",
+		RunID:        "run-whitelist",
+		ToolName:     "Snapshot.HighRisk.Tool",
+		Args:         map[string]interface{}{},
+		ApprovalMode: model.ApprovalModeWhitelist,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ApprovalRequired {
+		t.Fatalf("run whitelist snapshot must remain approval-gated: %#v", result)
 	}
 }

@@ -18,7 +18,7 @@ func TestIntentBreakdownRejectsCapabilityOutsideRuntimeCatalog(t *testing.T) {
 		Operation:  "execute",
 	}}
 
-	if err := validateIntentBreakdownAgainstCatalog(breakdown, catalog); err == nil {
+	if err := validateIntentBreakdownAgainstCatalog(breakdown, catalog, nil); err == nil {
 		t.Fatal("capability outside the runtime catalog must be rejected")
 	}
 }

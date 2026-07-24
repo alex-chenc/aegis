@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"api-server/internal/model"
@@ -12,20 +14,41 @@ import (
 	"go.uber.org/zap"
 )
 
+// capturedStepOutcome holds the reference-bearing fields extracted from a prior
+// step's tool outcome. It is the deterministic source for binding a downstream
+// step's previous_step arguments, so the model never has to regenerate values
+// like operation_id, scan_id, query_id or task_id.
+type capturedStepOutcome struct {
+	operationRef map[string]string
+	sideEffects  []map[string]interface{}
+	terminal     bool
+}
+
 // AssistantToolGatewayAdapter 适配 agent-runtime ToolGateway 接口
 // 将 agent-runtime 的工具调用桥接到 assistant 的 ToolDispatcher
 type AssistantToolGatewayAdapter struct {
-	dispatcher *ToolDispatcher
-	sessionID  string
-	messageID  string
-	runID      string
-	operator   string
-	logger     *zap.Logger
-	runManager *RunManager
+	dispatcher        *ToolDispatcher
+	sessionID         string
+	messageID         string
+	runID             string
+	operator          string
+	approvalMode      string
+	requireMappedPlan bool
+	logger            *zap.Logger
+	runManager        *RunManager
 
 	// executionPlan is retained for non-Assistant compatibility callers that
 	// explicitly supply a fixed plan. Pure-agent Assistant runs always leave it nil.
 	executionPlan *ToolExecutionPlan
+
+	// priorStepOutcomes captures each Mapping-bound step's extracted operation
+	// and side-effect references, keyed by step_id. It is the deterministic
+	// binding source for downstream steps whose required arguments declare a
+	// previous_step source. The runtime executes Mapping-bound steps in
+	// dependency order, so a producer's outcome is always captured before its
+	// consumer's Prepare runs.
+	priorStepOutcomes map[string]capturedStepOutcome
+	outcomesMu        sync.Mutex
 
 	// 回调函数，用于 SSE 事件推送
 	onToolCall        func(callID, toolName string, args interface{})
@@ -42,6 +65,8 @@ type AssistantToolGatewayConfig struct {
 	MessageID         string
 	RunID             string
 	Operator          string
+	ApprovalMode      string
+	RequireMappedPlan bool
 	Logger            *zap.Logger
 	RunManager        *RunManager
 	UserInput         string
@@ -56,15 +81,22 @@ type AssistantToolGatewayConfig struct {
 
 // NewAssistantToolGatewayAdapter 创建适配器
 func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantToolGatewayAdapter {
+	approvalMode := strings.TrimSpace(cfg.ApprovalMode)
+	if approvalMode != "" {
+		approvalMode = normalizeAssistantApprovalMode(approvalMode)
+	}
 	return &AssistantToolGatewayAdapter{
 		dispatcher:        cfg.Dispatcher,
 		sessionID:         cfg.SessionID,
 		messageID:         cfg.MessageID,
 		runID:             cfg.RunID,
 		operator:          cfg.Operator,
+		approvalMode:      cfg.ApprovalMode,
+		requireMappedPlan: cfg.RequireMappedPlan,
 		logger:            cfg.Logger,
 		runManager:        cfg.RunManager,
 		executionPlan:     cfg.ExecutionPlan,
+		priorStepOutcomes: make(map[string]capturedStepOutcome),
 		onToolCall:        cfg.OnToolCall,
 		onToolResult:      cfg.OnToolResult,
 		onToolError:       cfg.OnToolError,
@@ -91,8 +123,10 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		pollAttempt = req.Context["agent_runtime_poll_attempt"]
 	}
 
-	if cachedResp, ok := a.reuseSuccessfulReadonlyToolCall(ctx, req, args, startedAt); ok {
-		return cachedResp, nil
+	if !asyncPoll {
+		if cachedResp, ok := a.reuseSuccessfulReadonlyToolCall(ctx, req, args, startedAt); ok {
+			return cachedResp, nil
+		}
 	}
 
 	// 通知工具调用开始
@@ -102,14 +136,16 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 
 	// 通过 ToolDispatcher 调度执行
 	result, err := a.dispatcher.Dispatch(ctx, DispatchRequest{
-		SessionID: a.sessionID,
-		MessageID: a.messageID,
-		RunID:     a.runID,
-		CallID:    req.CallID,
-		ToolName:  req.ToolName,
-		Args:      args,
-		Operator:  a.operator,
-		Polling:   asyncPoll,
+		SessionID:    a.sessionID,
+		MessageID:    a.messageID,
+		RunID:        a.runID,
+		StepID:       req.StepID,
+		CallID:       req.CallID,
+		ToolName:     req.ToolName,
+		Args:         args,
+		Operator:     a.operator,
+		ApprovalMode: a.approvalMode,
+		Polling:      asyncPoll,
 	})
 
 	endedAt := time.Now()
@@ -165,6 +201,12 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		resultJSON, _ := json.Marshal(result.Data)
 		tool, _ := a.dispatcher.registry.Get(req.ToolName)
 		outcome := normalizeToolOutcome(tool, result.Data)
+		// Capture the operation/side-effect references so a downstream step can
+		// deterministically bind its previous_step arguments from this result.
+		// Captured on every successful call (including non-terminal Accepted and
+		// async poll refreshes) so the reference is available as soon as the
+		// producer returns it.
+		a.captureStepOutcome(req.StepID, req.ToolName, outcome)
 		a.logToolOutcome(req, outcome)
 		if a.onToolResult != nil && (!asyncPoll || outcome.Terminal) {
 			a.onToolResult(result.CallID, result.Data, outcome)
@@ -206,17 +248,67 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 	}, nil
 }
 
-// Prepare implements agentruntime.ToolRequestPreparer. It only applies
-// caller-supplied compatibility plan args before schema validation. Pure-agent
-// mode does not pass such a plan, so Runtime remains responsible for deriving
-// every business argument from user context and observed tool results.
+// Prepare implements agentruntime.ToolRequestPreparer. It applies authoritative
+// plan arguments, allowlisted normalization, and backend schema/business
+// validation before agent-runtime can treat the candidate as an executable
+// tool call.
 func (a *AssistantToolGatewayAdapter) Prepare(ctx context.Context, req agentruntime.ToolRequest) (agentruntime.ToolRequest, error) {
-	_ = ctx
+	if err := a.validateMappedToolSelection(req); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("assistant runtime attempted to replace a Mapping-bound tool",
+				zap.String("session_id", a.sessionID),
+				zap.String("run_id", a.runID),
+				zap.String("step_id", req.StepID),
+				zap.String("requested_tool", req.ToolName),
+				zap.Error(err),
+			)
+		}
+		return req, err
+	}
 	args := make(map[string]interface{}, len(req.Args)+4)
 	for key, value := range req.Args {
 		args[key] = value
 	}
 	args = a.applyPlanArgs(req.StepID, req.ToolName, args)
+	// Deterministically bind previous_step arguments from prior step outcomes
+	// captured during this run. This keeps operation/scan/query/task references
+	// fully backend-driven: the model never regenerates them. If a REQUIRED
+	// previous_step argument cannot be resolved (e.g. its producer step did not
+	// run or did not produce the reference), skip dispatch with a clear reason
+	// rather than letting schema validation reject a missing required argument.
+	args, skipReason := a.resolvePreviousStepArgs(req.StepID, req.ToolName, args)
+	if skipReason != "" {
+		if a.logger != nil {
+			a.logger.Info("assistant mapping step skipped: unresolvable previous_step dependency",
+				zap.String("session_id", a.sessionID),
+				zap.String("run_id", a.runID),
+				zap.String("step_id", req.StepID),
+				zap.String("tool_name", req.ToolName),
+				zap.String("reason", skipReason),
+			)
+		}
+		if req.Context == nil {
+			req.Context = make(map[string]string)
+		}
+		req.Context["aegis_prepared"] = "true"
+		req.Args = args
+		return req, fmt.Errorf("assistant step skipped: %s", skipReason)
+	}
+	if a.dispatcher != nil {
+		prepared, err := a.dispatcher.PrepareInvocation(ctx, ToolInvocationFilterRequest{
+			SessionID: a.sessionID,
+			MessageID: a.messageID,
+			RunID:     a.runID,
+			StepID:    req.StepID,
+			Phase:     ToolInvocationPhaseCandidate,
+			ToolName:  req.ToolName,
+			Args:      args,
+		})
+		if err != nil {
+			return req, err
+		}
+		args = prepared.Args
+	}
 
 	if req.Context == nil {
 		req.Context = make(map[string]string)
@@ -224,6 +316,43 @@ func (a *AssistantToolGatewayAdapter) Prepare(ctx context.Context, req agentrunt
 	req.Context["aegis_prepared"] = "true"
 	req.Args = args
 	return req, nil
+}
+
+// validateMappedToolSelection enforces the second half of the tool-election
+// invariant at the last pre-runtime boundary. A model may copy the one tool
+// bound to its current step, but it may not add or replace tool_name.
+func (a *AssistantToolGatewayAdapter) validateMappedToolSelection(req agentruntime.ToolRequest) error {
+	if a == nil || a.executionPlan == nil || len(a.executionPlan.Steps) == 0 {
+		if a != nil && a.requireMappedPlan {
+			return fmt.Errorf("assistant tool invocation requires a Mapping-bound execution plan")
+		}
+		return nil
+	}
+	if a.requireMappedPlan && strings.TrimSpace(req.StepID) == "" {
+		return fmt.Errorf("assistant tool invocation requires a Mapping-bound step_id")
+	}
+	if strings.TrimSpace(req.StepID) != "" {
+		for _, step := range a.executionPlan.Steps {
+			if step.StepID != req.StepID {
+				continue
+			}
+			if step.ToolName != req.ToolName {
+				return fmt.Errorf("tool %s is not the Mapping-bound tool for step %s", req.ToolName, req.StepID)
+			}
+			return nil
+		}
+		return fmt.Errorf("step %s is not present in the Mapping-bound execution plan", req.StepID)
+	}
+
+	// Compatibility callers may omit step_id only when the requested tool is
+	// still present in the mapped plan. Production fixed plans always provide
+	// step_id, including repeated uses of the same tool.
+	for _, step := range a.executionPlan.Steps {
+		if step.ToolName == req.ToolName {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool %s is not present in the Mapping-bound execution plan", req.ToolName)
 }
 
 func (a *AssistantToolGatewayAdapter) reuseSuccessfulReadonlyToolCall(ctx context.Context, req agentruntime.ToolRequest, args map[string]interface{}, startedAt time.Time) (agentruntime.ToolResponse, bool) {
@@ -280,6 +409,9 @@ func (a *AssistantToolGatewayAdapter) reuseSuccessfulReadonlyToolCall(ctx contex
 
 func canReuseAssistantToolResult(tool *ToolSpec) bool {
 	if tool == nil {
+		return false
+	}
+	if tool.ResultContract.OperationStatusField != "" && len(tool.ResultContract.PendingValues) > 0 {
 		return false
 	}
 	// 状态工具的返回值会随后台任务推进而变化，同一轮内也不能复用旧结果。
@@ -483,10 +615,191 @@ func (a *AssistantToolGatewayAdapter) applyPlanArgs(stepID, toolName string, arg
 	if matched == nil {
 		return args
 	}
+	// A fixed step is already authorized and fully bound by the backend.
+	// Returning only compiled arguments prevents legacy or invented model
+	// fields from surviving into strict schema validation.
+	compiled := make(map[string]interface{}, len(matched.Args))
 	for key, value := range matched.Args {
-		args[key] = value
+		compiled[key] = value
 	}
-	return args
+	return compiled
+}
+
+// captureStepOutcome records the operation and side-effect references extracted
+// from a successful tool outcome, keyed by step_id. Async polls refresh the
+// same entry until the operation reaches a terminal state; a previously
+// captured reference is retained when a later poll omits it.
+func (a *AssistantToolGatewayAdapter) captureStepOutcome(stepID, toolName string, outcome *agentruntime.ToolOutcome) {
+	if a == nil || outcome == nil || strings.TrimSpace(stepID) == "" {
+		return
+	}
+	captured := capturedStepOutcome{
+		operationRef: outcome.OperationRef,
+		sideEffects:  outcome.SideEffects,
+		terminal:     outcome.Terminal,
+	}
+	a.outcomesMu.Lock()
+	if existing, ok := a.priorStepOutcomes[stepID]; ok && len(captured.operationRef) == 0 {
+		captured.operationRef = existing.operationRef
+	}
+	a.priorStepOutcomes[stepID] = captured
+	a.outcomesMu.Unlock()
+	if a.logger != nil {
+		a.logger.Debug("assistant prior step outcome captured for binding",
+			zap.String("session_id", a.sessionID),
+			zap.String("run_id", a.runID),
+			zap.String("step_id", stepID),
+			zap.String("tool_name", toolName),
+			zap.Bool("terminal", captured.terminal),
+			zap.Strings("operation_ref_fields", refKeys(captured.operationRef)),
+		)
+	}
+}
+
+// resolvePreviousStepArgs deterministically binds arguments whose declared
+// source is previous_step. It matches the argument name against operation and
+// side-effect reference field names captured from prior step outcomes (most
+// recent first). It returns the resolved args and, when a REQUIRED previous_step
+// argument cannot be resolved, a non-empty skipReason so the caller can skip
+// dispatch instead of failing schema validation on a missing argument.
+func (a *AssistantToolGatewayAdapter) resolvePreviousStepArgs(stepID, toolName string, args map[string]interface{}) (map[string]interface{}, string) {
+	if a == nil || a.executionPlan == nil || len(a.executionPlan.Steps) == 0 {
+		return args, ""
+	}
+	step := a.findPlanStep(stepID, toolName)
+	if step == nil || len(step.ArgSources) == 0 {
+		return args, ""
+	}
+	tool, _ := a.dispatcher.registry.Get(toolName)
+	requiredSet := make(map[string]bool)
+	if tool != nil {
+		for _, name := range requiredArgsFromToolSchema(tool.ArgsSchema) {
+			requiredSet[name] = true
+		}
+	}
+
+	resolved := cloneInvocationArgs(args)
+	priorOutcomes := a.orderedPriorOutcomes(stepID)
+	var missingRequired []string
+	for argName, source := range step.ArgSources {
+		if !strings.EqualFold(strings.TrimSpace(source.SourceType), "previous_step") {
+			continue
+		}
+		// A previous_step argument is deterministically bound from the prior
+		// step's outcome. When a producer outcome is available it ALWAYS takes
+		// precedence over any model-supplied value, so the model can never
+		// regenerate or invent an operation/scan/query/task reference.
+		if value, ok := resolveRefFromOutcomes(priorOutcomes, argName); ok {
+			resolved[argName] = value
+			if a.logger != nil {
+				a.logger.Debug("assistant previous_step argument bound from prior step",
+					zap.String("session_id", a.sessionID),
+					zap.String("run_id", a.runID),
+					zap.String("step_id", stepID),
+					zap.String("tool_name", toolName),
+					zap.String("arg_name", argName),
+				)
+			}
+			continue
+		}
+		// No producer produced this reference. A required previous_step
+		// argument must not fall back to a model-invented value; skip the step
+		// so the gap is observable instead of silently dispatching bad input.
+		if requiredSet[argName] {
+			missingRequired = append(missingRequired, argName)
+		}
+	}
+	if len(missingRequired) == 0 {
+		return resolved, ""
+	}
+	sort.Strings(missingRequired)
+	return resolved, "missing previous_step argument(s): " + strings.Join(missingRequired, ", ")
+}
+
+// findPlanStep returns the Mapping-bound plan step for the given step_id (and
+// tool name when available). The runtime always supplies step_id for fixed
+// plans, so an exact step_id match is preferred; tool name is a fallback for
+// compatibility callers that omit it.
+func (a *AssistantToolGatewayAdapter) findPlanStep(stepID, toolName string) *ToolPlanStep {
+	if a.executionPlan == nil {
+		return nil
+	}
+	if strings.TrimSpace(stepID) != "" {
+		for _, step := range a.executionPlan.Steps {
+			if step.StepID == stepID {
+				if toolName == "" || step.ToolName == toolName {
+					stepCopy := step
+					return &stepCopy
+				}
+			}
+		}
+	}
+	for _, step := range a.executionPlan.Steps {
+		if toolName != "" && step.ToolName == toolName {
+			stepCopy := step
+			return &stepCopy
+		}
+	}
+	return nil
+}
+
+// orderedPriorOutcomes returns captured prior step outcomes in plan order,
+// excluding the current step's own outcome. The runtime executes Mapping-bound
+// steps in dependency order, so this naturally yields only previously executed
+// producers.
+func (a *AssistantToolGatewayAdapter) orderedPriorOutcomes(currentStepID string) []capturedStepOutcome {
+	if a == nil || a.executionPlan == nil {
+		return nil
+	}
+	a.outcomesMu.Lock()
+	defer a.outcomesMu.Unlock()
+	var ordered []capturedStepOutcome
+	for _, step := range a.executionPlan.Steps {
+		if step.StepID == currentStepID {
+			continue
+		}
+		if outcome, ok := a.priorStepOutcomes[step.StepID]; ok {
+			ordered = append(ordered, outcome)
+		}
+	}
+	return ordered
+}
+
+// resolveRefFromOutcomes searches captured prior step outcomes (most recent
+// first) for an operation or side-effect reference whose field name matches
+// argName. The discriminator "type" key is ignored.
+func resolveRefFromOutcomes(outcomes []capturedStepOutcome, argName string) (string, bool) {
+	for i := len(outcomes) - 1; i >= 0; i-- {
+		outcome := outcomes[i]
+		if outcome.operationRef != nil {
+			if value, ok := outcome.operationRef[argName]; ok && value != "" {
+				return value, true
+			}
+		}
+		for _, sideEffect := range outcome.sideEffects {
+			if value, ok := sideEffect[argName]; ok {
+				if s, _ := value.(string); s != "" {
+					return s, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func refKeys(ref map[string]string) []string {
+	if len(ref) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(ref))
+	for key := range ref {
+		if key == "type" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func resultDataItems(result map[string]interface{}) []map[string]interface{} {

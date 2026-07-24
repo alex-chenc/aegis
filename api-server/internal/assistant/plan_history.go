@@ -21,6 +21,8 @@ func extractPlanFromEvents(events []AssistantEvent) datatypes.JSON {
 			applyStepStatusToPlan(plan, event.Payload, "failed")
 		case EventStepRetrying:
 			applyStepStatusToPlan(plan, event.Payload, "retrying")
+		case EventStepSkipped:
+			applyStepStatusToPlan(plan, event.Payload, "skipped")
 		}
 	}
 

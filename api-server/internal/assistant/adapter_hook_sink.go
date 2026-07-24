@@ -135,6 +135,11 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 
 	case agentruntime.HookStepSkipped:
 		stepTitle := findAssistantStepTitle(event, event.StepID)
+		s.publish(EventStepSkipped, map[string]interface{}{
+			"step_id": event.StepID,
+			"title":   stepTitle,
+			"status":  "skipped",
+		})
 		s.publish(EventThinking, map[string]interface{}{
 			"content": fmt.Sprintf(localized(s.locale, "已跳过步骤: %s", "Skipped step: %s"), stepTitle),
 		})
@@ -153,27 +158,21 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 	// --- 工具调用 ---
 
 	case agentruntime.HookToolCallStarted:
-		// 工具调用开始事件已由 ToolGatewayAdapter 回调处理
-		// 这里仅发送 thinking 事件
-		payload := toMap(event.Payload)
-		toolName, _ := payload["tool_name"].(string)
-		callID, _ := payload["call_id"].(string)
-		s.publish(EventThinking, map[string]interface{}{
-			"content":   fmt.Sprintf(localized(s.locale, "正在调用工具: %s", "Calling tool: %s"), toolName),
-			"call_id":   callID,
-			"tool_name": toolName,
-		})
+		// A runtime hook is emitted for a model candidate before gateway
+		// preparation and validation. The ToolGatewayAdapter publishes the
+		// official call only after that boundary succeeds.
 
 	case agentruntime.HookToolCallFinished:
-		// 正常网关结果由 ToolGatewayAdapter 发布。只有在进入网关前发生
-		// 的 descriptor/args/policy/step scope 校验失败需要在这里补发。
+		// Normal gateway results are published by ToolGatewayAdapter.
+		// Pre-gateway validation failures are internal recovery evidence rather
+		// than durable/user-visible tool calls.
 		payload := toMap(event.Payload)
 		validationStage, _ := payload["validation_stage"].(string)
 		if validationStage != "" {
 			if s.logger != nil {
 				toolName, _ := payload["tool_name"].(string)
 				callID, _ := payload["call_id"].(string)
-				s.logger.Warn("assistant runtime tool call rejected before gateway",
+				s.logger.Debug("assistant runtime tool candidate rejected before gateway",
 					zap.String("session_id", s.sessionID),
 					zap.String("run_id", s.runID),
 					zap.String("step_id", event.StepID),
@@ -182,12 +181,6 @@ func (s *AssistantHookSink) Handle(ctx context.Context, event agentruntime.HookE
 					zap.String("validation_stage", validationStage),
 				)
 			}
-			s.publish(EventToolError, map[string]interface{}{
-				"call_id":          payload["call_id"],
-				"tool_name":        payload["tool_name"],
-				"error":            payload["error_message"],
-				"validation_stage": validationStage,
-			})
 		}
 
 	// --- 审计 ---

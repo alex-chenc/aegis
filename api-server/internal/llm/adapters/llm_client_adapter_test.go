@@ -81,6 +81,39 @@ func TestCompleteForwardsRuntimeJSONSchemaAndFallsBackOnce(t *testing.T) {
 	}
 }
 
+func TestCompleteEnforcesJSONModeForFinalSummary(t *testing.T) {
+	var captured llm.ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"final_answer\":\"任务未执行。\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	client := llm.NewLLMClient("test-key", server.URL+"/v1", "test-model", 30, 1)
+	adapter := NewLLMClientAdapter(client, nil)
+	response, err := adapter.Complete(context.Background(), agentruntime.LLMRequest{
+		TaskID:         "task-summary",
+		Purpose:        agentruntime.PurposeSummarize,
+		ResponseSchema: "final_summary",
+		Messages: []agentruntime.LLMMessage{
+			{Role: "system", Content: "Return the final answer."},
+			{Role: "user", Content: "Summarize the evidence."},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != `{"final_answer":"任务未执行。"}` {
+		t.Fatalf("summary content = %q", response.Content)
+	}
+	if captured.ResponseFormat == nil || captured.ResponseFormat.Type != "json_object" {
+		t.Fatalf("summary response_format = %#v, want json_object", captured.ResponseFormat)
+	}
+}
+
 func TestInjectAlertContext_WithEmptyMessages(t *testing.T) {
 	alertCtx := map[string]interface{}{
 		"rule_name": "test_rule",

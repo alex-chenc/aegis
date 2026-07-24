@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -158,9 +159,11 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 		}, nil
 	}
 
-	// This layer is an authorization boundary, not a workflow planner. Preserve
-	// the LLM-selected set exactly; agent-runtime is the only component allowed
-	// to order, repeat or conditionally execute these tools.
+	// TOOL ELECTION SECURITY INVARIANT:
+	// This exact capability Mapping plus hard-gate decision is the only place
+	// where an Assistant tool may enter an executable plan. agent-runtime must
+	// receive these Mapping-bound steps as its initial plan and must never run a
+	// second free tool_name election. Do not restore a dynamic-tool fallback.
 	steps := e.buildPlanSteps(dedupeStrings(accepted), input, breakdown)
 
 	e.logger.Info("assistant tool authorization completed",
@@ -183,6 +186,7 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 }
 
 func (e *ToolDecisionEngine) buildPlanSteps(names []string, input ToolDecisionInput, breakdown *IntentBreakdown) []ToolPlanStep {
+	names = orderDeterministicWorkflowTools(names)
 	steps := make([]ToolPlanStep, 0, len(names))
 	for _, name := range names {
 		if step, ok := e.newToolPlanStep(name, input, breakdown); ok {
@@ -200,6 +204,7 @@ func (e *ToolDecisionEngine) newToolPlanStep(name string, input ToolDecisionInpu
 	}
 	tool, _ := e.registry.Get(name)
 	args, argSources := bindPlanArgs(contract, input, breakdown)
+	applyBuiltinDeterministicPlanArgs(name, args, argSources, breakdown)
 	reason := decisionStepReason(tool, contract, input, breakdown)
 	return ToolPlanStep{
 		ToolName:         name,
@@ -211,13 +216,223 @@ func (e *ToolDecisionEngine) newToolPlanStep(name string, input ToolDecisionInpu
 		ArgSources:       argSources,
 		Preconditions:    contract.Preconditions,
 		Postconditions:   contract.Postconditions,
+		// Condition compiles the dependency into the plan artifact so the
+		// conditional execution graph is explicit. The runtime enforces it by
+		// skipping a step whose required previous_step arg cannot be resolved
+		// from a prior step's outcome (see AssistantToolGatewayAdapter).
+		Condition: previousStepCondition(tool, argSources),
 	}, true
+}
+
+// previousStepCondition renders the declared previous_step dependency of a step
+// into a human- and machine-readable condition. Only required args whose binding
+// source is previous_step are conditional: optional or statically-bound args do
+// not gate execution. The returned string is recorded on ToolPlanStep.Condition
+// and surfaced in the runtime step objective; it does not itself drive skipping.
+func previousStepCondition(tool *ToolSpec, argSources map[string]ArgSource) string {
+	if tool == nil || len(argSources) == 0 {
+		return ""
+	}
+	required := requiredArgsFromToolSchema(tool.ArgsSchema)
+	if len(required) == 0 {
+		return ""
+	}
+	requiredSet := make(map[string]bool, len(required))
+	for _, argName := range required {
+		requiredSet[argName] = true
+	}
+	var deps []string
+	for argName, source := range argSources {
+		if !requiredSet[argName] {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(source.SourceType), "previous_step") {
+			deps = append(deps, argName)
+		}
+	}
+	sort.Strings(deps)
+	if len(deps) == 0 {
+		return ""
+	}
+	return "requires previous step to produce: " + strings.Join(deps, ", ")
+}
+
+// orderDeterministicWorkflowTools only orders the V6.1 baseline workflow. The
+// generic agent path remains capability-driven and dynamic for every other
+// request. Host resolution must complete before the approved write operation,
+// while operation polling must follow it.
+func orderDeterministicWorkflowTools(names []string) []string {
+	if !containsExactString(names, "Baseline.Compliance.Run") {
+		return names
+	}
+	priority := []string{"Host.Resolve", "Baseline.Compliance.Run", "Operation.Get"}
+	ordered := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range priority {
+		for _, candidate := range names {
+			if candidate == name && !seen[candidate] {
+				ordered = append(ordered, candidate)
+				seen[candidate] = true
+			}
+		}
+	}
+	for _, name := range names {
+		if !seen[name] {
+			ordered = append(ordered, name)
+			seen[name] = true
+		}
+	}
+	return ordered
+}
+
+func containsExactString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// applyBuiltinDeterministicPlanArgs bridges validated intent fields to the
+// high-level baseline workflow. It intentionally covers only the narrow V6.1
+// contract whose scope, template and remediation policy can be represented
+// without model-selected UUID batches.
+func applyBuiltinDeterministicPlanArgs(toolName string, args map[string]interface{}, sources map[string]ArgSource, breakdown *IntentBreakdown) {
+	if breakdown == nil || args == nil || sources == nil {
+		return
+	}
+	targetScope, hasTargetScope := baselineOnlineTargetScope(breakdown)
+	switch toolName {
+	case "Host.Resolve":
+		if hasTargetScope {
+			args["target_scope"] = targetScope
+			args["require_online"] = true
+			sources["target_scope"] = ArgSource{SourceType: "intent_scope", SourceRef: breakdown.Scope.Kind, Confidence: 1}
+			sources["require_online"] = ArgSource{SourceType: "policy_default", SourceRef: "baseline_runtime_targets", Confidence: 1}
+		}
+	case "Baseline.Compliance.Run":
+		if hasTargetScope {
+			args["target_scope"] = targetScope
+			sources["target_scope"] = ArgSource{SourceType: "intent_scope", SourceRef: breakdown.Scope.Kind, Confidence: 1}
+		}
+		if selector := baselineTemplateSelector(breakdown); selector != "" {
+			args["template_selector"] = selector
+			sources["template_selector"] = ArgSource{SourceType: "intent_object", SourceRef: "baseline_template", Confidence: 1}
+		}
+		args["scope"] = "all_rules"
+		sources["scope"] = ArgSource{SourceType: "policy_default", SourceRef: "all_rules", Confidence: 1}
+		if remediation, ok := baselineRemediationPolicy(breakdown); ok {
+			args["remediation"] = remediation
+			sources["remediation"] = ArgSource{SourceType: "intent_parameters", SourceRef: "auto_remediate/remediation_rounds", Confidence: 1}
+		}
+	}
+}
+
+func baselineOnlineTargetScope(breakdown *IntentBreakdown) (string, bool) {
+	if breakdown == nil {
+		return "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(breakdown.Scope.Kind)) {
+	case "all_live_hosts", "live_hosts", "all_alive_hosts", "alive_hosts", "online_hosts", "all_online_hosts":
+		return "all_online_hosts", true
+	}
+	for _, object := range breakdown.Objects {
+		switch strings.ToLower(strings.TrimSpace(object.Type)) {
+		case "host", "machine", "server", "endpoint":
+		default:
+			continue
+		}
+		if isOnlineHostSelectorAlias(object.Selector) {
+			return "all_online_hosts", true
+		}
+	}
+	return "", false
+}
+
+func baselineTemplateSelector(breakdown *IntentBreakdown) string {
+	if breakdown == nil {
+		return ""
+	}
+	if value, ok := breakdown.Parameters["template_selector"]; ok {
+		if selector, ok := value.(string); ok && strings.TrimSpace(selector) != "" {
+			return strings.TrimSpace(selector)
+		}
+	}
+	for _, object := range breakdown.Objects {
+		switch strings.ToLower(strings.TrimSpace(object.Type)) {
+		case "baseline_template", "baseline", "benchmark", "compliance_baseline":
+		default:
+			continue
+		}
+		if strings.TrimSpace(object.ID) != "" {
+			return strings.TrimSpace(object.ID)
+		}
+		if strings.TrimSpace(object.Selector) != "" {
+			return strings.TrimSpace(object.Selector)
+		}
+	}
+	return ""
+}
+
+func baselineRemediationPolicy(breakdown *IntentBreakdown) (map[string]interface{}, bool) {
+	if breakdown == nil {
+		return nil, false
+	}
+	enabled, hasEnabled := boolIntentParameter(breakdown.Parameters, "auto_remediate", "auto_repair")
+	maxRounds := 0
+	if value, ok := firstIntentParameter(breakdown.Parameters, "remediation_rounds", "repair_rounds"); ok {
+		switch typed := value.(type) {
+		case float64:
+			maxRounds = int(typed)
+		case float32:
+			maxRounds = int(typed)
+		case int:
+			maxRounds = typed
+		case int64:
+			maxRounds = int(typed)
+		}
+	}
+	if !hasEnabled && maxRounds == 0 {
+		return nil, false
+	}
+	if maxRounds == 0 {
+		maxRounds = 3
+	}
+	return map[string]interface{}{"enabled": enabled, "max_rounds": maxRounds}, true
+}
+
+func boolIntentParameter(parameters IntentParameters, keys ...string) (bool, bool) {
+	value, ok := firstIntentParameter(parameters, keys...)
+	if !ok {
+		return false, false
+	}
+	typed, ok := value.(bool)
+	return typed, ok
+}
+
+func firstIntentParameter(parameters IntentParameters, keys ...string) (interface{}, bool) {
+	for _, key := range keys {
+		if value, ok := parameters[key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, breakdown *IntentBreakdown) ([]string, []string) {
 	names := make([]string, 0, 32)
+	unmatched := make([]string, 0)
 	if input.Intent.ExplicitToolName != "" {
-		names = append(names, input.Intent.ExplicitToolName)
+		// Explicit tool syntax is not a Mapping bypass. Round-trip the tool to
+		// its registered capability and back through the exact mapper. If that
+		// contract is unavailable, record an unmatched capability and fail
+		// closed instead of authorizing the raw tool_name.
+		if contract, ok := e.mapper.ContractForToolName(input.Intent.ExplicitToolName); ok {
+			names = append(names, e.mapper.ToolNamesForCapabilities([]string{contract.Capability})...)
+		} else {
+			unmatched = append(unmatched, "explicit_tool:"+strings.ToLower(strings.TrimSpace(input.Intent.ExplicitToolName)))
+		}
 	}
 	mapped := e.mapper.ToolNamesForCapabilities(breakdown.CandidateCapabilities)
 	names = append(names, mapped...)
@@ -229,7 +444,6 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 			capabilityMatched[strings.ToLower(contract.Capability)] = true
 		}
 	}
-	unmatched := make([]string, 0)
 	for _, capability := range breakdown.CandidateCapabilities {
 		key := strings.ToLower(strings.TrimSpace(capability))
 		if key != "" && !capabilityMatched[key] && len(e.mapper.ToolNamesForCapabilities([]string{capability})) == 0 {

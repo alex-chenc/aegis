@@ -35,6 +35,7 @@ const (
 	EventStepCompleted            = "step_completed"
 	EventStepFailed               = "step_failed"
 	EventStepRetrying             = "step_retrying"
+	EventStepSkipped              = "step_skipped"
 	EventToolCall                 = "tool_call"
 	EventToolResult               = "tool_result"
 	EventToolError                = "tool_error"

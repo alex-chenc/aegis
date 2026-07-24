@@ -98,6 +98,7 @@ type IntentBreakdown struct {
 	RequiresWrite         bool                   `json:"requires_write"`
 	RiskHint              string                 `json:"risk_hint"`
 	CandidateCapabilities []string               `json:"candidate_capabilities"`
+	WorkflowIDs           []string               `json:"workflow_ids,omitempty"`
 	NeedClarification     bool                   `json:"need_clarification"`
 	ClarifyingQuestion    string                 `json:"clarifying_question,omitempty"`
 	Reason                string                 `json:"reason"`
@@ -186,9 +187,11 @@ type EvidencePolicy struct {
 	MissingEvidenceBehavior string `json:"missing_evidence_behavior"`
 }
 
-// ToolExecutionPlan is a legacy type name. In the Assistant pure-agent flow it
-// is an authorization artifact only; its steps describe allowed tools and are
-// never forwarded as agent-runtime execution steps.
+// ToolExecutionPlan is the immutable result of capability Mapping and
+// authorization hard gates. Its steps are always forwarded as agent-runtime's
+// authoritative initial plan when tools are present. Runtime/model code may
+// execute a bound step but must never add, replace, or reorder tool_name outside
+// this artifact.
 type ToolExecutionPlan struct {
 	Goal                string               `json:"goal"`
 	NeedClarification   bool                 `json:"need_clarification"`

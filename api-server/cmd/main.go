@@ -136,6 +136,7 @@ func main() {
 	assistantMessageRepo := repository.NewAssistantMessageRepository(db)
 	assistantContextRefRepo := repository.NewAssistantContextRefRepository(db)
 	assistantToolCallRepo := repository.NewAssistantToolCallRepository(db)
+	assistantOperationRepo := repository.NewAssistantOperationRepository(db)
 	assistantApprovalRepo := repository.NewAssistantApprovalRepository(db)
 	assistantMemoryRepo := repository.NewAssistantMemoryRepository(db)
 	assistantToolPolicyRepo := repository.NewAssistantToolPolicyRepository(db)
@@ -465,13 +466,21 @@ func main() {
 		logger.Warn("failed to register notification tools", zap.Error(err))
 	}
 	// Baseline tools
-	if err := assistantTools.RegisterBaselineTools(toolRegistry, assistantTools.BaselineToolDeps{
+	baselineToolDeps := assistantTools.BaselineToolDeps{
 		TaskService:      taskService,
 		TemplateRepo:     templateRepo,
 		RuleRepo:         ruleRepo,
 		ScriptGenService: scriptGenService,
-	}); err != nil {
+		HostRepo:         hostRepo,
+		ServerClient:     serverClient,
+		OperationRepo:    assistantOperationRepo,
+		TaskLogRepo:      taskLogRepo,
+		Logger:           assistantLogger,
+	}
+	if err := assistantTools.RegisterBaselineTools(toolRegistry, baselineToolDeps); err != nil {
 		logger.Warn("failed to register baseline tools", zap.Error(err))
+	} else {
+		assistantTools.NewBaselineOperationWorker(baselineToolDeps).Start(ctx)
 	}
 	// Detection write tools
 	if err := assistantTools.RegisterDetectionWriteTools(toolRegistry, assistantTools.DetectionWriteToolDeps{AlertService: alertService}); err != nil {
@@ -489,6 +498,18 @@ func main() {
 	if err := assistantTools.RegisterSigmaRuleTools(toolRegistry, assistantTools.SigmaRuleToolDeps{SigmaRuleRepo: sigmaRuleRepo, RuleGenService: ruleGenerationService}); err != nil {
 		logger.Warn("failed to register sigma rule tools", zap.Error(err))
 	}
+	if err := toolRegistry.ValidateModelFacingEnglish(); err != nil {
+		logger.Fatal("assistant tool English contract validation failed", zap.Error(err))
+	}
+	// Enforce a 1:1 capability->tool policy at startup using the resolved
+	// capability (including synthetic capabilities), so Mapping can never select
+	// multiple implementations for one capability. This catches collisions the
+	// per-Register guard misses (tools with an empty Capability field that
+	// synthesize the same capability from domain+operation).
+	if err := toolRegistry.ValidateCapabilityUniqueness(); err != nil {
+		logger.Fatal("assistant tool capability uniqueness validation failed", zap.Error(err))
+	}
+	assistantLogger.Info("assistant tool capability uniqueness validated", zap.Int("total", toolRegistry.Count()))
 
 	assistantLogger.Info("all assistant tools registered", zap.Int("total", toolRegistry.Count()))
 

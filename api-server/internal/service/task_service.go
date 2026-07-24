@@ -33,8 +33,10 @@ type TaskService struct {
 }
 
 type TaskCreateResult struct {
-	TaskGroupID uuid.UUID
-	TaskIDs     []string
+	TaskGroupID   uuid.UUID
+	TaskIDs       []string
+	ExpectedCount int
+	CreatedCount  int
 }
 
 func NewTaskService(
@@ -85,6 +87,74 @@ type DispatchOptions struct {
 }
 
 func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostIDs []string, taskType string, opts *DispatchOptions, existingGroupID ...uuid.UUID) (*TaskCreateResult, error) {
+	taskType = strings.ToUpper(strings.TrimSpace(taskType))
+	if taskType != "CHECK" && taskType != "FIX" {
+		return nil, fmt.Errorf("task_type must be CHECK or FIX")
+	}
+	if len(ruleIDs) == 0 {
+		return nil, fmt.Errorf("at least one rule_id is required")
+	}
+	if len(hostIDs) == 0 {
+		return nil, fmt.Errorf("at least one host_id is required")
+	}
+	if s == nil || s.ruleRepo == nil || s.hostRepo == nil || s.taskLogRepo == nil {
+		return nil, fmt.Errorf("task dispatch dependencies are unavailable")
+	}
+
+	parsedRuleIDs, err := parseUniqueUUIDs(ruleIDs, "rule_id")
+	if err != nil {
+		return nil, err
+	}
+	parsedHostIDs, err := parseUniqueUUIDs(hostIDs, "host_id")
+	if err != nil {
+		return nil, err
+	}
+
+	autoVerify := false
+	maxRounds := 3
+	if opts != nil {
+		autoVerify = opts.AutoVerify
+		if opts.MaxRounds < 0 || opts.MaxRounds > 10 {
+			return nil, fmt.Errorf("max_rounds must be zero for the default or between 1 and 10")
+		}
+		if opts.MaxRounds > 0 {
+			maxRounds = opts.MaxRounds
+		}
+	}
+
+	type preparedRule struct {
+		id     uuid.UUID
+		script string
+	}
+	preparedRules := make([]preparedRule, 0, len(parsedRuleIDs))
+	for _, ruleID := range parsedRuleIDs {
+		rule, findErr := s.ruleRepo.FindByID(ruleID)
+		if findErr != nil {
+			return nil, fmt.Errorf("find rule %s: %w", ruleID, findErr)
+		}
+		var scriptContent, scriptStatus string
+		if taskType == "CHECK" {
+			if rule.GeneratedCheckScript != nil {
+				scriptContent = strings.TrimSpace(*rule.GeneratedCheckScript)
+			}
+			scriptStatus = rule.CheckScriptStatus
+		} else {
+			if rule.GeneratedFixScript != nil {
+				scriptContent = strings.TrimSpace(*rule.GeneratedFixScript)
+			}
+			scriptStatus = rule.FixScriptStatus
+		}
+		if scriptContent == "" || !strings.EqualFold(strings.TrimSpace(scriptStatus), "generated") {
+			return nil, fmt.Errorf("rule %s %s script is not ready", ruleID, taskType)
+		}
+		preparedRules = append(preparedRules, preparedRule{id: ruleID, script: scriptContent})
+	}
+	for _, hostID := range parsedHostIDs {
+		if _, findErr := s.hostRepo.FindByID(hostID); findErr != nil {
+			return nil, fmt.Errorf("find host %s: %w", hostID, findErr)
+		}
+	}
+
 	var taskGroupID uuid.UUID
 	if len(existingGroupID) > 0 && existingGroupID[0] != uuid.Nil {
 		taskGroupID = existingGroupID[0]
@@ -94,61 +164,22 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 	var taskIDs []string
 	now := time.Now()
 
-	autoVerify := false
-	maxRounds := 3
-	if opts != nil {
-		autoVerify = opts.AutoVerify
-		if opts.MaxRounds > 0 {
-			maxRounds = opts.MaxRounds
-		}
-	}
+	expectedCount := len(preparedRules) * len(parsedHostIDs)
+	logger.Info("creating deterministic task group",
+		zap.String("task_group_id", taskGroupID.String()),
+		zap.String("task_type", taskType),
+		zap.Int("rule_count", len(preparedRules)),
+		zap.Int("host_count", len(parsedHostIDs)),
+		zap.Int("expected_task_count", expectedCount),
+		zap.Bool("auto_verify", autoVerify),
+		zap.Int("max_rounds", maxRounds),
+	)
 
-	for _, ruleIDStr := range ruleIDs {
-		ruleID, err := uuid.Parse(ruleIDStr)
-		if err != nil {
-			logger.Error("invalid rule_id", zap.String("rule_id", ruleIDStr), zap.Error(err))
-			continue
-		}
-
-		rule, err := s.ruleRepo.FindByID(ruleID)
-		if err != nil {
-			logger.Error("failed to find rule", zap.String("rule_id", ruleIDStr), zap.Error(err))
-			continue
-		}
-
-		var scriptContent string
-		if taskType == "CHECK" {
-			if rule.GeneratedCheckScript != nil {
-				scriptContent = *rule.GeneratedCheckScript
-			}
-		} else {
-			if rule.GeneratedFixScript != nil {
-				scriptContent = *rule.GeneratedFixScript
-			}
-		}
-
-		if scriptContent == "" {
-			if s.scriptGenService != nil {
-				logger.Info("script not generated, queueing generation",
-					zap.String("rule_id", ruleIDStr),
-					zap.String("task_type", taskType),
-				)
-				if taskType == "CHECK" {
-					go s.scriptGenService.GenerateCheckScript(context.Background(), ruleID)
-				} else {
-					go s.scriptGenService.GenerateFixScript(context.Background(), ruleID)
-				}
-			}
-			scriptContent = fmt.Sprintf("# Script generation in progress for %s\n# Please retry in a few seconds\n", taskType)
-		}
-
-		for _, hostIDStr := range hostIDs {
-			hostID, err := uuid.Parse(hostIDStr)
-			if err != nil {
-				logger.Error("invalid host_id", zap.String("host_id", hostIDStr), zap.Error(err))
-				continue
-			}
-
+	preparedTasks := make([]*model.TaskLog, 0, expectedCount)
+	for _, prepared := range preparedRules {
+		for _, hostID := range parsedHostIDs {
+			ruleID := prepared.id
+			scriptContent := prepared.script
 			taskLog := &model.TaskLog{
 				TaskGroupID:   taskGroupID,
 				RuleID:        &ruleID,
@@ -164,25 +195,47 @@ func (s *TaskService) CreateAndDispatchTasks(ctx context.Context, ruleIDs, hostI
 				StartedAt:     &now,
 			}
 
-			if err := s.taskLogRepo.Create(taskLog); err != nil {
-				logger.Error("failed to create task log",
-					zap.String("rule_id", ruleIDStr),
-					zap.String("host_id", hostIDStr),
-					zap.Error(err),
-				)
-				continue
-			}
-
-			taskIDs = append(taskIDs, taskLog.ID.String())
-
-			go s.dispatchToAgent(context.Background(), taskLog.ID, hostID, ruleID, scriptContent, taskType)
+			preparedTasks = append(preparedTasks, taskLog)
 		}
+	}
+	if err := s.taskLogRepo.CreateBatch(preparedTasks); err != nil {
+		return nil, fmt.Errorf("create deterministic task batch: %w", err)
+	}
+	for _, taskLog := range preparedTasks {
+		taskIDs = append(taskIDs, taskLog.ID.String())
+		ruleID := uuid.Nil
+		if taskLog.RuleID != nil {
+			ruleID = *taskLog.RuleID
+		}
+		go s.dispatchToAgent(context.Background(), taskLog.ID, taskLog.HostID, ruleID, stringValue(taskLog.ScriptContent), taskType)
+	}
+	if len(taskIDs) != expectedCount {
+		return nil, fmt.Errorf("task group %s created %d of %d expected tasks", taskGroupID, len(taskIDs), expectedCount)
 	}
 
 	return &TaskCreateResult{
-		TaskGroupID: taskGroupID,
-		TaskIDs:     taskIDs,
+		TaskGroupID:   taskGroupID,
+		TaskIDs:       taskIDs,
+		ExpectedCount: expectedCount,
+		CreatedCount:  len(taskIDs),
 	}, nil
+}
+
+func parseUniqueUUIDs(values []string, field string) ([]uuid.UUID, error) {
+	result := make([]uuid.UUID, 0, len(values))
+	seen := make(map[uuid.UUID]struct{}, len(values))
+	for index, value := range values {
+		parsed, err := uuid.Parse(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d] must be a UUID: %w", field, index, err)
+		}
+		if _, exists := seen[parsed]; exists {
+			continue
+		}
+		seen[parsed] = struct{}{}
+		result = append(result, parsed)
+	}
+	return result, nil
 }
 
 func (s *TaskService) RedispatchTask(ctx context.Context, originalTaskID uuid.UUID) (*model.TaskLog, error) {

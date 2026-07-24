@@ -109,7 +109,7 @@ func compactRuntimeDisplayPayload(event AssistantEvent) (map[string]interface{},
 			return nil, false
 		}
 		return plan, true
-	case EventStepStarted, EventStepCompleted, EventStepFailed, EventStepRetrying:
+	case EventStepStarted, EventStepCompleted, EventStepFailed, EventStepRetrying, EventStepSkipped:
 		result := make(map[string]interface{})
 		for _, key := range []string{"step_id", "id", "title", "status", "result_summary", "summary", "error"} {
 			value, exists := payload[key]

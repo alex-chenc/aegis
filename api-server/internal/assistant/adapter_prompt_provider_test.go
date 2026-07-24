@@ -41,15 +41,35 @@ func TestAssistantPromptProviderIncludesGenericAgentReasoningGuide(t *testing.T)
 			prompt := bundle.SystemPrompt
 			for _, want := range []string{
 				"Generic agent reasoning",
-				"dynamic tool catalog is the capability boundary",
+				"Mapping-bound plan is the tool authority",
 				"actual prior results",
-				"never apply a fixed workflow",
+				"must not elect, add, replace, or reorder tools",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Fatalf("prompt for %s missing %q\n%s", tc.name, want, prompt)
 				}
 			}
 		})
+	}
+}
+
+func TestAssistantPromptProviderUsesFullAccessRunGuidance(t *testing.T) {
+	provider := NewAssistantPromptProvider(nil, nil, "operations", "run baseline").
+		WithApprovalMode("full_access")
+
+	for _, purpose := range []agentruntime.LLMPurpose{agentruntime.PurposePlan, agentruntime.PurposeReact} {
+		bundle, err := provider.Build(context.Background(), agentruntime.PromptRequest{Purpose: purpose})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"current run uses full_access", "without interactive approval", "do not ask for or wait for approval"} {
+			if !strings.Contains(bundle.SystemPrompt, want) {
+				t.Fatalf("full-access prompt missing %q\n%s", want, bundle.SystemPrompt)
+			}
+		}
+		if strings.Contains(bundle.SystemPrompt, "High-risk operations require user approval") {
+			t.Fatalf("full-access prompt retained contradictory approval instruction\n%s", bundle.SystemPrompt)
+		}
 	}
 }
 
@@ -62,6 +82,7 @@ func TestAssistantSummarizePromptRequiresEvidenceGroundedResult(t *testing.T) {
 
 	for _, want := range []string{
 		"Answer the final goal directly",
+		`{"final_answer":"`,
 		"Never report task creation as task completion",
 		"Never generalize a partial result",
 		"Never invent IDs, status, counts, impact scope, or execution results",
@@ -106,13 +127,13 @@ func TestAssistantReactPromptIncludesExactEnglishArgumentSchema(t *testing.T) {
 				"host_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "目标主机列表",
+					"description": "Exact target host UUIDs.",
 				},
 				"max_rounds": map[string]interface{}{
 					"type":        "integer",
 					"minimum":     1,
 					"maximum":     10,
-					"description": "自动修复轮数",
+					"description": "Maximum automatic remediation rounds.",
 				},
 			},
 		},
@@ -128,14 +149,11 @@ func TestAssistantReactPromptIncludesExactEnglishArgumentSchema(t *testing.T) {
 		`"max_rounds"`,
 		`"type":"integer"`,
 		`"required":["host_ids","max_rounds"]`,
+		`"description":"Exact target host UUIDs."`,
+		`"description":"Maximum automatic remediation rounds."`,
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("react prompt missing exact argument schema %q\n%s", want, bundle.SystemPrompt)
-		}
-	}
-	for _, forbidden := range []string{"目标主机列表", "自动修复轮数"} {
-		if strings.Contains(bundle.SystemPrompt, forbidden) {
-			t.Fatalf("react prompt leaked localized schema description %q\n%s", forbidden, bundle.SystemPrompt)
 		}
 	}
 }
@@ -223,7 +241,7 @@ func TestAssistantPromptProviderGuidesNaturalOperationToolReasoning(t *testing.T
 	for _, want := range []string{
 		"Generic agent reasoning",
 		"Understand the final goal",
-		"dynamic tool catalog is the capability boundary",
+		"Mapping-bound plan is the tool authority",
 		"actual prior results",
 		"If authorized tools cannot complete the goal",
 		"Reuse a successful result for the same tool and arguments",

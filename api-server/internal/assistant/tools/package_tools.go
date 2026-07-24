@@ -20,7 +20,7 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpList,
 		Capability:         "list_detection_packages",
-		Description:        "列出动态检测包，支持按状态和关键字筛选",
+		Description:        "List dynamic detection packages with status and keyword filters.",
 		Aliases:            []string{"动态检测包", "检测包列表", "规则包", "eBPF 检测包", "检测包状态"},
 		Tags:               []string{"package", "detection_package", "dynamic", "ebpf", "sigma"},
 		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
@@ -33,10 +33,10 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
-				"status":    map[string]interface{}{"type": "string", "description": "状态筛选（enabled/disabled/built/build_success/draft）"},
-				"search":    map[string]interface{}{"type": "string", "description": "搜索关键字（包ID或标题）"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page."},
+				"status":    map[string]interface{}{"type": "string", "description": "Status filter: enabled, disabled, built, build_success, or draft."},
+				"search":    map[string]interface{}{"type": "string", "description": "Package ID or title keyword."},
 			},
 		},
 		Handler: makePackageListHandler(deps.PackageRepo),
@@ -49,7 +49,7 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		Domain:             assistant.DomainPackage,
 		Operation:          assistant.OpGet,
 		Capability:         "get_detection_package",
-		Description:        "根据包ID获取动态检测包详情（最新版本）",
+		Description:        "Get the latest version of a dynamic detection package by package ID.",
 		Aliases:            []string{"检测包详情", "动态检测包详情", "规则包详情", "包版本"},
 		Tags:               []string{"package", "detection_package", "dynamic", "version"},
 		ObjectTypes:        []string{"detection_package", "package", "sigma_rule"},
@@ -62,7 +62,7 @@ func RegisterPackageTools(registry *assistant.ToolRegistry, deps PackageToolDeps
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"package_id": map[string]interface{}{"type": "string", "description": "检测包ID"},
+				"package_id": map[string]interface{}{"type": "string", "description": "Exact detection package ID."},
 			},
 			"required": []string{"package_id"},
 		},

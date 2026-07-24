@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 
+	"api-server/internal/model"
 	"api-server/internal/repository"
 )
 
@@ -25,15 +26,22 @@ func NewRiskPolicy(deps RiskPolicyDeps) *RiskPolicy {
 
 // Evaluate 评估工具风险
 func (p *RiskPolicy) Evaluate(ctx context.Context, req RiskEvaluateRequest) RiskEvaluateResult {
-	// Determine risk level from tool spec
-	riskLevel := req.ToolRiskLevel
-	if riskLevel == "" {
-		riskLevel = "readonly"
+	// full_access（全权限）模式下用户明确授予所有工具直接执行的权限，
+	// 工具级别的 RequiresApproval 标记不应再强制审批。应用工具级覆盖前先短路。
+	if req.Mode == model.ApprovalModeFullAccess {
+		return RiskEvaluateResult{
+			Allow:            true,
+			RequiresApproval: false,
+			Mode:             req.Mode,
+			RiskLevel:        effectiveRiskLevel(req.ToolRiskLevel),
+		}
 	}
 
-	// Determine if approval is required based on mode
+	riskLevel := effectiveRiskLevel(req.ToolRiskLevel)
+
+	// Determine if approval is required based on mode.
+	// full_access is handled by the early return above.
 	requiresApproval := false
-	allow := true
 
 	switch req.Mode {
 	case "request_approval":
@@ -44,9 +52,6 @@ func (p *RiskPolicy) Evaluate(ctx context.Context, req RiskEvaluateRequest) Risk
 		if !req.Whitelisted {
 			requiresApproval = true
 		}
-	case "full_access":
-		// All tools execute directly
-		requiresApproval = false
 	default:
 		// Default to whitelist mode
 		if !req.Whitelisted {
@@ -54,22 +59,27 @@ func (p *RiskPolicy) Evaluate(ctx context.Context, req RiskEvaluateRequest) Risk
 		}
 	}
 
-	// High-risk tools always require approval regardless of mode
+	// High-risk tools always require approval under whitelist/request_approval
+	// modes. full_access is handled by the early return above and bypasses
+	// approval entirely.
 	if riskLevel == "critical" || riskLevel == "high" {
-		if req.Mode == "full_access" {
-			// full_access still allows, but marks for audit
-			allow = true
-		} else {
-			requiresApproval = true
-		}
+		requiresApproval = true
 	}
 
 	return RiskEvaluateResult{
-		Allow:            allow,
+		Allow:            true,
 		RequiresApproval: requiresApproval,
 		Mode:             req.Mode,
 		RiskLevel:        riskLevel,
 	}
+}
+
+// effectiveRiskLevel 规范化工具风险等级，空值默认为 readonly。
+func effectiveRiskLevel(level string) string {
+	if level == "" {
+		return "readonly"
+	}
+	return level
 }
 
 // RiskEvaluateRequest 风险评估请求

@@ -20,7 +20,7 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 		Domain:             "block",
 		Operation:          "policy_list",
 		Capability:         "list_block_policies",
-		Description:        "列出阻断策略，支持分页和关键字搜索",
+		Description:        "List block policies with pagination and keyword search.",
 		ModelDescription:   "List blocking policies with pagination and keyword search.",
 		Risk:               assistant.ToolRiskReadonly,
 		Enabled:            true,
@@ -28,9 +28,9 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
-				"query":     map[string]interface{}{"type": "string", "description": "搜索关键字（MITRE ID或名称）"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page."},
+				"query":     map[string]interface{}{"type": "string", "description": "MITRE ID or policy-name keyword."},
 			},
 		},
 		Handler: makeBlockPolicyListHandler(deps.BlockPolicyRepo),
@@ -43,7 +43,7 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 		Domain:             "block",
 		Operation:          "policy_update",
 		Capability:         "update_block_policy",
-		Description:        "更新阻断策略配置（高风险操作，需审批）",
+		Description:        "Update a block policy after approval and persist the selected enforcement settings.",
 		ModelDescription:   "Update one blocking policy after explicit user intent and approval.",
 		Risk:               assistant.ToolRiskHigh,
 		Enabled:            true,
@@ -53,23 +53,23 @@ func RegisterBlockTools(registry *assistant.ToolRegistry, deps BlockToolDeps) er
 			"properties": map[string]interface{}{
 				"mitre_id": map[string]interface{}{
 					"type":        "string",
-					"description": "MITRE技术ID",
+					"description": "Exact MITRE technique ID used to identify one policy.",
 				},
 				"enabled": map[string]interface{}{
 					"type":        "boolean",
-					"description": "是否启用策略",
+					"description": "Enable or disable the policy.",
 				},
 				"auto_block": map[string]interface{}{
 					"type":        "boolean",
-					"description": "是否启用自动阻断",
+					"description": "Enable or disable automatic blocking.",
 				},
 				"auto_dispose": map[string]interface{}{
 					"type":        "boolean",
-					"description": "是否启用自动处置",
+					"description": "Enable or disable automatic disposition.",
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
-					"description": "阻断动作（kill_process/quarantine_file/block_connection）",
+					"description": "Block action: kill_process, quarantine_file, or block_connection.",
 				},
 			},
 			"required": []string{"mitre_id"},

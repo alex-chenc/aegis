@@ -45,6 +45,19 @@ func TestRuntimeEvidenceRejectsOnlineHostContradiction(t *testing.T) {
 	}
 }
 
+func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
+	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{
+		ActualToolNames: []string{"Host.Resolve"},
+		FailedToolNames: []string{"Host.Resolve"},
+	})
+	if !strings.Contains(fallback, "任务未完成") || strings.Contains(strings.ToLower(fallback), "completed") {
+		t.Fatalf("failed-goal fallback = %q", fallback)
+	}
+	if !strings.Contains(fallback, "未下发任务") {
+		t.Fatalf("fallback must state missing task dispatch evidence: %q", fallback)
+	}
+}
+
 func TestRuntimeEvidenceRejectsUnprovenDispatch(t *testing.T) {
 	result := &agentruntime.TaskResult{
 		StepExecutions: []agentruntime.StepExecution{{
@@ -154,7 +167,7 @@ func TestRuntimeEvidenceRejectsGeneratedClaimForAcceptedOperation(t *testing.T) 
 	}
 }
 
-func TestPersistRuntimeToolCallRecordsKeepsPreGatewayValidationFailure(t *testing.T) {
+func TestPersistRuntimeToolCallRecordsSkipsPreGatewayValidationFailure(t *testing.T) {
 	repo := &fakeToolCallRepo{}
 	orchestrator := &Orchestrator{toolCallRepo: repo}
 	startedAt := time.Now().Add(-25 * time.Millisecond)
@@ -171,22 +184,12 @@ func TestPersistRuntimeToolCallRecordsKeepsPreGatewayValidationFailure(t *testin
 		}},
 	})
 
-	if len(repo.calls) != 1 {
-		t.Fatalf("created calls = %d, want 1", len(repo.calls))
-	}
-	call := repo.calls[0]
-	if call.MessageID != "message-1" || call.Status != "failed" {
-		t.Fatalf("unexpected persisted call: %#v", call)
-	}
-	if !strings.Contains(call.ArgsSummary, "validation_stage=arguments") {
-		t.Fatalf("args summary = %q", call.ArgsSummary)
-	}
-	if call.DurationMs != 25 {
-		t.Fatalf("duration = %d, want 25", call.DurationMs)
+	if len(repo.calls) != 0 {
+		t.Fatalf("pre-gateway validation attempts must not be durable tool calls: %#v", repo.calls)
 	}
 
 	messageCalls := orchestrator.toolCallsForMessage(context.Background(), "session-1", "message-1")
-	if len(messageCalls) == 0 {
-		t.Fatal("expected tool calls to be attached to the assistant message")
+	if len(messageCalls) != 0 {
+		t.Fatalf("pre-gateway validation attempts must not be attached to the assistant message: %s", messageCalls)
 	}
 }

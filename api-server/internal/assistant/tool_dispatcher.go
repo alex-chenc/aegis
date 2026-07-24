@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"api-server/internal/model"
@@ -18,6 +19,7 @@ type ToolDispatcher struct {
 	toolCallRepo  repository.AssistantToolCallRepository
 	sessionRepo   repository.AssistantSessionRepository
 	policyService *ToolPolicyService
+	filters       *ToolInvocationFilterChain
 	logger        *zap.Logger
 }
 
@@ -36,20 +38,23 @@ func NewToolDispatcher(
 		toolCallRepo:  toolCallRepo,
 		sessionRepo:   sessionRepo,
 		policyService: policyService,
+		filters:       NewToolInvocationFilterChain(registry, logger),
 		logger:        logger,
 	}
 }
 
 // DispatchRequest 调度请求
 type DispatchRequest struct {
-	SessionID string                 `json:"session_id"`
-	MessageID string                 `json:"message_id"`
-	RunID     string                 `json:"run_id"`
-	CallID    string                 `json:"call_id,omitempty"`
-	ToolName  string                 `json:"tool_name"`
-	Args      map[string]interface{} `json:"args"`
-	Operator  string                 `json:"operator"`
-	Approved  bool                   `json:"approved"` // true if already approved via approval gate
+	SessionID    string                 `json:"session_id"`
+	MessageID    string                 `json:"message_id"`
+	RunID        string                 `json:"run_id"`
+	StepID       string                 `json:"step_id,omitempty"`
+	CallID       string                 `json:"call_id,omitempty"`
+	ToolName     string                 `json:"tool_name"`
+	Args         map[string]interface{} `json:"args"`
+	Operator     string                 `json:"operator"`
+	ApprovalMode string                 `json:"approval_mode,omitempty"`
+	Approved     bool                   `json:"approved"` // true if already approved via approval gate
 	// Polling marks an internal Runtime retry of an already-authorized,
 	// read-only, idempotent status call. It updates the original logical tool
 	// call instead of creating another user-visible/audit row.
@@ -76,9 +81,30 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 	if !ok {
 		return nil, fmt.Errorf("tool %s not found", req.ToolName)
 	}
+	if !tool.ExposurePolicy.DirectCallable {
+		return nil, fmt.Errorf("tool %s is internal and cannot be called directly by the model", req.ToolName)
+	}
 	if req.Polling && (tool.Risk != ToolRiskReadonly || !tool.Idempotent) {
 		return nil, fmt.Errorf("tool %s is not eligible for automatic asynchronous polling", req.ToolName)
 	}
+
+	phase := ToolInvocationPhaseDispatch
+	if req.Approved {
+		phase = ToolInvocationPhaseApprovalResume
+	}
+	prepared, err := d.PrepareInvocation(ctx, ToolInvocationFilterRequest{
+		SessionID: req.SessionID,
+		MessageID: req.MessageID,
+		RunID:     req.RunID,
+		StepID:    req.StepID,
+		Phase:     phase,
+		ToolName:  req.ToolName,
+		Args:      req.Args,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tool %s pre-invocation rejected: %w", req.ToolName, err)
+	}
+	req.Args = prepared.Args
 
 	callID := req.CallID
 	if callID == "" {
@@ -91,6 +117,7 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 		toolCall := &model.AssistantToolCall{
 			ID:        uuid.New(),
 			SessionID: req.SessionID,
+			RunID:     req.RunID,
 			MessageID: req.MessageID,
 			CallID:    callID,
 			ToolName:  req.ToolName,
@@ -115,7 +142,11 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 
 	// Evaluate risk
 	isWhitelisted, _ := d.policyService.IsToolWhitelisted(ctx, req.ToolName)
-	mode, _ := d.policyService.GetApprovalMode(ctx)
+	mode := normalizeAssistantApprovalMode(req.ApprovalMode)
+	if strings.TrimSpace(req.ApprovalMode) == "" {
+		configuredMode, _ := d.policyService.GetApprovalMode(ctx)
+		mode = normalizeAssistantApprovalMode(configuredMode)
+	}
 
 	riskResult := d.approvalGate.riskPolicy.Evaluate(ctx, RiskEvaluateRequest{
 		ToolName:      req.ToolName,
@@ -124,6 +155,20 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 		Whitelisted:   isWhitelisted,
 		Operator:      req.Operator,
 	})
+	// 工具级 RequiresApproval 在非全权限模式下仍强制审批；
+	// full_access 模式下用户已授予直接执行权限，跳过此覆盖。
+	if tool.RequiresApproval && mode != model.ApprovalModeFullAccess {
+		riskResult.RequiresApproval = true
+	}
+	if mode == model.ApprovalModeFullAccess && (tool.RequiresApproval || tool.Risk == ToolRiskHigh || tool.Risk == ToolRiskCritical) {
+		d.logger.Info("assistant tool executing under full access",
+			zap.String("session_id", req.SessionID),
+			zap.String("run_id", req.RunID),
+			zap.String("tool_name", req.ToolName),
+			zap.String("risk_level", string(tool.Risk)),
+			zap.String("approval_mode", mode),
+		)
+	}
 
 	if riskResult.RequiresApproval {
 		// Create approval request
@@ -158,6 +203,15 @@ func (d *ToolDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (*Di
 	return d.executeTool(ctx, callID, tool, req)
 }
 
+// PrepareInvocation runs the shared, side-effect-free pre-invocation boundary.
+// Callers must use the returned arguments and must not mutate them afterward.
+func (d *ToolDispatcher) PrepareInvocation(ctx context.Context, req ToolInvocationFilterRequest) (ToolInvocationFilterResult, error) {
+	if d == nil || d.filters == nil {
+		return ToolInvocationFilterResult{}, fmt.Errorf("tool invocation filters are not configured")
+	}
+	return d.filters.Prepare(ctx, req)
+}
+
 func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *ToolSpec, req DispatchRequest) (*DispatchResult, error) {
 	// Apply tool execution timeout to prevent indefinite blocking
 	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -169,6 +223,14 @@ func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *T
 		err    error
 	}
 	resultCh := make(chan toolResult, 1)
+	toolCtx = WithToolInvocationContext(toolCtx, ToolInvocationContext{
+		SessionID: req.SessionID,
+		MessageID: req.MessageID,
+		RunID:     req.RunID,
+		CallID:    callID,
+		Operator:  req.Operator,
+		Approved:  req.Approved,
+	})
 
 	go func() {
 		res, err := d.registry.Execute(toolCtx, req.ToolName, req.Args)
@@ -272,11 +334,25 @@ func (d *ToolDispatcher) ExecuteApprovedTool(ctx context.Context, approvalID str
 	// Execute
 	req := DispatchRequest{
 		SessionID: approval.SessionID,
+		MessageID: toolCall.MessageID,
+		RunID:     toolCall.RunID,
 		ToolName:  approval.ToolName,
 		Args:      args,
 		Operator:  operator,
 		Approved:  true,
 	}
 
+	prepared, err := d.PrepareInvocation(ctx, ToolInvocationFilterRequest{
+		SessionID: req.SessionID,
+		MessageID: req.MessageID,
+		RunID:     req.RunID,
+		Phase:     ToolInvocationPhaseApprovalResume,
+		ToolName:  req.ToolName,
+		Args:      req.Args,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("approved tool %s failed pre-invocation validation: %w", req.ToolName, err)
+	}
+	req.Args = prepared.Args
 	return d.executeTool(ctx, approval.ToolCallID, tool, req)
 }

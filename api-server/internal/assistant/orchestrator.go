@@ -115,16 +115,19 @@ type RunResult struct {
 
 // Run 运行编排。所有请求统一进入 agent-runtime；Runtime 根据任务复杂度决定直接回答或 Plan → React。
 func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, error) {
+	approvalMode := o.snapshotApprovalMode(ctx)
 	o.logger.Info("starting orchestration",
 		zap.String("session_id", input.SessionID),
 		zap.String("run_id", input.RunID),
 		zap.String("task_type", input.TaskType),
 		zap.String("locale", NormalizeLocale(input.Locale)),
+		zap.String("approval_mode", approvalMode),
 	)
 
 	// 1. 发布 run_started 事件
 	o.runManager.Publish(input.SessionID, NewEvent(EventRunStarted, input.SessionID, input.RunID, map[string]interface{}{
-		"status": "started",
+		"status":        "started",
+		"approval_mode": approvalMode,
 	}))
 
 	// 2. 发布 thinking 事件
@@ -186,12 +189,27 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	if o.intentDecomposer == nil {
 		return nil, fmt.Errorf("assistant intent decomposer unavailable")
 	}
-	capabilityCatalog := o.buildCapabilityCatalog()
+	capabilityCatalog := o.buildCapabilityCatalog(intent, intentInput.ContextRefs)
+	workflowCards := NewWorkflowRegistry().Match(intent)
+	workflowIDs := make([]string, 0, len(workflowCards))
+	for _, workflow := range workflowCards {
+		workflowIDs = append(workflowIDs, workflow.ID)
+	}
+	o.logger.Info("assistant capability catalog filtered",
+		zap.String("session_id", input.SessionID),
+		zap.String("run_id", input.RunID),
+		zap.Strings("domains", intent.Domains),
+		zap.Strings("object_types", intent.ObjectTypes),
+		zap.Strings("workflow_ids", workflowIDs),
+		zap.Int("registered_count", o.toolRegistry.Count()),
+		zap.Int("exposed_count", len(capabilityCatalog)),
+	)
 	intentBreakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
 		Query:                  input.UserMessage,
 		Intent:                 intent,
 		ContextRefs:            intentInput.ContextRefs,
 		AvailableCapabilities:  capabilityCatalog,
+		AvailableWorkflows:     workflowCards,
 		EnableLLMDecomposition: true,
 	})
 	if err != nil {
@@ -203,8 +221,9 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		return nil, fmt.Errorf("decompose assistant intent with llm: %w", err)
 	}
 
-	// 6. 工具选择：LLM 只从实时英文 capability 目录中选择能力，后端通过
-	// exact mapping 解析工具并执行安全硬门。不存在工具评分、领域召回或预选绕过。
+	// 6. 工具选择安全不变量：LLM 只返回 capability；后端 exact Mapping
+	// 是唯一工具选举边界。Mapping 结果会作为 Runtime 的不可变 initial
+	// plan，后续 Planner/ReAct 不得再通过自由 tool_name 选举工具。
 	selection := &ToolSelectionResult{
 		Query:  input.UserMessage,
 		Intent: intent,
@@ -212,8 +231,11 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	selectionMode := "capability_mapping"
 	useAIAnalysisFlow := o.isComplexTask(input.TaskType, input.UserMessage, intent, selection.SelectedTools)
 
+	if o.toolDecisionEngine == nil || !o.toolDecisionEngine.config.Enabled {
+		return nil, fmt.Errorf("assistant capability Mapping engine is required and cannot be disabled")
+	}
 	var authorization *ToolExecutionPlan
-	if o.toolDecisionEngine != nil && o.toolDecisionEngine.config.Enabled {
+	{
 		plan, err := o.toolDecisionEngine.Decide(ctx, ToolDecisionInput{
 			Query:             input.UserMessage,
 			Intent:            intent,
@@ -229,6 +251,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			)
 			return nil, fmt.Errorf("decide assistant tools: %w", err)
 		} else if plan != nil {
+			applyEffectiveApprovalMode(plan, approvalMode)
 			authorization = plan
 
 			// 使用 ToolDecisionRecorder 持久化裁决记录
@@ -242,6 +265,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 				o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
 					"intent_breakdown":   intentBreakdown,
 					"tool_authorization": authorization,
+					"approval_mode":      approvalMode,
 					"current_run_status": "needs_input",
 					"goal_outcome":       agentruntime.GoalNeedsInput,
 				})
@@ -270,6 +294,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
 				"intent_breakdown":   intentBreakdown,
 				"tool_authorization": authorization,
+				"approval_mode":      approvalMode,
 			})
 		}
 	}
@@ -281,6 +306,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		"runtime_profile": runtimeProfileName(useAIAnalysisFlow),
 		"max_total_turns": maxRuntimeTurns(useAIAnalysisFlow),
 		"selection_mode":  selectionMode,
+		"approval_mode":   approvalMode,
 	}
 	if authorization != nil {
 		toolSelectionPayload["decision_trace_id"] = authorization.DecisionTraceID
@@ -294,20 +320,23 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	// 8. 构建 agent-runtime 工具描述符
 	toolDescriptors := o.buildAgentToolDescriptors(selection.SelectedTools)
 
-	// 9. 统一走 agent-runtime，由 LLM 自行判断任务复杂度和回复方式
-	// - 问候/闲聊：LLM 直接回复自然语言
-	// - 简单任务（<3步）：跳过计划，直接 ReAct 执行
-	// - 复杂任务（>=3步）：生成完整计划，按步骤执行
-	o.logger.Info("assistant request routed to generic agent runtime",
+	planningMode := "no_tool_model_response"
+	if usesMappingBoundExecutionPlan(authorization) {
+		planningMode = "mapping_bound_execution"
+	}
+	// 9. agent-runtime may produce a direct response when there are no mapped
+	// tools. Tool-enabled runs always receive the Mapping-bound initial plan.
+	o.logger.Info("assistant request routed to Mapping-bound runtime",
 		zap.String("session_id", input.SessionID),
 		zap.String("run_id", input.RunID),
 		zap.String("runtime_profile", runtimeProfileName(useAIAnalysisFlow)),
-		zap.String("planning_mode", "agent_runtime_dynamic"),
+		zap.String("planning_mode", planningMode),
 		zap.String("selection_mode", selectionMode),
+		zap.String("approval_mode", approvalMode),
 		zap.Strings("selected_tools", selection.SelectedTools),
 		zap.Int("tools_count", len(toolDescriptors)),
 	)
-	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, authorization)
+	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, authorization, approvalMode)
 }
 
 func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput, plan *ToolExecutionPlan) (*RunResult, error) {
@@ -404,12 +433,30 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 	return descriptors
 }
 
-func (o *Orchestrator) buildCapabilityCatalog() []CapabilityCatalogItem {
+func (o *Orchestrator) buildCapabilityCatalog(intent IntentResult, contextRefs []ContextRefInput) []CapabilityCatalogItem {
 	if o == nil || o.toolRegistry == nil {
 		return nil
 	}
-	tools := o.toolRegistry.List()
+	objectTypes := append([]string{}, intent.ObjectTypes...)
+	for _, ref := range contextRefs {
+		if strings.TrimSpace(ref.ObjectType) != "" {
+			objectTypes = append(objectTypes, ref.ObjectType)
+		}
+	}
+	workflowSpecs := NewWorkflowRegistry().Match(intent)
+	workflowIDs := make([]string, 0, len(workflowSpecs))
+	for _, workflow := range workflowSpecs {
+		workflowIDs = append(workflowIDs, workflow.ID)
+	}
+	tools := NewToolExposureResolver(o.toolRegistry).IntentCatalog(ToolExposureContext{
+		Domains:     intent.Domains,
+		ObjectTypes: dedupeStrings(objectTypes),
+		WorkflowIDs: workflowIDs,
+	})
 	sort.Slice(tools, func(i, j int) bool {
+		if tools[i].ExposurePolicy.CatalogPriority != tools[j].ExposurePolicy.CatalogPriority {
+			return tools[i].ExposurePolicy.CatalogPriority > tools[j].ExposurePolicy.CatalogPriority
+		}
 		return tools[i].Capability < tools[j].Capability
 	})
 	catalog := make([]CapabilityCatalogItem, 0, len(tools))
@@ -503,21 +550,33 @@ func containsSubstring(s, substr string) bool {
 
 // runAgentRuntime 统一执行入口：使用 agent-runtime Plan → React 流程
 // 使用 RuntimeFactory.Build() 集中创建 runtime（对齐设计文档 4.3 节）
-func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool, authorization *ToolExecutionPlan) (*RunResult, error) {
+func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, contextRefs []ContextObject, selection ToolSelectionResult, toolDescriptors []agentruntime.ToolDescriptor, useAIAnalysisFlow bool, authorization *ToolExecutionPlan, approvalMode string) (*RunResult, error) {
 	msgID := "msg_" + input.RunID
+	executionPlan := mappingBoundExecutionPlanForAssistant(authorization)
+	planningMode := "no_tool_model_response"
+	if executionPlan != nil {
+		planningMode = "mapping_bound_execution"
+		o.logger.Info("assistant runtime received immutable Mapping-bound execution plan",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("plan_id", executionPlan.DecisionTraceID),
+			zap.Int("plan_step_count", len(executionPlan.Steps)),
+		)
+	}
 	maxIterations := 80
 	if useAIAnalysisFlow {
 		maxIterations = 500
 	}
 	o.mergeSessionMetadata(ctx, input.SessionID, map[string]interface{}{
 		"runtime_profile":    runtimeProfileName(useAIAnalysisFlow),
-		"planning_mode":      "agent_runtime_dynamic",
+		"planning_mode":      planningMode,
 		"max_total_turns":    maxIterations,
 		"current_run_id":     input.RunID,
 		"current_message_id": msgID,
 		"current_run_status": "running",
 		"run_started_at":     time.Now().UTC().Format(time.RFC3339),
 		"locale":             NormalizeLocale(input.Locale),
+		"approval_mode":      normalizeAssistantApprovalMode(approvalMode),
 	})
 
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
@@ -532,9 +591,10 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		SelectedTools:     selection.SelectedTools,
 		ToolDescriptors:   toolDescriptors,
 		MaxIterations:     maxIterations,
-		ExecutionPlan:     nil,
+		ExecutionPlan:     executionPlan,
 		UseAIAnalysisFlow: useAIAnalysisFlow,
 		Locale:            NormalizeLocale(input.Locale),
+		ApprovalMode:      normalizeAssistantApprovalMode(approvalMode),
 	})
 	if err != nil {
 		o.logger.Error("failed to build agent-runtime", zap.Error(err))
@@ -545,12 +605,13 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	taskResult, err := buildResult.Runtime.Run(ctx, agentruntime.TaskInput{
 		UserInput:   input.UserMessage,
 		UserContext: buildResult.UserContext,
-		InitialPlan: runtimeInitialPlanForAssistant(authorization),
+		InitialPlan: runtimeInitialPlanForAssistant(executionPlan),
 		Metadata: map[string]string{
-			"session_id": input.SessionID,
-			"run_id":     input.RunID,
-			"task_type":  input.TaskType,
-			"locale":     NormalizeLocale(input.Locale),
+			"session_id":    input.SessionID,
+			"run_id":        input.RunID,
+			"task_type":     input.TaskType,
+			"locale":        NormalizeLocale(input.Locale),
+			"approval_mode": normalizeAssistantApprovalMode(approvalMode),
 		},
 	})
 	if run, ok := o.runManager.Get(input.SessionID); ok {
@@ -578,15 +639,44 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	if taskResult == nil {
 		return nil, fmt.Errorf("agent runtime returned no result")
 	}
+	var blockedSteps []agentruntime.PlanStep
+	if usesMappingBoundExecutionPlan(executionPlan) {
+		blockedSteps = normalizeBlockedMappingPlanSteps(taskResult)
+	}
+	if len(blockedSteps) > 0 {
+		blockedStepIDs := make([]string, 0, len(blockedSteps))
+		for _, step := range blockedSteps {
+			blockedStepIDs = append(blockedStepIDs, step.StepID)
+			o.runManager.Publish(input.SessionID, withMessageID(NewEvent(EventStepSkipped, input.SessionID, input.RunID, map[string]interface{}{
+				"step_id": step.StepID,
+				"title":   step.Title,
+				"status":  "skipped",
+				"reason":  "blocked_by_failed_dependency",
+			}), msgID))
+		}
+		o.logger.Info("assistant Mapping-bound steps skipped after dependency failure",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Strings("step_ids", blockedStepIDs),
+		)
+	}
 	saveCtx := context.Background()
 	o.persistRuntimeToolCallRecords(saveCtx, input.SessionID, msgID, taskResult)
-	if err := validateRuntimeFinalAnswer(taskResult.FinalAnswer); err != nil {
-		return nil, err
-	}
-
 	evidence := buildRuntimeEvidenceLedger(taskResult)
 	response := taskResult.FinalAnswer
-	evidenceConflicts := validateRuntimeEvidenceConsistency(response, evidence)
+	evidenceConflicts := make([]string, 0, 4)
+	if err := validateRuntimeFinalAnswer(response); err != nil {
+		o.logger.Warn("assistant final answer violated the output contract",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("message_id", msgID),
+			zap.Error(err),
+		)
+		evidenceConflicts = append(evidenceConflicts, "invalid_final_answer_contract")
+		response = buildEvidenceGroundedFallback(evidence)
+	}
+	evidenceConflicts = append(evidenceConflicts, validateRuntimeEvidenceConsistency(response, evidence)...)
+	evidenceConflicts = dedupeStrings(evidenceConflicts)
 	if len(evidenceConflicts) > 0 {
 		o.logger.Warn("assistant final answer contradicted runtime tool evidence",
 			zap.String("session_id", input.SessionID),
@@ -594,7 +684,9 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			zap.String("message_id", msgID),
 			zap.Strings("conflict_codes", evidenceConflicts),
 		)
-		response = buildEvidenceGroundedFallback(evidence)
+		if !containsExactString(evidenceConflicts, "invalid_final_answer_contract") {
+			response = buildEvidenceGroundedFallback(evidence)
+		}
 	}
 	goalOutcome := taskResult.GoalOutcome
 	if goalOutcome == "" {
@@ -602,6 +694,18 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	}
 	if len(evidenceConflicts) > 0 && goalOutcome == agentruntime.GoalSucceeded {
 		goalOutcome = agentruntime.GoalPartiallySucceeded
+	}
+	if goalOutcome == agentruntime.GoalFailed {
+		// agent-runtime may finish its control loop normally after a failed
+		// plan. Never expose that transport completion as a completed task.
+		response = buildFailedGoalFallback(evidence)
+		o.logger.Warn("assistant final answer replaced for failed goal outcome",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Int("failed_tool_count", len(evidence.FailedToolNames)),
+			zap.Strings("failed_tools", evidence.FailedToolNames),
+			zap.Int("task_group_count", len(evidence.TaskGroupIDs)),
+		)
 	}
 	contextBudget := effectiveRuntimeContextBudget(taskResult)
 	metadata := map[string]interface{}{
@@ -739,7 +843,11 @@ func validateRuntimeFinalAnswer(answer string) error {
 	case "tool_call", "additional_capability_request", "need_user_input", "clarification_required":
 		return fmt.Errorf("agent runtime ended with unfinished control action %q", action)
 	}
-	return nil
+	// The runtime parser unwraps a valid {"final_answer":"..."} response before
+	// returning it. Any JSON object that reaches this boundary therefore uses an
+	// unexpected top-level shape (for example tool arguments) and must never be
+	// shown as the user-facing conclusion.
+	return fmt.Errorf("agent runtime returned a JSON object without a valid final_answer wrapper")
 }
 
 func (o *Orchestrator) persistRuntimeToolCallRecords(
@@ -754,6 +862,13 @@ func (o *Orchestrator) persistRuntimeToolCallRecords(
 
 	for _, runtimeCall := range result.ToolCalls {
 		if strings.TrimSpace(runtimeCall.CallID) == "" || strings.TrimSpace(runtimeCall.ToolName) == "" {
+			continue
+		}
+		// Descriptor, preparation, argument, policy, and step-scope failures
+		// happen before the Aegis gateway accepts an executable invocation.
+		// Keep them in runtime evidence, but never persist them as durable or
+		// user-visible tool calls.
+		if strings.TrimSpace(runtimeCall.ValidationStage) != "" {
 			continue
 		}
 

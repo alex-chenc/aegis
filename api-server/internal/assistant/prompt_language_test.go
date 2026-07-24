@@ -52,7 +52,7 @@ func TestModelFacingToolMetadataUsesEnglishContract(t *testing.T) {
 		Domain:      DomainVulnerability,
 		Operation:   OpGenerate,
 		Capability:  "generate_vulnerability_script",
-		Description: "生成漏洞验证或修复脚本",
+		Description: "Generate a vulnerability verification or remediation script.",
 		Aliases:     []string{"生成漏洞脚本"},
 		ObjectTypes: []string{"vulnerability", "script"},
 		Risk:        ToolRiskMedium,
@@ -62,16 +62,19 @@ func TestModelFacingToolMetadataUsesEnglishContract(t *testing.T) {
 			"properties": map[string]interface{}{
 				"cve_id": map[string]interface{}{
 					"type":        "string",
-					"description": "漏洞编号",
+					"description": "Normalized CVE ID.",
 				},
 				"script_type": map[string]interface{}{
 					"type":        "string",
-					"description": "脚本类型",
+					"description": "Script type: poc or fix.",
 					"enum":        []interface{}{"poc", "fix"},
 				},
 			},
 			"required": []interface{}{"cve_id", "script_type"},
 		},
+	}
+	if err := ValidateToolEnglishContract(spec); err != nil {
+		t.Fatalf("English tool contract rejected: %v", err)
 	}
 
 	for name, text := range map[string]string{

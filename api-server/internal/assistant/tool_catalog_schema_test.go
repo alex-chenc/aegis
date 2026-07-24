@@ -15,8 +15,8 @@ func TestNormalizeRuntimeArgsSchemaRelaxesInteger(t *testing.T) {
 		ArgsSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"page":      map[string]any{"type": "integer", "description": "页码"},
-				"page_size": map[string]any{"type": "integer", "description": "每页数量"},
+				"page":      map[string]any{"type": "integer", "description": "Page number"},
+				"page_size": map[string]any{"type": "integer", "description": "Number of items per page"},
 				"cve_id":    map[string]any{"type": "string"},
 			},
 		},
@@ -41,6 +41,9 @@ func TestNormalizeRuntimeArgsSchemaRelaxesInteger(t *testing.T) {
 	if got := desc.ArgsSchema["additionalProperties"]; got != false {
 		t.Fatalf("additionalProperties = %v, want false for an exact runtime contract", got)
 	}
+	if got := props["page"].(map[string]any)["description"]; got != "Page number" {
+		t.Fatalf("page description = %v, want the English parameter semantics preserved", got)
+	}
 
 	// 源 spec 不应被修改，仍保留 integer 语义。
 	srcProps := spec.ArgsSchema["properties"].(map[string]any)
@@ -49,6 +52,27 @@ func TestNormalizeRuntimeArgsSchemaRelaxesInteger(t *testing.T) {
 	}
 	if _, exists := spec.ArgsSchema["additionalProperties"]; exists {
 		t.Fatal("source spec mutated: additionalProperties was added")
+	}
+}
+
+func TestNormalizeRuntimeArgsSchemaKeepsExamplesAndFormats(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"host_id": map[string]any{
+				"type":        "string",
+				"format":      "uuid",
+				"description": "Exact host UUID returned by Host.Resolve.",
+				"examples":    []any{"cf18f7f7-5b45-46e2-9889-160dddc4ee30"},
+			},
+		},
+	}
+
+	normalized := normalizeRuntimeArgsSchema(schema)
+	properties := normalized["properties"].(map[string]any)
+	hostID := properties["host_id"].(map[string]any)
+	if hostID["description"] == nil || hostID["format"] != "uuid" || hostID["examples"] == nil {
+		t.Fatalf("normalized schema lost model-facing semantics: %#v", hostID)
 	}
 }
 

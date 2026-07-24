@@ -11,11 +11,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// SystemConfigQuerier abstracts the system-config lookup so that
+// ToolPolicyService can be tested without a real database.
+type SystemConfigQuerier interface {
+	GetByKey(key string) (*model.SystemConfig, error)
+	Upsert(key string, value interface{}, description, category string) error
+}
+
 // ToolPolicyService 工具策略服务（对齐设计文档 8.1 节）
 type ToolPolicyService struct {
 	policyRepo   repository.AssistantToolPolicyRepository
 	registry     *ToolRegistry
-	systemConfig *repository.SystemConfigRepo
+	systemConfig SystemConfigQuerier
 	logger       *zap.Logger
 }
 
@@ -23,7 +30,7 @@ type ToolPolicyService struct {
 type ToolPolicyServiceDeps struct {
 	PolicyRepo   repository.AssistantToolPolicyRepository
 	Registry     *ToolRegistry
-	SystemConfig *repository.SystemConfigRepo
+	SystemConfig SystemConfigQuerier
 	Logger       *zap.Logger
 }
 

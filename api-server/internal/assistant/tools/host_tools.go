@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,15 +19,77 @@ type HostToolDeps struct {
 	ServerClient agentStatusClient
 }
 
+const hostTargetScopeAllOnline = "all_online_hosts"
+
 // RegisterHostTools 注册主机域工具（对齐设计文档命名规范）
 func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) error {
+	if err := registry.Register(&assistant.ToolSpec{
+		Name:               "Host.Resolve",
+		Domain:             assistant.DomainHost,
+		Operation:          assistant.OpGet,
+		Capability:         "resolve_hosts",
+		Description:        "Resolve user-provided host selectors to exact host UUIDs and report ambiguity, missing targets, and online status.",
+		Aliases:            []string{"解析主机", "主机选择器", "resolve hosts"},
+		Tags:               []string{"v6.1", "host", "resolver"},
+		ObjectTypes:        []string{"host"},
+		PageRoutes:         []string{"/hosts", "/baseline"},
+		Risk:               assistant.ToolRiskReadonly,
+		AutoCallable:       true,
+		Idempotent:         true,
+		DefaultWhitelisted: true,
+		Enabled:            true,
+		ExposurePolicy: assistant.ToolExposurePolicy{
+			Exposure:        assistant.ToolExposurePrimary,
+			Discoverable:    true,
+			DirectCallable:  true,
+			CatalogPriority: 100,
+		},
+		ResultContract: assistant.ToolResultContract{
+			OperationStatusField: "operation_status",
+			SuccessValues:        []string{"succeeded"},
+			FailureValues:        []string{"failed"},
+			FactBindings: []assistant.ToolFactBinding{{
+				Kind:       "host_resolved",
+				ItemsField: "resolved",
+				IDField:    "host_id",
+				StateField: "agent_status",
+			}},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"host_selectors": map[string]interface{}{
+					"type":        "array",
+					"minItems":    1,
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Explicit host UUIDs, IP addresses, hostnames, or short labels supplied by the user. Do not use natural-language groups here.",
+					"examples":    []interface{}{[]interface{}{"159IP"}},
+				},
+				"target_scope": map[string]interface{}{
+					"type":        "string",
+					"enum":        []interface{}{hostTargetScopeAllOnline},
+					"description": "Deterministic server-side host scope. Use all_online_hosts for every currently connected or recently heartbeating host. Mutually exclusive with host_selectors.",
+				},
+				"require_online": map[string]interface{}{
+					"type":        "boolean",
+					"description": "When true, report resolved offline hosts as unavailable for runtime operations.",
+				},
+			},
+			"additionalProperties": false,
+		},
+		Preflight: validateHostResolveArgs,
+		Handler:   makeHostResolveHandler(deps.HostRepo, deps.ServerClient),
+	}); err != nil {
+		return err
+	}
+
 	// Host.List — 查询主机列表
 	if err := registry.Register(&assistant.ToolSpec{
 		Name:               "Host.List",
 		Domain:             assistant.DomainHost,
 		Operation:          assistant.OpList,
 		Capability:         "list_hosts",
-		Description:        "列出所有主机，支持分页和关键字搜索",
+		Description:        "List hosts with pagination, keyword search, and agent-status filters.",
 		ModelDescription:   "List hosts with pagination, query, and online or offline agent-status filters.",
 		Aliases:            []string{"主机列表", "资产列表", "list hosts"},
 		Tags:               []string{"v5.5", "host", "asset"},
@@ -49,13 +112,13 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":         map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size":    map[string]interface{}{"type": "integer", "description": "每页数量，默认20，最大100"},
-				"limit":        map[string]interface{}{"type": "integer", "description": "兼容参数，等同于 page_size，最大100"},
-				"query":        map[string]interface{}{"type": "string", "description": "搜索关键字（IP或主机名）"},
-				"status":       map[string]interface{}{"type": "string", "description": "Agent 在线状态筛选：online/offline/all"},
-				"agent_status": map[string]interface{}{"type": "string", "description": "Agent 在线状态筛选：online/offline/all"},
-				"filters":      map[string]interface{}{"type": "array", "description": "兼容过滤条件，可包含 field=status/agent_status 与 value=online/offline"},
+				"page":         map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size":    map[string]interface{}{"type": "integer", "description": "Items per page; defaults to 20 and is capped at 100."},
+				"limit":        map[string]interface{}{"type": "integer", "description": "Compatibility alias for page_size; capped at 100."},
+				"query":        map[string]interface{}{"type": "string", "description": "Keyword matched against IP address or hostname."},
+				"status":       map[string]interface{}{"type": "string", "description": "Agent status filter: online, offline, or all."},
+				"agent_status": map[string]interface{}{"type": "string", "description": "Compatibility agent status filter: online, offline, or all."},
+				"filters":      map[string]interface{}{"type": "array", "description": "Compatibility filters containing field=status or agent_status and value=online or offline."},
 			},
 		},
 		Handler: makeHostListHandler(deps.HostRepo, deps.ServerClient),
@@ -74,7 +137,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		Domain:             assistant.DomainHost,
 		Operation:          assistant.OpGet,
 		Capability:         "get_host_detail",
-		Description:        "根据主机ID获取主机详细信息",
+		Description:        "Get detailed host information by exact host UUID.",
 		Aliases:            []string{"主机详情", "主机信息", "get host"},
 		Tags:               []string{"v5.5", "host", "asset"},
 		ObjectTypes:        []string{"host"},
@@ -87,7 +150,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"host_id": map[string]interface{}{"type": "string", "description": "主机ID（UUID）"},
+				"host_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact host UUID."},
 			},
 			"required": []string{"host_id"},
 		},
@@ -107,7 +170,7 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		Domain:             assistant.DomainHost,
 		Operation:          assistant.OpGet,
 		Capability:         "get_agent_status",
-		Description:        "查询 Agent 在线状态，返回在线和离线主机统计",
+		Description:        "Get agent connectivity status and counts for online and offline hosts.",
 		Aliases:            []string{"Agent状态", "在线状态", "离线主机"},
 		Tags:               []string{"v5.5", "host", "agent", "status"},
 		ObjectTypes:        []string{"host"},
@@ -120,8 +183,8 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page."},
 			},
 		},
 		Handler: makeHostAgentStatusHandler(deps.HostRepo, deps.ServerClient),
@@ -135,6 +198,234 @@ func RegisterHostTools(registry *assistant.ToolRegistry, deps HostToolDeps) erro
 	}
 
 	return nil
+}
+
+type hostResolution struct {
+	TargetScope     string                   `json:"target_scope,omitempty"`
+	Requested       []string                 `json:"requested"`
+	Resolved        []map[string]interface{} `json:"resolved"`
+	Ambiguous       []map[string]interface{} `json:"ambiguous"`
+	Unresolved      []string                 `json:"unresolved"`
+	Offline         []map[string]interface{} `json:"offline,omitempty"`
+	Coverage        map[string]int           `json:"coverage"`
+	OperationStatus string                   `json:"operation_status"`
+}
+
+func makeHostResolveHandler(repo *repository.HostRepository, statusClient agentStatusClient) assistant.ToolHandler {
+	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+		return resolveHostTargetInput(ctx, repo, statusClient, args, getBoolArg(args, "require_online", false))
+	}
+}
+
+func validateHostResolveArgs(_ context.Context, args map[string]interface{}) error {
+	targetScope := strings.ToLower(strings.TrimSpace(getStringArg(args, "target_scope", "")))
+	selectorsRaw, selectorsProvided := args["host_selectors"]
+	if targetScope != "" {
+		if targetScope != hostTargetScopeAllOnline {
+			return fmt.Errorf("unsupported target_scope %q", targetScope)
+		}
+		if selectorsProvided && selectorsRaw != nil {
+			selectors, err := getStringSliceArg(args, "host_selectors")
+			if err != nil {
+				return fmt.Errorf("host_selectors: %w", err)
+			}
+			if len(selectors) > 0 {
+				return fmt.Errorf("target_scope and host_selectors are mutually exclusive")
+			}
+		}
+		return nil
+	}
+	if !selectorsProvided {
+		return fmt.Errorf("provide host_selectors or target_scope=all_online_hosts")
+	}
+	selectors, err := getStringSliceArg(args, "host_selectors")
+	if err != nil {
+		return fmt.Errorf("host_selectors: %w", err)
+	}
+	if len(selectors) == 0 {
+		return fmt.Errorf("at least one host selector is required")
+	}
+	return nil
+}
+
+// resolveHostTargetInput owns the boundary between model arguments and actual
+// host identities. Semantic scopes are enumerated server-side; literal
+// selectors remain available for precise user-provided targets.
+func resolveHostTargetInput(ctx context.Context, repo *repository.HostRepository, statusClient agentStatusClient, args map[string]interface{}, requireOnline bool) (*hostResolution, error) {
+	targetScope := strings.ToLower(strings.TrimSpace(getStringArg(args, "target_scope", "")))
+	selectorsRaw, selectorsProvided := args["host_selectors"]
+	if targetScope != "" {
+		if targetScope != hostTargetScopeAllOnline {
+			return nil, fmt.Errorf("unsupported target_scope %q", targetScope)
+		}
+		if selectorsProvided && selectorsRaw != nil {
+			selectors, err := getStringSliceArg(args, "host_selectors")
+			if err != nil {
+				return nil, fmt.Errorf("host_selectors: %w", err)
+			}
+			if len(selectors) > 0 {
+				return nil, fmt.Errorf("target_scope and host_selectors are mutually exclusive")
+			}
+		}
+		return resolveAllOnlineHosts(ctx, repo, statusClient)
+	}
+	if !selectorsProvided {
+		return nil, fmt.Errorf("provide host_selectors or target_scope=all_online_hosts")
+	}
+	selectors, err := getStringSliceArg(args, "host_selectors")
+	if err != nil {
+		return nil, fmt.Errorf("host_selectors: %w", err)
+	}
+	return resolveHostSelectors(ctx, repo, statusClient, selectors, requireOnline)
+}
+
+var compactIPSelectorPattern = regexp.MustCompile(`(?i)^\s*(\d{1,3})\s*(?:ip|号主机|号)?\s*$`)
+
+func resolveHostSelectors(ctx context.Context, repo *repository.HostRepository, statusClient agentStatusClient, selectors []string, requireOnline bool) (*hostResolution, error) {
+	if repo == nil {
+		return nil, fmt.Errorf("host repository not configured")
+	}
+	if len(selectors) == 0 {
+		return nil, fmt.Errorf("at least one host selector is required")
+	}
+	statuses := loadAgentRuntimeStatuses(ctx, statusClient)
+	result := &hostResolution{Requested: append([]string(nil), selectors...)}
+	seen := make(map[uuid.UUID]struct{})
+
+	for _, rawSelector := range selectors {
+		selector := strings.TrimSpace(rawSelector)
+		if selector == "" {
+			result.Unresolved = append(result.Unresolved, rawSelector)
+			continue
+		}
+
+		var candidates []model.Host
+		if hostID, err := uuid.Parse(selector); err == nil {
+			host, findErr := repo.FindByIDWithContext(ctx, hostID)
+			if findErr == nil && host != nil {
+				candidates = []model.Host{*host}
+			}
+		} else {
+			query := normalizeHostSelectorQuery(selector)
+			var findErr error
+			candidates, findErr = repo.FindAllWithContext(ctx, 1, 100, query)
+			if findErr != nil {
+				return nil, fmt.Errorf("resolve host selector %q: %w", selector, findErr)
+			}
+			candidates = preferExactHostCandidates(selector, query, candidates)
+		}
+
+		switch len(candidates) {
+		case 0:
+			result.Unresolved = append(result.Unresolved, selector)
+		case 1:
+			host := candidates[0]
+			if _, exists := seen[host.ID]; exists {
+				continue
+			}
+			seen[host.ID] = struct{}{}
+			item := decorateHostWithAgentStatus(host, statuses)
+			item["host_id"] = host.ID.String()
+			item["selector"] = selector
+			item["matched_by"] = hostSelectorMatchReason(selector, host)
+			if requireOnline && !isHostAgentOnlineWithRuntime(host, statuses) {
+				result.Offline = append(result.Offline, item)
+				continue
+			}
+			result.Resolved = append(result.Resolved, item)
+		default:
+			items := decorateHostsWithAgentStatus(candidates, statuses)
+			result.Ambiguous = append(result.Ambiguous, map[string]interface{}{
+				"selector":   selector,
+				"candidates": items,
+			})
+		}
+	}
+
+	finalizeHostResolution(result)
+	return result, nil
+}
+
+func resolveAllOnlineHosts(ctx context.Context, repo *repository.HostRepository, statusClient agentStatusClient) (*hostResolution, error) {
+	if repo == nil {
+		return nil, fmt.Errorf("host repository not configured")
+	}
+	hosts, err := repo.FindAllWithContext(ctx, 1, 1000, "")
+	if err != nil {
+		return nil, fmt.Errorf("list all online hosts: %w", err)
+	}
+	statuses := loadAgentRuntimeStatuses(ctx, statusClient)
+	result := &hostResolution{
+		TargetScope: hostTargetScopeAllOnline,
+		Requested:   []string{hostTargetScopeAllOnline},
+	}
+	for _, host := range filterHostsByAgentStatusWithRuntime(hosts, "online", statuses) {
+		item := decorateHostWithAgentStatus(host, statuses)
+		item["host_id"] = host.ID.String()
+		item["selector"] = hostTargetScopeAllOnline
+		item["matched_by"] = "target_scope"
+		result.Resolved = append(result.Resolved, item)
+	}
+	finalizeHostResolution(result)
+	return result, nil
+}
+
+func finalizeHostResolution(result *hostResolution) {
+	if result == nil {
+		return
+	}
+	result.Coverage = map[string]int{
+		"requested":  len(result.Requested),
+		"resolved":   len(result.Resolved),
+		"ambiguous":  len(result.Ambiguous),
+		"unresolved": len(result.Unresolved),
+		"offline":    len(result.Offline),
+	}
+	if len(result.Resolved) > 0 && len(result.Ambiguous) == 0 && len(result.Unresolved) == 0 && len(result.Offline) == 0 {
+		result.OperationStatus = "succeeded"
+		return
+	}
+	result.OperationStatus = "failed"
+}
+
+func hostSelectorMatchReason(selector string, host model.Host) string {
+	if _, err := uuid.Parse(strings.TrimSpace(selector)); err == nil {
+		return "host_uuid"
+	}
+	if strings.EqualFold(strings.TrimSpace(selector), host.IPAddress) {
+		return "ip_exact"
+	}
+	if strings.EqualFold(strings.TrimSpace(selector), host.Hostname) {
+		return "hostname_exact"
+	}
+	if normalizeHostSelectorQuery(selector) != strings.TrimSpace(selector) {
+		return "ip_token_unique"
+	}
+	return "query_unique"
+}
+
+func normalizeHostSelectorQuery(selector string) string {
+	if matches := compactIPSelectorPattern.FindStringSubmatch(selector); len(matches) == 2 {
+		return matches[1]
+	}
+	return selector
+}
+
+func preferExactHostCandidates(selector, normalized string, candidates []model.Host) []model.Host {
+	exact := make([]model.Host, 0, len(candidates))
+	for _, host := range candidates {
+		if strings.EqualFold(host.IPAddress, selector) || strings.EqualFold(host.Hostname, selector) {
+			exact = append(exact, host)
+			continue
+		}
+		if normalized != selector && strings.HasSuffix(host.IPAddress, "."+normalized) {
+			exact = append(exact, host)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return candidates
 }
 
 func makeHostListHandler(repo *repository.HostRepository, statusClient agentStatusClient) assistant.ToolHandler {

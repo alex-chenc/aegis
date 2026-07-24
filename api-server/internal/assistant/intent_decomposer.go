@@ -21,7 +21,7 @@ const intentDecomposerSystemPrompt = `You are the intent decomposer for the Aegi
 
 Requirements:
 1. Output candidate_capabilities only as machine-readable capability identifiers, never as final tool_name values.
-2. Every candidate_capabilities item MUST be copied exactly from the Available capability catalog and must match ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$. Never translate a capability, summarize it, or invent a new identifier.
+2. Every candidate_capabilities item MUST be copied exactly from the Available capability catalog and must match ^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$. Every workflow_ids item MUST be copied exactly from the Available workflow cards. Never translate, summarize, or invent either identifier.
 3. Infer write intent only when the original user message explicitly asks to execute, collect, scan, repair, block, generate, dispatch, or otherwise change state.
 4. If an object, action, or scope is genuinely ambiguous, set need_clarification=true and provide one concise question.
 5. Preserve page references such as "this alert" or "current host" as object references. Never invent a real ID.
@@ -33,7 +33,7 @@ Requirements:
 11. Natural-language fields such as goal, reason, and clarifying_question may follow the user's language. Machine identifiers must remain English.
 
 Output schema:
-{"goal":"","domains":[],"actions":[],"objects":[{"type":"","id":"","selector":""}],"scope":{"kind":"unspecified","object_ids":[]},"parameters":{},"constraints":[],"missing_info":[],"requires_write":false,"risk_hint":"readonly","candidate_capabilities":[],"need_clarification":false,"clarifying_question":"","reason":"","confidence":0.8}`
+{"goal":"","domains":[],"actions":[],"objects":[{"type":"","id":"","selector":""}],"scope":{"kind":"unspecified","object_ids":[]},"parameters":{},"constraints":[],"missing_info":[],"requires_write":false,"risk_hint":"readonly","workflow_ids":[],"candidate_capabilities":[],"need_clarification":false,"clarifying_question":"","reason":"","confidence":0.8}`
 
 type LLMClientFactory func(ctx context.Context) (*llm.LLMClient, error)
 
@@ -43,6 +43,7 @@ type IntentDecomposeInput struct {
 	ContextRefs            []ContextRefInput       `json:"context_refs,omitempty"`
 	CandidateCapabilities  []string                `json:"candidate_capabilities,omitempty"`
 	AvailableCapabilities  []CapabilityCatalogItem `json:"available_capabilities,omitempty"`
+	AvailableWorkflows     []WorkflowSpec          `json:"available_workflows,omitempty"`
 	EnableLLMDecomposition bool                    `json:"enable_llm_decomposition,omitempty"`
 }
 
@@ -118,10 +119,11 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nAvailable capability catalog (candidate_capabilities may contain only exact capability values from this catalog):\n%s\n\nExisting candidate capabilities:\n%s",
+	userPrompt := fmt.Sprintf("User message:\n%s\n\nUpstream LLM intent:\n%s\n\nContext references:\n%s\n\nAvailable workflow cards (workflow_ids may contain only exact IDs from these cards):\n%s\n\nAvailable capability catalog (candidate_capabilities may contain only exact capability values from this catalog):\n%s\n\nExisting candidate capabilities:\n%s",
 		input.Query,
 		encodeJSON(input.Intent),
 		encodeJSON(input.ContextRefs),
+		encodeJSON(input.AvailableWorkflows),
 		encodeJSON(input.AvailableCapabilities),
 		encodeJSON(input.CandidateCapabilities),
 	)
@@ -139,7 +141,7 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 		return nil, err
 	}
 	normalizeIntentBreakdown(&breakdown, input)
-	if err := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities); err != nil {
+	if err := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities, input.AvailableWorkflows); err != nil {
 		logger.Warn("assistant intent breakdown contract correction requested",
 			zap.Int("attempt", 1),
 			zap.String("error_category", "contract_validation"),
@@ -161,7 +163,7 @@ func requestLLMIntentBreakdown(ctx context.Context, client *llm.LLMClient, input
 			return nil, fmt.Errorf("correct invalid intent breakdown: %w", retryErr)
 		}
 		normalizeIntentBreakdown(&breakdown, input)
-		if retryErr := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities); retryErr != nil {
+		if retryErr := validateIntentBreakdownAgainstCatalog(&breakdown, input.AvailableCapabilities, input.AvailableWorkflows); retryErr != nil {
 			return nil, fmt.Errorf("intent breakdown contract invalid after correction: %w", retryErr)
 		}
 	}
@@ -199,9 +201,14 @@ func normalizeIntentBreakdown(value *IntentBreakdown, input IntentDecomposeInput
 		capabilities[i] = strings.ToLower(strings.TrimSpace(capabilities[i]))
 	}
 	value.CandidateCapabilities = dedupeStrings(capabilities)
+	for index := range value.WorkflowIDs {
+		value.WorkflowIDs[index] = strings.ToLower(strings.TrimSpace(value.WorkflowIDs[index]))
+	}
+	value.WorkflowIDs = dedupeStrings(value.WorkflowIDs)
 	if value.Parameters == nil {
 		value.Parameters = IntentParameters{}
 	}
+	normalizeWorkflowIntentBreakdown(value)
 }
 
 func validateIntentBreakdown(value *IntentBreakdown) error {
@@ -228,12 +235,9 @@ func validateIntentBreakdown(value *IntentBreakdown) error {
 	return nil
 }
 
-func validateIntentBreakdownAgainstCatalog(value *IntentBreakdown, catalog []CapabilityCatalogItem) error {
+func validateIntentBreakdownAgainstCatalog(value *IntentBreakdown, catalog []CapabilityCatalogItem, workflows []WorkflowSpec) error {
 	if err := validateIntentBreakdown(value); err != nil {
 		return err
-	}
-	if len(catalog) == 0 {
-		return nil
 	}
 	available := make(map[string]struct{}, len(catalog))
 	for _, item := range catalog {
@@ -244,6 +248,15 @@ func validateIntentBreakdownAgainstCatalog(value *IntentBreakdown, catalog []Cap
 	for _, capability := range value.CandidateCapabilities {
 		if _, ok := available[capability]; !ok {
 			return fmt.Errorf("candidate_capabilities item %q is not present in the available capability catalog", capability)
+		}
+	}
+	availableWorkflows := make(map[string]struct{}, len(workflows))
+	for _, workflow := range workflows {
+		availableWorkflows[workflow.ID] = struct{}{}
+	}
+	for _, workflowID := range value.WorkflowIDs {
+		if _, ok := availableWorkflows[workflowID]; !ok {
+			return fmt.Errorf("workflow_ids item %q is not present in the available workflow cards", workflowID)
 		}
 	}
 	return nil

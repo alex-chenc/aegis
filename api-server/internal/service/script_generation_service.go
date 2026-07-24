@@ -55,6 +55,11 @@ func NewScriptGenerationService(
 
 // StartWorkers 启动脚本生成 Worker
 func (s *ScriptGenerationService) StartWorkers(ctx context.Context) {
+	if err := s.ruleRepo.ResetQueuedScriptGeneration(); err != nil {
+		logger.Warn("failed to recover queued script generation state",
+			zap.Error(err),
+		)
+	}
 	logger.Info("starting script generation workers",
 		zap.Int("count", s.workerCount),
 	)
@@ -200,6 +205,18 @@ func (s *ScriptGenerationService) processScriptGeneration(ctx context.Context, w
 
 // QueueScriptGeneration 将脚本生成任务加入队列
 func (s *ScriptGenerationService) QueueScriptGeneration(ruleID uuid.UUID, scriptType string) error {
+	_, err := s.queueScriptGeneration(ruleID, scriptType)
+	return err
+}
+
+func (s *ScriptGenerationService) queueScriptGeneration(ruleID uuid.UUID, scriptType string) (bool, error) {
+	claimed, err := s.ruleRepo.ClaimScriptGeneration(ruleID, scriptType)
+	if err != nil {
+		return false, fmt.Errorf("claim script generation: %w", err)
+	}
+	if !claimed {
+		return false, nil
+	}
 	task := GenerateTask{
 		RuleID:     ruleID,
 		ScriptType: scriptType,
@@ -207,16 +224,20 @@ func (s *ScriptGenerationService) QueueScriptGeneration(ruleID uuid.UUID, script
 
 	select {
 	case s.generateQueue <- task:
-		logger.Info("script generation queued",
+		logger.Debug("script generation queued",
 			zap.String("rule_id", ruleID.String()),
 			zap.String("script_type", scriptType),
 		)
-		return nil
+		return true, nil
 	default:
-		logger.Error("script generation queue is full",
-			zap.String("rule_id", ruleID.String()),
-		)
-		return fmt.Errorf("script generation queue is full")
+		if releaseErr := s.ruleRepo.ReleaseQueuedScriptGeneration(ruleID, scriptType); releaseErr != nil {
+			logger.Warn("failed to release script generation queue claim",
+				zap.String("rule_id", ruleID.String()),
+				zap.String("script_type", scriptType),
+				zap.Error(releaseErr),
+			)
+		}
+		return false, fmt.Errorf("script generation queue is full")
 	}
 }
 
@@ -230,6 +251,7 @@ type BatchGenerateResult struct {
 	Queued    int `json:"queued"`
 	Skipped   int `json:"skipped"`
 	Generated int `json:"generated"`
+	Deferred  int `json:"deferred"`
 }
 
 func (s *ScriptGenerationService) BatchGenerateForTemplate(ctx context.Context, templateID uuid.UUID, scriptType string, maxConcurrency int) (*BatchGenerateResult, error) {
@@ -239,7 +261,7 @@ func (s *ScriptGenerationService) BatchGenerateForTemplate(ctx context.Context, 
 	}
 
 	result := &BatchGenerateResult{Total: len(rules)}
-	var queued, skipped, generated int
+	var queued, skipped, generated, deferred int
 
 	for _, rule := range rules {
 		var hasScript bool
@@ -258,24 +280,27 @@ func (s *ScriptGenerationService) BatchGenerateForTemplate(ctx context.Context, 
 			continue
 		}
 
-		if status == "generating" {
+		if status == "queued" || status == "generating" {
 			skipped++
 			continue
 		}
 
-		if err := s.QueueScriptGeneration(rule.ID, scriptType); err != nil {
-			logger.Error("failed to queue script generation",
-				zap.Error(err),
-				zap.String("rule_id", rule.ID.String()),
-			)
+		claimed, queueErr := s.queueScriptGeneration(rule.ID, scriptType)
+		if queueErr != nil {
+			deferred++
 			continue
 		}
-		queued++
+		if claimed {
+			queued++
+		} else {
+			skipped++
+		}
 	}
 
 	result.Queued = queued
 	result.Skipped = skipped
 	result.Generated = generated
+	result.Deferred = deferred
 
 	logger.Info("batch script generation queued",
 		zap.String("template_id", templateID.String()),
@@ -284,6 +309,7 @@ func (s *ScriptGenerationService) BatchGenerateForTemplate(ctx context.Context, 
 		zap.Int("queued", result.Queued),
 		zap.Int("skipped", result.Skipped),
 		zap.Int("generated", result.Generated),
+		zap.Int("deferred", result.Deferred),
 	)
 
 	return result, nil

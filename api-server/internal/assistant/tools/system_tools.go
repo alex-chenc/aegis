@@ -15,7 +15,7 @@ func RegisterSystemTools(registry *assistant.ToolRegistry, catalog *assistant.To
 		Domain:             assistant.DomainSystem,
 		Operation:          assistant.OpSearch,
 		Capability:         "search_available_tools",
-		Description:        "搜索可用工具。当当前工具不足以完成任务时，使用此工具发现其他可用工具。返回匹配的工具列表，但不直接注入到当前运行中。",
+		Description:        "Search discoverable primary and contextual tools when the current tool set is insufficient; results are not injected into the current run automatically.",
 		Aliases:            []string{"搜索工具", "查找工具", "search tools", "find tools"},
 		Tags:               []string{"meta", "system", "tool-search"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -29,21 +29,21 @@ func RegisterSystemTools(registry *assistant.ToolRegistry, catalog *assistant.To
 			"properties": map[string]interface{}{
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "搜索关键词，可以是工具名、域名、操作类型或功能描述",
+					"description": "Tool name, domain, operation, capability, alias, tag, or functional keyword.",
 				},
 				"domains": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "按域过滤，如 host, detection, package 等",
+					"description": "Optional domain filters such as host, detection, or package.",
 				},
 				"operations": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "按操作类型过滤，如 list, get, create, update 等",
+					"description": "Optional operation filters such as list, get, create, or update.",
 				},
 				"max_results": map[string]interface{}{
 					"type":        "integer",
-					"description": "最大返回结果数，默认 10",
+					"description": "Maximum result count; defaults to 10.",
 				},
 			},
 			"required": []string{"query"},
@@ -59,7 +59,7 @@ func RegisterSystemTools(registry *assistant.ToolRegistry, catalog *assistant.To
 		Domain:             assistant.DomainSystem,
 		Operation:          assistant.OpGet,
 		Capability:         "get_session_context",
-		Description:        "获取当前会话的上下文信息，包括关联的主机、告警、任务等对象",
+		Description:        "Get current session context, including referenced hosts, alerts, tasks, and other objects.",
 		Aliases:            []string{"获取上下文", "上下文信息"},
 		Tags:               []string{"meta", "system", "context"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -83,7 +83,7 @@ func RegisterSystemTools(registry *assistant.ToolRegistry, catalog *assistant.To
 		Domain:             assistant.DomainSystem,
 		Operation:          assistant.OpGet,
 		Capability:         "summarize_session",
-		Description:        "总结当前会话的对话历史，生成摘要",
+		Description:        "Summarize the current conversation history while preserving object and operation references.",
 		Aliases:            []string{"会话总结", "对话摘要"},
 		Tags:               []string{"meta", "system", "session"},
 		Risk:               assistant.ToolRiskReadonly,
@@ -111,7 +111,7 @@ func makeToolSearchHandler(catalog *assistant.ToolCatalog) assistant.ToolHandler
 		if query == "" {
 			return map[string]interface{}{
 				"matches": []interface{}{},
-				"message": "请提供搜索关键词",
+				"message": "Provide a search keyword.",
 			}, nil
 		}
 
@@ -178,9 +178,9 @@ func summarizeArgsSchema(schema map[string]interface{}) string {
 	var parts []string
 	for name := range props {
 		if requiredSet[name] {
-			parts = append(parts, name+"(必填)")
+			parts = append(parts, name+" (required)")
 		} else {
-			parts = append(parts, name+"(可选)")
+			parts = append(parts, name+" (optional)")
 		}
 	}
 	return fmt.Sprintf("%v", parts)
@@ -192,7 +192,7 @@ func makeContextGetHandler(contextLoader interface{}) assistant.ToolHandler {
 		// Context.Get 返回当前上下文信息
 		// 实际实现需要从 session 中获取 context refs
 		return map[string]interface{}{
-			"message": "上下文信息已通过系统提示注入",
+			"message": "Session context is already injected through the system prompt.",
 		}, nil
 	}
 }
@@ -201,7 +201,7 @@ func makeContextGetHandler(contextLoader interface{}) assistant.ToolHandler {
 func makeSessionSummarizeHandler() assistant.ToolHandler {
 	return func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 		return map[string]interface{}{
-			"message": "会话总结功能由 agent-runtime 内置处理",
+			"message": "Conversation summarization is handled by the agent runtime.",
 		}, nil
 	}
 }

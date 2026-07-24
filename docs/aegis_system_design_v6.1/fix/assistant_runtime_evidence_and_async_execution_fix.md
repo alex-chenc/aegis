@@ -1,5 +1,10 @@
 # 纯智能体证据可见性与异步执行可靠性修复
 
+> **工具选举章节已被 2026-07-24 方案替代**：本文关于
+> `InitialPlan=nil`、动态 Planner 选举工具和 Runtime 固化模型候选工具的内容不再
+> 适用。Runtime 只能执行 capability Mapping 已绑定的不可变步骤；本文关于
+> observation、异步轮询、终态证据和最终回答真实性的设计仍然有效。
+
 ## 1. 问题、范围和成功标准
 
 最新受控会话 `asst_ebe8fda3` / `run_b6451bbe` 已证明 capability exact mapping、

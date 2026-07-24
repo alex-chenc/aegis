@@ -104,6 +104,46 @@ func TestToolDecisionEngineDoesNotUseDomainRecallOrWrongPreselection(t *testing.
 	}
 }
 
+func TestToolDecisionEngineRoundsExplicitToolThroughCapabilityMapping(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "Example.Apply",
+		Domain:             DomainSystem,
+		Operation:          OpExecute,
+		Capability:         "apply_example",
+		Description:        "apply example",
+		ObjectTypes:        []string{"example"},
+		Risk:               ToolRiskMedium,
+		DefaultWhitelisted: false,
+	})
+	intent := IntentResult{
+		Domains:          []string{"system"},
+		Action:           "execute",
+		Object:           "example",
+		NeedWrite:        true,
+		RiskHint:         ToolRiskMedium,
+		Confidence:       0.9,
+		ExplicitToolName: "Example.Apply",
+	}
+	breakdown := makeDecisionBreakdown(t, "execute Example.Apply", intent, nil, nil)
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:     "execute Example.Apply",
+		Intent:    intent,
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.ToolNames(); len(got) != 1 || got[0] != "Example.Apply" {
+		t.Fatalf("explicit tool did not round-trip through Mapping: %v", got)
+	}
+	step := findPlanStep(plan, "Example.Apply")
+	if step == nil || step.Capability != "apply_example" {
+		t.Fatalf("mapped capability missing from execution step: %#v", step)
+	}
+}
+
 func TestToolDecisionEngineAllowsRequiredArgFromPreviousStepForAnyTool(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, spec := range []*ToolSpec{
@@ -139,6 +179,117 @@ func TestToolDecisionEngineAllowsRequiredArgFromPreviousStepForAnyTool(t *testin
 	apply := findPlanStep(plan, "Example.Apply")
 	if apply == nil || apply.ArgSources["resource_id"].SourceType != "previous_step" {
 		t.Fatalf("expected generic previous-step binding, got %#v", apply)
+	}
+}
+
+func TestToolDecisionEngineBindsBaselineWorkflowScopeTemplateAndRemediation(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Host.Resolve", Domain: DomainHost, Operation: OpGet, Capability: "resolve_hosts", Description: "resolve hosts", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Baseline.Compliance.Run", Domain: DomainBaseline, Operation: OpExecute, Capability: "run_baseline_compliance", Description: "run baseline compliance", ObjectTypes: []string{"host", "baseline_template"}, Risk: ToolRiskHigh, DefaultWhitelisted: false, RequiresApproval: true, ExecutionContract: ToolExecutionContract{Mode: ToolExecutionAsynchronous, CompletionCapability: "get_operation_status"}, ArgsSchema: requiredSchema("template_selector")},
+		{Name: "Operation.Get", Domain: DomainSystem, Operation: OpGet, Capability: "get_operation_status", Description: "get operation", ObjectTypes: []string{"operation"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("operation_id")},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+	intent := IntentResult{Domains: []string{"baseline"}, Action: "execute", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.95}
+	breakdown := makeDecisionBreakdown(t, "scan every online host with CIS Ubuntu and remediate five rounds", intent, nil, []string{"resolve_hosts", "run_baseline_compliance"})
+	breakdown.Scope = IntentScope{Kind: "all_alive_hosts", Source: "llm"}
+	breakdown.Objects = append(breakdown.Objects, IntentObject{Type: "baseline_template", ID: "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf", Source: "llm"})
+	breakdown.Parameters = IntentParameters{"auto_remediate": true, "remediation_rounds": float64(5), "baseline_rules": "all"}
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{Query: "run baseline", Intent: intent, Breakdown: breakdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.ToolNames(); len(got) != 3 || got[0] != "Host.Resolve" || got[1] != "Baseline.Compliance.Run" || got[2] != "Operation.Get" {
+		t.Fatalf("unexpected deterministic baseline plan order: %v", got)
+	}
+	resolve := findPlanStep(plan, "Host.Resolve")
+	baseline := findPlanStep(plan, "Baseline.Compliance.Run")
+	if resolve.Args["target_scope"] != "all_online_hosts" {
+		t.Fatalf("host scope was not normalized: %#v", resolve.Args)
+	}
+	if baseline.Args["target_scope"] != "all_online_hosts" || baseline.Args["template_selector"] != "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf" || baseline.Args["scope"] != "all_rules" {
+		t.Fatalf("baseline deterministic args missing: %#v", baseline.Args)
+	}
+	remediation, ok := baseline.Args["remediation"].(map[string]interface{})
+	if !ok || remediation["enabled"] != true || remediation["max_rounds"] != 5 {
+		t.Fatalf("remediation policy missing: %#v", baseline.Args)
+	}
+}
+
+func TestToolDecisionEngineCompilesCapturedBaselineIntentWithoutModelArguments(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Host.Resolve", Domain: DomainHost, Operation: OpGet, Capability: "resolve_hosts", Description: "resolve hosts", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Baseline.Compliance.Run", Domain: DomainBaseline, Operation: OpExecute, Capability: "run_baseline_compliance", Description: "run baseline compliance", ObjectTypes: []string{"host", "baseline_template"}, Risk: ToolRiskHigh, DefaultWhitelisted: false, RequiresApproval: true, ExecutionContract: ToolExecutionContract{Mode: ToolExecutionAsynchronous, CompletionCapability: "get_operation_status"}, ArgsSchema: requiredSchema("template_selector")},
+		{Name: "Operation.Get", Domain: DomainSystem, Operation: OpGet, Capability: "get_operation_status", Description: "get operation", ObjectTypes: []string{"operation"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("operation_id")},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+	intent := IntentResult{Domains: []string{"baseline"}, Action: "execute", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.95}
+	breakdown := makeDecisionBreakdown(t, "给存活的机器下发基线并自动修复5轮", intent, nil, []string{"resolve_hosts", "run_baseline_compliance"})
+	breakdown.Scope = IntentScope{Kind: "unspecified"}
+	breakdown.Objects = []IntentObject{
+		{Type: "machine", Selector: "live"},
+		{Type: "baseline", ID: "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf"},
+	}
+	breakdown.Parameters = IntentParameters{"auto_repair": true, "repair_rounds": float64(5)}
+	breakdown.WorkflowIDs = []string{"baseline_compliance"}
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: "给存活的机器下发基线并自动修复5轮", Intent: intent})
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{Query: "run baseline", Intent: intent, Breakdown: breakdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usesDeterministicBaselineWorkflow(plan) {
+		t.Fatalf("captured production intent must produce a fixed baseline plan: %#v", plan)
+	}
+	baseline := findPlanStep(plan, "Baseline.Compliance.Run")
+	remediation, ok := baseline.Args["remediation"].(map[string]interface{})
+	if !ok || remediation["enabled"] != true || remediation["max_rounds"] != 5 {
+		t.Fatalf("compiled remediation = %#v, want enabled with five rounds", baseline.Args)
+	}
+}
+
+func TestToolDecisionEngineCompilesLatestProductionBaselineAliases(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, spec := range []*ToolSpec{
+		{Name: "Host.Resolve", Domain: DomainHost, Operation: OpGet, Capability: "resolve_hosts", Description: "resolve hosts", ObjectTypes: []string{"host"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Baseline.Compliance.Run", Domain: DomainBaseline, Operation: OpExecute, Capability: "run_baseline_compliance", Description: "run baseline compliance", ObjectTypes: []string{"host", "baseline_template"}, Risk: ToolRiskHigh, DefaultWhitelisted: false, RequiresApproval: true, ExecutionContract: ToolExecutionContract{Mode: ToolExecutionAsynchronous, CompletionCapability: "get_operation_status"}, ArgsSchema: requiredSchema("template_selector")},
+		{Name: "Operation.Get", Domain: DomainSystem, Operation: OpGet, Capability: "get_operation_status", Description: "get operation", ObjectTypes: []string{"operation"}, Risk: ToolRiskReadonly, DefaultWhitelisted: true, ArgsSchema: requiredSchema("operation_id")},
+	} {
+		registerDecisionTestTool(t, registry, spec)
+	}
+	intent := IntentResult{Domains: []string{"baseline"}, Action: "execute", NeedWrite: true, RiskHint: ToolRiskHigh, Confidence: 0.95}
+	breakdown := makeDecisionBreakdown(t, "给存活机器下发基线并自动修复5轮", intent, nil, []string{"resolve_hosts", "run_baseline_compliance"})
+	breakdown.Scope = IntentScope{Kind: "all_online_hosts"}
+	breakdown.Objects = []IntentObject{
+		{Type: "host", Selector: "alive"},
+		{Type: "baseline_template", Selector: "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf"},
+	}
+	breakdown.Parameters = IntentParameters{"auto_remediate": true, "retry_rounds": float64(5)}
+	breakdown.WorkflowIDs = []string{"baseline_compliance"}
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: "给存活机器下发基线并自动修复5轮", Intent: intent})
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:     "run baseline",
+		Intent:    intent,
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usesDeterministicBaselineWorkflow(plan) {
+		t.Fatalf("latest production intent must bind a deterministic baseline plan: %#v", plan)
+	}
+	baseline := findPlanStep(plan, "Baseline.Compliance.Run")
+	if baseline == nil || baseline.Args["template_selector"] != "CIS_Ubuntu_Linux_24.04_LTS_Benchmark_v2.0.0-12-971.pdf" {
+		t.Fatalf("template selector was not compiled: %#v", baseline)
+	}
+	remediation, ok := baseline.Args["remediation"].(map[string]interface{})
+	if !ok || remediation["max_rounds"] != 5 {
+		t.Fatalf("retry_rounds alias did not preserve five rounds: %#v", baseline.Args)
 	}
 }
 

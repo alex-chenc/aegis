@@ -7,8 +7,10 @@ import (
 
 	"api-server/internal/assistant"
 	"api-server/internal/model"
+	"api-server/internal/repository"
 	"api-server/internal/service"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // TaskServiceForTools 任务服务接口（基线检查/修复）
@@ -37,16 +39,24 @@ type BaselineToolDeps struct {
 	TemplateRepo     TemplateRepositoryForTools
 	RuleRepo         RuleRepositoryForTools
 	ScriptGenService ScriptGenerationServiceForTools
+	HostRepo         *repository.HostRepository
+	ServerClient     agentStatusClient
+	OperationRepo    AssistantOperationRepositoryForTools
+	TaskLogRepo      TaskGroupRepositoryForTools
+	Logger           *zap.Logger
 }
 
 // RegisterBaselineTools 注册基线写操作工具
 func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDeps) error {
+	if err := registerBaselineComplianceTools(registry, deps); err != nil {
+		return err
+	}
 	if err := registry.Register(&assistant.ToolSpec{
 		Name:               "Baseline.Template.List",
 		Domain:             assistant.DomainBaseline,
 		Operation:          assistant.OpList,
 		Capability:         "list_baseline_templates",
-		Description:        "查询基线模板列表，包括解析状态和规则数量",
+		Description:        "List baseline templates with parsing status and rule count.",
 		Aliases:            []string{"基线模板", "基线上传记录", "模板列表"},
 		Tags:               []string{"baseline", "template", "rule"},
 		ObjectTypes:        []string{"baseline_template"},
@@ -59,8 +69,8 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"page":      map[string]interface{}{"type": "integer", "description": "页码，默认1"},
-				"page_size": map[string]interface{}{"type": "integer", "description": "每页数量，默认20"},
+				"page":      map[string]interface{}{"type": "integer", "description": "One-based page number; defaults to 1."},
+				"page_size": map[string]interface{}{"type": "integer", "description": "Items per page; defaults to 20."},
 			},
 		},
 		Handler: makeBaselineTemplateListHandler(deps.TemplateRepo),
@@ -73,7 +83,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:             assistant.DomainBaseline,
 		Operation:          assistant.OpGet,
 		Capability:         "get_baseline_template_status",
-		Description:        "查询基线模板解析状态、错误信息和规则数量",
+		Description:        "Get baseline template parsing status, error details, and rule count.",
 		Aliases:            []string{"模板解析状态", "基线识别状态", "基线解析进度"},
 		Tags:               []string{"baseline", "template", "status"},
 		ObjectTypes:        []string{"baseline_template"},
@@ -86,7 +96,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{"type": "string", "description": "基线模板ID"},
+				"template_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact baseline template UUID."},
 			},
 			"required": []string{"template_id"},
 		},
@@ -100,7 +110,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:             assistant.DomainBaseline,
 		Operation:          assistant.OpList,
 		Capability:         "list_baseline_template_rules",
-		Description:        "查询基线模板识别出的规则列表和脚本生成状态",
+		Description:        "List rules parsed from a baseline template and their script-generation status.",
 		Aliases:            []string{"基线规则", "模板规则", "基线识别结果"},
 		Tags:               []string{"baseline", "template", "rule", "script"},
 		ObjectTypes:        []string{"baseline_template", "baseline_rule"},
@@ -113,7 +123,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{"type": "string", "description": "基线模板ID"},
+				"template_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact baseline template UUID."},
 			},
 			"required": []string{"template_id"},
 		},
@@ -127,7 +137,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:             assistant.DomainBaseline,
 		Operation:          assistant.OpGenerate,
 		Capability:         "generate_baseline_scripts",
-		Description:        "为基线模板或指定规则生成检测/修复脚本",
+		Description:        "Generate CHECK or FIX scripts for a baseline template or explicit rule UUIDs.",
 		Aliases:            []string{"生成基线脚本", "自动生成检测脚本", "自动生成修复脚本", "基线脚本生成"},
 		Tags:               []string{"baseline", "script", "generate", "check", "fix"},
 		ObjectTypes:        []string{"baseline_template", "baseline_rule"},
@@ -140,13 +150,13 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{"type": "string", "description": "基线模板ID；提供后按模板批量生成"},
+				"template_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Baseline template UUID for server-side batch generation."},
 				"rule_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "规则ID列表；未提供 template_id 时使用",
+					"description": "Explicit rule UUIDs used only when template_id is omitted.",
 				},
-				"script_type": map[string]interface{}{"type": "string", "description": "脚本类型：CHECK 或 FIX"},
+				"script_type": map[string]interface{}{"type": "string", "enum": []interface{}{"CHECK", "FIX"}, "description": "Script type: CHECK or FIX."},
 			},
 			"required": []string{"script_type"},
 		},
@@ -160,7 +170,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:             "baseline",
 		Operation:          "run_check",
 		Capability:         "run_baseline_check",
-		Description:        "触发基线检查任务，将检查脚本下发到指定主机执行",
+		Description:        "Create and dispatch baseline CHECK tasks for explicit rule UUIDs and host UUIDs.",
 		ModelDescription:   "Create and dispatch baseline check tasks for explicit rule IDs and host IDs.",
 		Risk:               assistant.ToolRiskMedium,
 		Enabled:            true,
@@ -171,20 +181,20 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 				"rule_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "规则ID列表",
+					"description": "Exact baseline rule UUIDs.",
 				},
 				"host_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "主机ID列表",
+					"description": "Exact target host UUIDs.",
 				},
 				"auto_verify": map[string]interface{}{
 					"type":        "boolean",
-					"description": "是否启用自动验证：检测到不合规项后自动下发修复并复查，直到通过或达到最大轮次。默认 false。",
+					"description": "Enable automatic remediation and recheck for noncompliant results; defaults to false.",
 				},
 				"max_rounds": map[string]interface{}{
 					"type":        "integer",
-					"description": "自动验证最大轮次（仅 auto_verify=true 时生效），默认 3。",
+					"description": "Maximum automatic verification rounds when auto_verify is true; defaults to 3.",
 				},
 			},
 			"required": []string{"rule_ids", "host_ids"},
@@ -199,7 +209,7 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 		Domain:             "baseline",
 		Operation:          "run_fix",
 		Capability:         "run_baseline_fix",
-		Description:        "触发基线修复任务，将修复脚本下发到指定主机执行（高风险操作）",
+		Description:        "Create and dispatch high-risk baseline FIX tasks for explicit rule UUIDs and host UUIDs after approval.",
 		ModelDescription:   "Create and dispatch baseline remediation tasks for explicit rule IDs and host IDs after approval.",
 		Risk:               assistant.ToolRiskHigh,
 		Enabled:            true,
@@ -210,20 +220,20 @@ func RegisterBaselineTools(registry *assistant.ToolRegistry, deps BaselineToolDe
 				"rule_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "规则ID列表",
+					"description": "Exact baseline rule UUIDs.",
 				},
 				"host_ids": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "主机ID列表",
+					"description": "Exact target host UUIDs.",
 				},
 				"auto_verify": map[string]interface{}{
 					"type":        "boolean",
-					"description": "是否启用自动验证：修复后自动复查，直到通过或达到最大轮次。默认 false。",
+					"description": "Enable automatic recheck after remediation until compliant or max_rounds is reached; defaults to false.",
 				},
 				"max_rounds": map[string]interface{}{
 					"type":        "integer",
-					"description": "自动验证最大轮次（仅 auto_verify=true 时生效），默认 3。",
+					"description": "Maximum automatic verification rounds when auto_verify is true; defaults to 3.",
 				},
 			},
 			"required": []string{"rule_ids", "host_ids"},
@@ -358,9 +368,9 @@ func makeBaselineScriptGenerateHandler(svc ScriptGenerationServiceForTools) assi
 func baselineScriptNextAction(scriptType string) string {
 	switch strings.ToUpper(strings.TrimSpace(scriptType)) {
 	case "CHECK":
-		return "检测脚本已处理；如果用户要求完整基线闭环，继续调用 Baseline.Script.Generate，script_type=FIX。"
+		return "CHECK scripts were queued or already available. For a remediation workflow, prepare FIX scripts before dispatching checks."
 	case "FIX":
-		return "修复脚本已处理；如果用户提供了 rule_ids 和 host_ids，继续调用 Task.RunCheck 下发检测任务，然后按用户要求调用 Task.RunFix，最后用 Task.List 或 Task.GetDetail 查询状态。"
+		return "FIX scripts were queued or already available. Dispatch CHECK tasks first, then use the approved remediation workflow and monitor the task group."
 	default:
 		return ""
 	}
@@ -388,10 +398,12 @@ func makeRunCheckHandler(svc TaskServiceForTools) assistant.ToolHandler {
 		}
 
 		return map[string]interface{}{
-			"task_group_id": result.TaskGroupID.String(),
-			"task_ids":      result.TaskIDs,
-			"task_type":     "CHECK",
-			"next_action":   "检测任务已下发；如果用户要求修复，继续调用 Task.RunFix，使用相同 rule_ids 和 host_ids；随后调用 Task.List 或 Task.GetDetail 查看任务状态。",
+			"task_group_id":  result.TaskGroupID.String(),
+			"task_ids":       result.TaskIDs,
+			"task_type":      "CHECK",
+			"next_action":    "The CHECK task group was created. Monitor the group; use the approved remediation workflow for any required FIX action.",
+			"expected_count": result.ExpectedCount,
+			"created_count":  result.CreatedCount,
 			"task_ref": buildTaskRef(
 				"baseline_task",
 				result.TaskGroupID.String(),
@@ -425,10 +437,12 @@ func makeRunFixHandler(svc TaskServiceForTools) assistant.ToolHandler {
 		}
 
 		return map[string]interface{}{
-			"task_group_id": result.TaskGroupID.String(),
-			"task_ids":      result.TaskIDs,
-			"task_type":     "FIX",
-			"next_action":   "修复任务已下发；继续调用 Task.List 或 Task.GetDetail 查询任务状态和结果。",
+			"task_group_id":  result.TaskGroupID.String(),
+			"task_ids":       result.TaskIDs,
+			"task_type":      "FIX",
+			"next_action":    "The FIX task group was created. Monitor the group until every task reaches a terminal state.",
+			"expected_count": result.ExpectedCount,
+			"created_count":  result.CreatedCount,
 			"task_ref": buildTaskRef(
 				"baseline_task",
 				result.TaskGroupID.String(),

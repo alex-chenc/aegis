@@ -31,7 +31,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpGenerate,
 		Capability:         "weak_password_dictionary_generation",
-		Description:        "根据自然语言调用 AI 生成弱密码字典并保存，复用弱密码模块的 AI 字典生成接口",
+		Description:        "Generate and save a weak-password dictionary from natural-language requirements using the weak-password AI generation service.",
 		Aliases:            []string{"AI生成弱密码", "生成弱密码字典", "弱密码字典生成", "AI 一键生成字典"},
 		Tags:               []string{"weak_password", "credential", "dictionary", "ai", "v6.1"},
 		ObjectTypes:        []string{"dictionary"},
@@ -47,12 +47,12 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			Component: "weak_password_service",
 			File:      "api-server/internal/service/weak_password_service.go",
 			Function:  "GenerateAIDictionary",
-			Notes:     "只调用 LLM 生成并保存字典，不使用随机硬编码兜底。",
+			Notes:     "Uses the LLM generation and persistence path without a random hard-coded fallback.",
 		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"natural_language": map[string]interface{}{"type": "string", "description": "生成弱密码字典的自然语言要求"},
+				"natural_language": map[string]interface{}{"type": "string", "description": "Natural-language requirements for the weak-password dictionary."},
 				"count":            map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
 				"application_type": map[string]interface{}{"type": "string"},
 				"organization_keywords": map[string]interface{}{
@@ -88,7 +88,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			}
 			return map[string]interface{}{
 				"dictionary":  summary,
-				"next_action": "字典已保存；可在弱密码字典管理页面查看，也可继续调用 Credential.WeakPassword.AnalyzeApplications 分析应用后发起检测。",
+				"next_action": "The dictionary was saved. Review it or analyze candidate applications before starting an assessment.",
 				"route_path":  "/risk/weak-password/dictionaries",
 			}, nil
 		},
@@ -101,7 +101,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpGenerate,
 		Capability:         "weak_password_asset_analysis",
-		Description:        "分析在线主机应用资产，筛选市面可见且需要密码认证的应用，并在同一主机上按应用类型去重",
+		Description:        "Analyze application assets on online hosts, select externally recognizable password-authenticated applications, and deduplicate by host and application type.",
 		Aliases:            []string{"弱密码应用分析", "分析弱密码资产", "应用资产分析", "弱口令应用识别"},
 		Tags:               []string{"weak_password", "asset", "application", "ai", "v6.1"},
 		ObjectTypes:        []string{"candidate_application", "host_application_asset"},
@@ -117,7 +117,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			Component: "weak_password_service",
 			File:      "api-server/internal/service/weak_password_service.go",
 			Function:  "AnalyzeAssetApplications",
-			Notes:     "服务端强制 online_agents_only=true，并按 host/application_type 去重。",
+			Notes:     "The backend enforces online_agents_only=true and deduplicates by host and application_type.",
 		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
@@ -147,7 +147,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			}
 			return map[string]interface{}{
 				"analysis":    resp,
-				"next_action": "选择候选应用 candidate_application_id 后，可调用 Credential.WeakPassword.Scan 创建检测任务；任务进度用 Credential.WeakPassword.QueryProgress 查询。",
+				"next_action": "Select candidate_application_id values, create the assessment task, and monitor it with the progress companion tool.",
 				"route_path":  "/risk/weak-password",
 			}, nil
 		},
@@ -160,7 +160,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpExecute,
 		Capability:         "weak_password_scan",
-		Description:        "针对候选应用创建弱密码检查任务，复用 V6.1 弱密码检测编排链路",
+		Description:        "Create a weak-password assessment task for selected candidate applications through the V6.1 workflow service.",
 		Aliases:            []string{"弱密码检查", "弱口令扫描", "检查弱密码"},
 		Tags:               []string{"weak_password", "credential", "v6.1"},
 		ObjectTypes:        []string{"candidate_application", "task"},
@@ -203,7 +203,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpList,
 		Capability:         "weak_password_findings",
-		Description:        "查询弱密码检测任务的命中结果，默认只返回脱敏密码",
+		Description:        "Get weak-password assessment findings with passwords redacted by default.",
 		Aliases:            []string{"弱密码结果", "弱口令命中"},
 		Tags:               []string{"weak_password", "finding", "v6.1"},
 		ObjectTypes:        []string{"finding", "task"},
@@ -249,7 +249,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpGet,
 		Capability:         "weak_password_progress",
-		Description:        "查询弱密码检测任务总体进度和采集进度，包含 Agent 工具轮次、状态、错误码和错误说明",
+		Description:        "Get overall and collection progress for a weak-password assessment, including agent tool rounds, status, error code, and error message.",
 		Aliases:            []string{"弱密码进度", "弱口令进度", "采集进度", "弱密码任务进度"},
 		Tags:               []string{"weak_password", "progress", "task", "v6.1"},
 		ObjectTypes:        []string{"task", "collection_progress"},
@@ -298,7 +298,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 				"task_progress":             progress,
 				"collection_progress":       items,
 				"collection_progress_total": total,
-				"next_action":               "如状态仍在采集或匹配中，可稍后再次查询；失败时优先查看 collection_progress 中的 error_code 和 error_message。",
+				"next_action":               "Poll again while collection or matching is active. On failure, inspect error_code and error_message in collection_progress.",
 				"route_path":                "/risk/weak-password/tasks/" + taskID.String(),
 			}, nil
 		},
@@ -311,7 +311,7 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Domain:             assistant.DomainDetection,
 		Operation:          assistant.OpGet,
 		Capability:         "weak_password_explain",
-		Description:        "解释弱密码命中依据和整改建议，不展示完整明文密码",
+		Description:        "Explain weak-password evidence and remediation guidance without exposing full plaintext passwords.",
 		Aliases:            []string{"解释弱密码", "弱密码建议"},
 		Tags:               []string{"weak_password", "explain", "v6.1"},
 		ObjectTypes:        []string{"finding"},
@@ -330,8 +330,8 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			_ = ctx
 			return map[string]interface{}{
-				"summary":        "弱密码命中由服务端字典或 verifier 校验确认，页面默认只展示脱敏密码。",
-				"recommendation": "修改命中账号密码，禁用默认口令，限制配置文件权限，并在修复后发起复测。",
+				"summary":        "The backend dictionary or verifier confirmed the weak-password finding; passwords remain redacted.",
+				"recommendation": "Change affected credentials, disable default passwords, restrict configuration-file permissions, and run a post-remediation assessment.",
 			}, nil
 		},
 	})

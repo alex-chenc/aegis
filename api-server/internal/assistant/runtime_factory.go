@@ -70,6 +70,7 @@ type RuntimeBuildRequest struct {
 	ExecutionPlan     *ToolExecutionPlan            `json:"execution_plan,omitempty"`
 	UseAIAnalysisFlow bool                          `json:"use_ai_analysis_flow,omitempty"`
 	Locale            string                        `json:"locale,omitempty"`
+	ApprovalMode      string                        `json:"approval_mode,omitempty"`
 }
 
 // RuntimeBuildResult 运行时构建结果
@@ -95,19 +96,33 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	if len(toolDescriptors) == 0 && len(req.SelectedTools) > 0 {
 		toolDescriptors = f.catalog.BuildDescriptors(req.SelectedTools)
 	}
+	invariantRequest := req
+	invariantRequest.ToolDescriptors = toolDescriptors
+	if err := validateRuntimeToolElectionInvariant(invariantRequest); err != nil {
+		f.logger.Error("assistant runtime rejected an unmapped tool election path",
+			zap.String("session_id", req.SessionID),
+			zap.String("run_id", req.RunID),
+			zap.Int("tool_count", len(toolDescriptors)),
+			zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
+			zap.Error(err),
+		)
+		return nil, err
+	}
 
 	// 4. 创建 ToolGateway（实现 agentruntime.ToolGateway）
 	toolGateway := NewAssistantToolGatewayAdapter(AssistantToolGatewayConfig{
-		Dispatcher:    f.toolDispatcher,
-		SessionID:     req.SessionID,
-		MessageID:     req.MessageID,
-		RunID:         req.RunID,
-		Operator:      req.Operator,
-		Logger:        f.logger,
-		RunManager:    f.runManager,
-		UserInput:     req.UserInput,
-		ContextRefs:   req.ContextRefs,
-		ExecutionPlan: req.ExecutionPlan,
+		Dispatcher:        f.toolDispatcher,
+		SessionID:         req.SessionID,
+		MessageID:         req.MessageID,
+		RunID:             req.RunID,
+		Operator:          req.Operator,
+		ApprovalMode:      normalizeAssistantApprovalMode(req.ApprovalMode),
+		RequireMappedPlan: true,
+		Logger:            f.logger,
+		RunManager:        f.runManager,
+		UserInput:         req.UserInput,
+		ContextRefs:       req.ContextRefs,
+		ExecutionPlan:     req.ExecutionPlan,
 		OnToolCall: func(callID, toolName string, args interface{}) {
 			f.runManager.Publish(req.SessionID, EventToolCallPayload(req.SessionID, req.RunID, req.MessageID, callID, toolName, args))
 		},
@@ -137,6 +152,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	reflectionMemories := f.loadReflectionMemories(ctx, req.SessionID, 5)
 	promptProvider := NewAssistantPromptProvider(toolDescriptors, req.ContextRefs, req.TaskType, req.UserInput).
 		WithLocale(req.Locale).
+		WithApprovalMode(req.ApprovalMode).
 		WithReflectionMemories(reflectionMemories)
 
 	// 7. 创建 LLM 适配器
@@ -179,6 +195,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	f.logger.Info("assistant runtime config selected",
 		zap.String("session_id", req.SessionID),
 		zap.String("profile", profile),
+		zap.String("approval_mode", normalizeAssistantApprovalMode(req.ApprovalMode)),
 		zap.Int("max_total_turns", runtimeConfig.MaxTotalTurns),
 		zap.Int("tool_count", len(toolDescriptors)),
 		zap.String("plan_id", toolExecutionPlanID(req.ExecutionPlan)),
@@ -216,6 +233,63 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		Runtime:     runtime,
 		UserContext: userContext,
 	}, nil
+}
+
+// validateRuntimeToolElectionInvariant is a fail-closed architecture boundary.
+// Tool descriptors without an exact capability-Mapping execution plan would
+// restore free model tool_name election and are therefore forbidden.
+//
+// This must remain a code check, not merely a prompt instruction.
+func validateRuntimeToolElectionInvariant(req RuntimeBuildRequest) error {
+	if len(req.ToolDescriptors) == 0 {
+		if usesMappingBoundExecutionPlan(req.ExecutionPlan) {
+			return fmt.Errorf("Mapping-bound execution plan has no runtime tool descriptors")
+		}
+		return nil
+	}
+	if !usesMappingBoundExecutionPlan(req.ExecutionPlan) {
+		return fmt.Errorf("assistant tool descriptors require a Mapping-bound execution plan")
+	}
+	if strings.TrimSpace(req.ExecutionPlan.DecisionTraceID) == "" {
+		return fmt.Errorf("Mapping-bound execution plan requires a decision trace ID")
+	}
+	acceptedMappings := make(map[string]struct{}, len(req.ExecutionPlan.DecisionRecords))
+	for _, record := range req.ExecutionPlan.DecisionRecords {
+		if record.Decision != toolDecisionAccepted {
+			continue
+		}
+		key := strings.TrimSpace(record.ToolName) + "\x00" + strings.TrimSpace(record.Capability)
+		acceptedMappings[key] = struct{}{}
+	}
+	mappedTools := make(map[string]struct{}, len(req.ExecutionPlan.Steps))
+	stepIDs := make(map[string]struct{}, len(req.ExecutionPlan.Steps))
+	for _, step := range req.ExecutionPlan.Steps {
+		if _, exists := stepIDs[step.StepID]; exists {
+			return fmt.Errorf("Mapping-bound execution plan contains duplicate step_id %s", step.StepID)
+		}
+		stepIDs[step.StepID] = struct{}{}
+		mappingKey := strings.TrimSpace(step.ToolName) + "\x00" + strings.TrimSpace(step.Capability)
+		if _, accepted := acceptedMappings[mappingKey]; !accepted {
+			return fmt.Errorf("Mapping-bound step %s has no accepted capability decision record", step.StepID)
+		}
+		mappedTools[step.ToolName] = struct{}{}
+	}
+	descriptorTools := make(map[string]struct{}, len(req.ToolDescriptors))
+	for _, descriptor := range req.ToolDescriptors {
+		if _, exists := descriptorTools[descriptor.Name]; exists {
+			return fmt.Errorf("runtime contains duplicate tool descriptor %s", descriptor.Name)
+		}
+		descriptorTools[descriptor.Name] = struct{}{}
+		if _, ok := mappedTools[descriptor.Name]; !ok {
+			return fmt.Errorf("runtime tool %s is not present in the Mapping-bound execution plan", descriptor.Name)
+		}
+	}
+	for toolName := range mappedTools {
+		if _, ok := descriptorTools[toolName]; !ok {
+			return fmt.Errorf("Mapping-bound tool %s has no runtime descriptor", toolName)
+		}
+	}
+	return nil
 }
 
 func toolExecutionPlanStepCount(plan *ToolExecutionPlan) int {

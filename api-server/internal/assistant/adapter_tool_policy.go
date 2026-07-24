@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 
+	"api-server/internal/model"
+
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
 )
@@ -71,16 +73,20 @@ func (p *AssistantToolPolicy) Evaluate(ctx context.Context, req agentruntime.Too
 		Whitelisted:   spec.DefaultWhitelisted,
 		Operator:      p.operator,
 	})
-
-	// 5. 映射到 agent-runtime 策略决策
-	if riskResult.Allow {
-		return agentruntime.PolicyAllow, nil
+	// 工具级 RequiresApproval 在非全权限模式下仍强制审批；
+	// full_access 模式下用户已授予直接执行权限，跳过此覆盖。
+	if spec.RequiresApproval && approvalMode != model.ApprovalModeFullAccess {
+		riskResult.RequiresApproval = true
 	}
 
+	// 5. 映射到 agent-runtime 策略决策
 	if riskResult.RequiresApproval {
 		// 在 agent-runtime 层返回 RequireApproval
 		// agent-runtime 会将此信息传递给 ToolGateway，由 ToolGateway 创建审批
 		return agentruntime.PolicyRequireApproval, nil
+	}
+	if !riskResult.Allow {
+		return agentruntime.PolicyDeny, nil
 	}
 
 	return agentruntime.PolicyAllow, nil

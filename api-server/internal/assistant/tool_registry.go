@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +114,28 @@ type ToolFactBinding struct {
 	StateValue string `json:"state_value,omitempty"`
 }
 
+// ToolExposure controls which model stages may discover or call a tool. It is
+// intentionally independent from risk and approval policy.
+type ToolExposure string
+
+const (
+	ToolExposurePrimary    ToolExposure = "primary"
+	ToolExposureContextual ToolExposure = "contextual"
+	ToolExposureCompanion  ToolExposure = "companion"
+	ToolExposureInternal   ToolExposure = "internal"
+)
+
+// ToolExposurePolicy declares the maximum model-facing visibility of a tool.
+// Runtime authorization and approval checks still apply after exposure.
+type ToolExposurePolicy struct {
+	Exposure        ToolExposure `json:"exposure"`
+	WorkflowIDs     []string     `json:"workflow_ids,omitempty"`
+	AssistantModes  []string     `json:"assistant_modes,omitempty"`
+	Discoverable    bool         `json:"discoverable"`
+	DirectCallable  bool         `json:"direct_callable"`
+	CatalogPriority int          `json:"catalog_priority,omitempty"`
+}
+
 // ToolSpec 工具规格定义（完整版，对齐设计文档）
 type ToolSpec struct {
 	Name               string                 `json:"name"`
@@ -134,6 +157,8 @@ type ToolSpec struct {
 	ResultSchema       map[string]interface{} `json:"result_schema,omitempty"`
 	ExecutionContract  ToolExecutionContract  `json:"execution_contract,omitempty"`
 	ResultContract     ToolResultContract     `json:"result_contract,omitempty"`
+	ExposurePolicy     ToolExposurePolicy     `json:"exposure_policy"`
+	Preflight          ToolPreflight          `json:"-"`
 	Handler            ToolHandler            `json:"-"`
 	ServiceBinding     ServiceBinding         `json:"service_binding,omitempty"`
 	DefaultWhitelisted bool                   `json:"default_whitelisted"`
@@ -150,6 +175,10 @@ type ToolSpec struct {
 
 // ToolHandler 工具执行函数
 type ToolHandler func(ctx context.Context, args map[string]interface{}) (interface{}, error)
+
+// ToolPreflight validates business invariants before a durable tool call,
+// approval, or handler execution is allowed. It must be side-effect free.
+type ToolPreflight func(ctx context.Context, args map[string]interface{}) error
 
 // ToolExecutionResult 工具执行结果
 type ToolExecutionResult struct {
@@ -182,6 +211,12 @@ func (r *ToolRegistry) Register(spec *ToolSpec) error {
 	}
 	if spec.Handler == nil {
 		return fmt.Errorf("tool handler is required for %s", spec.Name)
+	}
+	if spec.ExposurePolicy.Exposure == "" {
+		spec.ExposurePolicy = builtinToolExposurePolicy(spec.Name)
+	}
+	if !validToolExposure(spec.ExposurePolicy.Exposure) {
+		return fmt.Errorf("tool %s exposure %q is invalid", spec.Name, spec.ExposurePolicy.Exposure)
 	}
 	if capability := strings.TrimSpace(spec.Capability); capability != "" && !capabilityIdentifierPattern.MatchString(capability) {
 		return fmt.Errorf("tool %s capability %q must be a lowercase English capability identifier", spec.Name, capability)
@@ -252,6 +287,9 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	if !tool.Enabled {
 		return nil, fmt.Errorf("tool %s is disabled", name)
 	}
+	if err := ValidateToolArgs(tool.ArgsSchema, args); err != nil {
+		return nil, fmt.Errorf("tool %s arguments validation failed: %w", name, err)
+	}
 
 	startTime := timeNow()
 	data, err := tool.Handler(ctx, args)
@@ -277,4 +315,46 @@ func (r *ToolRegistry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.tools)
+}
+
+// ValidateCapabilityUniqueness is the startup strong-check that asserts one
+// capability maps to exactly one tool. It resolves each tool's effective
+// capability through BuildToolUseContract (which includes synthetic
+// capabilities generated from domain+operation when Capability is empty), so it
+// catches collisions the per-Register guard misses: Register only compares the
+// raw Capability field, so two tools with an empty Capability but identical
+// domain+operation would both synthesize the same capability without tripping
+// the registration check.
+//
+// The platform enforces a 1:1 capability->tool policy. New tools may enter the
+// executable plan only through exact capability Mapping; a duplicate capability
+// would let Mapping select multiple implementations at once.
+func (r *ToolRegistry) ValidateCapabilityUniqueness() error {
+	if r == nil {
+		return fmt.Errorf("tool registry is not configured")
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	owners := make(map[string]string, len(r.tools))
+	// Iterate in a deterministic name order so the reported collision is stable.
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tool := r.tools[name]
+		if tool == nil {
+			continue
+		}
+		capability := strings.ToLower(strings.TrimSpace(BuildToolUseContract(tool).Capability))
+		if capability == "" {
+			continue
+		}
+		if existing, exists := owners[capability]; exists && existing != tool.Name {
+			return fmt.Errorf("capability %q is registered by both %s and %s; one capability must map to exactly one tool", capability, existing, tool.Name)
+		}
+		owners[capability] = tool.Name
+	}
+	return nil
 }
