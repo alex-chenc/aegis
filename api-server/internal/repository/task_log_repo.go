@@ -45,6 +45,39 @@ func (r *TaskLogRepository) Create(log *model.TaskLog) error {
 	return nil
 }
 
+// CreateBatch inserts one deterministic dispatch scope atomically. No task is
+// visible to dispatch workers unless every expected task row was persisted.
+func (r *TaskLogRepository) CreateBatch(logs []*model.TaskLog) error {
+	if len(logs) == 0 {
+		return fmt.Errorf("task batch is empty")
+	}
+	for _, log := range logs {
+		if log.ID == uuid.Nil {
+			log.ID = uuid.New()
+		}
+		if log.AttemptNo <= 0 {
+			log.AttemptNo = 1
+		}
+		if log.MaxRounds <= 0 {
+			log.MaxRounds = 3
+		}
+	}
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		return tx.Create(&logs).Error
+	}); err != nil {
+		logger.Error("failed to create task batch",
+			zap.Error(err),
+			zap.Int("task_count", len(logs)),
+		)
+		return err
+	}
+	logger.Info("task batch created",
+		zap.String("task_group_id", logs[0].TaskGroupID.String()),
+		zap.Int("task_count", len(logs)),
+	)
+	return nil
+}
+
 func (r *TaskLogRepository) UpdateResult(id uuid.UUID, stdout, stderr *string, exitCode *int, status string, finishedAt time.Time) error {
 	result := r.db.Model(&model.TaskLog{}).
 		Where("id = ?", id).

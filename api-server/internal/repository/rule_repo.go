@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"fmt"
+
 	"api-server/internal/model"
 	"api-server/pkg/logger"
 
@@ -144,6 +146,65 @@ func (r *RuleRepository) UpdateScriptStatusByType(ruleID uuid.UUID, scriptType, 
 		zap.String("status", status),
 	)
 	return nil
+}
+
+// ClaimScriptGeneration atomically reserves one script type for queueing. It
+// prevents repeated operation polling from enqueueing the same rule while a
+// prior request is queued or generating.
+func (r *RuleRepository) ClaimScriptGeneration(ruleID uuid.UUID, scriptType string) (bool, error) {
+	column, err := scriptStatusColumn(scriptType)
+	if err != nil {
+		return false, err
+	}
+	condition := fmt.Sprintf("id = ? AND COALESCE(%s, 'pending') NOT IN ?", column)
+	tx := r.db.Model(&model.AegisRule{}).
+		Where(condition, ruleID, []string{"queued", "generating", "generated"}).
+		Updates(map[string]interface{}{
+			"script_status": "queued",
+			column:          "queued",
+		})
+	if tx.Error != nil {
+		return false, tx.Error
+	}
+	return tx.RowsAffected == 1, nil
+}
+
+// ReleaseQueuedScriptGeneration returns an unsubmitted queue claim to pending.
+func (r *RuleRepository) ReleaseQueuedScriptGeneration(ruleID uuid.UUID, scriptType string) error {
+	column, err := scriptStatusColumn(scriptType)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&model.AegisRule{}).
+		Where("id = ? AND "+column+" = ?", ruleID, "queued").
+		Updates(map[string]interface{}{
+			"script_status": "pending",
+			column:          "pending",
+		}).Error
+}
+
+// ResetQueuedScriptGeneration recovers in-memory queue claims after a service
+// restart. Durable operations will enqueue the pending work again.
+func (r *RuleRepository) ResetQueuedScriptGeneration() error {
+	for _, column := range []string{"check_script_status", "fix_script_status"} {
+		if err := r.db.Model(&model.AegisRule{}).
+			Where(column+" = ?", "queued").
+			Updates(map[string]interface{}{"script_status": "pending", column: "pending"}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scriptStatusColumn(scriptType string) (string, error) {
+	switch scriptType {
+	case "CHECK":
+		return "check_script_status", nil
+	case "FIX":
+		return "fix_script_status", nil
+	default:
+		return "", fmt.Errorf("unsupported script type %q", scriptType)
+	}
 }
 
 func (r *RuleRepository) UpdateScriptStatusWithError(ruleID uuid.UUID, scriptType, status, errorMsg string) error {

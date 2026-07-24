@@ -81,6 +81,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AssistantMessage{},
 		&model.AssistantContextRef{},
 		&model.AssistantToolCall{},
+		&model.AssistantOperation{},
 		&model.AssistantApproval{},
 		&model.AssistantToolSelection{},
 		&model.AssistantToolPolicy{},

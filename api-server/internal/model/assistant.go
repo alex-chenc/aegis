@@ -69,6 +69,7 @@ func (AssistantContextRef) TableName() string {
 type AssistantToolCall struct {
 	ID            uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	SessionID     string         `gorm:"type:varchar(100);index;not null" json:"session_id"`
+	RunID         string         `gorm:"type:varchar(100);index" json:"run_id,omitempty"`
 	MessageID     string         `gorm:"type:varchar(100);index" json:"message_id"`
 	CallID        string         `gorm:"type:varchar(100);uniqueIndex;not null" json:"call_id"`
 	ToolName      string         `gorm:"type:varchar(120);not null" json:"tool_name"`
@@ -92,6 +93,38 @@ type AssistantToolCall struct {
 
 func (AssistantToolCall) TableName() string {
 	return "assistant_tool_calls"
+}
+
+// AssistantOperation persists durable, model-independent workflow state for
+// asynchronous high-level assistant tools.
+type AssistantOperation struct {
+	ID              uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	Type            string         `gorm:"type:varchar(80);index;not null" json:"type"`
+	SessionID       string         `gorm:"type:varchar(100);index" json:"session_id,omitempty"`
+	RunID           string         `gorm:"type:varchar(100);index" json:"run_id,omitempty"`
+	WorkflowID      string         `gorm:"type:varchar(80);index;not null" json:"workflow_id"`
+	WorkflowVersion string         `gorm:"type:varchar(20);not null" json:"workflow_version"`
+	Status          string         `gorm:"type:varchar(32);index;not null" json:"status"`
+	CurrentStage    string         `gorm:"type:varchar(80)" json:"current_stage,omitempty"`
+	Terminal        bool           `gorm:"not null;default:false" json:"terminal"`
+	Request         datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"request"`
+	ResolvedScope   datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"resolved_scope"`
+	Result          datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"result"`
+	Counts          datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"counts"`
+	References      datatypes.JSON `gorm:"column:domain_references;type:jsonb;not null;default:'{}'" json:"references"`
+	Violations      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"violations"`
+	TaskGroupID     *uuid.UUID     `gorm:"type:uuid;index" json:"task_group_id,omitempty"`
+	IdempotencyKey  string         `gorm:"type:varchar(160);index" json:"idempotency_key,omitempty"`
+	CreatedBy       string         `gorm:"type:varchar(100)" json:"created_by,omitempty"`
+	ErrorCode       string         `gorm:"type:varchar(80)" json:"error_code,omitempty"`
+	ErrorMessage    string         `gorm:"type:text" json:"error_message,omitempty"`
+	CreatedAt       time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	UpdatedAt       time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
+}
+
+func (AssistantOperation) TableName() string {
+	return "assistant_operations"
 }
 
 // AssistantApproval 审批记录
