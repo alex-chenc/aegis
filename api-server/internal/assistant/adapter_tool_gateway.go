@@ -37,6 +37,8 @@ type AssistantToolGatewayAdapter struct {
 	requireMappedPlan bool
 	logger            *zap.Logger
 	runManager        *RunManager
+	stopForRecovery   context.CancelFunc
+	userInput         string
 
 	// executionPlan is the immutable capability-to-tool Mapping artifact. Every
 	// Assistant tool call must remain inside this backend-compiled authority.
@@ -61,6 +63,7 @@ type AssistantToolGatewayAdapter struct {
 	onToolError       func(callID, errMsg string)
 	onApproval        func(approval interface{})
 	onApprovalUpdated func(approval interface{})
+	onRecovery        func(recovery interface{})
 }
 
 // AssistantToolGatewayConfig 适配器配置
@@ -74,6 +77,7 @@ type AssistantToolGatewayConfig struct {
 	RequireMappedPlan       bool
 	Logger                  *zap.Logger
 	RunManager              *RunManager
+	StopForRecovery         context.CancelFunc
 	UserInput               string
 	ContextRefs             []ContextRefResult
 	ExecutionPlan           *ToolExecutionPlan
@@ -83,6 +87,7 @@ type AssistantToolGatewayConfig struct {
 	OnToolError             func(callID, errMsg string)
 	OnApproval              func(approval interface{})
 	OnApprovalUpdated       func(approval interface{})
+	OnRecovery              func(recovery interface{})
 }
 
 // NewAssistantToolGatewayAdapter 创建适配器
@@ -101,6 +106,8 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 		requireMappedPlan:       cfg.RequireMappedPlan,
 		logger:                  cfg.Logger,
 		runManager:              cfg.RunManager,
+		stopForRecovery:         cfg.StopForRecovery,
+		userInput:               cfg.UserInput,
 		executionPlan:           cfg.ExecutionPlan,
 		runtimeStepToolBindings: cloneRuntimeStepToolBindings(cfg.RuntimeStepToolBindings),
 		priorStepOutcomes:       make(map[string]capturedStepOutcome),
@@ -109,6 +116,7 @@ func NewAssistantToolGatewayAdapter(cfg AssistantToolGatewayConfig) *AssistantTo
 		onToolError:             cfg.OnToolError,
 		onApproval:              cfg.OnApproval,
 		onApprovalUpdated:       cfg.OnApprovalUpdated,
+		onRecovery:              cfg.OnRecovery,
 	}
 }
 
@@ -151,6 +159,7 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		ToolName:     req.ToolName,
 		Args:         args,
 		Operator:     a.operator,
+		UserQuery:    a.userInput,
 		ApprovalMode: a.approvalMode,
 		Polling:      asyncPoll,
 	})
@@ -241,7 +250,35 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 	}
 
 	// 工具执行失败
-	if a.onToolError != nil {
+	if result.Blocked && result.Recovery != nil {
+		if a.runManager != nil {
+			if run, ok := a.runManager.Get(a.sessionID); ok && run.RunID == a.runID {
+				run.SetWaitingRecovery(&WaitingRecoveryState{
+					RecoveryID:  result.Recovery.RecoveryID,
+					ToolCallID:  result.CallID,
+					ToolName:    result.ToolName,
+					RequestedAt: time.Now(),
+				})
+			}
+		}
+		if a.stopForRecovery != nil {
+			a.stopForRecovery()
+		}
+		if a.logger != nil {
+			a.logger.Info("assistant runtime stopped for recoverable blocker",
+				zap.String("session_id", a.sessionID),
+				zap.String("run_id", a.runID),
+				zap.String("recovery_id", result.Recovery.RecoveryID),
+				zap.String("call_id", result.CallID),
+				zap.String("tool_name", result.ToolName),
+				zap.String("error_code", result.Recovery.Code),
+			)
+		}
+		if a.onRecovery != nil {
+			a.onRecovery(result.Recovery)
+		}
+	}
+	if !result.Blocked && a.onToolError != nil {
 		a.onToolError(result.CallID, result.Error)
 	}
 	return agentruntime.ToolResponse{
@@ -249,10 +286,17 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 		ToolName:     req.ToolName,
 		Status:       agentruntime.ToolCallFailed,
 		ErrorMessage: result.Error,
-		Summary:      fmt.Sprintf("工具 %s 执行失败", req.ToolName),
+		Summary:      toolFailureSummary(req.ToolName, result.Blocked),
 		StartedAt:    startedAt,
 		EndedAt:      endedAt,
 	}, nil
+}
+
+func toolFailureSummary(toolName string, blocked bool) string {
+	if blocked {
+		return fmt.Sprintf("工具 %s 等待用户选择恢复方式", toolName)
+	}
+	return fmt.Sprintf("工具 %s 执行失败", toolName)
 }
 
 // Prepare implements agentruntime.ToolRequestPreparer. It applies authoritative
@@ -738,6 +782,22 @@ func (a *AssistantToolGatewayAdapter) resolvePreviousStepArgs(stepID, toolName s
 			}
 			continue
 		}
+		// Singular *_id arguments are bound only when prior facts identify one
+		// unique entity. Ambiguous facts deliberately remain unresolved so a
+		// detail/write step cannot silently choose an arbitrary target.
+		if id, ok := resolveEntityIDFromFacts(priorOutcomes, argName); ok {
+			resolved[argName] = id
+			if a.logger != nil {
+				a.logger.Debug("assistant previous_step singular argument bound from prior step facts",
+					zap.String("session_id", a.sessionID),
+					zap.String("run_id", a.runID),
+					zap.String("step_id", stepID),
+					zap.String("tool_name", toolName),
+					zap.String("arg_name", argName),
+				)
+			}
+			continue
+		}
 		// No producer produced this reference. A required previous_step
 		// argument must not fall back to a model-invented value; skip the step
 		// so the gap is observable instead of silently dispatching bad input.
@@ -868,6 +928,33 @@ func resolveEntityIDsFromFacts(outcomes []capturedStepOutcome, argName string) (
 		}
 	}
 	return dedupeStrings(ids), len(ids) > 0
+}
+
+// resolveEntityIDFromFacts resolves a required singular entity reference only
+// when exactly one distinct fact exists. The plural helper above intentionally
+// remains separate because callers have different ambiguity semantics.
+func resolveEntityIDFromFacts(outcomes []capturedStepOutcome, argName string) (string, bool) {
+	entity := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(argName)), "_id")
+	if entity == argName || entity == "" {
+		return "", false
+	}
+	factKind := entity + "_resolved"
+	var ids []string
+	for _, outcome := range outcomes {
+		for _, fact := range outcome.facts {
+			if fact == nil || !strings.EqualFold(stringValue(fact["kind"]), factKind) {
+				continue
+			}
+			if id := stringValue(fact["id"]); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	ids = dedupeStrings(ids)
+	if len(ids) != 1 {
+		return "", false
+	}
+	return ids[0], true
 }
 
 func refKeys(ref map[string]string) []string {

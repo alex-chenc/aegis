@@ -31,6 +31,8 @@ type runtimeEvidenceLedger struct {
 	AssetCollectionTaskIDs  []string              `json:"asset_collection_task_ids,omitempty"`
 	AssetCollectionTerminal bool                  `json:"asset_collection_terminal,omitempty"`
 	AssetCollectionCoverage map[string]int        `json:"asset_collection_coverage,omitempty"`
+	DetectionPackageID      string                `json:"detection_package_id,omitempty"`
+	DetectionPackageStatus  string                `json:"detection_package_status,omitempty"`
 }
 
 func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidenceLedger {
@@ -90,9 +92,34 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 			}
 			evidence.Content = content
 			ledger.Calls = append(ledger.Calls, evidence)
+			if strings.HasPrefix(observation.ToolName, "Package.") {
+				if contentMap, ok := content.(map[string]interface{}); ok {
+					if packageID := stringValue(contentMap["package_id"]); packageID != "" {
+						ledger.DetectionPackageID = packageID
+					}
+					if status := stringValue(contentMap["status"]); status != "" {
+						ledger.DetectionPackageStatus = status
+					}
+				}
+				if observation.Outcome != nil {
+					if packageID := observation.Outcome.OperationRef["package_id"]; packageID != "" {
+						ledger.DetectionPackageID = packageID
+					}
+				}
+			}
 
 			if observation.Status != agentruntime.ToolCallSuccess {
 				failedNames[observation.ToolName] = true
+				if ledger.DetectionPackageID != "" {
+					switch observation.ToolName {
+					case "Package.Build.Start", "Package.Build.Status":
+						ledger.DetectionPackageStatus = "build_failed"
+					case "Package.Sign":
+						ledger.DetectionPackageStatus = "sign_failed"
+					case "Package.Enable":
+						ledger.DetectionPackageStatus = "enable_failed"
+					}
+				}
 				continue
 			}
 			outcome := observation.Outcome

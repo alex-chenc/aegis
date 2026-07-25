@@ -23,6 +23,7 @@ type Service struct {
 	contextRepo   repository.AssistantContextRefRepository
 	toolCallRepo  repository.AssistantToolCallRepository
 	approvalRepo  repository.AssistantApprovalRepository
+	recovery      *RecoveryManager
 	memoryRepo    repository.AssistantMemoryRepository
 	contextLoader *ContextLoader
 	orchestrator  *Orchestrator
@@ -32,16 +33,17 @@ type Service struct {
 
 // ServiceDeps 服务依赖
 type ServiceDeps struct {
-	SessionRepo    repository.AssistantSessionRepository
-	MessageRepo    repository.AssistantMessageRepository
-	ContextRefRepo repository.AssistantContextRefRepository
-	ToolCallRepo   repository.AssistantToolCallRepository
-	ApprovalRepo   repository.AssistantApprovalRepository
-	MemoryRepo     repository.AssistantMemoryRepository
-	ContextLoader  *ContextLoader
-	Orchestrator   *Orchestrator
-	RunManager     *RunManager
-	Logger         *zap.Logger
+	SessionRepo     repository.AssistantSessionRepository
+	MessageRepo     repository.AssistantMessageRepository
+	ContextRefRepo  repository.AssistantContextRefRepository
+	ToolCallRepo    repository.AssistantToolCallRepository
+	ApprovalRepo    repository.AssistantApprovalRepository
+	RecoveryManager *RecoveryManager
+	MemoryRepo      repository.AssistantMemoryRepository
+	ContextLoader   *ContextLoader
+	Orchestrator    *Orchestrator
+	RunManager      *RunManager
+	Logger          *zap.Logger
 }
 
 // NewService 创建智能体服务
@@ -52,6 +54,7 @@ func NewService(deps ServiceDeps) *Service {
 		contextRepo:   deps.ContextRefRepo,
 		toolCallRepo:  deps.ToolCallRepo,
 		approvalRepo:  deps.ApprovalRepo,
+		recovery:      deps.RecoveryManager,
 		memoryRepo:    deps.MemoryRepo,
 		contextLoader: deps.ContextLoader,
 		orchestrator:  deps.Orchestrator,
@@ -217,6 +220,7 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 		metadata = make(map[string]interface{})
 	}
 	metadata["locale"] = req.Locale
+	pendingClarification := pendingClarificationFromMetadata(metadata)
 	session.Metadata = mustMarshalJSON(metadata)
 	if err := s.sessionRepo.Update(ctx, session); err != nil {
 		s.logger.Warn("failed to persist assistant run locale",
@@ -246,9 +250,24 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 	}
 	_ = s.sessionRepo.IncrementMessageCount(ctx, sessionID)
 
-	// Start run
+	return s.startRun(session, userMsg.MessageID, req.Content, req.Locale, pendingClarification, nil, operator)
+}
+
+func (s *Service) startRun(
+	session *model.AssistantSession,
+	userMessageID,
+	userMessage,
+	locale string,
+	pendingClarification *PendingClarification,
+	recoveryContext *RecoveryResumeContext,
+	operator string,
+) (*RunHandle, error) {
+	if session == nil {
+		return nil, fmt.Errorf("session is required")
+	}
+	sessionID := session.SessionID
 	run := s.runManager.Start(sessionID)
-	_ = s.sessionRepo.UpdateStatus(ctx, sessionID, model.SessionStatusRunning)
+	_ = s.sessionRepo.UpdateStatus(context.Background(), sessionID, model.SessionStatusRunning)
 
 	// Run orchestrator in background
 	go func() {
@@ -284,21 +303,24 @@ func (s *Service) SendMessage(ctx context.Context, sessionID string, req SendMes
 			}
 		}
 		result, err := s.orchestrator.Run(runCtx, RunInput{
-			RunID:       run.RunID,
-			SessionID:   sessionID,
-			MessageID:   userMsg.MessageID,
-			UserID:      operator,
-			UserMessage: req.Content,
-			TaskType:    session.TaskType,
-			ContextRefs: contextRefs,
-			Locale:      req.Locale,
+			RunID:                run.RunID,
+			SessionID:            sessionID,
+			MessageID:            userMessageID,
+			UserID:               operator,
+			UserMessage:          userMessage,
+			OriginalUserMessage:  userMessage,
+			TaskType:             session.TaskType,
+			ContextRefs:          contextRefs,
+			Locale:               locale,
+			PendingClarification: pendingClarification,
+			RecoveryContext:      recoveryContext,
 		})
 		s.completeRun(context.Background(), sessionID, run.RunID, result, err)
 	}()
 
 	return &RunHandle{
 		RunID:     run.RunID,
-		MessageID: userMsg.MessageID,
+		MessageID: userMessageID,
 	}, nil
 }
 
@@ -420,6 +442,14 @@ func (s *Service) completeRun(ctx context.Context, sessionID, runID string, resu
 			sessionStatus := sessionStatusForGoalOutcome(result.GoalOutcome)
 			_ = s.sessionRepo.UpdateStatus(ctx, sessionID, sessionStatus)
 			s.persistRunOutcomeMetadata(ctx, sessionID, result.RunStatus, result.GoalOutcome)
+			if result.Recovery != nil {
+				s.runManager.Publish(sessionID, EventRecoveryRequiredPayload(
+					sessionID,
+					runID,
+					result.MessageID,
+					result.Recovery,
+				))
+			}
 			s.runManager.Publish(sessionID, EventDoneOutcomePayload(
 				sessionID,
 				runID,
@@ -454,9 +484,9 @@ func (s *Service) sessionLocale(ctx context.Context, sessionID string) string {
 
 func sessionStatusForGoalOutcome(outcome agentruntime.GoalOutcome) string {
 	switch outcome {
-	case agentruntime.GoalSucceeded, agentruntime.GoalPartiallySucceeded:
+	case agentruntime.GoalSucceeded:
 		return model.SessionStatusCompleted
-	case agentruntime.GoalNeedsInput:
+	case agentruntime.GoalPartiallySucceeded, agentruntime.GoalNeedsInput:
 		return model.SessionStatusActive
 	default:
 		return model.SessionStatusFailed
@@ -507,6 +537,128 @@ func (s *Service) ListToolCalls(ctx context.Context, sessionID string, page, pag
 // ListApprovals 列出审批
 func (s *Service) ListApprovals(ctx context.Context, sessionID string, page, pageSize int) ([]model.AssistantApproval, int64, error) {
 	return s.approvalRepo.ListBySession(ctx, sessionID, page, pageSize)
+}
+
+func (s *Service) ListRecoveries(ctx context.Context, sessionID string, page, pageSize int) ([]model.AssistantRecoveryRequest, int64, error) {
+	if s.recovery == nil {
+		return nil, 0, fmt.Errorf("recovery service unavailable")
+	}
+	return s.recovery.ListBySession(ctx, sessionID, page, pageSize)
+}
+
+func (s *Service) GetRecovery(ctx context.Context, recoveryID string) (*model.AssistantRecoveryRequest, error) {
+	if s.recovery == nil {
+		return nil, fmt.Errorf("recovery service unavailable")
+	}
+	return s.recovery.Get(ctx, recoveryID)
+}
+
+func (s *Service) DecideRecovery(
+	ctx context.Context,
+	recoveryID string,
+	decision RecoveryDecisionRequest,
+	operator string,
+) (*RecoveryDecisionResult, error) {
+	if s.recovery == nil {
+		return nil, fmt.Errorf("recovery service unavailable")
+	}
+	pendingRequest, err := s.recovery.Get(ctx, recoveryID)
+	if err != nil {
+		return nil, err
+	}
+	pendingSession, err := s.sessionRepo.FindBySessionID(ctx, pendingRequest.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load recovery session: %w", err)
+	}
+	if pendingSession.Status == model.SessionStatusRunning {
+		return nil, fmt.Errorf("session is already running")
+	}
+	result, err := s.recovery.Decide(ctx, recoveryID, decision, operator)
+	if err != nil {
+		return nil, err
+	}
+	request := result.Recovery
+	if request == nil {
+		return nil, fmt.Errorf("recovery decision returned no request")
+	}
+	switch request.Status {
+	case model.RecoveryStatusCancelled:
+		_ = s.sessionRepo.UpdateStatus(ctx, request.SessionID, model.SessionStatusCancelled)
+	default:
+		_ = s.sessionRepo.UpdateStatus(ctx, request.SessionID, model.SessionStatusActive)
+	}
+	if request.Status == model.RecoveryStatusResolved || request.Status == model.RecoveryStatusCancelled {
+		s.clearPendingRecoveryMetadata(ctx, request.SessionID, request.RecoveryID)
+	}
+	if !result.ResumeRequest {
+		return result, nil
+	}
+	session, err := s.sessionRepo.FindBySessionID(ctx, request.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load recovery session: %w", err)
+	}
+	if session.Status == model.SessionStatusRunning {
+		return nil, fmt.Errorf("session is already running")
+	}
+	locale := s.sessionLocale(ctx, request.SessionID)
+	handle, err := s.startRun(
+		session,
+		request.MessageID,
+		request.OriginalQuery,
+		locale,
+		nil,
+		recoveryResumeContextFromRequest(request),
+		operator,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("resume recovered assistant run: %w", err)
+	}
+	if err := s.recovery.LinkResumeRun(ctx, recoveryID, handle.RunID); err != nil {
+		s.logger.Warn("failed to link resumed assistant run to recovery request",
+			zap.String("recovery_id", recoveryID),
+			zap.String("resume_run_id", handle.RunID),
+			zap.Error(err),
+		)
+	}
+	result.RunHandle = handle
+	if updated, getErr := s.recovery.Get(ctx, recoveryID); getErr == nil {
+		result.Recovery = updated
+	}
+	s.logger.Info("assistant recovery started linked run",
+		zap.String("recovery_id", recoveryID),
+		zap.String("session_id", request.SessionID),
+		zap.String("original_run_id", request.RunID),
+		zap.String("resume_run_id", handle.RunID),
+	)
+	return result, nil
+}
+
+func (s *Service) clearPendingRecoveryMetadata(ctx context.Context, sessionID, recoveryID string) {
+	session, err := s.sessionRepo.FindBySessionID(ctx, sessionID)
+	if err != nil || session == nil {
+		s.logger.Warn("failed to load assistant session while clearing recovery metadata",
+			zap.String("session_id", sessionID),
+			zap.String("recovery_id", recoveryID),
+			zap.Error(err),
+		)
+		return
+	}
+	metadata := unmarshalJSON(session.Metadata)
+	if metadata == nil {
+		return
+	}
+	if current, _ := metadata["pending_recovery_id"].(string); current != "" && current != recoveryID {
+		return
+	}
+	delete(metadata, "pending_recovery_id")
+	session.Metadata = mustMarshalJSON(metadata)
+	if err := s.sessionRepo.Update(ctx, session); err != nil {
+		s.logger.Warn("failed to clear assistant recovery metadata",
+			zap.String("session_id", sessionID),
+			zap.String("recovery_id", recoveryID),
+			zap.Error(err),
+		)
+	}
 }
 
 // SignalApprovalApproved 将用户批准结果发送给正在等待的工具调用。

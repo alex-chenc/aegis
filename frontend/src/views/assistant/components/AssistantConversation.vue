@@ -275,6 +275,7 @@ function isToolCallDisplaySettled(toolCall: AssistantToolCall): boolean {
     'completed',
     'success',
     'failed',
+    'blocked',
     'cancelled',
     'approval_required',
     'rejected',

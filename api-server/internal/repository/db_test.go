@@ -148,3 +148,83 @@ func TestBaselineTaskExecutionSchemaStatementsIncludeAutoVerifyColumns(t *testin
 		}
 	}
 }
+
+func TestAssistantRecoveryMigrationContainsDurableDecisionState(t *testing.T) {
+	repositoryDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get repository test directory: %v", err)
+	}
+	migrationPath := filepath.Clean(filepath.Join(
+		repositoryDir,
+		"..", "..", "..",
+		"migrations",
+		"027_v6.1_assistant_recovery_requests.sql",
+	))
+	content, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("read assistant recovery migration: %v", err)
+	}
+	requiredFragments := []string{
+		"CREATE TABLE IF NOT EXISTS assistant_recovery_requests",
+		"recovery_id VARCHAR(100) NOT NULL UNIQUE",
+		"actions JSONB NOT NULL",
+		"decision_input JSONB NOT NULL",
+		"resolution_result JSONB NOT NULL",
+		"resume_run_id VARCHAR(100)",
+		"uq_assistant_recovery_active_tool_code",
+		"WHERE status IN ('pending', 'executing', 'paused')",
+	}
+	for _, fragment := range requiredFragments {
+		if !strings.Contains(string(content), fragment) {
+			t.Fatalf("assistant recovery migration missing %q", fragment)
+		}
+	}
+}
+
+func TestAssistantRecoveryStartupSchemaIncludesActiveRequestUniqueness(t *testing.T) {
+	statements := strings.Join(assistantRecoverySchemaStatements(), "\n")
+	for _, fragment := range []string{
+		"uq_assistant_recovery_active_tool_code",
+		"assistant_recovery_requests(tool_call_id, code)",
+		"ranked_active_recoveries",
+		"duplicate_rank > 1",
+		"uq_assistant_recovery_active_run_step_tool_code",
+		"COALESCE(NULLIF(step_id, ''), tool_name)",
+		"WHERE status IN ('pending', 'executing', 'paused')",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("assistant recovery startup schema missing %q", fragment)
+		}
+	}
+}
+
+func TestAssistantRecoveryBusinessIdentityMigrationExpiresHistoricalDuplicates(t *testing.T) {
+	repositoryDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get repository test directory: %v", err)
+	}
+	migrationPath := filepath.Clean(filepath.Join(
+		repositoryDir,
+		"..", "..", "..",
+		"migrations",
+		"028_v6.1_assistant_recovery_business_identity.sql",
+	))
+	content, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("read assistant recovery business identity migration: %v", err)
+	}
+	for _, fragment := range []string{
+		"ranked_active_recoveries",
+		"status = 'expired'",
+		"duplicate_rank > 1",
+		"WHEN 'executing' THEN 0",
+		"WHEN 'paused' THEN 1",
+		"uq_assistant_recovery_active_run_step_tool_code",
+		"COALESCE(NULLIF(step_id, ''), tool_name)",
+		"WHERE status IN ('pending', 'executing', 'paused')",
+	} {
+		if !strings.Contains(string(content), fragment) {
+			t.Fatalf("assistant recovery business identity migration missing %q", fragment)
+		}
+	}
+}

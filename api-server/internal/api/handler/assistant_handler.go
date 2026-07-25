@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"api-server/internal/repository"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // AssistantHandler 智能体处理器
@@ -64,6 +66,7 @@ func (h *AssistantHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/sessions/:session_id/files", h.UploadSessionFile)
 	group.GET("/sessions/:session_id/tool-calls", h.ListToolCalls)
 	group.GET("/sessions/:session_id/approvals", h.ListApprovals)
+	group.GET("/sessions/:session_id/recoveries", h.ListRecoveries)
 
 	// Tools
 	group.GET("/tools", h.ListTools)
@@ -77,6 +80,10 @@ func (h *AssistantHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/approvals/:approval_id", h.GetApproval)
 	group.POST("/approvals/:approval_id/approve", h.Approve)
 	group.POST("/approvals/:approval_id/reject", h.Reject)
+
+	// Recoverable tool blockers
+	group.GET("/recoveries/:recovery_id", h.GetRecovery)
+	group.POST("/recoveries/:recovery_id/decision", h.DecideRecovery)
 
 	// Investigations
 	group.POST("/investigations/host-attack", h.CreateHostAttackInvestigation)
@@ -318,6 +325,63 @@ func (h *AssistantHandler) ListApprovals(c *gin.Context) {
 			"total": total,
 		},
 	})
+}
+
+// ListRecoveries lists durable recovery requests for a session.
+func (h *AssistantHandler) ListRecoveries(c *gin.Context) {
+	sessionID := c.Param("session_id")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	requests, total, err := h.assistantService.ListRecoveries(c.Request.Context(), sessionID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{
+		"items": requests,
+		"total": total,
+	}})
+}
+
+func (h *AssistantHandler) GetRecovery(c *gin.Context) {
+	request, err := h.assistantService.GetRecovery(c.Request.Context(), c.Param("recovery_id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": request})
+}
+
+func (h *AssistantHandler) DecideRecovery(c *gin.Context) {
+	var req assistant.RecoveryDecisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ActionID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "action_id is required"})
+		return
+	}
+	operator := c.GetString("username")
+	result, err := h.assistantService.DecideRecovery(
+		c.Request.Context(),
+		c.Param("recovery_id"),
+		req,
+		operator,
+	)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		} else if !errors.Is(err, repository.ErrRecoveryAlreadyDecided) &&
+			!strings.Contains(err.Error(), "not authorized") &&
+			!strings.Contains(err.Error(), "requires a non-empty comment") {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
 // ListTools 列出工具

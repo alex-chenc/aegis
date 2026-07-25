@@ -139,6 +139,27 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 			clarificationQuestion = record.Reason
 		}
 	}
+	// Completion and discovery tools inherit authority from an accepted mapped
+	// producer. Expanding companions before hard gates allowed a rejected write
+	// tool to leave executable read-only status/list steps behind.
+	companionNames := e.mapper.ReadonlyCompanionToolNames(accepted)
+	for _, name := range companionNames {
+		if containsExactString(candidateNames, name) {
+			continue
+		}
+		candidateNames = append(candidateNames, name)
+		record, accept := e.evaluateCandidate(name, input, breakdown)
+		record.TraceID = traceID
+		records = append(records, record)
+		if accept {
+			accepted = append(accepted, name)
+			continue
+		}
+		rejectedRecords = append(rejectedRecords, record)
+		if record.Decision == toolDecisionClarificationRequired && clarificationQuestion == "" {
+			clarificationQuestion = record.Reason
+		}
+	}
 
 	if breakdown.NeedClarification && clarificationQuestion == "" {
 		clarificationQuestion = breakdown.ClarifyingQuestion
@@ -174,7 +195,7 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 	// receive these Mapping-bound steps as its initial plan and must never run a
 	// second free tool_name election. Do not restore a dynamic-tool fallback.
 	acceptedTools := dedupeStrings(accepted)
-	steps, compileClarification := e.compileWorkflowPlan(acceptedTools, input, breakdown, traceID)
+	steps, compileClarification, deferredClarification, remainingWorkflowIDs := e.compileWorkflowPlan(acceptedTools, input, breakdown, traceID)
 	if compileClarification != "" {
 		e.logger.Info("assistant workflow compiler requires clarification",
 			zap.String("trace_id", traceID),
@@ -201,14 +222,26 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 		zap.Bool("need_clarification", false),
 	)
 	return &ToolExecutionPlan{
-		Goal:                breakdown.Goal,
-		NeedClarification:   false,
-		Steps:               steps,
-		EvidencePolicy:      defaultEvidencePolicy(e.config.PostconditionCheckEnabled),
-		DecisionTraceID:     traceID,
-		DecisionRecords:     records,
-		RejectedToolRecords: rejectedRecords,
+		Goal:                  breakdown.Goal,
+		WorkflowIDs:           dedupeStrings(breakdown.WorkflowIDs),
+		RequiredOutcome:       requiredBusinessOutcome(breakdown),
+		DeferredClarification: deferredClarification,
+		RemainingWorkflowIDs:  dedupeStrings(remainingWorkflowIDs),
+		NeedClarification:     false,
+		Steps:                 steps,
+		EvidencePolicy:        defaultEvidencePolicy(e.config.PostconditionCheckEnabled),
+		DecisionTraceID:       traceID,
+		DecisionRecords:       records,
+		RejectedToolRecords:   rejectedRecords,
 	}, nil
+}
+
+func requiredBusinessOutcome(breakdown *IntentBreakdown) string {
+	if workflowSelected(breakdown, detectionPackageLifecycleWorkflowID) &&
+		requiresDetectionPackageActivation(breakdown) {
+		return "detection_package_enabled"
+	}
+	return ""
 }
 
 // compileWorkflowPlan selects a workflow compiler from the breakdown's declared
@@ -216,7 +249,7 @@ func (e *ToolDecisionEngine) Decide(ctx context.Context, input ToolDecisionInput
 // DAG (reordered, pruned, typed args). When no compiler matches the generic
 // capability-driven path is used. The returned clarification string is non-empty
 // when the compiler could not safely compile the intent.
-func (e *ToolDecisionEngine) compileWorkflowPlan(acceptedTools []string, input ToolDecisionInput, breakdown *IntentBreakdown, traceID string) ([]ToolPlanStep, string) {
+func (e *ToolDecisionEngine) compileWorkflowPlan(acceptedTools []string, input ToolDecisionInput, breakdown *IntentBreakdown, traceID string) ([]ToolPlanStep, string, string, []string) {
 	if e.compilerRegistry != nil && breakdown != nil {
 		result, compiled, err := e.compilerRegistry.CompileForBreakdown(WorkflowCompileInput{
 			Breakdown:       breakdown,
@@ -233,11 +266,11 @@ func (e *ToolDecisionEngine) compileWorkflowPlan(acceptedTools []string, input T
 				zap.String("stage", "mapping_compile"),
 				zap.Error(err),
 			)
-			return nil, err.Error()
+			return nil, err.Error(), "", nil
 		}
 		if compiled && result != nil {
 			if result.Clarification != "" {
-				return nil, result.Clarification
+				return nil, result.Clarification, "", nil
 			}
 			steps := assignPlanStepIDs(result.Steps)
 			e.logger.Info("assistant workflow plan compiled",
@@ -246,10 +279,10 @@ func (e *ToolDecisionEngine) compileWorkflowPlan(acceptedTools []string, input T
 				zap.Int("mapped_tool_count", len(acceptedTools)),
 				zap.Int("compiled_step_count", len(steps)),
 			)
-			return steps, ""
+			return steps, "", result.DeferredClarification, result.RemainingWorkflowIDs
 		}
 	}
-	return e.buildPlanSteps(acceptedTools, input, breakdown), ""
+	return e.buildPlanSteps(acceptedTools, input, breakdown), "", "", nil
 }
 
 func assignPlanStepIDs(steps []ToolPlanStep) []ToolPlanStep {
@@ -280,6 +313,12 @@ func (e *ToolDecisionEngine) newToolPlanStep(name string, input ToolDecisionInpu
 	tool, _ := e.registry.Get(name)
 	args, argSources := bindPlanArgs(contract, input, breakdown)
 	applyBuiltinDeterministicPlanArgs(name, args, argSources, breakdown)
+	if name == "Host.Resolve" {
+		if resolvedArgs, resolvedSources, ok := deterministicHostResolvePlanArgs(breakdown, input.ContextRefs); ok {
+			args = resolvedArgs
+			argSources = resolvedSources
+		}
+	}
 	reason := decisionStepReason(tool, contract, input, breakdown)
 	return ToolPlanStep{
 		ToolName:         name,
@@ -436,6 +475,15 @@ func applyBuiltinDeterministicPlanArgs(toolName string, args map[string]interfac
 			args["remediation"] = remediation
 			sources["remediation"] = ArgSource{SourceType: "intent_parameters", SourceRef: "auto_remediate/remediation_rounds", Confidence: 1}
 		}
+	case "Package.Draft.Generate":
+		for _, key := range []string{"attack_prerequisites", "exploitation_chain", "false_positive_constraints"} {
+			value, ok := breakdown.Parameters[key].(string)
+			if !ok || strings.TrimSpace(value) == "" {
+				continue
+			}
+			args[key] = strings.TrimSpace(value)
+			sources[key] = ArgSource{SourceType: "intent_parameters", SourceRef: key, Confidence: 0.9}
+		}
 	}
 }
 
@@ -546,7 +594,6 @@ func (e *ToolDecisionEngine) recallCandidateToolNames(input ToolDecisionInput, b
 	}
 	mapped := e.mapper.ToolNamesForCapabilities(breakdown.CandidateCapabilities)
 	names = append(names, mapped...)
-	names = append(names, e.mapper.ReadonlyCompanionToolNames(mapped)...)
 
 	capabilityMatched := make(map[string]bool, len(breakdown.CandidateCapabilities))
 	for _, name := range mapped {
@@ -614,6 +661,16 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	}
 	gates = append(gates, HardGateResult{Name: "explicit_write_intent", Passed: true})
 
+	if name == "Host.Resolve" {
+		if _, _, ok := deterministicHostResolvePlanArgs(breakdown, input.ContextRefs); !ok {
+			reason := "请提供明确的主机 UUID、主机名/IP，或指定所有在线主机。"
+			gates = append(gates, HardGateResult{Name: "required_entities", Passed: false, Reason: reason})
+			record.Decision = toolDecisionClarificationRequired
+			record.Reason = reason
+			record.HardGateResults = gates
+			return record, false
+		}
+	}
 	if missing, question := e.missingRequiredEntity(contract, input, breakdown); missing {
 		gates = append(gates, HardGateResult{Name: "required_entities", Passed: false, Reason: question})
 		record.Decision = toolDecisionClarificationRequired
@@ -630,6 +687,45 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	_, sources := bindPlanArgs(contract, input, breakdown)
 	record.ArgSources = sources
 	return record, true
+}
+
+func deterministicHostResolvePlanArgs(breakdown *IntentBreakdown, contextRefs []ContextRefInput) (map[string]interface{}, map[string]ArgSource, bool) {
+	scenario, hostIDs, selectors := classifyAssetScope(breakdown)
+	args := map[string]interface{}{"require_online": true}
+	sources := map[string]ArgSource{
+		"require_online": {SourceType: "policy_default", SourceRef: "host_resolution", Confidence: 1},
+	}
+	switch scenario {
+	case "all_hosts":
+		args["target_scope"] = "all_online_hosts"
+		sources["target_scope"] = ArgSource{SourceType: "intent_scope", SourceRef: "all_online_hosts", Confidence: 1}
+		return args, sources, true
+	case "exact_uuids":
+		args["host_selectors"] = dedupeStrings(hostIDs)
+		sources["host_selectors"] = ArgSource{SourceType: "intent_scope", SourceRef: "host_uuid", Confidence: 0.95}
+		return args, sources, len(hostIDs) > 0
+	case "selector":
+		args["host_selectors"] = dedupeStrings(selectors)
+		sources["host_selectors"] = ArgSource{SourceType: "user_message", SourceRef: "host_selector", Confidence: 0.9}
+		return args, sources, len(selectors) > 0
+	}
+
+	var contextSelectors []string
+	for _, ref := range contextRefs {
+		switch normalizeExposureIdentifier(ref.ObjectType) {
+		case "host", "machine", "server", "endpoint":
+			if strings.TrimSpace(ref.ObjectID) != "" {
+				contextSelectors = append(contextSelectors, strings.TrimSpace(ref.ObjectID))
+			}
+		}
+	}
+	contextSelectors = dedupeStrings(contextSelectors)
+	if len(contextSelectors) == 0 {
+		return nil, nil, false
+	}
+	args["host_selectors"] = contextSelectors
+	sources["host_selectors"] = ArgSource{SourceType: "page_context", SourceRef: "host", Confidence: 0.95}
+	return args, sources, true
 }
 
 // checkDeniedIntents 检查 LLM 候选能力是否命中工具的 denied_intents 或 negative_cases。

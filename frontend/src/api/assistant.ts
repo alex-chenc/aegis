@@ -106,7 +106,7 @@ export interface AssistantToolCall {
   tool_name: string
   domain?: string
   risk_level: AssistantRiskLevel
-  status: 'pending' | 'running' | 'accepted' | 'completed' | 'success' | 'failed' | 'cancelled' | 'approval_required' | 'rejected'
+  status: 'pending' | 'running' | 'accepted' | 'completed' | 'success' | 'failed' | 'blocked' | 'cancelled' | 'approval_required' | 'rejected'
   /** Transport status is kept in status by the API; these fields describe the business operation. */
   operation_status?: 'accepted' | 'running' | 'succeeded' | 'failed' | 'skipped'
   terminal?: boolean
@@ -142,6 +142,63 @@ export interface AssistantApproval {
   expires_at?: string
   created_at: string
   reviewed_at?: string
+}
+
+export interface AssistantRecoveryAction {
+  id: string
+  label: string
+  description?: string
+  risk_level: AssistantRiskLevel
+  executor?: string
+  confirmation_required?: boolean
+  resumes_run?: boolean
+  input_required?: boolean
+  retry_safe?: boolean
+  keeps_open?: boolean
+}
+
+export interface AssistantRecoveryRequest {
+  id: string
+  recovery_id: string
+  session_id: string
+  run_id: string
+  message_id?: string
+  step_id?: string
+  tool_call_id: string
+  tool_name: string
+  code: string
+  category: string
+  risk_level: AssistantRiskLevel
+  summary: string
+  detail?: string
+  original_query?: string
+  original_args?: Record<string, any>
+  context?: Record<string, any>
+  actions: AssistantRecoveryAction[]
+  status: 'pending' | 'executing' | 'resolved' | 'paused' | 'cancelled' | 'expired' | 'failed'
+  selected_action_id?: string
+  decision_input?: Record<string, any>
+  resolution_result?: Record<string, any>
+  requested_by?: string
+  decided_by?: string
+  resume_run_id?: string
+  created_at: string
+  updated_at: string
+  decided_at?: string
+  resolved_at?: string
+}
+
+export interface RecoveryDecisionRequest {
+  action_id: string
+  input?: Record<string, any>
+}
+
+export interface RecoveryDecisionResult {
+  recovery: AssistantRecoveryRequest
+  action: AssistantRecoveryAction
+  execution?: Record<string, any>
+  resume_request?: boolean
+  run_handle?: RunHandle
 }
 
 /** 工具策略 */
@@ -544,6 +601,29 @@ export function getApprovals(sessionId: string, params?: ApprovalsQueryParams) {
   })
 }
 
+export function getRecoveries(sessionId: string, params?: PaginationParams) {
+  return request<any, PaginatedResponse<AssistantRecoveryRequest>>({
+    url: `/assistant/sessions/${sessionId}/recoveries`,
+    method: 'get',
+    params
+  })
+}
+
+export function getRecovery(recoveryId: string) {
+  return request<any, AssistantRecoveryRequest>({
+    url: `/assistant/recoveries/${recoveryId}`,
+    method: 'get'
+  })
+}
+
+export function decideRecovery(recoveryId: string, data: RecoveryDecisionRequest) {
+  return request<any, RecoveryDecisionResult>({
+    url: `/assistant/recoveries/${recoveryId}/decision`,
+    method: 'post',
+    data
+  })
+}
+
 /** 获取可用工具列表 */
 export function getTools(params?: PaginationParams) {
   return request<any, AssistantToolsResponse>({
@@ -721,6 +801,8 @@ export type AssistantStreamEventType =
   | 'tool_error'
   | 'approval_required'
   | 'approval_updated'
+  | 'recovery_required'
+  | 'recovery_updated'
   | 'run_waiting_approval'
   | 'context_ref_added'
   | 'result_card'

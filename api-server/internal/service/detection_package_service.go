@@ -93,16 +93,18 @@ func (s *DetectionPackageService) objectKeyToURL(objectKey string) string {
 }
 
 type CreateDraftRequest struct {
-	PackageID       string                 `json:"package_id"`
-	TargetVersion   string                 `json:"target_version" binding:"required"`
-	Title           string                 `json:"title" binding:"required"`
-	Description     string                 `json:"description"`
-	CVEIDs          []string               `json:"cve_ids"`
-	HookPlanYAML    string                 `json:"hook_plan_yaml"`
-	EBPFSource      string                 `json:"ebpf_source"`
-	SigmaRulesYAML  string                 `json:"sigma_rules_yaml"`
-	CorrelationYAML string                 `json:"correlation_yaml"`
-	BuildParams     map[string]interface{} `json:"build_params"`
+	PackageID         string                 `json:"package_id"`
+	TargetVersion     string                 `json:"target_version" binding:"required"`
+	Title             string                 `json:"title" binding:"required"`
+	Description       string                 `json:"description"`
+	CVEIDs            []string               `json:"cve_ids"`
+	AIGenerated       bool                   `json:"ai_generated"`
+	AIGenerationInput map[string]interface{} `json:"ai_generation_input,omitempty"`
+	HookPlanYAML      string                 `json:"hook_plan_yaml"`
+	EBPFSource        string                 `json:"ebpf_source"`
+	SigmaRulesYAML    string                 `json:"sigma_rules_yaml"`
+	CorrelationYAML   string                 `json:"correlation_yaml"`
+	BuildParams       map[string]interface{} `json:"build_params"`
 }
 
 type UpdateDraftRequest struct {
@@ -121,22 +123,32 @@ func (s *DetectionPackageService) CreateDraft(ctx context.Context, req CreateDra
 	if buildParams == nil {
 		buildParams = []byte("{}")
 	}
+	var aiGenerationInput datatypes.JSON
+	if req.AIGenerationInput != nil {
+		encodedInput, err := json.Marshal(req.AIGenerationInput)
+		if err != nil {
+			return nil, fmt.Errorf("marshal AI generation input: %w", err)
+		}
+		aiGenerationInput = datatypes.JSON(encodedInput)
+	}
 
 	draft := &model.DetectionPackageDraft{
-		ID:              uuid.New(),
-		PackageID:       req.PackageID,
-		TargetVersion:   req.TargetVersion,
-		Title:           req.Title,
-		Description:     req.Description,
-		CVEIDs:          datatypes.JSON(cveIDs),
-		HookPlanYAML:    req.HookPlanYAML,
-		EBPFSource:      req.EBPFSource,
-		SigmaRulesYAML:  req.SigmaRulesYAML,
-		CorrelationYAML: req.CorrelationYAML,
-		BuildParams:     datatypes.JSON(buildParams),
-		Status:          "draft",
-		CreatedBy:       operator,
-		UpdatedBy:       operator,
+		ID:                uuid.New(),
+		PackageID:         req.PackageID,
+		TargetVersion:     req.TargetVersion,
+		Title:             req.Title,
+		Description:       req.Description,
+		CVEIDs:            datatypes.JSON(cveIDs),
+		AIGenerated:       req.AIGenerated,
+		AIGenerationInput: aiGenerationInput,
+		HookPlanYAML:      req.HookPlanYAML,
+		EBPFSource:        req.EBPFSource,
+		SigmaRulesYAML:    req.SigmaRulesYAML,
+		CorrelationYAML:   req.CorrelationYAML,
+		BuildParams:       datatypes.JSON(buildParams),
+		Status:            "draft",
+		CreatedBy:         operator,
+		UpdatedBy:         operator,
 	}
 
 	// Auto-generate UUID package_id if not provided
@@ -217,7 +229,7 @@ func (s *DetectionPackageService) StartBuild(ctx context.Context, packageID stri
 
 	// Pre-validate hooks against eBPF hook allowlist before building.
 	// This catches disallowed hooks early instead of waiting for agent-side rejection.
-	if err := s.validateHooksAgainstAllowlist(draft.HookPlanYAML); err != nil {
+	if err := s.validateHooksAgainstAllowlist(ctx, draft.HookPlanYAML); err != nil {
 		// Create a failed build record so the UI can display the failure reason.
 		allowlistErr := fmt.Errorf("hook allowlist validation failed: %w", err)
 		now := time.Now()
@@ -969,6 +981,23 @@ func (s *DetectionPackageService) GetAllowlist(ctx context.Context) (*model.EBPF
 	return s.repo.GetActiveAllowlist()
 }
 
+// GetActiveHookAllowlist returns the exact runtime hook contract used by build
+// preflight. A missing row means the platform has no active restriction.
+func (s *DetectionPackageService) GetActiveHookAllowlist(context.Context) (*AllowlistConfig, error) {
+	allowlistRow, err := s.repo.GetActiveAllowlist()
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get allowlist: %w", err)
+	}
+	allowlist, err := parseAllowlistConfig(allowlistRow.ConfigJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse allowlist: %w", err)
+	}
+	return allowlist, nil
+}
+
 func (s *DetectionPackageService) UpdateAllowlist(ctx context.Context, configJSON datatypes.JSON, description, operator string) (*model.EBPFHookAllowlistConfig, error) {
 	config := &model.EBPFHookAllowlistConfig{
 		ID:          uuid.New(),
@@ -1024,7 +1053,7 @@ func allowlistConfigPayload(configJSON datatypes.JSON, version int64) string {
 // validateHooksAgainstAllowlist parses the hook_plan_yaml and validates each hook
 // against the currently active eBPF hook allowlist. Returns nil if no allowlist
 // is configured (allow everything) or if all hooks pass validation.
-func (s *DetectionPackageService) validateHooksAgainstAllowlist(hookPlanYAML string) error {
+func (s *DetectionPackageService) validateHooksAgainstAllowlist(ctx context.Context, hookPlanYAML string) error {
 	hooks, err := parseHookPlan(hookPlanYAML)
 	if err != nil {
 		return err
@@ -1033,18 +1062,13 @@ func (s *DetectionPackageService) validateHooksAgainstAllowlist(hookPlanYAML str
 		return nil
 	}
 
-	allowlistRow, err := s.repo.GetActiveAllowlist()
+	allowlist, err := s.GetActiveHookAllowlist(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// No allowlist configured — allow everything (same as agent behavior when version=0)
-			return nil
-		}
-		return fmt.Errorf("get allowlist: %w", err)
+		return err
 	}
-
-	allowlist, err := parseAllowlistConfig(allowlistRow.ConfigJSON)
-	if err != nil {
-		return fmt.Errorf("parse allowlist: %w", err)
+	if allowlist == nil {
+		// No allowlist configured — allow everything (same as agent behavior when version=0).
+		return nil
 	}
 
 	return ValidateHooksAgainstAllowlist(hooks, allowlist)

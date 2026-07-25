@@ -1,16 +1,13 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
-	"api-server/internal/llm"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 	"api-server/pkg/logger"
@@ -26,10 +23,6 @@ type DetectionPackageHandler struct {
 	configRepo    *repository.ConfigRepository
 	llmTimeout    int
 	llmMaxRetries int
-}
-
-type LLMCaller interface {
-	ChatCompletion(ctx context.Context, systemPrompt, userPrompt string, temperature float64) (string, error)
 }
 
 func NewDetectionPackageHandler(pkgService *service.DetectionPackageService, configRepo *repository.ConfigRepository, llmTimeout, llmMaxRetries int) *DetectionPackageHandler {
@@ -123,189 +116,28 @@ func (h *DetectionPackageHandler) AIGenerateDraft(c *gin.Context) {
 		return
 	}
 
-	// Generate UUID package_id
-	packageID := uuid.New().String()
-
-	// Call LLM to generate detection package content
-	hookPlanYAML := ""
-	ebpfSource := ""
-	sigmaRulesYAML := ""
-	correlationYAML := ""
-
-	config, err := h.configRepo.GetActive()
-	if err != nil {
-		logger.Error("no active LLM config found", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "AI生成服务未配置，请在系统设置中配置并启用LLM"})
-		return
-	}
-
-	apiKey, err := h.configRepo.DecryptAPIKey(config.APIKeyEncrypted)
-	if err != nil {
-		logger.Error("failed to decrypt LLM API key", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "AI生成服务配置错误，无法解密API Key"})
-		return
-	}
-
-	llmClient := llm.NewLLMClient(apiKey, config.BaseURL, config.ModelName, h.llmTimeout, h.llmMaxRetries)
-
-	prompt := llm.GetDetectionPackageGenerationPrompt(
-		packageID,
-		req.CVEID,
-		req.VulnerabilityDescription,
-		req.AttackPrerequisites,
-		req.ExploitationChain,
-		req.FalsePositiveConstraints,
+	generator := service.NewDetectionPackageGenerationService(
+		h.configRepo,
+		h.pkgService,
+		h.llmTimeout,
+		h.llmMaxRetries,
 	)
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
-	defer cancel()
-	response, err := llmClient.ChatCompletion(ctx, "", prompt, 0.7)
-	if err != nil {
-		logger.Error("LLM generation failed", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"code":    503,
-			"message": "AI生成服务暂时不可用，请检查LLM配置或稍后重试",
-		})
-		return
-	}
-
-	hookPlanYAML, ebpfSource, sigmaRulesYAML, correlationYAML = parseLLMResponse(response)
-
-	// Create draft with AI generation input
-	draftReq := service.CreateDraftRequest{
-		PackageID:       packageID,
-		TargetVersion:   "1.0.0",
-		Title:           fmt.Sprintf("%s Runtime Detector", req.CVEID),
-		Description:     req.VulnerabilityDescription,
-		CVEIDs:          []string{req.CVEID},
-		HookPlanYAML:    hookPlanYAML,
-		EBPFSource:      ebpfSource,
-		SigmaRulesYAML:  sigmaRulesYAML,
-		CorrelationYAML: correlationYAML,
-	}
-
-	operator := getOperator(c)
-
-	existingDraft, _ := h.pkgService.GetDraft(c.Request.Context(), packageID)
-	if existingDraft != nil {
-		if err := h.pkgService.DeleteDraftByPackageID(c.Request.Context(), packageID, operator); err != nil {
-			logger.Error("failed to delete existing draft", zap.String("package_id", packageID), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": fmt.Sprintf("删除旧草稿失败: %s", err.Error())})
-			return
-		}
-	}
-
-	draft, err := h.pkgService.CreateDraft(c.Request.Context(), draftReq, operator)
+	draft, err := generator.GenerateDraft(c.Request.Context(), service.GenerateDetectionPackageDraftRequest{
+		CVEID:                    req.CVEID,
+		VulnerabilityDescription: req.VulnerabilityDescription,
+		AttackPrerequisites:      req.AttackPrerequisites,
+		ExploitationChain:        req.ExploitationChain,
+		FalsePositiveConstraints: req.FalsePositiveConstraints,
+		Operator:                 getOperator(c),
+	})
 	if err != nil {
 		logger.Error("ai generate draft failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		status, msg := classifyServiceError(err)
+		c.JSON(status, gin.H{"code": status, "message": msg})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": draft})
-}
-
-// parseLLMResponse extracts the four sections from the LLM response
-func parseLLMResponse(response string) (hookPlan, ebpfSource, sigmaRules, correlation string) {
-	hookPlan = extractCodeBlock(response, "yaml", "HookPlan")
-	ebpfSource = extractCodeBlock(response, "c", "eBPF Source")
-	sigmaRules = extractCodeBlock(response, "yaml", "Sigma")
-	correlation = extractCodeBlock(response, "yaml", "Correlation")
-
-	if hookPlan == "" {
-		hookPlan = extractCodeBlockByLang(response, "yaml", 1)
-	}
-	if ebpfSource == "" {
-		ebpfSource = extractCodeBlockByLang(response, "c", 1)
-	}
-	if sigmaRules == "" {
-		sigmaRules = extractCodeBlockByLang(response, "yaml", 2)
-	}
-	if correlation == "" {
-		correlation = extractCodeBlockByLang(response, "yaml", 3)
-	}
-
-	if hookPlan == "" {
-		hookPlan = fmt.Sprintf("# HookPlan parsing failed - raw LLM response:\n# %s", strings.ReplaceAll(response, "\n", "\n# "))
-	}
-	if ebpfSource == "" {
-		ebpfSource = fmt.Sprintf("// eBPF source parsing failed - raw LLM response:\n// %s", strings.ReplaceAll(response, "\n", "\n// "))
-	}
-	if sigmaRules == "" {
-		sigmaRules = fmt.Sprintf("# Sigma rules parsing failed - raw LLM response:\n# %s", strings.ReplaceAll(response, "\n", "\n# "))
-	}
-	if correlation == "" {
-		correlation = fmt.Sprintf("# Correlation parsing failed - raw LLM response:\n# %s", strings.ReplaceAll(response, "\n", "\n# "))
-	}
-	return
-}
-
-func extractCodeBlockByLang(response, lang string, occurrence int) string {
-	langMarker := "```" + lang
-	lines := strings.Split(response, "\n")
-	var blockLines []string
-	inBlock := false
-	count := 0
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, langMarker) {
-			count++
-			if count == occurrence {
-				inBlock = true
-				continue
-			}
-			if inBlock {
-				break
-			}
-			continue
-		}
-		if inBlock && strings.HasPrefix(trimmed, "```") {
-			break
-		}
-		if inBlock {
-			blockLines = append(blockLines, line)
-		}
-	}
-
-	if len(blockLines) > 0 {
-		return strings.Join(blockLines, "\n")
-	}
-	return ""
-}
-
-func extractCodeBlock(response, lang, sectionHint string) string {
-	// Find section header containing the hint
-	lines := strings.Split(response, "\n")
-	inSection := false
-	var blockLines []string
-	inBlock := false
-
-	for _, line := range lines {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, strings.ToLower(sectionHint)) && strings.HasPrefix(strings.TrimSpace(line), "#") {
-			inSection = true
-			continue
-		}
-		if inSection && strings.HasPrefix(strings.TrimSpace(line), "```") {
-			if inBlock {
-				break // End of block
-			}
-			inBlock = true
-			continue
-		}
-		if inSection && inBlock {
-			blockLines = append(blockLines, line)
-		}
-		// If we hit another section header while looking, stop
-		if inSection && !inBlock && strings.HasPrefix(strings.TrimSpace(line), "## ") && !strings.Contains(lower, strings.ToLower(sectionHint)) {
-			inSection = false
-		}
-	}
-
-	if len(blockLines) > 0 {
-		return strings.Join(blockLines, "\n")
-	}
-	return ""
 }
 
 func (h *DetectionPackageHandler) UpdateDraft(c *gin.Context) {

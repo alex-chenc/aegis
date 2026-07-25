@@ -83,6 +83,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AssistantToolCall{},
 		&model.AssistantOperation{},
 		&model.AssistantApproval{},
+		&model.AssistantRecoveryRequest{},
 		&model.AssistantToolSelection{},
 		&model.AssistantToolPolicy{},
 		&model.AssistantMemory{},
@@ -102,6 +103,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	if err := ensureDetectionEnhancementSchema(db); err != nil {
 		logger.Error("failed to ensure detection enhancement schema", zap.Error(err))
 		return nil, fmt.Errorf("failed to ensure detection enhancement schema: %w", err)
+	}
+
+	if err := ensureAssistantRecoverySchema(db); err != nil {
+		logger.Error("failed to ensure assistant recovery schema", zap.Error(err))
+		return nil, fmt.Errorf("failed to ensure assistant recovery schema: %w", err)
 	}
 
 	if err := ensureSigmaRuleEnhancementSchema(db); err != nil {
@@ -131,6 +137,58 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	return db, nil
+}
+
+func ensureAssistantRecoverySchema(db *gorm.DB) error {
+	for _, statement := range assistantRecoverySchemaStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assistantRecoverySchemaStatements() []string {
+	return []string{`
+WITH ranked_active_recoveries AS (
+	SELECT
+		id,
+		ROW_NUMBER() OVER (
+			PARTITION BY
+				run_id,
+				COALESCE(NULLIF(step_id, ''), tool_name),
+				tool_name,
+				code
+			ORDER BY
+				CASE status
+					WHEN 'executing' THEN 0
+					WHEN 'paused' THEN 1
+					ELSE 2
+				END,
+				created_at ASC,
+				id ASC
+		) AS duplicate_rank
+	FROM assistant_recovery_requests
+	WHERE status IN ('pending', 'executing', 'paused')
+)
+UPDATE assistant_recovery_requests AS recovery
+SET
+	status = 'expired',
+	updated_at = NOW()
+FROM ranked_active_recoveries AS ranked
+WHERE recovery.id = ranked.id
+	AND ranked.duplicate_rank > 1`, `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_recovery_active_tool_code
+ON assistant_recovery_requests(tool_call_id, code)
+WHERE status IN ('pending', 'executing', 'paused')`, `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_recovery_active_run_step_tool_code
+ON assistant_recovery_requests(
+	run_id,
+	COALESCE(NULLIF(step_id, ''), tool_name),
+	tool_name,
+	code
+)
+WHERE status IN ('pending', 'executing', 'paused')`}
 }
 
 // cleanInvalidThinkingData cleans up non-JSON data in assistant_messages.thinking

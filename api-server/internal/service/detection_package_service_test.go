@@ -233,6 +233,34 @@ func TestCreateDraft_AutoGeneratesUUIDPackageID(t *testing.T) {
 	}
 }
 
+func TestCreateDraftPersistsAIGenerationProvenance(t *testing.T) {
+	svc, _ := newTestDetectionPackageService(t)
+
+	draft, err := svc.CreateDraft(context.Background(), CreateDraftRequest{
+		PackageID:     "pkg-ai-provenance",
+		TargetVersion: "1.0.0",
+		Title:         "AI Package",
+		AIGenerated:   true,
+		AIGenerationInput: map[string]interface{}{
+			"cve_id":     "CVE-2026-31431",
+			"model_name": "test-model",
+		},
+	}, "assistant")
+	if err != nil {
+		t.Fatalf("CreateDraft failed: %v", err)
+	}
+	if !draft.AIGenerated {
+		t.Fatal("AI-generated draft lost ai_generated provenance")
+	}
+	var generationInput map[string]interface{}
+	if err := json.Unmarshal(draft.AIGenerationInput, &generationInput); err != nil {
+		t.Fatalf("unmarshal AI generation input: %v", err)
+	}
+	if generationInput["cve_id"] != "CVE-2026-31431" || generationInput["model_name"] != "test-model" {
+		t.Fatalf("unexpected AI generation input: %#v", generationInput)
+	}
+}
+
 func TestUpdateDraftResetsBuildStatus(t *testing.T) {
 	svc, db := newTestDetectionPackageService(t)
 

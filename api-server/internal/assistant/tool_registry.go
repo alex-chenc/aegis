@@ -186,6 +186,9 @@ type ToolExecutionResult struct {
 	Data       interface{} `json:"data,omitempty"`
 	Error      string      `json:"error,omitempty"`
 	DurationMs int64       `json:"duration_ms"`
+	// Cause preserves a typed service error inside the process so the dispatcher
+	// can create a backend-declared recovery request. It is never serialized.
+	Cause error `json:"-"`
 }
 
 // ToolRegistry 工具注册中心
@@ -300,6 +303,7 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 			Success:    false,
 			Error:      err.Error(),
 			DurationMs: duration,
+			Cause:      err,
 		}, nil
 	}
 

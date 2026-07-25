@@ -47,13 +47,81 @@ func (r *ToolExposureResolver) IntentCatalog(ctx ToolExposureContext) []*ToolSpe
 			}
 		}
 	}
+	result = r.withDeclaredLowRiskCompanions(result, ctx.AssistantMode)
+	sortIntentCatalog(result)
+	return result
+}
+
+// intentCatalogForCapabilities resolves a closed workflow capability contract
+// directly. Contextual domain matching is deliberately bypassed here because a
+// workflow may span tools owned by another domain (for example asset-scoped
+// weak-password assessment tools implemented by the detection service).
+func (r *ToolExposureResolver) intentCatalogForCapabilities(capabilities map[string]bool, assistantMode string) []*ToolSpec {
+	if r == nil || r.registry == nil || len(capabilities) == 0 {
+		return nil
+	}
+	var result []*ToolSpec
+	for _, tool := range r.registry.List() {
+		if !intentCatalogToolEligible(tool, assistantMode) ||
+			tool.ExposurePolicy.Exposure == ToolExposureInternal {
+			continue
+		}
+		capability := strings.ToLower(strings.TrimSpace(BuildToolUseContract(tool).Capability))
+		if capabilities[capability] {
+			result = append(result, tool)
+		}
+	}
+	result = r.withDeclaredLowRiskCompanions(result, assistantMode)
+	sortIntentCatalog(result)
+	return result
+}
+
+// withDeclaredLowRiskCompanions computes the bounded dependency closure of the
+// selected tools. Only completion/discovery capabilities explicitly declared
+// by a tool contract and implemented by read-only or low-risk tools are added.
+func (r *ToolExposureResolver) withDeclaredLowRiskCompanions(tools []*ToolSpec, assistantMode string) []*ToolSpec {
+	if r == nil || r.registry == nil || len(tools) == 0 {
+		return tools
+	}
+	result := append([]*ToolSpec{}, tools...)
+	seen := make(map[string]bool, len(result))
+	primaryNames := make([]string, 0, len(result))
+	for _, tool := range result {
+		if tool == nil {
+			continue
+		}
+		seen[tool.Name] = true
+		primaryNames = append(primaryNames, tool.Name)
+	}
+	for _, name := range NewToolCapabilityMapper(r.registry).ReadonlyCompanionToolNames(primaryNames) {
+		if seen[name] {
+			continue
+		}
+		tool, ok := r.registry.Get(name)
+		if !ok || !intentCatalogToolEligible(tool, assistantMode) ||
+			tool.ExposurePolicy.Exposure == ToolExposureInternal {
+			continue
+		}
+		seen[name] = true
+		result = append(result, tool)
+	}
+	return result
+}
+
+func intentCatalogToolEligible(tool *ToolSpec, assistantMode string) bool {
+	return tool != nil &&
+		tool.Enabled &&
+		!isResidentTool(tool.Name) &&
+		exposureModeAllows(tool.ExposurePolicy, assistantMode)
+}
+
+func sortIntentCatalog(result []*ToolSpec) {
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].ExposurePolicy.CatalogPriority != result[j].ExposurePolicy.CatalogPriority {
 			return result[i].ExposurePolicy.CatalogPriority > result[j].ExposurePolicy.CatalogPriority
 		}
 		return result[i].Name < result[j].Name
 	})
-	return result
 }
 
 func exposureContextMatches(tool *ToolSpec, ctx ToolExposureContext) bool {
@@ -127,6 +195,7 @@ func builtinToolExposurePolicy(name string) ToolExposurePolicy {
 	case "Context.Get", "Session.Summarize",
 		"Asset.Collection.Get", "Task.GetDetail",
 		"Vulnerability.CustomQuery.Status", "Vulnerability.Scan.Status", "Vulnerability.Script.Status",
+		"Package.Build.Status",
 		"Credential.WeakPassword.QueryProgress", "ExternalMCP.Source.GetSchema", "Operation.Get":
 		exposure = ToolExposureCompanion
 	case "Baseline.Template.Rules.List", "Baseline.Script.Generate", "Task.RunCheck", "Task.RunFix":
@@ -135,6 +204,9 @@ func builtinToolExposurePolicy(name string) ToolExposurePolicy {
 		exposure = ToolExposurePrimary
 	case "Vulnerability.Script.Generate", "Vulnerability.Script.Execute":
 		workflowIDs = []string{vulnerabilityRemediationWorkflowID}
+	case "Package.List", "Package.Get", "Package.Draft.Generate",
+		"Package.Build.Start", "Package.Sign", "Package.Enable":
+		workflowIDs = []string{detectionPackageLifecycleWorkflowID}
 	case "":
 		exposure = ToolExposureInternal
 	}

@@ -202,14 +202,15 @@ func normalizeIntentBreakdown(value *IntentBreakdown, input IntentDecomposeInput
 		capabilities[i] = strings.ToLower(strings.TrimSpace(capabilities[i]))
 	}
 	value.CandidateCapabilities = dedupeStrings(capabilities)
-	for index := range value.WorkflowIDs {
-		value.WorkflowIDs[index] = strings.ToLower(strings.TrimSpace(value.WorkflowIDs[index]))
+	workflowIDs := append(append([]string{}, value.WorkflowIDs...), input.Intent.WorkflowIDs...)
+	for index := range workflowIDs {
+		workflowIDs[index] = strings.ToLower(strings.TrimSpace(workflowIDs[index]))
 	}
-	value.WorkflowIDs = dedupeStrings(value.WorkflowIDs)
+	value.WorkflowIDs = dedupeStrings(workflowIDs)
 	if value.Parameters == nil {
 		value.Parameters = IntentParameters{}
 	}
-	normalizeWorkflowIntentBreakdown(value)
+	normalizeWorkflowIntentBreakdown(value, input.Query)
 }
 
 func validateIntentBreakdown(value *IntentBreakdown) error {

@@ -14,7 +14,7 @@ func TestSessionStatusForGoalOutcomeDoesNotCollapseFailureIntoCompleted(t *testi
 		want    string
 	}{
 		{name: "succeeded", outcome: agentruntime.GoalSucceeded, want: model.SessionStatusCompleted},
-		{name: "partial", outcome: agentruntime.GoalPartiallySucceeded, want: model.SessionStatusCompleted},
+		{name: "partial", outcome: agentruntime.GoalPartiallySucceeded, want: model.SessionStatusActive},
 		{name: "needs input", outcome: agentruntime.GoalNeedsInput, want: model.SessionStatusActive},
 		{name: "failed", outcome: agentruntime.GoalFailed, want: model.SessionStatusFailed},
 		{name: "missing", outcome: "", want: model.SessionStatusFailed},

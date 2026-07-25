@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -38,6 +39,161 @@ func TestToolDecisionEngineRejectsConceptWriteTool(t *testing.T) {
 	assertRejectedDecision(t, plan, "Asset.Collection.Trigger")
 	if plan.NeedClarification {
 		t.Fatalf("concept explanation should not require clarification, got %q", plan.ClarifyingQuestion)
+	}
+}
+
+func TestToolDecisionEngineDoesNotAuthorizeCompanionsOfRejectedProducer(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	for _, tool := range []*ToolSpec{
+		{
+			Name:               "Example.Generate",
+			Domain:             DomainPackage,
+			Operation:          OpGenerate,
+			Capability:         "generate_example",
+			Description:        "Generate an example artifact.",
+			Risk:               ToolRiskMedium,
+			DefaultWhitelisted: false,
+			ExecutionContract: ToolExecutionContract{
+				CompletionCapability:  "get_example_status",
+				DiscoveryCapabilities: []string{"list_examples"},
+			},
+		},
+		{
+			Name:               "Example.Status",
+			Domain:             DomainPackage,
+			Operation:          OpGet,
+			Capability:         "get_example_status",
+			Description:        "Get example generation status.",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+		},
+		{
+			Name:               "Example.List",
+			Domain:             DomainPackage,
+			Operation:          OpList,
+			Capability:         "list_examples",
+			Description:        "List example artifacts.",
+			Risk:               ToolRiskReadonly,
+			DefaultWhitelisted: true,
+		},
+	} {
+		registerDecisionTestTool(t, registry, tool)
+	}
+
+	intent := IntentResult{Domains: []string{"package"}, Action: "query", Object: "package", RiskHint: ToolRiskReadonly, Confidence: 0.9}
+	breakdown := makeDecisionBreakdown(t, "explain example generation", intent, nil, []string{"generate_example"})
+	breakdown.RequiresWrite = false
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:     "explain example generation",
+		Intent:    intent,
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	for _, name := range []string{"Example.Generate", "Example.Status", "Example.List"} {
+		assertNotContainsTool(t, plan.ToolNames(), name)
+	}
+}
+
+func TestToolDecisionEngineBuildsDynamicDetectionPackageDraftPlan(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "Package.Draft.Generate",
+		Domain:             DomainPackage,
+		Operation:          OpGenerate,
+		Capability:         "generate_detection_package_draft",
+		Description:        "Generate a dynamic detection package draft.",
+		ObjectTypes:        []string{"detection_package", "package"},
+		Risk:               ToolRiskMedium,
+		DefaultWhitelisted: false,
+		ResultContract: ToolResultContract{
+			OperationRefFields: []string{"package_id"},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cve_id":                    map[string]interface{}{"type": "string"},
+				"vulnerability_description": map[string]interface{}{"type": "string"},
+				"exploitation_chain":        map[string]interface{}{"type": "string"},
+			},
+			"required":             []string{"cve_id", "vulnerability_description"},
+			"additionalProperties": false,
+		},
+	})
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "Package.Build.Start",
+		Domain:             DomainPackage,
+		Operation:          OpExecute,
+		Capability:         "start_detection_package_build",
+		Description:        "Build a dynamic detection package.",
+		ObjectTypes:        []string{"detection_package", "package"},
+		Risk:               ToolRiskMedium,
+		DefaultWhitelisted: false,
+		ExecutionContract: ToolExecutionContract{
+			Mode:                 ToolExecutionAsynchronous,
+			CompletionCapability: "get_detection_package_build_status",
+		},
+		ResultContract: ToolResultContract{OperationRefFields: []string{"package_id"}},
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"package_id": map[string]interface{}{"type": "string"}},
+			"required":   []string{"package_id"},
+		},
+	})
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "Package.Build.Status",
+		Domain:             DomainPackage,
+		Operation:          OpGet,
+		Capability:         "get_detection_package_build_status",
+		Description:        "Get dynamic detection package build status.",
+		ObjectTypes:        []string{"detection_package", "package"},
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ResultContract: ToolResultContract{
+			SatisfiesCapabilities: []string{"start_detection_package_build"},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"package_id": map[string]interface{}{"type": "string"}},
+			"required":   []string{"package_id"},
+		},
+	})
+
+	query := "CVE-2026-31431 通过 AF_ALG、pipe 和 splice 实现本地提权，请使用动态检测包检测"
+	breakdown := &IntentBreakdown{
+		Goal:                  "Detect CVE-2026-31431 using a dynamic detection package",
+		Actions:               []string{"detect"},
+		Objects:               []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "dynamic_detection"}},
+		Parameters:            IntentParameters{"cve_id": "CVE-2026-31431", "detection_method": "dynamic_detection_package"},
+		WorkflowIDs:           []string{detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{"resolve_hosts", "generate_vulnerability_script"},
+		RiskHint:              string(ToolRiskReadonly),
+		Confidence:            0.9,
+	}
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: query})
+
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{
+		Query:     query,
+		Intent:    IntentResult{Domains: []string{"cybersecurity"}, Action: "detect", Confidence: 0.9},
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if plan.NeedClarification {
+		t.Fatalf("dynamic package request should compile without host clarification: %q", plan.ClarifyingQuestion)
+	}
+	if got, want := plan.ToolNames(), []string{"Package.Draft.Generate", "Package.Build.Start", "Package.Build.Status"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected dynamic package plan: got %v want %v records=%#v capabilities=%#v", got, want, plan.DecisionRecords, breakdown.CandidateCapabilities)
+	}
+	if plan.RequiredOutcome != "detection_package_enabled" {
+		t.Fatalf("required outcome = %q, want detection_package_enabled", plan.RequiredOutcome)
+	}
+	step := plan.Steps[0]
+	if step.Args["cve_id"] != "CVE-2026-31431" || step.Args["vulnerability_description"] != query || step.Args["exploitation_chain"] != query {
+		t.Fatalf("dynamic package args were not deterministically bound: %#v", step.Args)
 	}
 }
 

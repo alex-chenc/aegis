@@ -28,21 +28,21 @@ func (m *ToolCapabilityMapper) ToolNamesForCapabilities(capabilities []string) [
 	if m == nil || m.registry == nil || len(capabilities) == 0 {
 		return nil
 	}
-	wanted := make(map[string]bool, len(capabilities))
+	registeredTools := m.registry.List()
+	var names []string
 	for _, capability := range capabilities {
 		capability = strings.ToLower(strings.TrimSpace(capability))
-		if capability != "" {
-			wanted[capability] = true
-		}
-	}
-	var names []string
-	for _, tool := range m.registry.List() {
-		if tool == nil || !tool.Enabled {
+		if capability == "" {
 			continue
 		}
-		contract := BuildToolUseContract(tool)
-		if wanted[strings.ToLower(contract.Capability)] {
-			names = append(names, tool.Name)
+		for _, tool := range registeredTools {
+			if tool == nil || !tool.Enabled {
+				continue
+			}
+			contract := BuildToolUseContract(tool)
+			if strings.EqualFold(strings.TrimSpace(contract.Capability), capability) {
+				names = append(names, tool.Name)
+			}
 		}
 	}
 	return dedupeStrings(names)

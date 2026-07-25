@@ -60,6 +60,7 @@ type RuntimeBuildRequest struct {
 	MessageID         string                        `json:"message_id"`
 	Operator          string                        `json:"operator"`
 	UserInput         string                        `json:"user_input"`
+	OriginalUserInput string                        `json:"original_user_input,omitempty"`
 	TaskType          string                        `json:"task_type"`
 	ContextRefs       []ContextRefResult            `json:"context_refs,omitempty"`
 	PageRoute         string                        `json:"page_route,omitempty"`
@@ -71,6 +72,7 @@ type RuntimeBuildRequest struct {
 	UseAIAnalysisFlow bool                          `json:"use_ai_analysis_flow,omitempty"`
 	Locale            string                        `json:"locale,omitempty"`
 	ApprovalMode      string                        `json:"approval_mode,omitempty"`
+	StopForRecovery   context.CancelFunc            `json:"-"`
 }
 
 // RuntimeBuildResult 运行时构建结果
@@ -137,7 +139,8 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		RequireMappedPlan:       true,
 		Logger:                  f.logger,
 		RunManager:              f.runManager,
-		UserInput:               req.UserInput,
+		StopForRecovery:         req.StopForRecovery,
+		UserInput:               firstNonEmptyString(req.OriginalUserInput, req.UserInput),
 		ContextRefs:             req.ContextRefs,
 		ExecutionPlan:           req.ExecutionPlan,
 		RuntimeStepToolBindings: runtimeStepToolBindings,

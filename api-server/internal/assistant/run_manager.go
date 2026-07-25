@@ -28,6 +28,7 @@ type ActiveRun struct {
 
 	// 审批暂停/恢复状态
 	waitingApproval  *WaitingApprovalState
+	waitingRecovery  *WaitingRecoveryState
 	approvalWaiters  map[string]chan ApprovalDecision
 	rejectedApproval *ApprovalDecision
 	waitingMu        sync.RWMutex
@@ -45,6 +46,15 @@ type WaitingApprovalState struct {
 	Args        map[string]interface{} `json:"args"`
 	Operator    string                 `json:"operator"`
 	RequestedAt time.Time              `json:"requested_at"`
+}
+
+// WaitingRecoveryState records the durable recovery request that stopped the
+// agent-runtime loop. Unlike approval, recovery is resumed through a new run.
+type WaitingRecoveryState struct {
+	RecoveryID  string    `json:"recovery_id"`
+	ToolCallID  string    `json:"tool_call_id"`
+	ToolName    string    `json:"tool_name"`
+	RequestedAt time.Time `json:"requested_at"`
 }
 
 // ApprovalDecision 表示用户对一次工具审批的处理结果。
@@ -84,6 +94,30 @@ func (r *ActiveRun) ClearWaitingApproval() {
 		delete(r.approvalWaiters, r.waitingApproval.ApprovalID)
 	}
 	r.waitingApproval = nil
+}
+
+// SetWaitingRecovery marks the current run as stopped by a recoverable blocker.
+func (r *ActiveRun) SetWaitingRecovery(state *WaitingRecoveryState) {
+	if state == nil || state.RecoveryID == "" {
+		return
+	}
+	r.waitingMu.Lock()
+	defer r.waitingMu.Unlock()
+	if r.waitingRecovery == nil {
+		copy := *state
+		r.waitingRecovery = &copy
+	}
+}
+
+// GetWaitingRecovery returns a copy of the recovery pause state.
+func (r *ActiveRun) GetWaitingRecovery() *WaitingRecoveryState {
+	r.waitingMu.RLock()
+	defer r.waitingMu.RUnlock()
+	if r.waitingRecovery == nil {
+		return nil
+	}
+	copy := *r.waitingRecovery
+	return &copy
 }
 
 // WaitForApproval 等待用户审批当前工具调用。

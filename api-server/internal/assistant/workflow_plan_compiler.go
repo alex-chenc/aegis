@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	assetInventoryWorkflowID           = "asset_inventory"
-	vulnerabilityAssessmentWorkflowID  = "vulnerability_assessment"
-	vulnerabilityRemediationWorkflowID = "vulnerability_remediation"
+	assetInventoryWorkflowID            = "asset_inventory"
+	vulnerabilityAssessmentWorkflowID   = "vulnerability_assessment"
+	vulnerabilityRemediationWorkflowID  = "vulnerability_remediation"
+	detectionPackageLifecycleWorkflowID = "detection_package_lifecycle"
 )
 
 var exactCVEIDPattern = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]{4,}\b`)
@@ -51,8 +52,10 @@ type WorkflowCompileInput struct {
 // Clarification is non-empty the caller must surface it to the user instead of
 // building a runtime plan.
 type WorkflowCompileResult struct {
-	Steps         []ToolPlanStep
-	Clarification string
+	Steps                 []ToolPlanStep
+	Clarification         string
+	DeferredClarification string
+	RemainingWorkflowIDs  []string
 }
 
 // WorkflowPlanCompilerRegistry selects the unique compiler for a workflow ID.
@@ -65,6 +68,7 @@ func NewWorkflowPlanCompilerRegistry() *WorkflowPlanCompilerRegistry {
 	registry.Register(&AssetInventoryCompiler{})
 	registry.Register(&VulnerabilityAssessmentCompiler{})
 	registry.Register(&VulnerabilityRemediationCompiler{})
+	registry.Register(&DetectionPackageLifecycleCompiler{})
 	return registry
 }
 
@@ -83,14 +87,25 @@ func (r *WorkflowPlanCompilerRegistry) Get(workflowID string) WorkflowPlanCompil
 	return r.compilers[strings.ToLower(strings.TrimSpace(workflowID))]
 }
 
-// CompileForBreakdown selects a compiler from the breakdown's declared
-// workflow IDs. When a compiler matches it is invoked; otherwise the caller
-// falls back to the generic capability-driven path.
+// CompileForBreakdown invokes every selected compiler in declared order and
+// composes their steps. A user request may contain an ordered workflow chain
+// (for example vulnerability assessment followed by package generation);
+// returning after the first compiler would silently drop the later goal.
+// When no compiler produces a result the caller falls back to the generic
+// capability-driven path.
 func (r *WorkflowPlanCompilerRegistry) CompileForBreakdown(input WorkflowCompileInput) (*WorkflowCompileResult, bool, error) {
 	if r == nil || input.Breakdown == nil {
 		return nil, false, nil
 	}
-	for _, workflowID := range input.Breakdown.WorkflowIDs {
+	combined := &WorkflowCompileResult{}
+	compiled := false
+	seen := make(map[string]bool)
+	for index, workflowID := range input.Breakdown.WorkflowIDs {
+		workflowID = strings.ToLower(strings.TrimSpace(workflowID))
+		if workflowID == "" || seen[workflowID] {
+			continue
+		}
+		seen[workflowID] = true
 		compiler := r.Get(workflowID)
 		if compiler == nil {
 			continue
@@ -102,9 +117,23 @@ func (r *WorkflowPlanCompilerRegistry) CompileForBreakdown(input WorkflowCompile
 		if result == nil {
 			continue
 		}
-		return result, true, nil
+		compiled = true
+		if result.Clarification != "" {
+			if len(combined.Steps) > 0 {
+				combined.DeferredClarification = result.Clarification
+				combined.RemainingWorkflowIDs = dedupeStrings(
+					append([]string{}, input.Breakdown.WorkflowIDs[index:]...),
+				)
+				return combined, true, nil
+			}
+			return result, true, nil
+		}
+		combined.Steps = append(combined.Steps, result.Steps...)
 	}
-	return nil, false, nil
+	if !compiled {
+		return nil, false, nil
+	}
+	return combined, true, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +730,222 @@ func vulnerabilityRemediationMaxRounds(breakdown *IntentBreakdown) (int, error) 
 		return 0, fmt.Errorf("max_rounds must be between 1 and 10")
 	}
 	return maxRounds, nil
+}
+
+// ---------------------------------------------------------------------------
+// Detection package lifecycle compiler
+// ---------------------------------------------------------------------------
+
+// DetectionPackageLifecycleCompiler keeps each durable package lifecycle
+// stage explicit. A draft-only request stops after generation; a request to
+// activate detection also builds and waits at the review boundary. Signing and
+// enabling remain ordered independent steps for an already identified package.
+type DetectionPackageLifecycleCompiler struct{}
+
+func (c *DetectionPackageLifecycleCompiler) WorkflowID() string {
+	return detectionPackageLifecycleWorkflowID
+}
+
+func (c *DetectionPackageLifecycleCompiler) Compile(input WorkflowCompileInput) (*WorkflowCompileResult, error) {
+	breakdown := input.Breakdown
+	if breakdown == nil || !isDetectionPackageMutationIntent(breakdown) {
+		return nil, nil
+	}
+
+	if requiresDetectionPackageDraft(breakdown) {
+		requiredTools := []string{"Package.Draft.Generate"}
+		if requiresDetectionPackageActivation(breakdown) {
+			requiredTools = append(requiredTools, "Package.Build.Start", "Package.Build.Status")
+		}
+		if err := requireAcceptedTools(input.AcceptedTools, requiredTools...); err != nil {
+			return nil, err
+		}
+		cveIDs := exactCVEIDsFromBreakdown(breakdown)
+		if len(cveIDs) != 1 {
+			return &WorkflowCompileResult{Clarification: localizedClarification(
+				breakdown,
+				"生成动态检测包需要一个明确的 CVE 编号，请提供单个 CVE（例如 CVE-2026-31431）。",
+				"Generating a dynamic detection package requires one exact CVE ID.",
+			)}, nil
+		}
+		description := detectionPackageParameterString(breakdown, "vulnerability_description")
+		if description == "" {
+			description = strings.TrimSpace(breakdown.Goal)
+		}
+		if description == "" {
+			return &WorkflowCompileResult{Clarification: localizedClarification(
+				breakdown,
+				"请提供漏洞原理或利用链描述，以便生成动态检测包。",
+				"Provide the vulnerability mechanism or exploitation chain.",
+			)}, nil
+		}
+		steps := []ToolPlanStep{c.buildDraftStep(input, cveIDs[0], description)}
+		if requiresDetectionPackageActivation(breakdown) {
+			steps = append(steps,
+				c.buildPreviousPackageIDStep(input, "Package.Build.Start", "Build the generated detection package draft."),
+				c.buildPreviousPackageIDStep(input, "Package.Build.Status", "Wait for the generated detection package build to reach review or a terminal state."),
+			)
+		}
+		return &WorkflowCompileResult{Steps: steps}, nil
+	}
+
+	wantsBuild := hasDetectionPackageAction(breakdown, "build", "compile")
+	wantsSign := hasDetectionPackageAction(breakdown, "sign", "approve", "publish")
+	wantsEnable := hasDetectionPackageAction(breakdown, "enable", "publish", "dispatch")
+	if !wantsBuild && !wantsSign && !wantsEnable {
+		return nil, nil
+	}
+
+	packageID := exactDetectionPackageID(breakdown)
+	if packageID == "" {
+		return &WorkflowCompileResult{Clarification: localizedClarification(
+			breakdown,
+			"构建、签名或启用检测包需要明确的 package_id。",
+			"Building, signing, or enabling a detection package requires an exact package_id.",
+		)}, nil
+	}
+
+	// Build is asynchronous and may enter a manual-review state. Never compile
+	// sign/enable into the same run even if the model inferred those future
+	// actions; a later explicit request must observe the terminal build state.
+	if wantsBuild {
+		if err := requireAcceptedTools(input.AcceptedTools, "Package.Build.Start", "Package.Build.Status"); err != nil {
+			return nil, err
+		}
+		return &WorkflowCompileResult{Steps: []ToolPlanStep{
+			c.buildPackageIDStep(input, "Package.Build.Start", packageID, "Start the requested detection package build."),
+			c.buildPackageIDStep(input, "Package.Build.Status", packageID, "Wait for the detection package build to reach a terminal state."),
+		}}, nil
+	}
+
+	steps := make([]ToolPlanStep, 0, 2)
+	if wantsSign {
+		if err := requireAcceptedTools(input.AcceptedTools, "Package.Sign"); err != nil {
+			return nil, err
+		}
+		steps = append(steps, c.buildPackageIDStep(input, "Package.Sign", packageID, "Sign the successfully built detection package."))
+	}
+	if wantsEnable {
+		if err := requireAcceptedTools(input.AcceptedTools, "Package.Enable"); err != nil {
+			return nil, err
+		}
+		steps = append(steps, c.buildPackageIDStep(input, "Package.Enable", packageID, "Enable and distribute the signed detection package."))
+	}
+	return &WorkflowCompileResult{Steps: steps}, nil
+}
+
+func (c *DetectionPackageLifecycleCompiler) buildDraftStep(input WorkflowCompileInput, cveID, description string) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName("Package.Draft.Generate")
+	args := map[string]interface{}{
+		"cve_id":                    cveID,
+		"vulnerability_description": description,
+	}
+	sources := map[string]ArgSource{
+		"cve_id":                    {SourceType: "user_message", SourceRef: "cve_id", Confidence: 1},
+		"vulnerability_description": {SourceType: "user_message", SourceRef: "vulnerability_description", Confidence: 1},
+	}
+	for _, key := range []string{"attack_prerequisites", "exploitation_chain", "false_positive_constraints"} {
+		if value := detectionPackageParameterString(input.Breakdown, key); value != "" {
+			args[key] = value
+			sources[key] = ArgSource{SourceType: "intent_parameters", SourceRef: key, Confidence: 0.9}
+		}
+	}
+	return ToolPlanStep{
+		ToolName:         "Package.Draft.Generate",
+		Capability:       "generate_detection_package_draft",
+		Args:             args,
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           "Generate the package draft before any build, signing, or distribution stage.",
+		ArgSources:       sources,
+		Preconditions:    contract.Preconditions,
+		Postconditions:   contract.Postconditions,
+	}
+}
+
+func (c *DetectionPackageLifecycleCompiler) buildPackageIDStep(input WorkflowCompileInput, toolName, packageID, reason string) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName(toolName)
+	return ToolPlanStep{
+		ToolName:         toolName,
+		Capability:       contract.Capability,
+		Args:             map[string]interface{}{"package_id": packageID},
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           reason,
+		ArgSources: map[string]ArgSource{
+			"package_id": {SourceType: "intent_object", SourceRef: "package_id", Confidence: 1},
+		},
+		Preconditions:  contract.Preconditions,
+		Postconditions: contract.Postconditions,
+	}
+}
+
+func (c *DetectionPackageLifecycleCompiler) buildPreviousPackageIDStep(input WorkflowCompileInput, toolName, reason string) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName(toolName)
+	return ToolPlanStep{
+		ToolName:         toolName,
+		Capability:       contract.Capability,
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           reason,
+		ArgSources: map[string]ArgSource{
+			"package_id": {SourceType: "previous_step", SourceRef: "detection_package", Confidence: 1},
+		},
+		Preconditions:  contract.Preconditions,
+		Postconditions: contract.Postconditions,
+		Condition:      "requires previous step to produce: package_id",
+	}
+}
+
+func requireAcceptedTools(accepted []string, toolNames ...string) error {
+	for _, toolName := range toolNames {
+		if !containsExactString(accepted, toolName) {
+			return newCompilePlanError(
+				"mapping_compile",
+				toolName,
+				"accepted_tools",
+				fmt.Sprintf("detection package lifecycle requires authorized tool %s", toolName),
+			)
+		}
+	}
+	return nil
+}
+
+func exactDetectionPackageID(breakdown *IntentBreakdown) string {
+	if breakdown == nil {
+		return ""
+	}
+	if value := detectionPackageParameterString(breakdown, "package_id"); value != "" && !isExactCVEIdentifier(value) {
+		return value
+	}
+	for _, object := range breakdown.Objects {
+		switch normalizeExposureIdentifier(object.Type) {
+		case "detection_package", "dynamic_detection_package", "runtime_detection_package", "package":
+		default:
+			continue
+		}
+		if value := strings.TrimSpace(object.ID); value != "" && !isExactCVEIdentifier(value) {
+			return value
+		}
+	}
+	for _, value := range breakdown.Scope.ObjectIDs {
+		value = strings.TrimSpace(value)
+		if value != "" && !isExactCVEIdentifier(value) {
+			return value
+		}
+	}
+	return ""
+}
+
+func detectionPackageParameterString(breakdown *IntentBreakdown, key string) string {
+	if breakdown == nil {
+		return ""
+	}
+	value, ok := breakdown.Parameters[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 // classifyAssetScope determines which compilation scenario applies from the

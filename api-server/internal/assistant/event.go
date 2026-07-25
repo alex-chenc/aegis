@@ -41,6 +41,8 @@ const (
 	EventToolError                = "tool_error"
 	EventApprovalRequired         = "approval_required"
 	EventApprovalUpdated          = "approval_updated"
+	EventRecoveryRequired         = "recovery_required"
+	EventRecoveryUpdated          = "recovery_updated"
 	EventContextRefAdded          = "context_ref_added"
 	EventResultCard               = "result_card"
 	EventContextBudget            = "context_budget"
@@ -130,6 +132,14 @@ func EventToolErrorPayload(sessionID, runID, messageID, callID, errMsg string) A
 // EventApprovalRequiredPayload 创建审批请求事件
 func EventApprovalRequiredPayload(sessionID, runID, messageID string, approval interface{}) AssistantEvent {
 	return withMessageID(NewEvent(EventApprovalRequired, sessionID, runID, approval), messageID)
+}
+
+func EventRecoveryRequiredPayload(sessionID, runID, messageID string, recovery interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventRecoveryRequired, sessionID, runID, recovery), messageID)
+}
+
+func EventRecoveryUpdatedPayload(sessionID, runID, messageID string, recovery interface{}) AssistantEvent {
+	return withMessageID(NewEvent(EventRecoveryUpdated, sessionID, runID, recovery), messageID)
 }
 
 // EventResultCardPayload 创建结果卡片事件

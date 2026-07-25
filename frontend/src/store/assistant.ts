@@ -12,6 +12,8 @@ import {
   uploadAssistantFile as apiUploadAssistantFile,
   getToolCalls as apiGetToolCalls,
   getApprovals as apiGetApprovals,
+  getRecoveries as apiGetRecoveries,
+  decideRecovery as apiDecideRecovery,
   approveApproval as apiApproveApproval,
   rejectApproval as apiRejectApproval,
   createAssistantStream,
@@ -20,6 +22,7 @@ import {
   type AssistantContextRef,
   type AssistantToolCall,
   type AssistantApproval,
+  type AssistantRecoveryRequest,
   type AssistantResultCard,
   type AssistantFileUploadPurpose,
   type AssistantFileUploadResult,
@@ -55,6 +58,8 @@ export const useAssistantStore = defineStore('assistant', () => {
   const toolCalls = ref<AssistantToolCall[]>([])
   /** 当前会话审批列表 */
   const approvals = ref<AssistantApproval[]>([])
+  /** 当前会话的持久化可恢复阻塞 */
+  const recoveries = ref<AssistantRecoveryRequest[]>([])
   /** 当前会话结果卡片 */
   const resultCards = ref<AssistantResultCard[]>([])
   /** 意图识别结果 */
@@ -863,6 +868,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         messages.value = []
         toolCalls.value = []
         approvals.value = []
+        recoveries.value = []
         resultCards.value = []
         contextRefs.value = []
         intentResult.value = null
@@ -1137,6 +1143,70 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
+  async function fetchRecoveries(sessionId: string) {
+    error.value = null
+    try {
+      const result = await apiGetRecoveries(sessionId, { page: 1, page_size: 100 })
+      recoveries.value = result.items || []
+      return result
+    } catch (err: any) {
+      error.value = err.message || '获取恢复请求失败'
+      throw err
+    }
+  }
+
+  function upsertRecovery(recovery: AssistantRecoveryRequest) {
+    const index = recoveries.value.findIndex(item =>
+      item.recovery_id === recovery.recovery_id || item.id === recovery.id
+    )
+    if (index > -1) {
+      recoveries.value[index] = recovery
+    } else {
+      recoveries.value.unshift(recovery)
+    }
+  }
+
+  async function decideRecovery(
+    recoveryId: string,
+    actionId: string,
+    input?: Record<string, any>
+  ) {
+    error.value = null
+    try {
+      const result = await apiDecideRecovery(recoveryId, {
+        action_id: actionId,
+        input,
+      })
+      upsertRecovery(result.recovery)
+      if (result.run_handle && currentSession.value) {
+        currentSession.value.status = 'running'
+        updateCurrentSessionMetadata({
+          current_run_id: result.run_handle.run_id,
+          current_run_status: 'running',
+          pending_recovery_id: null,
+        })
+        const sessionIndex = sessions.value.findIndex(item =>
+          item.session_id === currentSession.value?.session_id
+        )
+        if (sessionIndex > -1) {
+          sessions.value[sessionIndex].status = 'running'
+        }
+        startStream(currentSession.value.session_id)
+      }
+      return result
+    } catch (err: any) {
+      if (currentSession.value) {
+        try {
+          await fetchRecoveries(currentSession.value.session_id)
+        } catch {
+          // Preserve the original decision error for the caller.
+        }
+      }
+      error.value = err.message || '处理恢复请求失败'
+      throw err
+    }
+  }
+
   /**
    * 通过审批
    */
@@ -1281,6 +1351,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       tc.status === 'completed' ||
       tc.status === 'success' ||
       tc.status === 'failed' ||
+      tc.status === 'blocked' ||
       tc.status === 'cancelled' ||
       tc.status === 'rejected'
     ))
@@ -1867,6 +1938,36 @@ export const useAssistantStore = defineStore('assistant', () => {
         break
       }
 
+      case 'recovery_required':
+      case 'recovery_updated': {
+        const recovery = payload as AssistantRecoveryRequest
+        upsertRecovery(recovery)
+        const toolIndex = toolCalls.value.findIndex(item =>
+          item.call_id === recovery.tool_call_id || item.id === recovery.tool_call_id
+        )
+        if (toolIndex > -1 && recovery.status === 'pending') {
+          toolCalls.value[toolIndex].status = 'blocked'
+          toolCalls.value[toolIndex].error_message = recovery.summary
+        }
+        for (const message of messages.value) {
+          const messageTool = message.tool_calls?.find(item =>
+            item.call_id === recovery.tool_call_id || item.id === recovery.tool_call_id
+          )
+          if (messageTool && recovery.status === 'pending') {
+            messageTool.status = 'blocked'
+            messageTool.error_message = recovery.summary
+          }
+        }
+        if (currentSession.value && recovery.status === 'pending') {
+          currentSession.value.status = 'active'
+          updateCurrentSessionMetadata({
+            current_run_status: 'needs_input',
+            pending_recovery_id: recovery.recovery_id,
+          })
+        }
+        break
+      }
+
       case 'run_waiting_approval': {
         if (currentSession.value) {
           currentSession.value.status = 'waiting_approval'
@@ -1989,6 +2090,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         fetchContextRefs(sessionId),
         fetchToolCalls(sessionId),
         fetchApprovals(sessionId),
+        fetchRecoveries(sessionId),
       ])
       rebuildAssistantHistoryCycles()
       if (session?.status === 'running' || session?.status === 'waiting_approval') {
@@ -2038,6 +2140,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     contextRefs.value = []
     toolCalls.value = []
     approvals.value = []
+    recoveries.value = []
     resultCards.value = []
     intentResult.value = null
     toolSelections.value = []
@@ -2064,6 +2167,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     contextRefs,
     toolCalls,
     approvals,
+    recoveries,
     resultCards,
     intentResult,
     toolSelections,
@@ -2093,6 +2197,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     uploadSessionFile,
     fetchToolCalls,
     fetchApprovals,
+    fetchRecoveries,
+    decideRecovery,
     approveApproval,
     rejectApproval,
     approveAction,

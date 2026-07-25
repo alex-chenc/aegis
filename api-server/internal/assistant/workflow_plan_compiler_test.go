@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -168,6 +169,74 @@ func TestVulnerabilityRemediationCompilerDoesNotStartScanForExactCVEPOC(t *testi
 	}
 }
 
+type orderedWorkflowCompiler struct {
+	workflowID    string
+	toolName      string
+	clarification string
+}
+
+func (c orderedWorkflowCompiler) WorkflowID() string { return c.workflowID }
+
+func (c orderedWorkflowCompiler) Compile(WorkflowCompileInput) (*WorkflowCompileResult, error) {
+	if c.clarification != "" {
+		return &WorkflowCompileResult{Clarification: c.clarification}, nil
+	}
+	return &WorkflowCompileResult{Steps: []ToolPlanStep{{
+		ToolName:   c.toolName,
+		Capability: strings.ToLower(c.toolName),
+	}}}, nil
+}
+
+func TestWorkflowCompilerRegistryDefersLaterClarificationUntilReadyStepsComplete(t *testing.T) {
+	registry := &WorkflowPlanCompilerRegistry{compilers: make(map[string]WorkflowPlanCompiler)}
+	registry.Register(orderedWorkflowCompiler{workflowID: vulnerabilityAssessmentWorkflowID, toolName: "Vulnerability.Scan.Start"})
+	registry.Register(orderedWorkflowCompiler{
+		workflowID:    detectionPackageLifecycleWorkflowID,
+		clarification: "请选择扫描结果中的 CVE",
+	})
+
+	result, compiled, err := registry.CompileForBreakdown(WorkflowCompileInput{
+		Breakdown: &IntentBreakdown{WorkflowIDs: []string{
+			vulnerabilityAssessmentWorkflowID,
+			detectionPackageLifecycleWorkflowID,
+		}},
+	})
+	if err != nil || !compiled || result == nil {
+		t.Fatalf("expected deferred composed plan, result=%#v compiled=%v err=%v", result, compiled, err)
+	}
+	if got := toolNamesFromSteps(result.Steps); !reflect.DeepEqual(got, []string{"Vulnerability.Scan.Start"}) {
+		t.Fatalf("ready workflow steps = %v", got)
+	}
+	if result.DeferredClarification == "" {
+		t.Fatal("later workflow clarification must be deferred until ready steps finish")
+	}
+	if got, want := result.RemainingWorkflowIDs, []string{detectionPackageLifecycleWorkflowID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remaining workflows = %v, want %v", got, want)
+	}
+}
+
+func TestWorkflowCompilerRegistryComposesSelectedWorkflowsInRequestOrder(t *testing.T) {
+	registry := &WorkflowPlanCompilerRegistry{compilers: make(map[string]WorkflowPlanCompiler)}
+	registry.Register(orderedWorkflowCompiler{workflowID: vulnerabilityAssessmentWorkflowID, toolName: "Vulnerability.Scan.Start"})
+	registry.Register(orderedWorkflowCompiler{workflowID: detectionPackageLifecycleWorkflowID, toolName: "Package.Draft.Generate"})
+
+	result, compiled, err := registry.CompileForBreakdown(WorkflowCompileInput{
+		Breakdown: &IntentBreakdown{WorkflowIDs: []string{
+			vulnerabilityAssessmentWorkflowID,
+			detectionPackageLifecycleWorkflowID,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CompileForBreakdown returned error: %v", err)
+	}
+	if !compiled || result == nil {
+		t.Fatalf("expected a composed plan, compiled=%v result=%#v", compiled, result)
+	}
+	if got, want := toolNamesFromSteps(result.Steps), []string{"Vulnerability.Scan.Start", "Package.Draft.Generate"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composed workflow order = %v, want %v", got, want)
+	}
+}
+
 func TestVulnerabilityRemediationCompilerDoesNotEnableFixForPOCOnly(t *testing.T) {
 	registry := newWorkflowCompilerTestRegistry(t)
 	mapper := NewToolCapabilityMapper(registry)
@@ -203,6 +272,230 @@ func TestVulnerabilityRemediationCompilerDoesNotEnableFixForPOCOnly(t *testing.T
 	}
 }
 
+func TestDetectionPackageLifecycleCompilerBuildsGeneratedPackageBeforeReviewBoundary(t *testing.T) {
+	registry := newDetectionPackageCompilerTestRegistry(t)
+	breakdown := &IntentBreakdown{
+		Goal:          "Detect exploitation of CVE-2026-31431 using a dynamic detection package",
+		Domains:       []string{"vulnerability", "detection", "package"},
+		Actions:       []string{"lookup", "generate", "build"},
+		Objects:       []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "detection_package", Selector: "dynamic detection package for CVE-2026-31431"}},
+		Scope:         IntentScope{Kind: "unspecified"},
+		Parameters:    IntentParameters{"cve_id": "CVE-2026-31431", "vulnerability_description": "AF_ALG, pipe and splice exploitation chain", "exploitation_chain": "AF_ALG -> pipe -> splice"},
+		RequiresWrite: true,
+		RiskHint:      "high",
+		WorkflowIDs:   []string{"cve_lookup", detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{
+			"list_detection_packages",
+			"get_detection_package",
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"enable_detection_package",
+		},
+		Confidence: 0.9,
+	}
+
+	result, compiled, err := NewWorkflowPlanCompilerRegistry().CompileForBreakdown(WorkflowCompileInput{
+		Breakdown: breakdown,
+		AcceptedTools: []string{
+			"Package.Enable",
+			"Package.Get",
+			"Package.List",
+			"Package.Build.Start",
+			"Package.Build.Status",
+			"Package.Draft.Generate",
+		},
+		Registry: registry,
+		Mapper:   NewToolCapabilityMapper(registry),
+	})
+	if err != nil {
+		t.Fatalf("CompileForBreakdown returned error: %v", err)
+	}
+	if !compiled || result == nil || result.Clarification != "" {
+		t.Fatalf("expected detection package workflow compiler, result=%#v compiled=%v", result, compiled)
+	}
+	steps := assignPlanStepIDs(result.Steps)
+	if got, want := toolNamesFromSteps(steps), []string{"Package.Draft.Generate", "Package.Build.Start", "Package.Build.Status"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("detection request must stop at the build review boundary: got %v want %v", got, want)
+	}
+	if got := steps[0].Args["cve_id"]; got != "CVE-2026-31431" {
+		t.Fatalf("draft cve_id mismatch: %#v", got)
+	}
+	for _, step := range steps[1:] {
+		if source := step.ArgSources["package_id"]; source.SourceType != "previous_step" {
+			t.Fatalf("%s package_id must come from the generated package: %#v", step.ToolName, source)
+		}
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(&ToolExecutionPlan{Goal: breakdown.Goal, Steps: steps}, nil); err != nil {
+		t.Fatalf("compiled detection package draft plan failed validation: %v", err)
+	}
+}
+
+func TestToolDecisionEngineCompilesCapturedDetectionPackageContract(t *testing.T) {
+	registry := newDetectionPackageCompilerTestRegistry(t)
+	breakdown := &IntentBreakdown{
+		Goal:       "Generate a dynamic detection package to detect CVE-2026-31431 exploitation.",
+		Domains:    []string{"vulnerability", "package"},
+		Actions:    []string{"generate_detection_package"},
+		Objects:    []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "detection_package"}},
+		Scope:      IntentScope{Kind: "unspecified"},
+		Parameters: IntentParameters{"detection_method": "dynamic", "vulnerability_id": "CVE-2026-31431"},
+		WorkflowIDs: []string{
+			detectionPackageLifecycleWorkflowID,
+		},
+		CandidateCapabilities: []string{
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"get_detection_package",
+			"sign_detection_package",
+			"enable_detection_package",
+		},
+		RequiresWrite: true,
+		RiskHint:      "medium",
+		Confidence:    0.95,
+	}
+
+	engine := NewToolDecisionEngine(ToolDecisionEngineDeps{
+		Registry: registry,
+		Mapper:   NewToolCapabilityMapper(registry),
+		Config: ToolDecisionConfig{
+			Enabled:                      true,
+			ClarificationRequiredWrite:   true,
+			PostconditionCheckEnabled:    true,
+			AssetWorkflowCompilerEnabled: true,
+		},
+	})
+	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
+		Query:     breakdown.Goal,
+		Intent:    IntentResult{Action: "generate", NeedWrite: true, Confidence: 0.95},
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if plan == nil || plan.NeedClarification {
+		t.Fatalf("expected executable detection package plan: %#v", plan)
+	}
+	if got, want := plan.ToolNames(), []string{
+		"Package.Draft.Generate",
+		"Package.Build.Start",
+		"Package.Build.Status",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("captured detection package plan = %v, want %v", got, want)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+		t.Fatalf("captured detection package plan failed validation: %v", err)
+	}
+}
+
+func TestDetectionPackageLifecycleCompilerOrdersExplicitSignBeforeEnable(t *testing.T) {
+	registry := newDetectionPackageCompilerTestRegistry(t)
+	breakdown := &IntentBreakdown{
+		Goal:                  "Sign and enable package pkg-cve-2026-31431",
+		Actions:               []string{"sign", "enable"},
+		Objects:               []IntentObject{{Type: "detection_package", ID: "pkg-cve-2026-31431"}},
+		Scope:                 IntentScope{Kind: "specific", ObjectIDs: []string{"pkg-cve-2026-31431"}},
+		Parameters:            IntentParameters{"package_id": "pkg-cve-2026-31431"},
+		RequiresWrite:         true,
+		WorkflowIDs:           []string{detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{"enable_detection_package", "sign_detection_package"},
+		Confidence:            0.9,
+	}
+	result, compiled, err := NewWorkflowPlanCompilerRegistry().CompileForBreakdown(WorkflowCompileInput{
+		Breakdown:     breakdown,
+		AcceptedTools: []string{"Package.Enable", "Package.Sign"},
+		Registry:      registry,
+		Mapper:        NewToolCapabilityMapper(registry),
+	})
+	if err != nil || !compiled || result == nil {
+		t.Fatalf("expected compiled sign/enable plan, result=%#v compiled=%v err=%v", result, compiled, err)
+	}
+	steps := assignPlanStepIDs(result.Steps)
+	if got, want := toolNamesFromSteps(steps), []string{"Package.Sign", "Package.Enable"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sign/enable order mismatch: got %v want %v", got, want)
+	}
+	for _, step := range steps {
+		if got := step.Args["package_id"]; got != "pkg-cve-2026-31431" {
+			t.Fatalf("%s package_id mismatch: %#v", step.ToolName, got)
+		}
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(&ToolExecutionPlan{Goal: breakdown.Goal, Steps: steps}, nil); err != nil {
+		t.Fatalf("compiled sign/enable plan failed validation: %v", err)
+	}
+}
+
+func TestDetectionPackageLifecycleCompilerBuildStageWaitsForTerminalStatus(t *testing.T) {
+	registry := newDetectionPackageCompilerTestRegistry(t)
+	breakdown := &IntentBreakdown{
+		Goal:                  "Build package pkg-cve-2026-31431",
+		Actions:               []string{"build"},
+		Objects:               []IntentObject{{Type: "detection_package", ID: "pkg-cve-2026-31431"}},
+		Scope:                 IntentScope{Kind: "specific", ObjectIDs: []string{"pkg-cve-2026-31431"}},
+		Parameters:            IntentParameters{"package_id": "pkg-cve-2026-31431"},
+		RequiresWrite:         true,
+		WorkflowIDs:           []string{detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{"start_detection_package_build"},
+		Confidence:            0.9,
+	}
+	result, compiled, err := NewWorkflowPlanCompilerRegistry().CompileForBreakdown(WorkflowCompileInput{
+		Breakdown:     breakdown,
+		AcceptedTools: []string{"Package.Build.Start", "Package.Build.Status"},
+		Registry:      registry,
+		Mapper:        NewToolCapabilityMapper(registry),
+	})
+	if err != nil || !compiled || result == nil {
+		t.Fatalf("expected compiled build plan, result=%#v compiled=%v err=%v", result, compiled, err)
+	}
+	steps := assignPlanStepIDs(result.Steps)
+	if got, want := toolNamesFromSteps(steps), []string{"Package.Build.Start", "Package.Build.Status"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("build stage must include terminal status: got %v want %v", got, want)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(&ToolExecutionPlan{Goal: breakdown.Goal, Steps: steps}, nil); err != nil {
+		t.Fatalf("compiled package build plan failed validation: %v", err)
+	}
+}
+
+func TestToolDecisionEngineAddsDetectionPackageBuildStatusCompanion(t *testing.T) {
+	registry := newDetectionPackageCompilerTestRegistry(t)
+	breakdown := &IntentBreakdown{
+		Goal:                  "Build package pkg-cve-2026-31431",
+		Actions:               []string{"build"},
+		Objects:               []IntentObject{{Type: "detection_package", ID: "pkg-cve-2026-31431"}},
+		Scope:                 IntentScope{Kind: "specific", ObjectIDs: []string{"pkg-cve-2026-31431"}},
+		Parameters:            IntentParameters{"package_id": "pkg-cve-2026-31431"},
+		RequiresWrite:         true,
+		WorkflowIDs:           []string{detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{"start_detection_package_build"},
+		Confidence:            0.9,
+	}
+	engine := NewToolDecisionEngine(ToolDecisionEngineDeps{
+		Registry: registry,
+		Mapper:   NewToolCapabilityMapper(registry),
+		Config: ToolDecisionConfig{
+			Enabled:                      true,
+			ClarificationRequiredWrite:   true,
+			PostconditionCheckEnabled:    true,
+			AssetWorkflowCompilerEnabled: true,
+		},
+	})
+	plan, err := engine.Decide(context.Background(), ToolDecisionInput{
+		Query:     breakdown.Goal,
+		Intent:    IntentResult{Action: "build", NeedWrite: true, Confidence: 0.9},
+		Breakdown: breakdown,
+	})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if plan == nil || plan.NeedClarification {
+		t.Fatalf("expected executable build plan: %#v", plan)
+	}
+	if got, want := plan.ToolNames(), []string{"Package.Build.Start", "Package.Build.Status"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("build status companion was not mapped: got %v want %v", got, want)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+		t.Fatalf("authorized package build plan failed validation: %v", err)
+	}
+}
+
 func TestToolDecisionEngineCompletesLatestVulnerabilityRemediationPlan(t *testing.T) {
 	registry := newWorkflowCompilerTestRegistry(t)
 	breakdown := &IntentBreakdown{
@@ -234,7 +527,7 @@ func TestToolDecisionEngineCompletesLatestVulnerabilityRemediationPlan(t *testin
 	}
 	orchestrator := &Orchestrator{toolRegistry: registry}
 	workflowCards := NewWorkflowRegistry().Match(intent)
-	catalog := orchestrator.buildCapabilityCatalog(intent, nil)
+	catalog := orchestrator.buildCapabilityCatalog(intent, nil, workflowCards)
 	if err := validateIntentBreakdownAgainstCatalog(breakdown, catalog, workflowCards); err != nil {
 		t.Fatalf("latest remediation intent must remain valid against its capability catalog: %v", err)
 	}
@@ -294,6 +587,9 @@ func newWorkflowCompilerTestRegistry(t *testing.T) *ToolRegistry {
 		Description:        "Resolve host selectors.",
 		Risk:               ToolRiskReadonly,
 		DefaultWhitelisted: true,
+		ResultContract: ToolResultContract{
+			FactBindings: []ToolFactBinding{{Kind: "host_resolved", IDField: "host_id"}},
+		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -333,6 +629,7 @@ func newWorkflowCompilerTestRegistry(t *testing.T) *ToolRegistry {
 			Mode:                 ToolExecutionAsynchronous,
 			CompletionCapability: "get_vulnerability_scan_status",
 		},
+		ResultContract: ToolResultContract{OperationRefFields: []string{"scan_id"}},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -375,6 +672,7 @@ func newWorkflowCompilerTestRegistry(t *testing.T) *ToolRegistry {
 			Mode:                 ToolExecutionAsynchronous,
 			CompletionCapability: "get_vulnerability_script_status",
 		},
+		ResultContract: ToolResultContract{OperationRefFields: []string{"cve_id", "script_type"}},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -429,6 +727,58 @@ func newWorkflowCompilerTestRegistry(t *testing.T) *ToolRegistry {
 			"additionalProperties": false,
 		},
 	})
+	return registry
+}
+
+func newDetectionPackageCompilerTestRegistry(t *testing.T) *ToolRegistry {
+	t.Helper()
+	registry := NewToolRegistry()
+	register := func(spec *ToolSpec) {
+		t.Helper()
+		spec.Enabled = true
+		spec.Handler = func(context.Context, map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		}
+		if err := registry.Register(spec); err != nil {
+			t.Fatalf("register %s: %v", spec.Name, err)
+		}
+	}
+	register(&ToolSpec{
+		Name: "Package.Draft.Generate", Domain: DomainPackage, Operation: OpGenerate,
+		Capability: "generate_detection_package_draft", Description: "Generate package draft.", Risk: ToolRiskMedium,
+		ResultContract: ToolResultContract{OperationRefFields: []string{"package_id"}},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cve_id":                    map[string]interface{}{"type": "string"},
+				"vulnerability_description": map[string]interface{}{"type": "string"},
+				"exploitation_chain":        map[string]interface{}{"type": "string"},
+			},
+			"required":             []string{"cve_id", "vulnerability_description"},
+			"additionalProperties": false,
+		},
+	})
+	for _, spec := range []*ToolSpec{
+		{Name: "Package.List", Domain: DomainPackage, Operation: OpList, Capability: "list_detection_packages", Description: "List packages.", Risk: ToolRiskReadonly},
+		{Name: "Package.Get", Domain: DomainPackage, Operation: OpGet, Capability: "get_detection_package", Description: "Get package.", Risk: ToolRiskReadonly},
+		{
+			Name: "Package.Build.Start", Domain: DomainPackage, Operation: OpExecute, Capability: "start_detection_package_build", Description: "Build package.", Risk: ToolRiskMedium,
+			ExecutionContract: ToolExecutionContract{Mode: ToolExecutionAsynchronous, CompletionCapability: "get_detection_package_build_status"},
+			ResultContract:    ToolResultContract{OperationRefFields: []string{"id", "package_id"}},
+		},
+		{Name: "Package.Build.Status", Domain: DomainPackage, Operation: OpGet, Capability: "get_detection_package_build_status", Description: "Get build status.", Risk: ToolRiskReadonly, DefaultWhitelisted: true},
+		{Name: "Package.Sign", Domain: DomainPackage, Operation: OpApprove, Capability: "sign_detection_package", Description: "Sign package.", Risk: ToolRiskCritical},
+		{Name: "Package.Enable", Domain: DomainPackage, Operation: OpDispatch, Capability: "enable_detection_package", Description: "Enable package.", Risk: ToolRiskCritical},
+	} {
+		if spec.Name != "Package.List" {
+			spec.ArgsSchema = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"package_id": map[string]interface{}{"type": "string"}},
+				"required":   []string{"package_id"},
+			}
+		}
+		register(spec)
+	}
 	return registry
 }
 

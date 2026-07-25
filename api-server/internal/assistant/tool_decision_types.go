@@ -137,11 +137,11 @@ type ToolUseContract struct {
 }
 
 type ArgBindingRule struct {
-	ArgName       string       `json:"arg_name"`
-	Entity        string       `json:"entity"`
-	SourceOrder   []string     `json:"source_order"`
-	Required      bool         `json:"required"`
-	DefaultPolicy string       `json:"default_policy,omitempty"`
+	ArgName       string   `json:"arg_name"`
+	Entity        string   `json:"entity"`
+	SourceOrder   []string `json:"source_order"`
+	Required      bool     `json:"required"`
+	DefaultPolicy string   `json:"default_policy,omitempty"`
 	// ValueKind constrains how a bound value may be typed. A business scope
 	// (e.g. "all") must never be coerced into an entity_id or entity_ids
 	// argument. When empty the kind is inferred from the arg name.
@@ -197,14 +197,18 @@ type EvidencePolicy struct {
 // execute a bound step but must never add, replace, or reorder tool_name outside
 // this artifact.
 type ToolExecutionPlan struct {
-	Goal                string               `json:"goal"`
-	NeedClarification   bool                 `json:"need_clarification"`
-	ClarifyingQuestion  string               `json:"clarifying_question,omitempty"`
-	Steps               []ToolPlanStep       `json:"steps"`
-	EvidencePolicy      EvidencePolicy       `json:"evidence_policy"`
-	DecisionTraceID     string               `json:"decision_trace_id"`
-	DecisionRecords     []ToolDecisionRecord `json:"decision_records,omitempty"`
-	RejectedToolRecords []ToolDecisionRecord `json:"rejected_tool_records,omitempty"`
+	Goal                  string               `json:"goal"`
+	WorkflowIDs           []string             `json:"workflow_ids,omitempty"`
+	RequiredOutcome       string               `json:"required_outcome,omitempty"`
+	DeferredClarification string               `json:"deferred_clarification,omitempty"`
+	RemainingWorkflowIDs  []string             `json:"remaining_workflow_ids,omitempty"`
+	NeedClarification     bool                 `json:"need_clarification"`
+	ClarifyingQuestion    string               `json:"clarifying_question,omitempty"`
+	Steps                 []ToolPlanStep       `json:"steps"`
+	EvidencePolicy        EvidencePolicy       `json:"evidence_policy"`
+	DecisionTraceID       string               `json:"decision_trace_id"`
+	DecisionRecords       []ToolDecisionRecord `json:"decision_records,omitempty"`
+	RejectedToolRecords   []ToolDecisionRecord `json:"rejected_tool_records,omitempty"`
 }
 
 type ToolPlanStep struct {

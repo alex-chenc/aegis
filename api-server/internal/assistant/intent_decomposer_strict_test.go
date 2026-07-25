@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -128,6 +129,25 @@ func TestNormalizeIntentBreakdownDoesNotInjectScenarioCapabilities(t *testing.T)
 	}
 }
 
+func TestNormalizeIntentBreakdownPreservesFirstLayerWorkflowContract(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:       "Generate a dynamic detection package",
+		Actions:    []string{"generate"},
+		Scope:      IntentScope{Kind: "unspecified"},
+		Confidence: 0.9,
+	}
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{
+		Query: "生成动态检测包",
+		Intent: IntentResult{
+			Action:      "generate",
+			WorkflowIDs: []string{detectionPackageLifecycleWorkflowID},
+		},
+	})
+	if got := breakdown.WorkflowIDs; len(got) != 1 || got[0] != detectionPackageLifecycleWorkflowID {
+		t.Fatalf("workflow_ids = %#v, want first-layer workflow contract to be preserved", got)
+	}
+}
+
 func TestNormalizeIntentBreakdownCompletesVulnerabilityRemediationCapabilities(t *testing.T) {
 	breakdown := &IntentBreakdown{
 		Goal:          "针对主机192.168.152.159进行CVE-2023-29484的POC验证，如果存在漏洞则进行修复",
@@ -156,6 +176,217 @@ func TestNormalizeIntentBreakdownCompletesVulnerabilityRemediationCapabilities(t
 	}
 	if containsExactString(breakdown.CandidateCapabilities, "start_vulnerability_scan") {
 		t.Fatalf("vulnerability remediation normalization must not inject scan capability: %#v", breakdown.CandidateCapabilities)
+	}
+}
+
+func TestNormalizeIntentBreakdownRoutesDynamicDetectionPackageAwayFromVulnerabilityScripts(t *testing.T) {
+	query := "样本通过 AF_ALG、pipe 与 splice 利用 CVE-2026-31431 本地提权，请通过动态检测包的方式进行检测"
+	breakdown := &IntentBreakdown{
+		Goal:    "Detect CVE-2026-31431 exploitation using a dynamic detection package",
+		Domains: []string{"vulnerability", "cybersecurity"},
+		Actions: []string{"lookup", "generate", "build", "enable"},
+		Objects: []IntentObject{
+			{Type: "cve", ID: "CVE-2026-31431"},
+			{Type: "dynamic_detection"},
+		},
+		Scope:         IntentScope{Kind: "unspecified"},
+		Parameters:    IntentParameters{"cve_id": "CVE-2026-31431", "detection_method": "dynamic_detection_package"},
+		RequiresWrite: false,
+		RiskHint:      "readonly",
+		WorkflowIDs:   []string{"cve_lookup", detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{
+			"list_detection_packages",
+			"get_detection_package",
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"enable_detection_package",
+		},
+	}
+
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: query})
+
+	if !breakdown.RequiresWrite {
+		t.Fatal("dynamic detection package generation must be treated as a write operation")
+	}
+	if breakdown.RiskHint != string(ToolRiskMedium) {
+		t.Fatalf("risk_hint = %q, want %q", breakdown.RiskHint, ToolRiskMedium)
+	}
+	if got, want := breakdown.CandidateCapabilities, []string{"generate_detection_package_draft", "start_detection_package_build"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("capabilities = %#v, want %#v", got, want)
+	}
+	for _, object := range breakdown.Objects {
+		if object.Type == "dynamic_detection" {
+			t.Fatalf("dynamic_detection object was not canonicalized: %#v", breakdown.Objects)
+		}
+	}
+	if got := breakdown.Parameters["vulnerability_description"]; got != query {
+		t.Fatalf("vulnerability_description = %#v, want original user query", got)
+	}
+}
+
+func TestNormalizeIntentBreakdownCanonicalizesCapturedDetectionPackageContract(t *testing.T) {
+	query := "样本利用 CVE-2026-31431 实现本地提权，你通过动态检测包的方式来进行检测"
+	breakdown := &IntentBreakdown{
+		Goal:       "Generate a dynamic detection package to detect CVE-2026-31431 exploitation.",
+		Domains:    []string{"vulnerability", "package"},
+		Actions:    []string{"generate_detection_package"},
+		Objects:    []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "detection_package"}},
+		Scope:      IntentScope{Kind: "unspecified"},
+		Parameters: IntentParameters{"detection_method": "dynamic", "vulnerability_id": "CVE-2026-31431"},
+		WorkflowIDs: []string{
+			detectionPackageLifecycleWorkflowID,
+		},
+		CandidateCapabilities: []string{
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"get_detection_package",
+			"sign_detection_package",
+			"enable_detection_package",
+		},
+		RequiresWrite: true,
+		RiskHint:      "medium",
+		Confidence:    0.95,
+	}
+
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: query})
+
+	if got, want := breakdown.Actions, []string{"generate"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("actions = %#v, want canonical package action %#v", got, want)
+	}
+	if got, want := breakdown.CandidateCapabilities, []string{
+		"generate_detection_package_draft",
+		"start_detection_package_build",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("capabilities = %#v, want lifecycle boundary %#v", got, want)
+	}
+	if got := breakdown.Parameters["cve_id"]; got != "CVE-2026-31431" {
+		t.Fatalf("cve_id = %#v, want captured CVE", got)
+	}
+	if got := breakdown.Parameters["vulnerability_description"]; got != query {
+		t.Fatalf("vulnerability_description = %#v, want original query", got)
+	}
+}
+
+func TestNormalizeDetectionPackageIntentDoesNotAskUserForGeneratedArtifacts(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:       "Create a dynamic detection package for CVE-2026-31431",
+		Actions:    []string{"generate", "build", "sign", "enable"},
+		Objects:    []IntentObject{{Type: "detection_package", Selector: "CVE-2026-31431"}},
+		Scope:      IntentScope{Kind: "unspecified"},
+		Parameters: IntentParameters{"cve_id": "CVE-2026-31431", "vulnerability_description": "AF_ALG, pipe and splice exploitation chain"},
+		WorkflowIDs: []string{
+			detectionPackageLifecycleWorkflowID,
+		},
+		CandidateCapabilities: []string{
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+		},
+		MissingInfo: []MissingInfo{
+			{Field: "eBPF hook plan for detecting AF_ALG socket creation"},
+			{Field: "Sigma rules for CVE-2026-31431"},
+			{Field: "Target deployment environment"},
+		},
+		NeedClarification:  true,
+		ClarifyingQuestion: "请提供 eBPF hook 计划和 Sigma 规则",
+		RequiresWrite:      true,
+		Confidence:         0.8,
+	}
+
+	normalizeDetectionPackageIntent(breakdown, "通过动态检测包检测 CVE-2026-31431")
+
+	if breakdown.NeedClarification {
+		t.Fatalf("generated package artifacts must not block execution: %#v", breakdown)
+	}
+	if breakdown.ClarifyingQuestion != "" {
+		t.Fatalf("clarifying_question = %q, want empty", breakdown.ClarifyingQuestion)
+	}
+	if len(breakdown.MissingInfo) != 0 {
+		t.Fatalf("generated artifact missing_info was not removed: %#v", breakdown.MissingInfo)
+	}
+}
+
+func TestNormalizeDetectionPackageIntentPreservesEarlierScanCapabilities(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:          "先进行漏洞扫描，再为 CVE-2026-31431 生成动态检测包",
+		Actions:       []string{"scan", "generate", "detect"},
+		Objects:       []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "detection_package"}},
+		Parameters:    IntentParameters{"cve_id": "CVE-2026-31431"},
+		RequiresWrite: true,
+		WorkflowIDs: []string{
+			vulnerabilityAssessmentWorkflowID,
+			detectionPackageLifecycleWorkflowID,
+		},
+		CandidateCapabilities: []string{
+			"resolve_hosts",
+			"start_vulnerability_scan",
+			"get_vulnerability_scan_status",
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"enable_detection_package",
+		},
+	}
+
+	normalizeDetectionPackageIntent(breakdown, breakdown.Goal)
+
+	for _, capability := range []string{
+		"resolve_hosts",
+		"start_vulnerability_scan",
+		"get_vulnerability_scan_status",
+		"generate_detection_package_draft",
+		"start_detection_package_build",
+	} {
+		if !containsExactString(breakdown.CandidateCapabilities, capability) {
+			t.Fatalf("required capability %q was dropped: %#v", capability, breakdown.CandidateCapabilities)
+		}
+	}
+	for _, capability := range []string{"enable_detection_package"} {
+		if containsExactString(breakdown.CandidateCapabilities, capability) {
+			t.Fatalf("future package stage %q must be deferred: %#v", capability, breakdown.CandidateCapabilities)
+		}
+	}
+}
+
+func TestNormalizeDetectionPackageGenerateAndBuildIncludesBuildCapability(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:          "Generate and build a dynamic detection package for CVE-2026-31431",
+		Actions:       []string{"generate", "build"},
+		Objects:       []IntentObject{{Type: "cve", ID: "CVE-2026-31431"}, {Type: "detection_package"}},
+		Parameters:    IntentParameters{"cve_id": "CVE-2026-31431"},
+		RequiresWrite: true,
+		WorkflowIDs:   []string{detectionPackageLifecycleWorkflowID},
+		CandidateCapabilities: []string{
+			"generate_detection_package_draft",
+		},
+	}
+
+	normalizeDetectionPackageIntent(breakdown, "通过动态检测包方式进行检测")
+
+	if got, want := breakdown.CandidateCapabilities, []string{
+		"generate_detection_package_draft",
+		"start_detection_package_build",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("generate+build capabilities = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeIntentBreakdownPreservesExplicitExistingPackageBuildStage(t *testing.T) {
+	breakdown := &IntentBreakdown{
+		Goal:       "Build existing dynamic detection package",
+		Actions:    []string{"build"},
+		Objects:    []IntentObject{{Type: "detection_package", ID: "pkg-cve-2026-31431"}},
+		Parameters: IntentParameters{"package_id": "pkg-cve-2026-31431", "detection_method": "dynamic_detection_package"},
+		WorkflowIDs: []string{
+			detectionPackageLifecycleWorkflowID,
+		},
+		CandidateCapabilities: []string{
+			"generate_detection_package_draft",
+			"start_detection_package_build",
+			"enable_detection_package",
+		},
+	}
+	normalizeIntentBreakdown(breakdown, IntentDecomposeInput{Query: "构建检测包 pkg-cve-2026-31431"})
+	if got, want := breakdown.CandidateCapabilities, []string{"start_detection_package_build"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("explicit existing-package build stage changed: got %#v want %#v", got, want)
 	}
 }
 

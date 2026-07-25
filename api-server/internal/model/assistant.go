@@ -152,6 +152,44 @@ func (AssistantApproval) TableName() string {
 	return "assistant_approvals"
 }
 
+// AssistantRecoveryRequest persists a backend-declared recovery decision for a
+// recoverable tool blocker. Action definitions and context are immutable
+// snapshots; clients may select an action but cannot redefine it.
+type AssistantRecoveryRequest struct {
+	ID               uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	RecoveryID       string         `gorm:"type:varchar(100);uniqueIndex;not null" json:"recovery_id"`
+	SessionID        string         `gorm:"type:varchar(100);index;not null" json:"session_id"`
+	RunID            string         `gorm:"type:varchar(100);index;not null" json:"run_id"`
+	MessageID        string         `gorm:"type:varchar(100);index" json:"message_id,omitempty"`
+	StepID           string         `gorm:"type:varchar(100)" json:"step_id,omitempty"`
+	ToolCallID       string         `gorm:"type:varchar(100);index;not null" json:"tool_call_id"`
+	ToolName         string         `gorm:"type:varchar(160);not null" json:"tool_name"`
+	Code             string         `gorm:"type:varchar(100);index;not null" json:"code"`
+	Category         string         `gorm:"type:varchar(64);index;not null" json:"category"`
+	RiskLevel        string         `gorm:"type:varchar(20);not null" json:"risk_level"`
+	Summary          string         `gorm:"type:text;not null" json:"summary"`
+	Detail           string         `gorm:"type:text" json:"detail,omitempty"`
+	OriginalQuery    string         `gorm:"type:text" json:"original_query,omitempty"`
+	OriginalArgs     datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"original_args"`
+	Context          datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"context"`
+	Actions          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"actions"`
+	Status           string         `gorm:"type:varchar(32);index;not null;default:'pending'" json:"status"`
+	SelectedActionID string         `gorm:"type:varchar(100)" json:"selected_action_id,omitempty"`
+	DecisionInput    datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"decision_input"`
+	ResolutionResult datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"resolution_result"`
+	RequestedBy      string         `gorm:"type:varchar(100)" json:"requested_by,omitempty"`
+	DecidedBy        string         `gorm:"type:varchar(100)" json:"decided_by,omitempty"`
+	ResumeRunID      string         `gorm:"type:varchar(100);index" json:"resume_run_id,omitempty"`
+	CreatedAt        time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	UpdatedAt        time.Time      `gorm:"not null;default:now()" json:"updated_at"`
+	DecidedAt        *time.Time     `json:"decided_at,omitempty"`
+	ResolvedAt       *time.Time     `json:"resolved_at,omitempty"`
+}
+
+func (AssistantRecoveryRequest) TableName() string {
+	return "assistant_recovery_requests"
+}
+
 // AssistantToolSelection 工具选择记录
 type AssistantToolSelection struct {
 	ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
@@ -260,6 +298,18 @@ const (
 	ToolCallStatusRunning          = "running"
 	ToolCallStatusSuccess          = "success"
 	ToolCallStatusFailed           = "failed"
+	ToolCallStatusBlocked          = "blocked"
 	ToolCallStatusApprovalRequired = "approval_required"
 	ToolCallStatusRejected         = "rejected"
+)
+
+// Recovery request status constants.
+const (
+	RecoveryStatusPending   = "pending"
+	RecoveryStatusExecuting = "executing"
+	RecoveryStatusResolved  = "resolved"
+	RecoveryStatusPaused    = "paused"
+	RecoveryStatusCancelled = "cancelled"
+	RecoveryStatusExpired   = "expired"
+	RecoveryStatusFailed    = "failed"
 )

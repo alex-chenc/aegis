@@ -36,6 +36,7 @@ type Orchestrator struct {
 	runManager         *RunManager
 	clarificationGate  *ClarificationGate
 	decisionRecorder   *ToolDecisionRecorder
+	recoveryManager    *RecoveryManager
 	logger             *zap.Logger
 }
 
@@ -56,6 +57,7 @@ type OrchestratorDeps struct {
 	RunManager         *RunManager
 	ClarificationGate  *ClarificationGate
 	DecisionRecorder   *ToolDecisionRecorder
+	RecoveryManager    *RecoveryManager
 	Logger             *zap.Logger
 }
 
@@ -89,32 +91,51 @@ func NewOrchestrator(deps OrchestratorDeps) *Orchestrator {
 		runManager:         deps.RunManager,
 		clarificationGate:  clarificationGate,
 		decisionRecorder:   decisionRecorder,
+		recoveryManager:    deps.RecoveryManager,
 		logger:             logger,
 	}
 }
 
 // RunInput 运行输入（对齐设计文档 6 节）
 type RunInput struct {
-	RunID       string
-	SessionID   string
-	MessageID   string
-	UserID      string
-	UserMessage string
-	TaskType    string
-	ContextRefs []model.AssistantContextRef
-	Locale      string
+	RunID                string
+	SessionID            string
+	MessageID            string
+	UserID               string
+	UserMessage          string
+	OriginalUserMessage  string
+	TaskType             string
+	ContextRefs          []model.AssistantContextRef
+	Locale               string
+	PendingClarification *PendingClarification
+	RecoveryContext      *RecoveryResumeContext
 }
 
 // RunResult 运行结果
 type RunResult struct {
-	MessageID   string                   `json:"message_id"`
-	FinalAnswer string                   `json:"final_answer"`
-	RunStatus   string                   `json:"run_status"`
-	GoalOutcome agentruntime.GoalOutcome `json:"goal_outcome"`
+	MessageID   string                          `json:"message_id"`
+	FinalAnswer string                          `json:"final_answer"`
+	RunStatus   string                          `json:"run_status"`
+	GoalOutcome agentruntime.GoalOutcome        `json:"goal_outcome"`
+	Recovery    *model.AssistantRecoveryRequest `json:"recovery,omitempty"`
 }
 
 // Run 运行编排。所有请求统一进入 agent-runtime；Runtime 根据任务复杂度决定直接回答或 Plan → React。
 func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, error) {
+	if strings.TrimSpace(input.OriginalUserMessage) == "" {
+		input.OriginalUserMessage = input.UserMessage
+	}
+	if input.RecoveryContext != nil {
+		input.UserMessage = buildRecoveryResumeQuery(input.UserMessage, input.RecoveryContext)
+		o.logger.Info("assistant recovery context attached to linked run",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("recovery_id", input.RecoveryContext.RecoveryID),
+			zap.String("recovery_code", input.RecoveryContext.Code),
+			zap.String("selected_action_id", input.RecoveryContext.SelectedActionID),
+		)
+	}
+	turnQuery := strings.TrimSpace(input.UserMessage)
 	approvalMode := o.snapshotApprovalMode(ctx)
 	o.logger.Info("starting orchestration",
 		zap.String("session_id", input.SessionID),
@@ -167,27 +188,64 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	}
 
 	// 4. 意图识别
+	workflowRegistry := NewWorkflowRegistry()
 	intentInput := IntentInput{
-		Query:       input.UserMessage,
-		ContextRefs: buildIntentContextRefs(contextRefs),
+		Query:                input.UserMessage,
+		ContextRefs:          buildIntentContextRefs(contextRefs),
+		AvailableWorkflows:   workflowRegistry.List(),
+		RequiredWorkflowIDs:  explicitWorkflowRequirements(input.UserMessage),
+		PendingClarification: input.PendingClarification,
 	}
 	intent, err := o.intentRouter.Classify(ctx, intentInput)
 	if err != nil {
 		return nil, fmt.Errorf("classify assistant intent: %w", err)
 	}
+	effectiveQuery, effectiveWorkflowIDs, resumedPending := resolveContinuationQuery(
+		input.UserMessage,
+		intent,
+		input.PendingClarification,
+	)
+	if resumedPending {
+		intent.WorkflowIDs = effectiveWorkflowIDs
+		input.UserMessage = effectiveQuery
+		mergePendingBreakdownIntoIntent(&intent, input.PendingClarification)
+		o.logger.Info("assistant clarification resumed pending goal",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Strings("workflow_ids", intent.WorkflowIDs),
+		)
+	} else if input.PendingClarification != nil && intent.ContinuationMode == "new_request" {
+		o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+			pendingClarificationMetadataKey: nil,
+		})
+		o.logger.Info("assistant pending clarification replaced by new request",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+		)
+	}
+	workflowCards, err := workflowRegistry.Resolve(intent.WorkflowIDs)
+	if err != nil {
+		o.logger.Error("assistant first-layer workflow contract resolution failed",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Strings("workflow_ids", intent.WorkflowIDs),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("resolve assistant intent workflows: %w", err)
+	}
 
 	// 5. 发布意图检测事件
 	o.runManager.Publish(input.SessionID, NewEvent(EventIntentDetected, input.SessionID, input.RunID, map[string]interface{}{
-		"domains":    intent.Domains,
-		"action":     intent.Action,
-		"object":     intent.Object,
-		"confidence": intent.Confidence,
+		"domains":      intent.Domains,
+		"action":       intent.Action,
+		"object":       intent.Object,
+		"workflow_ids": intent.WorkflowIDs,
+		"confidence":   intent.Confidence,
 	}))
 	if o.intentDecomposer == nil {
 		return nil, fmt.Errorf("assistant intent decomposer unavailable")
 	}
-	capabilityCatalog := o.buildCapabilityCatalog(intent, intentInput.ContextRefs)
-	workflowCards := NewWorkflowRegistry().Match(intent)
+	capabilityCatalog := o.buildCapabilityCatalog(intent, intentInput.ContextRefs, workflowCards)
 	workflowIDs := make([]string, 0, len(workflowCards))
 	for _, workflow := range workflowCards {
 		workflowIDs = append(workflowIDs, workflow.ID)
@@ -198,6 +256,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.Strings("domains", intent.Domains),
 		zap.Strings("object_types", intent.ObjectTypes),
 		zap.Strings("workflow_ids", workflowIDs),
+		zap.String("routing_mode", "closed_first_layer_contract"),
 		zap.Int("registered_count", o.toolRegistry.Count()),
 		zap.Int("exposed_count", len(capabilityCatalog)),
 	)
@@ -217,6 +276,7 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		)
 		return nil, fmt.Errorf("decompose assistant intent with llm: %w", err)
 	}
+	applyRecoveryResumeContextToBreakdown(intentBreakdown, input.RecoveryContext)
 
 	// 6. 工具选择安全不变量：LLM 只返回 capability；后端 exact Mapping
 	// 是唯一工具选举边界。Mapping 结果会作为 Runtime 的不可变 initial
@@ -282,7 +342,11 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 					"rejected_tool_records": plan.RejectedToolRecords,
 				}))
 				plan.ClarifyingQuestion = question
-				return o.clarificationResponse(ctx, input, plan)
+				rootQuery := turnQuery
+				if resumedPending && input.PendingClarification != nil {
+					rootQuery = input.PendingClarification.OriginalQuery
+				}
+				return o.clarificationResponse(ctx, input, intent, intentBreakdown, plan, rootQuery)
 			}
 			selection.SelectedTools = plan.ToolNames()
 			selection.CandidateTools = dedupeStrings(append(selection.CandidateTools, selection.SelectedTools...))
@@ -312,6 +376,11 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	if intentBreakdown != nil {
 		toolSelectionPayload["intent_breakdown"] = intentBreakdown
 	}
+	if resumedPending {
+		o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+			pendingClarificationMetadataKey: nil,
+		})
+	}
 	o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, toolSelectionPayload))
 
 	// 8. 构建 agent-runtime 工具描述符
@@ -336,13 +405,34 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, authorization, approvalMode)
 }
 
-func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput, plan *ToolExecutionPlan) (*RunResult, error) {
+func (o *Orchestrator) clarificationResponse(
+	ctx context.Context,
+	input RunInput,
+	intent IntentResult,
+	breakdown *IntentBreakdown,
+	plan *ToolExecutionPlan,
+	originalQuery string,
+) (*RunResult, error) {
 	_ = ctx
 	msgID := "msg_" + input.RunID
 	response := strings.TrimSpace(plan.ClarifyingQuestion)
 	if response == "" {
 		response = localized(input.Locale, "请补充要操作的对象和范围后再执行。", "Specify the target and scope before continuing.")
 	}
+	var missingInfo []MissingInfo
+	if breakdown != nil {
+		missingInfo = append(missingInfo, breakdown.MissingInfo...)
+	}
+	o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
+		pendingClarificationMetadataKey: PendingClarification{
+			OriginalQuery:   strings.TrimSpace(originalQuery),
+			Goal:            strings.TrimSpace(plan.Goal),
+			Question:        response,
+			WorkflowIDs:     dedupeStrings(intent.WorkflowIDs),
+			MissingInfo:     missingInfo,
+			IntentBreakdown: breakdown,
+		},
+	})
 
 	o.runManager.Publish(input.SessionID, EventMessageDeltaPayload(input.SessionID, input.RunID, msgID, response))
 	o.persistSessionRuntimeEvents(
@@ -375,6 +465,23 @@ func (o *Orchestrator) clarificationResponse(ctx context.Context, input RunInput
 		RunStatus:   "needs_input",
 		GoalOutcome: agentruntime.GoalNeedsInput,
 	}, nil
+}
+
+func mergePendingBreakdownIntoIntent(intent *IntentResult, pending *PendingClarification) {
+	if intent == nil || pending == nil || pending.IntentBreakdown == nil {
+		return
+	}
+	breakdown := pending.IntentBreakdown
+	intent.Domains = dedupeStrings(append(intent.Domains, breakdown.Domains...))
+	for _, object := range breakdown.Objects {
+		if objectType := strings.TrimSpace(object.Type); objectType != "" {
+			intent.ObjectTypes = append(intent.ObjectTypes, objectType)
+		}
+	}
+	intent.ObjectTypes = dedupeStrings(intent.ObjectTypes)
+	if breakdown.RequiresWrite {
+		intent.NeedWrite = true
+	}
 }
 
 // buildAgentToolDescriptors 从工具注册表构建 agent-runtime 工具描述符
@@ -430,8 +537,8 @@ func (o *Orchestrator) buildAgentToolDescriptors(toolNames []string) []agentrunt
 	return descriptors
 }
 
-func (o *Orchestrator) buildCapabilityCatalog(intent IntentResult, contextRefs []ContextRefInput) []CapabilityCatalogItem {
-	if o == nil || o.toolRegistry == nil {
+func (o *Orchestrator) buildCapabilityCatalog(intent IntentResult, contextRefs []ContextRefInput, workflowSpecs []WorkflowSpec) []CapabilityCatalogItem {
+	if o == nil || o.toolRegistry == nil || len(workflowSpecs) == 0 {
 		return nil
 	}
 	objectTypes := append([]string{}, intent.ObjectTypes...)
@@ -440,16 +547,22 @@ func (o *Orchestrator) buildCapabilityCatalog(intent IntentResult, contextRefs [
 			objectTypes = append(objectTypes, ref.ObjectType)
 		}
 	}
-	workflowSpecs := NewWorkflowRegistry().Match(intent)
 	workflowIDs := make([]string, 0, len(workflowSpecs))
 	for _, workflow := range workflowSpecs {
 		workflowIDs = append(workflowIDs, workflow.ID)
 	}
-	tools := NewToolExposureResolver(o.toolRegistry).IntentCatalog(ToolExposureContext{
-		Domains:     intent.Domains,
-		ObjectTypes: dedupeStrings(objectTypes),
-		WorkflowIDs: workflowIDs,
-	})
+	closedCapabilities, useClosedAllowlist := closedWorkflowCapabilityAllowlist(workflowSpecs)
+	exposureResolver := NewToolExposureResolver(o.toolRegistry)
+	var tools []*ToolSpec
+	if useClosedAllowlist {
+		tools = exposureResolver.intentCatalogForCapabilities(closedCapabilities, "")
+	} else {
+		tools = exposureResolver.IntentCatalog(ToolExposureContext{
+			Domains:     intent.Domains,
+			ObjectTypes: dedupeStrings(objectTypes),
+			WorkflowIDs: workflowIDs,
+		})
+	}
 	sort.Slice(tools, func(i, j int) bool {
 		if tools[i].ExposurePolicy.CatalogPriority != tools[j].ExposurePolicy.CatalogPriority {
 			return tools[i].ExposurePolicy.CatalogPriority > tools[j].ExposurePolicy.CatalogPriority
@@ -473,6 +586,24 @@ func (o *Orchestrator) buildCapabilityCatalog(intent IntentResult, contextRefs [
 		})
 	}
 	return catalog
+}
+
+func closedWorkflowCapabilityAllowlist(workflows []WorkflowSpec) (map[string]bool, bool) {
+	if len(workflows) == 0 {
+		return nil, false
+	}
+	allowed := make(map[string]bool)
+	for _, workflow := range workflows {
+		if len(workflow.ExposedCapabilities) == 0 {
+			return nil, false
+		}
+		for _, capability := range workflow.ExposedCapabilities {
+			if capability = strings.ToLower(strings.TrimSpace(capability)); capability != "" {
+				allowed[capability] = true
+			}
+		}
+	}
+	return allowed, true
 }
 
 func runtimeProfileName(useAIAnalysisFlow bool) string {
@@ -576,6 +707,9 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		"approval_mode":      normalizeAssistantApprovalMode(approvalMode),
 	})
 
+	runtimeCtx, stopRuntimeForRecovery := context.WithCancel(ctx)
+	defer stopRuntimeForRecovery()
+
 	// 使用 RuntimeFactory.Build() 创建完整的 agent-runtime 实例
 	buildResult, err := o.runtimeFactory.Build(ctx, RuntimeBuildRequest{
 		SessionID:         input.SessionID,
@@ -583,6 +717,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		MessageID:         msgID,
 		Operator:          input.UserID,
 		UserInput:         input.UserMessage,
+		OriginalUserInput: input.OriginalUserMessage,
 		TaskType:          input.TaskType,
 		ContextRefs:       o.convertContextRefs(contextRefs),
 		SelectedTools:     selection.SelectedTools,
@@ -592,6 +727,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		UseAIAnalysisFlow: useAIAnalysisFlow,
 		Locale:            NormalizeLocale(input.Locale),
 		ApprovalMode:      normalizeAssistantApprovalMode(approvalMode),
+		StopForRecovery:   stopRuntimeForRecovery,
 	})
 	if err != nil {
 		o.logger.Error("failed to build agent-runtime", zap.Error(err))
@@ -599,7 +735,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	}
 
 	// 运行 agent-runtime
-	taskResult, err := buildResult.Runtime.Run(ctx, agentruntime.TaskInput{
+	taskResult, err := buildResult.Runtime.Run(runtimeCtx, agentruntime.TaskInput{
 		UserInput:   input.UserMessage,
 		UserContext: buildResult.UserContext,
 		InitialPlan: runtimeInitialPlanForAssistantWithDescriptors(executionPlan, toolDescriptors),
@@ -694,6 +830,93 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	if len(evidenceConflicts) > 0 && goalOutcome == agentruntime.GoalSucceeded {
 		goalOutcome = agentruntime.GoalPartiallySucceeded
 	}
+	if authorization != nil &&
+		authorization.RequiredOutcome == "detection_package_enabled" &&
+		hasFailedDetectionPackageStage(evidence) {
+		if strings.TrimSpace(evidence.DetectionPackageID) == "" {
+			goalOutcome = agentruntime.GoalFailed
+		} else {
+			goalOutcome = agentruntime.GoalPartiallySucceeded
+		}
+		o.logger.Warn("assistant detection package lifecycle stopped after failed stage",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("package_id", evidence.DetectionPackageID),
+			zap.Strings("failed_tools", evidence.FailedToolNames),
+		)
+	}
+	var pendingLifecycle *PendingClarification
+	var pendingRecovery *model.AssistantRecoveryRequest
+	if authorization != nil &&
+		strings.TrimSpace(authorization.DeferredClarification) != "" &&
+		goalOutcome != agentruntime.GoalFailed {
+		goalOutcome = agentruntime.GoalNeedsInput
+		question := strings.TrimSpace(authorization.DeferredClarification)
+		pendingLifecycle = &PendingClarification{
+			OriginalQuery: originalRunQuery(input),
+			Goal:          authorization.Goal,
+			Question:      question,
+			WorkflowIDs:   dedupeStrings(authorization.RemainingWorkflowIDs),
+			Artifacts: map[string]string{
+				"package_id": evidence.DetectionPackageID,
+			},
+		}
+		response = strings.TrimSpace(response) + "\n\n" + question
+		o.logger.Info("assistant ordered workflow paused for deferred clarification",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.Strings("remaining_workflow_ids", authorization.RemainingWorkflowIDs),
+		)
+	} else if shouldPauseDetectionPackageBeforeActivation(authorization, evidence, goalOutcome) {
+		goalOutcome = agentruntime.GoalNeedsInput
+		stage := strings.TrimSpace(evidence.DetectionPackageStatus)
+		if stage == "" {
+			stage = "build_pending"
+		}
+		question := localized(
+			input.Locale,
+			"检测包尚未签名并启用。若构建处于待审核状态，请先完成审核；随后回复“继续”以签名、启用并分发。",
+			"The package is not signed and enabled yet. Complete build review if required, then reply \"continue\" to sign, enable, and distribute it.",
+		)
+		pendingLifecycle = &PendingClarification{
+			OriginalQuery: originalRunQuery(input),
+			Goal:          authorization.Goal,
+			Question:      question,
+			WorkflowIDs:   dedupeStrings(authorization.WorkflowIDs),
+			Artifacts: map[string]string{
+				"package_id": evidence.DetectionPackageID,
+				"status":     stage,
+			},
+		}
+		response = strings.TrimSpace(response) + "\n\n" + question
+		o.logger.Info("assistant detection package lifecycle paused before activation",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("package_id", evidence.DetectionPackageID),
+			zap.String("package_status", stage),
+			zap.String("required_outcome", authorization.RequiredOutcome),
+		)
+	}
+	if o.recoveryManager != nil {
+		if recoveryRequest, recoveryErr := o.recoveryManager.FindPendingByRun(saveCtx, input.RunID); recoveryErr == nil {
+			pendingRecovery = recoveryRequest
+			goalOutcome = agentruntime.GoalNeedsInput
+			response = buildRecoveryRequiredAnswer(recoveryRequest, input.Locale)
+			o.logger.Info("assistant run paused for recoverable tool blocker",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.String("recovery_id", recoveryRequest.RecoveryID),
+				zap.String("tool_name", recoveryRequest.ToolName),
+				zap.String("error_code", recoveryRequest.Code),
+			)
+		} else if !errors.Is(recoveryErr, gorm.ErrRecordNotFound) {
+			o.logger.Error("failed to inspect pending recovery after runtime",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Error(recoveryErr),
+			)
+		}
+	}
 	if goalOutcome == agentruntime.GoalFailed {
 		// agent-runtime may finish its control loop normally after a failed
 		// plan. Never expose that transport completion as a completed task.
@@ -724,6 +947,12 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		"compression_records":     taskResult.CompressionRecords,
 		"runtime_evidence":        evidence,
 		"evidence_conflicts":      evidenceConflicts,
+	}
+	if pendingRecovery != nil {
+		metadata["pending_recovery_id"] = pendingRecovery.RecoveryID
+	}
+	if pendingLifecycle != nil {
+		metadata[pendingClarificationMetadataKey] = pendingLifecycle
 	}
 	o.mergeSessionMetadata(context.Background(), input.SessionID, metadata)
 	if contextBudget != nil {
@@ -762,7 +991,57 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 		FinalAnswer: response,
 		RunStatus:   assistantRunStatus(goalOutcome),
 		GoalOutcome: goalOutcome,
+		Recovery:    pendingRecovery,
 	}, nil
+}
+
+func buildRecoveryRequiredAnswer(request *model.AssistantRecoveryRequest, locale string) string {
+	if request == nil {
+		return localized(locale, "任务已暂停，需要您选择处理方式。", "The task is paused and needs your decision.")
+	}
+	title := localized(locale, "任务已安全暂停，需要您选择处理方式。", "The task was safely paused and needs your decision.")
+	var b strings.Builder
+	b.WriteString(title)
+	if strings.TrimSpace(request.Summary) != "" {
+		b.WriteString("\n\n- " + strings.TrimSpace(request.Summary))
+	}
+	if strings.TrimSpace(request.Detail) != "" {
+		b.WriteString("\n- " + strings.TrimSpace(request.Detail))
+	}
+	b.WriteString(localized(
+		locale,
+		"\n- 请在恢复决策卡中查看影响并选择下一步；在您确认前，系统不会扩大安全边界。",
+		"\n- Review the impact and choose the next step in the recovery card. No security boundary will be expanded before you confirm.",
+	))
+	return b.String()
+}
+
+func shouldPauseDetectionPackageBeforeActivation(
+	authorization *ToolExecutionPlan,
+	evidence runtimeEvidenceLedger,
+	goalOutcome agentruntime.GoalOutcome,
+) bool {
+	if authorization == nil ||
+		authorization.RequiredOutcome != "detection_package_enabled" ||
+		containsExactString(evidence.ActualToolNames, "Package.Enable") ||
+		goalOutcome == agentruntime.GoalFailed {
+		return false
+	}
+	for _, failedTool := range evidence.FailedToolNames {
+		if strings.HasPrefix(strings.TrimSpace(failedTool), "Package.") {
+			return false
+		}
+	}
+	return true
+}
+
+func hasFailedDetectionPackageStage(evidence runtimeEvidenceLedger) bool {
+	for _, failedTool := range evidence.FailedToolNames {
+		if strings.HasPrefix(strings.TrimSpace(failedTool), "Package.") {
+			return true
+		}
+	}
+	return false
 }
 
 func assistantRunStatus(outcome agentruntime.GoalOutcome) string {
@@ -1034,18 +1313,23 @@ func (o *Orchestrator) mergeSessionMetadata(ctx context.Context, sessionID strin
 	if metadata == nil {
 		metadata = make(map[string]interface{})
 	}
-	for key, value := range updates {
-		if value == nil {
-			continue
-		}
-		metadata[key] = value
-	}
+	applySessionMetadataUpdates(metadata, updates)
 	session.Metadata = mustMarshalJSON(metadata)
 	if err := o.sessionRepo.Update(ctx, session); err != nil {
 		o.logger.Warn("failed to update assistant session metadata",
 			zap.String("session_id", sessionID),
 			zap.Error(err),
 		)
+	}
+}
+
+func applySessionMetadataUpdates(metadata, updates map[string]interface{}) {
+	for key, value := range updates {
+		if value == nil {
+			delete(metadata, key)
+			continue
+		}
+		metadata[key] = value
 	}
 }
 

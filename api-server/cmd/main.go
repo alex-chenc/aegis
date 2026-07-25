@@ -138,6 +138,7 @@ func main() {
 	assistantToolCallRepo := repository.NewAssistantToolCallRepository(db)
 	assistantOperationRepo := repository.NewAssistantOperationRepository(db)
 	assistantApprovalRepo := repository.NewAssistantApprovalRepository(db)
+	assistantRecoveryRepo := repository.NewAssistantRecoveryRepository(db)
 	assistantMemoryRepo := repository.NewAssistantMemoryRepository(db)
 	assistantToolPolicyRepo := repository.NewAssistantToolPolicyRepository(db)
 	assistantInvestigationReportRepo := repository.NewAssistantInvestigationReportRepository(db)
@@ -280,6 +281,12 @@ func main() {
 		artifactBaseURL = fmt.Sprintf("%s://%s/aegis-releases", scheme, strings.TrimRight(cfg.MinIO.Endpoint, "/"))
 	}
 	detectionPkgService := service.NewDetectionPackageService(detectionPkgRepo, db, serverClient, builderSvcClient, artifactBaseURL)
+	detectionPkgGenerationService := service.NewDetectionPackageGenerationService(
+		configRepo,
+		detectionPkgService,
+		cfg.LLM.TimeoutSeconds,
+		cfg.LLM.MaxRetries,
+	)
 
 	detectionPkgHandler := handler.NewDetectionPackageHandler(detectionPkgService, configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 
@@ -354,8 +361,14 @@ func main() {
 		RiskPolicy:    riskPolicy,
 		Logger:        assistantLogger,
 	})
-	intentRouter := assistant.NewIntentRouter()
+	intentRouter := assistant.NewIntentRouter(assistantLogger)
 	toolDispatcher := assistant.NewToolDispatcher(toolRegistry, approvalGate, assistantToolCallRepo, assistantSessionRepo, toolPolicyService, assistantLogger)
+	recoveryManager := assistant.NewRecoveryManager(assistantRecoveryRepo, assistantLogger)
+	recoveryManager.RegisterExecutor(
+		"hook_allowlist",
+		assistant.NewHookAllowlistRecoveryExecutor(detectionPkgService, assistantLogger),
+	)
+	toolDispatcher.SetRecoveryManager(recoveryManager)
 	toolCapabilityMapper := assistant.NewToolCapabilityMapper(toolRegistry)
 	toolDecisionEngine := assistant.NewToolDecisionEngine(assistant.ToolDecisionEngineDeps{
 		Registry: toolRegistry,
@@ -390,19 +403,21 @@ func main() {
 		IntentRouter:       intentRouter,
 		RuntimeFactory:     runtimeFactory,
 		RunManager:         runManager,
+		RecoveryManager:    recoveryManager,
 		Logger:             assistantLogger,
 	})
 	assistantService := assistant.NewService(assistant.ServiceDeps{
-		SessionRepo:    assistantSessionRepo,
-		MessageRepo:    assistantMessageRepo,
-		ContextRefRepo: assistantContextRefRepo,
-		ToolCallRepo:   assistantToolCallRepo,
-		ApprovalRepo:   assistantApprovalRepo,
-		MemoryRepo:     assistantMemoryRepo,
-		ContextLoader:  contextLoader,
-		Orchestrator:   orchestrator,
-		RunManager:     runManager,
-		Logger:         assistantLogger,
+		SessionRepo:     assistantSessionRepo,
+		MessageRepo:     assistantMessageRepo,
+		ContextRefRepo:  assistantContextRefRepo,
+		ToolCallRepo:    assistantToolCallRepo,
+		ApprovalRepo:    assistantApprovalRepo,
+		RecoveryManager: recoveryManager,
+		MemoryRepo:      assistantMemoryRepo,
+		ContextLoader:   contextLoader,
+		Orchestrator:    orchestrator,
+		RunManager:      runManager,
+		Logger:          assistantLogger,
 	})
 	assistantFileUploadService := assistant.NewFileUploadService(assistant.FileUploadServiceDeps{
 		ContextRepo:     assistantContextRefRepo,
@@ -487,7 +502,11 @@ func main() {
 		logger.Warn("failed to register detection write tools", zap.Error(err))
 	}
 	// Package write tools
-	if err := assistantTools.RegisterPackageWriteTools(toolRegistry, assistantTools.PackageWriteToolDeps{PackageService: detectionPkgService}); err != nil {
+	if err := assistantTools.RegisterPackageWriteTools(toolRegistry, assistantTools.PackageWriteToolDeps{
+		PackageService:         detectionPkgService,
+		PackageGenerator:       detectionPkgGenerationService,
+		DraftGenerationTimeout: time.Duration(cfg.LLM.TimeoutSeconds) * time.Second,
+	}); err != nil {
 		logger.Warn("failed to register package write tools", zap.Error(err))
 	}
 	// Config tools

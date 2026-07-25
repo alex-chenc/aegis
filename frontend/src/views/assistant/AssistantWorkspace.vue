@@ -67,6 +67,16 @@
           @reject="handleReject"
         />
 
+        <div v-if="pendingRecoveries.length" class="recovery-stack">
+          <AssistantRecoveryCard
+            v-for="recovery in pendingRecoveries"
+            :key="recovery.recovery_id"
+            :recovery="recovery"
+            :busy="recovery.status === 'executing' || recoveryBusyId === recovery.recovery_id"
+            @decide="handleRecoveryDecision"
+          />
+        </div>
+
         <!-- 输入框在底部 -->
         <AssistantComposer
           :disabled="streaming"
@@ -135,6 +145,7 @@ import AssistantSessionSidebar from './components/AssistantSessionSidebar.vue'
 import AssistantConversation from './components/AssistantConversation.vue'
 import AssistantComposer from './components/AssistantComposer.vue'
 import AssistantContextRail from './components/AssistantContextRail.vue'
+import AssistantRecoveryCard from './components/AssistantRecoveryCard.vue'
 import ContextBudgetIndicator from '@/components/ContextBudgetIndicator.vue'
 
 const route = useRoute()
@@ -162,6 +173,7 @@ const {
   messages,
   toolCalls,
   approvals,
+  recoveries,
   resultCards,
   contextBudget,
   compressionRecords,
@@ -174,6 +186,37 @@ const {
 const pendingApprovals = computed(() =>
   approvals.value.filter(a => a.status === 'pending')
 )
+const pendingRecoveries = computed(() => {
+  const active = recoveries.value.filter(item =>
+    item.status === 'pending' ||
+    item.status === 'executing' ||
+    item.status === 'paused'
+  )
+  const unique = new Map<string, typeof active[number]>()
+  const statusPriority: Record<string, number> = {
+    executing: 0,
+    paused: 1,
+    pending: 2,
+  }
+  for (const recovery of [...active].sort((left, right) => {
+    const priorityDelta = (statusPriority[left.status] ?? 3) - (statusPriority[right.status] ?? 3)
+    if (priorityDelta !== 0) return priorityDelta
+    return Date.parse(left.created_at) - Date.parse(right.created_at)
+  })) {
+    const normalizedStep = recovery.step_id?.trim() || recovery.tool_name
+    const key = [
+      recovery.run_id,
+      normalizedStep,
+      recovery.tool_name,
+      recovery.code,
+    ].join('\u0000')
+    if (!unique.has(key)) {
+      unique.set(key, recovery)
+    }
+  }
+  return [...unique.values()]
+})
+const recoveryBusyId = ref('')
 
 const sessionMetadata = computed<Record<string, any>>(() => {
   const metadata = currentSession.value?.metadata
@@ -246,6 +289,30 @@ async function handleSend(content: string) {
     }
   } catch (err) {
     console.error(translate('generatedScript.assistantAssistantWorkspace_failed_to_send_message_6340f8'), err)
+  }
+}
+
+async function handleRecoveryDecision(
+  recoveryId: string,
+  actionId: string,
+  input?: Record<string, any>
+) {
+  recoveryBusyId.value = recoveryId
+  try {
+    const result = await store.decideRecovery(recoveryId, actionId, input)
+    if (result.run_handle) {
+      ElMessage.success('恢复操作已完成，正在继续原任务')
+    } else if (result.recovery.status === 'paused') {
+      ElMessage.info('当前操作已暂停，恢复上下文已保留')
+    } else if (result.recovery.status === 'cancelled') {
+      ElMessage.info('当前操作已取消')
+    } else {
+      ElMessage.success('恢复决策已处理')
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || '恢复决策处理失败')
+  } finally {
+    recoveryBusyId.value = ''
   }
 }
 
@@ -545,6 +612,15 @@ onUnmounted(() => {
 .conversation-panel > :deep(.composer) {
   flex-shrink: 0;
   margin: 12px 20px 16px;
+}
+
+.recovery-stack {
+  display: grid;
+  gap: 10px;
+  max-height: 42%;
+  padding: 10px 20px 0;
+  overflow: auto;
+  flex-shrink: 0;
 }
 
 .conversation-header {

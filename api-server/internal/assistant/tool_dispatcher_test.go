@@ -81,7 +81,14 @@ func (f *fakeToolCallRepo) MarkApprovalRequired(_ context.Context, _, _ string) 
 	return nil
 }
 func (f *fakeToolCallRepo) MarkRejected(_ context.Context, _, _ string) error { return nil }
-func (f *fakeToolCallRepo) UpdateStatus(_ context.Context, _, _ string) error { return nil }
+func (f *fakeToolCallRepo) UpdateStatus(_ context.Context, callID, status string) error {
+	for i := range f.calls {
+		if f.calls[i].CallID == callID {
+			f.calls[i].Status = status
+		}
+	}
+	return nil
+}
 
 // fakeSessionRepo implements repository.AssistantSessionRepository
 type fakeSessionRepo struct{}
@@ -736,19 +743,17 @@ func TestAssistantToolGatewayAdapterExecutesOnlyRequestedPackageTool(t *testing.
 	}
 }
 
-func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
+func TestToolDispatcher_ExecutionTimeoutUsesToolDefault(t *testing.T) {
 	registry := NewToolRegistry()
 	_ = registry.Register(&ToolSpec{
-		Name:    "Slow.Tool",
-		Enabled: true,
+		Name:           "Slow.Tool",
+		Enabled:        true,
+		DefaultTimeout: 40 * time.Millisecond,
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-			// Simulate a slow operation that respects context
-			select {
-			case <-time.After(60 * time.Second):
-				return "done", nil
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
+			// The dispatcher must enforce the contract even when a dependency
+			// does not observe context cancellation promptly.
+			time.Sleep(2 * time.Second)
+			return "done", nil
 		},
 	})
 
@@ -769,13 +774,11 @@ func TestToolDispatcher_ExecutionTimeout(t *testing.T) {
 	if result.Success {
 		t.Fatalf("expected failure due to timeout, got success")
 	}
-	// Should contain timeout error message
-	if result.Error == "" {
-		t.Fatalf("expected timeout error message, got empty")
+	if !strings.Contains(result.Error, "40ms") {
+		t.Fatalf("timeout error %q does not report the configured tool timeout", result.Error)
 	}
-	// Should complete within ~30s (the tool dispatcher timeout) + some margin
-	if elapsed > 35*time.Second {
-		t.Fatalf("expected completion within 35s, took %v", elapsed)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("configured 40ms tool timeout was not applied, took %v", elapsed)
 	}
 	// Verify markFailed was called with timeout error
 	if toolCallRepo.markFailedCall == nil {

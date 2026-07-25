@@ -136,6 +136,7 @@ const statusLabel = computed(() => {
     completed: translate('generatedScript.common_success_51991a'),
     success: translate('generatedScript.common_success_51991a'),
     failed: translate('generatedScript.common_fail_3e3c80'),
+    blocked: '等待选择',
     approval_required: translate('generatedScript.common_pending_approval_57fce0'),
     rejected: translate('generatedScript.common_rejected_4c7c52'),
     cancelled: translate('generatedScript.common_canceled_a5ffdc'),
@@ -151,6 +152,7 @@ const statusTagType = computed(() => {
     case 'running':
     case 'accepted':
     case 'approval_required':
+    case 'blocked':
       return 'warning'
     case 'failed':
       return 'danger'

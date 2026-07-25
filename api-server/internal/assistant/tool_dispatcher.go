@@ -12,6 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultToolExecutionTimeout = 30 * time.Second
+
 // ToolDispatcher 工具调度器
 type ToolDispatcher struct {
 	registry      *ToolRegistry
@@ -20,7 +22,14 @@ type ToolDispatcher struct {
 	sessionRepo   repository.AssistantSessionRepository
 	policyService *ToolPolicyService
 	filters       *ToolInvocationFilterChain
+	recovery      *RecoveryManager
 	logger        *zap.Logger
+}
+
+func (d *ToolDispatcher) SetRecoveryManager(manager *RecoveryManager) {
+	if d != nil {
+		d.recovery = manager
+	}
 }
 
 // NewToolDispatcher 创建工具调度器
@@ -53,6 +62,7 @@ type DispatchRequest struct {
 	ToolName     string                 `json:"tool_name"`
 	Args         map[string]interface{} `json:"args"`
 	Operator     string                 `json:"operator"`
+	UserQuery    string                 `json:"-"`
 	ApprovalMode string                 `json:"approval_mode,omitempty"`
 	Approved     bool                   `json:"approved"` // true if already approved via approval gate
 	// Polling marks an internal Runtime retry of an already-authorized,
@@ -63,15 +73,17 @@ type DispatchRequest struct {
 
 // DispatchResult 调度结果
 type DispatchResult struct {
-	CallID           string                   `json:"call_id"`
-	ToolName         string                   `json:"tool_name"`
-	Success          bool                     `json:"success"`
-	Data             interface{}              `json:"data,omitempty"`
-	Error            string                   `json:"error,omitempty"`
-	DurationMs       int64                    `json:"duration_ms"`
-	ApprovalRequired bool                     `json:"approval_required,omitempty"`
-	ApprovalID       string                   `json:"approval_id,omitempty"`
-	Approval         *model.AssistantApproval `json:"approval,omitempty"`
+	CallID           string                          `json:"call_id"`
+	ToolName         string                          `json:"tool_name"`
+	Success          bool                            `json:"success"`
+	Data             interface{}                     `json:"data,omitempty"`
+	Error            string                          `json:"error,omitempty"`
+	DurationMs       int64                           `json:"duration_ms"`
+	ApprovalRequired bool                            `json:"approval_required,omitempty"`
+	ApprovalID       string                          `json:"approval_id,omitempty"`
+	Approval         *model.AssistantApproval        `json:"approval,omitempty"`
+	Blocked          bool                            `json:"blocked,omitempty"`
+	Recovery         *model.AssistantRecoveryRequest `json:"recovery,omitempty"`
 }
 
 // Dispatch 调度工具执行
@@ -213,8 +225,13 @@ func (d *ToolDispatcher) PrepareInvocation(ctx context.Context, req ToolInvocati
 }
 
 func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *ToolSpec, req DispatchRequest) (*DispatchResult, error) {
-	// Apply tool execution timeout to prevent indefinite blocking
-	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Apply the tool-owned timeout contract while preserving the historical
+	// default for tools that do not declare a custom execution budget.
+	executionTimeout := defaultToolExecutionTimeout
+	if tool != nil && tool.DefaultTimeout > 0 {
+		executionTimeout = tool.DefaultTimeout
+	}
+	toolCtx, cancel := context.WithTimeout(ctx, executionTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -274,6 +291,46 @@ func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *T
 				_ = d.sessionRepo.IncrementToolCallCount(ctx, req.SessionID)
 			}
 		} else {
+			var recoveryRequest *model.AssistantRecoveryRequest
+			var recoverable bool
+			if d.recovery != nil && tr.result.Cause != nil {
+				var createErr error
+				recoveryRequest, recoverable, createErr = d.recovery.CreateFromError(ctx, RecoveryCreateRequest{
+					SessionID:     req.SessionID,
+					RunID:         req.RunID,
+					MessageID:     req.MessageID,
+					StepID:        req.StepID,
+					ToolCallID:    callID,
+					ToolName:      req.ToolName,
+					OriginalQuery: req.UserQuery,
+					OriginalArgs:  req.Args,
+					Operator:      req.Operator,
+					Error:         tr.result.Cause,
+				})
+				if createErr != nil {
+					d.logger.Error("failed to persist assistant recovery request",
+						zap.String("session_id", req.SessionID),
+						zap.String("run_id", req.RunID),
+						zap.String("call_id", callID),
+						zap.String("tool_name", req.ToolName),
+						zap.Error(createErr),
+					)
+					recoverable = false
+				}
+			}
+			if recoverable && recoveryRequest != nil {
+				_ = d.toolCallRepo.MarkFailed(ctx, callID, recoveryRequest.Summary, duration)
+				_ = d.toolCallRepo.UpdateStatus(ctx, callID, model.ToolCallStatusBlocked)
+				return &DispatchResult{
+					CallID:     callID,
+					ToolName:   req.ToolName,
+					Success:    false,
+					Error:      recoveryRequest.Summary,
+					DurationMs: duration,
+					Blocked:    true,
+					Recovery:   recoveryRequest,
+				}, nil
+			}
 			_ = d.toolCallRepo.MarkFailed(ctx, callID, tr.result.Error, duration)
 		}
 
@@ -288,11 +345,12 @@ func (d *ToolDispatcher) executeTool(ctx context.Context, callID string, tool *T
 
 	case <-toolCtx.Done():
 		duration := time.Since(start).Milliseconds()
-		timeoutErr := fmt.Sprintf("tool %s execution timeout after %ds", req.ToolName, 30)
+		timeoutErr := fmt.Sprintf("tool %s execution timeout after %s", req.ToolName, executionTimeout)
 		d.logger.Warn("tool execution timeout",
 			zap.String("tool", req.ToolName),
 			zap.String("call_id", callID),
 			zap.Int64("duration_ms", duration),
+			zap.Int64("timeout_ms", executionTimeout.Milliseconds()),
 		)
 		_ = d.toolCallRepo.MarkFailed(ctx, callID, timeoutErr, duration)
 		return &DispatchResult{

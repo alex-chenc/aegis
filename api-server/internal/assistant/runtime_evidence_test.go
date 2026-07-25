@@ -122,6 +122,58 @@ func TestBuildFailedGoalFallbackReportsRunningAssetCollection(t *testing.T) {
 	}
 }
 
+func TestDetectionPackageActivationPauseRequiresNoFailedPackageStage(t *testing.T) {
+	authorization := &ToolExecutionPlan{RequiredOutcome: "detection_package_enabled"}
+	failedBuild := runtimeEvidenceLedger{
+		ActualToolNames:        []string{"Package.Draft.Generate", "Package.Build.Start"},
+		FailedToolNames:        []string{"Package.Build.Start"},
+		DetectionPackageID:     "package-1",
+		DetectionPackageStatus: "draft",
+	}
+	if shouldPauseDetectionPackageBeforeActivation(authorization, failedBuild, agentruntime.GoalPartiallySucceeded) {
+		t.Fatal("failed package build must not be converted into an activation continuation")
+	}
+	if !hasFailedDetectionPackageStage(failedBuild) {
+		t.Fatal("failed package build was not recognized as a terminal lifecycle failure")
+	}
+
+	awaitingReview := runtimeEvidenceLedger{
+		ActualToolNames:        []string{"Package.Draft.Generate", "Package.Build.Start", "Package.Build.Status"},
+		DetectionPackageID:     "package-1",
+		DetectionPackageStatus: "awaiting_review",
+	}
+	if !shouldPauseDetectionPackageBeforeActivation(authorization, awaitingReview, agentruntime.GoalPartiallySucceeded) {
+		t.Fatal("successful build review boundary should remain resumable")
+	}
+}
+
+func TestRuntimeEvidenceMarksDetectionPackageBuildFailure(t *testing.T) {
+	result := &agentruntime.TaskResult{
+		StepExecutions: []agentruntime.StepExecution{
+			{ReactTurns: []agentruntime.ReactTurn{{Observation: &agentruntime.Observation{
+				CallID:   "call-draft",
+				ToolName: "Package.Draft.Generate",
+				Status:   agentruntime.ToolCallSuccess,
+				Content:  `{"package_id":"package-1","status":"draft"}`,
+			}}}},
+			{ReactTurns: []agentruntime.ReactTurn{{Observation: &agentruntime.Observation{
+				CallID:   "call-build",
+				ToolName: "Package.Build.Start",
+				Status:   agentruntime.ToolCallFailed,
+				Error:    "hook allowlist validation failed",
+			}}}},
+		},
+	}
+
+	ledger := buildRuntimeEvidenceLedger(result)
+	if ledger.DetectionPackageID != "package-1" {
+		t.Fatalf("package ID = %q, want package-1", ledger.DetectionPackageID)
+	}
+	if ledger.DetectionPackageStatus != "build_failed" {
+		t.Fatalf("package status = %q, want build_failed", ledger.DetectionPackageStatus)
+	}
+}
+
 func TestRuntimeEvidenceRejectsUnprovenDispatch(t *testing.T) {
 	result := &agentruntime.TaskResult{
 		StepExecutions: []agentruntime.StepExecution{{

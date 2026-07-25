@@ -373,16 +373,19 @@ const DetectionPackageGenerationPrompt = `You are the Aegis V5.8 AI security-rul
 Input includes a CVE identifier, vulnerability description, prerequisites, exploitation-chain behavior, observable system calls or kernel hooks, false-positive constraints, and current agent capabilities.
 
 Output these sections with correctly labeled code fences:
-1. HookPlan YAML: collection-only hook, extract, filter, and emit definitions; no alert logic.
-2. eBPF C source draft: event collection and lightweight filtering only.
-3. Sigma atomic rules YAML: single-event atomic detection only.
-4. Correlation DetectionSpec YAML: ordered sequence, window, and by only.
+1. Coverage Decision YAML: declare whether the active Hook allowlist faithfully observes every core exploitation behavior.
+2. HookPlan YAML: collection-only hook, extract, filter, and emit definitions; no alert logic.
+3. eBPF C source draft: event collection and lightweight filtering only.
+4. Sigma atomic rules YAML: single-event atomic detection only.
+5. Correlation DetectionSpec YAML: ordered sequence, window, and by only.
 
 Rules:
 - Use rule_id in package_id.stable_name form.
 - Every Sigma atomic rule must include an attack.txxxx MITRE technique tag. The correlation alert must include the same actionable mitre_id.
 - Do not create cross-package dependencies.
-- Use only explicitly supported hook types; default to tracepoint.
+- Use only hooks listed in the ACTIVE HOOK ALLOWLIST supplied below. Every attach_type and attach value must match exactly.
+- Never substitute an unrelated allowlisted hook merely to make the package pass validation.
+- If the active allowlist cannot faithfully observe every core behavior in the exploit chain, set Coverage Decision status to unsupported, list the uncovered behaviors, list the exact minimally required hooks, and omit all generated code artifacts.
 - Avoid unbounded event volume.
 
 ## eBPF source requirements
@@ -419,7 +422,9 @@ For tracepoint programs:
 - The ring-buffer branch uses BPF_MAP_TYPE_RINGBUF with bpf_ringbuf_reserve and bpf_ringbuf_submit.
 - The perf branch uses BPF_MAP_TYPE_PERF_EVENT_ARRAY with bpf_perf_event_output and a stack-allocated struct event; it must not call bpf_ringbuf_reserve.
 - Obtain pid and tid with bpf_get_current_pid_tgid().
-- Never use bpf_get_current_task() or directly dereference struct task_struct, struct sock, struct file, or other internal kernel structures. Prefer tracepoint arguments or stable helpers.
+- Never call bpf_probe_read_kernel(), bpf_override_return(), bpf_setsockopt(), bpf_sk_redirect(), or bpf_get_current_task(). The builder rejects these helpers.
+- Do not use kernel-source pointer annotations such as __user, __kernel, __iomem, or __force. They are not defined by the standalone Builder headers. Declare user pointers as const void * and read them only with bpf_probe_read_user().
+- Never directly dereference struct task_struct, struct sock, struct file, or other internal kernel structures. Prefer tracepoint arguments or stable helpers.
 - Use the agent event envelope:
   timestamp_ns, plugin_id_hash, event_type, pid, tid, uid, gid, payload_len, payload[256]
 - Encode payload TLV as field_id(uint16 little-endian) + field_len(uint16 little-endian) + raw value, with no field_type byte.
@@ -430,20 +435,30 @@ For tracepoint programs:
 
 Place schema_version, package_id, and version before hooks. Use schema_version "aegis.ebpf_plugin.v1". Every hook must include name, attach_type, attach, and program.
 
-Example:
+Schema example only; placeholders must be replaced with exact entries from the ACTIVE HOOK ALLOWLIST and must never appear literally:
 schema_version: "aegis.ebpf_plugin.v1"
 package_id: "cve-2026-xxxxx"
 version: "1.0.0"
 hooks:
-  - name: sys_enter_socket
+  - name: allowed_hook_name
     attach_type: tracepoint
-    attach: syscalls/sys_enter_socket
-    program: tracepoint__syscalls__sys_enter_socket
+    attach: category/allowed_event
+    program: tracepoint__allowed_hook_name
 
 ## Output template
 
 ## Package Metadata
 package_id, version, title, description, cve_ids
+
+## Coverage Decision
+Use a yaml code fence with exactly these fields:
+status: supported or unsupported
+reason: concise coverage rationale
+covered_behaviors: list of exploit-chain behaviors directly observable through the selected hooks
+uncovered_core_behaviors: list of required behaviors that cannot be observed
+required_hooks: list of exact minimally required attach_type and attach pairs; use [] when no additional hooks are required
+
+Only when status is supported and uncovered_core_behaviors is empty, continue with the artifact sections below.
 
 ## HookPlan
 Use a yaml code fence containing metadata followed by hooks.
@@ -480,7 +495,7 @@ Attack prerequisites:
 Exploitation-chain behavior:
 %s
 
-False-positive constraints:
+False-positive and platform constraints:
 %s`
 
 // GetDetectionPackageGenerationPrompt returns the detection package generation prompt

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -129,6 +130,11 @@ func (v *CompiledPlanValidator) validateStepArgs(step ToolPlanStep, tool *ToolSp
 		}
 		return newCompilePlanError("arguments", step.ToolName, "args", err.Error())
 	}
+	if tool.Preflight != nil {
+		if err := tool.Preflight(context.Background(), step.Args); err != nil {
+			return newCompilePlanError("arguments", step.ToolName, "args", err.Error())
+		}
+	}
 	return nil
 }
 
@@ -139,12 +145,55 @@ func (v *CompiledPlanValidator) validatePreviousStepProducers(step ToolPlanStep,
 		if !strings.EqualFold(strings.TrimSpace(source.SourceType), "previous_step") {
 			continue
 		}
-		if len(priorSteps) == 0 {
+		hasProducer := false
+		for _, prior := range priorSteps {
+			tool, ok := v.registry.Get(prior.ToolName)
+			if !ok || tool == nil {
+				continue
+			}
+			if resultContractProducesArgument(tool.ResultContract, argName, source.SourceRef) {
+				hasProducer = true
+				break
+			}
+		}
+		if !hasProducer {
 			return newCompilePlanError("dependencies", step.ToolName, argName,
-				fmt.Sprintf("step %s requires previous_step argument %q but has no prior producer step", step.StepID, argName))
+				fmt.Sprintf("step %s requires previous_step argument %q but no prior step declares a matching result field", step.StepID, argName))
 		}
 	}
 	return nil
+}
+
+func resultContractProducesArgument(contract ToolResultContract, argName, sourceRef string) bool {
+	candidates := make([]string, 0, len(contract.OperationRefFields)+len(contract.ArtifactRefFields)+len(contract.SideEffectRefFields)+len(contract.FactBindings))
+	candidates = append(candidates, contract.OperationRefFields...)
+	candidates = append(candidates, contract.ArtifactRefFields...)
+	candidates = append(candidates, contract.SideEffectRefFields...)
+	for _, binding := range contract.FactBindings {
+		candidates = append(candidates, binding.IDField)
+	}
+	argBase := resultReferenceBase(argName)
+	sourceBase := resultReferenceBase(sourceRef)
+	for _, candidate := range candidates {
+		candidateBase := resultReferenceBase(candidate)
+		if candidateBase == "" {
+			continue
+		}
+		if candidateBase == argBase || (sourceBase != "" && candidateBase == sourceBase) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultReferenceBase(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if index := strings.LastIndex(value, "."); index >= 0 {
+		value = value[index+1:]
+	}
+	value = strings.TrimSuffix(value, "_ids")
+	value = strings.TrimSuffix(value, "_id")
+	return strings.TrimSpace(value)
 }
 
 // hasMappedCompletionTool checks whether any mapped plan tool provides the
