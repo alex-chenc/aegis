@@ -8,9 +8,25 @@
 
 ## Overview
 
-Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology to achieve dynamic audit management of host configurations and vulnerabilities. Through continuous AI noise reduction and automated judgment, it builds a closed loop from precise protection to automated response. We are committed to creating a minimalist, intelligent server baseline automation management platform for DevOps and security engineers through the forward-looking technology of "model against model".
+Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology, using a natural-language AI assistant to orchestrate end-to-end security operations across baselines, vulnerabilities, assets, alerts, and weak passwords, achieving dynamic audit management of host configurations, vulnerabilities, and weak passwords. Through continuous AI noise reduction and automated judgment, it builds a closed loop from precise protection to automated response. We are committed to creating a minimalist, intelligent server baseline automation management platform for DevOps and security engineers through the forward-looking technology of "model against model".
 
 ## Core Features
+
+### AI Security Assistant (V6.1)
+
+Takes security-operation goals in natural language: the LLM understands intent while the backend decides tools and parameters, driving end-to-end workflows across hosts, assets, vulnerabilities, baselines, weak passwords and detection via a deterministic plan, with final answers bounded by real tool evidence.
+
+- Describe targets and objects in natural language (host names, IPs, IP fragments, the current page object, etc.); the assistant resolves them to a unique real entity before any write, asks when ambiguous or offline, and never guesses a write target for you
+- Decomposes each request into business goal, action, object, scope and missing info, automatically forming a multi-step plan for complex tasks instead of stopping at the first matching tool
+- Backend capability contracts let the LLM only suggest candidate capabilities; final tool selection, argument binding and execution order are decided by the backend, so the model cannot bypass authorization to call or invent tools
+- Multi-step closures are wrapped as high-level capabilities (baseline compliance, vulnerability assessment and remediation, asset inventory refresh, alert investigation and response, weak-password assessment, etc.); the model picks the goal and the backend orchestrates the internal steps
+- Generates an immutable single-tool-bound execution plan; the runtime exposes only the tools allowed for the current step and rejects any guessed call outside the live tool catalog
+- Async and long-running tasks (vulnerability scans, weak-password scans, etc.) use bounded polling with backoff, reporting honestly when still running instead of looping on "executing" forever
+- All async high-level operations are tracked through a unified operation reference, with accepted, running, awaiting approval, awaiting input, partial and terminal states kept consistent across chat, events and UI
+- Write operations count as success only when they create a real side effect and meet coverage; "all" requests report expected, covered, failed and uncovered counts, and zero tasks created means failure
+- Final answers are bound to real tool evidence; answers that contradict or omit evidence fall back to a conservative summary, never fabricating "done"
+- High-risk and write operations require explicit user intent and approval bound to scope and parameters, voided if the scope changes
+- Recoverable blockers (e.g., a detection hook not yet allowlisted) produce a persistent decision card listing impacts and actions (extend allowlist, view suggestion only, pause, cancel, etc.), still actionable after refresh or restart
 
 ### Host and Agent Management
 
@@ -27,6 +43,8 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Batch dispatch check or fix tasks by selecting multiple rules and hosts
 - Task status, execution progress, output logs, task type filtering, and sorting
 - Failed tasks support re-dispatching checks, one-click fix task creation, and remediation suggestion viewing
+- A new auto-verify loop for baseline: a failed check auto-triggers a fix, and a successful fix auto-re-runs the check, looping until it passes or hits the max round limit, with an auto-verify toggle and max-rounds option at dispatch
+- Pass-rate is split by type (detection pass-rate = passed checks / total, fix pass-rate = successful fixes / total), and compliance report export is simplified to XLS with per-task detail rows
 
 ### Intelligent Vulnerability Check and Fix
 
@@ -35,6 +53,26 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Supports manually entering custom CVEs and calling LLMs to complete vulnerability details
 - Automatically calls LLMs to generate POC verification scripts and confirm whether vulnerabilities truly exist
 - Automatically calls LLMs to generate targeted remediation scripts, with batch dispatch and progress tracking
+- Script generation no longer depends on host selection; the batch-execute entry is consolidated into the one-click fix bar, and executing a generated script opens a host-selection dialog (online hosts with the script already generated) with max-rounds and auto-verify options
+- After POC verification confirms a vulnerability, a fix is triggered automatically; after a successful fix, POC re-verification runs automatically, looping until it passes, hits the max round limit, or fails
+- On script execution errors the LLM auto-regenerates and retries via the same self-healing mechanism as baseline, with task details showing per-round status and error summaries
+- The vulnerability workbench is sorted by shell generation status (generated > generating > none) with a new "Shell Status" column, and the same ordering is applied on both frontend and backend
+
+### Weak Password Detection (V6.1)
+
+Takes an AI-native approach: based on collected asset results, an LLM identifies which hosts, applications, and configuration files may contain collectable credential material; the agent's standard weak-password tool reads the target fields and returns them; the server and LLM then jointly complete dictionary matching and result explanation.
+
+- Analyzes collected asset results in one click to identify which hosts and applications may hold collectable account/password configurations, so users never need to specify config paths manually
+- Detects weak passwords across Linux local accounts (`/etc/passwd`, `/etc/shadow`), Redis, MySQL/MariaDB, PostgreSQL, Nginx/Apache Basic Auth, OpenSSH, and AI Agents, MCP Servers, LLM gateways, and more
+- The agent uses a standard weak-password collection tool to read account/password material from server-specified file paths and field selectors; `find`, recursive full-disk search, and arbitrary shell execution are forbidden
+- For containerized apps, the agent reads in-container config files via the read-only `/proc/<pid>/root` mapping of the related process PID, adapting automatically to container environments
+- Plaintext passwords are matched directly against dictionaries on the server; encrypted passwords/hashes are analyzed by the LLM and re-verified by a real server-side verifier, with proprietary algorithms that cannot be locally verified flagged as "AI-inferred, pending confirmation"
+- Ships a built-in 1000-entry default weak-password dictionary, supports user-uploaded dictionaries, and offers one-click AI dictionary generation from natural-language descriptions with automatic deduplication
+- Provides one-click batch detection that validates each host's online status before scanning and automatically skips offline hosts without creating invalid tasks
+- Defines a fixed detection skill per application type with a generic fallback skill, and supports configuring detection rounds (10-50) plus a cap of 10 agent auxiliary-tool calls per application
+- The task-detail progress bar tracks every stage (asset analysis -> tool dispatch -> config retrieval -> AI repair locator -> password matching -> result storage) with percentage, current host/application, and agent tool-call count
+- Supports initiating, viewing, re-testing, and explaining weak-password tasks in natural language, with results showing the matched password, match method, AI explanation, failure reasons, and remediation guidance
+- Passwords are displayed masked by default; revealing the full plaintext requires entering the system password / approval and is recorded in the audit log with a watermark
 
 ### Script Security Audit
 
@@ -88,6 +126,13 @@ Aegis is a next-generation AI-native host security platform. The system deeply i
 - Historical sessions can restore analysis process, conclusions, disposal suggestions, and execution results
 - Supports attack trace graphs, attack flowchart images, and structured disposal suggestions
 - Supports context compression, batch event analysis, and observability for large-context analysis
+
+### Frontend Internationalization (V6.1)
+
+- A Chinese/English switcher (zh-CN / en-US) is added next to the top-bar mode switcher; switching needs no refresh and preserves the current route, filters, forms, mode and assistant session
+- Built on Vue I18n and the Element Plus ConfigProvider with a single global locale; translation happens at the display boundary while enums and raw data stay stable
+- Two language resource sets split by business domain are bundled into the offline package with no external translation service or CDN; the language choice is persisted to local storage, synced across tabs, defaults to Simplified Chinese, and falls back on invalid values
+- REST requests send Accept-Language and API errors are localized via stable error codes; assistant runs carry a locale snapshot, while commands, scripts, logs, evidence and identifiers are never translated
 
 ### System Configuration and Observability
 
@@ -172,4 +217,3 @@ curl -sSL http://<SERVER_IP>:8082/api/v1/agent/install.sh | sudo bash
 | MinIO API | 9000 |
 | MinIO Console | 9001 |
 | Kafka | 29092 |
-
