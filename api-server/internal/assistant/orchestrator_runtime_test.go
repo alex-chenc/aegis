@@ -44,11 +44,18 @@ func TestDefaultAIAnalysisRuntimeConfigMatchesAnalysisFlow(t *testing.T) {
 
 func TestApplyFixedPlanRuntimeLimitsPreservesAsyncPollingBudget(t *testing.T) {
 	cfg := DefaultAIAnalysisRuntimeConfig(0)
+	plan := &ToolExecutionPlan{Steps: []ToolPlanStep{
+		{ToolName: "Host.Resolve"},
+		{ToolName: "Asset.Collection.Trigger"},
+	}}
 
-	applyFixedPlanRuntimeLimits(&cfg, 2)
+	profile := applyFixedPlanRuntimeLimits(&cfg, plan)
 
 	if cfg.MaxAsyncPollAttempts < 24 {
 		t.Fatalf("fixed plan async poll attempts = %d, want at least 24", cfg.MaxAsyncPollAttempts)
+	}
+	if profile != fixedPlanAsyncObservationDefault {
+		t.Fatalf("fixed plan observation profile = %q, want %q", profile, fixedPlanAsyncObservationDefault)
 	}
 	requiredPerStep := cfg.MaxAsyncPollAttempts + 2
 	if cfg.MaxToolCallsPerStep < requiredPerStep {
@@ -58,9 +65,38 @@ func TestApplyFixedPlanRuntimeLimitsPreservesAsyncPollingBudget(t *testing.T) {
 			requiredPerStep,
 		)
 	}
-	requiredTotal := 2*cfg.MaxToolCallsPerStep + 4
+	requiredTotal := len(plan.Steps)*cfg.MaxToolCallsPerStep + 4
 	if cfg.MaxToolCalls < requiredTotal {
 		t.Fatalf("fixed plan total tool budget = %d, want at least %d", cfg.MaxToolCalls, requiredTotal)
+	}
+}
+
+func TestApplyFixedPlanRuntimeLimitsKeepsLongRunningScanObservable(t *testing.T) {
+	cfg := DefaultAgentRuntimeConfig(0)
+	plan := &ToolExecutionPlan{Steps: []ToolPlanStep{
+		{ToolName: "Host.Resolve"},
+		{ToolName: "Vulnerability.Scan.Start"},
+		{ToolName: "Vulnerability.Scan.Status"},
+	}}
+
+	profile := applyFixedPlanRuntimeLimits(&cfg, plan)
+
+	if profile != fixedPlanAsyncObservationLongRunning {
+		t.Fatalf("scan observation profile = %q, want %q", profile, fixedPlanAsyncObservationLongRunning)
+	}
+	if cfg.MaxAsyncPollAttempts < 190 {
+		t.Fatalf("scan async poll attempts = %d, want at least 190", cfg.MaxAsyncPollAttempts)
+	}
+	if cfg.TaskTimeout < 2*time.Hour {
+		t.Fatalf("scan task timeout = %s, want at least 2h", cfg.TaskTimeout)
+	}
+	requiredPerStep := cfg.MaxAsyncPollAttempts + fixedPlanAsyncCallOverhead
+	if cfg.MaxToolCallsPerStep < requiredPerStep {
+		t.Fatalf("scan per-step tool budget = %d, want at least %d", cfg.MaxToolCallsPerStep, requiredPerStep)
+	}
+	requiredTotal := len(plan.Steps)*cfg.MaxToolCallsPerStep + fixedPlanTotalCallReserve
+	if cfg.MaxToolCalls < requiredTotal {
+		t.Fatalf("scan total tool budget = %d, want at least %d", cfg.MaxToolCalls, requiredTotal)
 	}
 }
 

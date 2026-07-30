@@ -11,6 +11,11 @@ DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 EBPF_BUILDER_IMAGE="${EBPF_BUILDER_IMAGE:-aegis-agent-builder-ubi8:5.8.0}"
 AGENT_ARTIFACT_IMAGE="${AGENT_ARTIFACT_IMAGE:-aegis-agent-artifacts:release}"
 BUILDER_SERVICE_IMAGE="${BUILDER_SERVICE_IMAGE:-aegis-system/builder:latest}"
+USE_LOCAL_IMAGES="${USE_LOCAL_IMAGES:-0}"
+LOCAL_API_SERVER_IMAGE="${LOCAL_API_SERVER_IMAGE:-aegis-api-server:latest}"
+LOCAL_SERVER_IMAGE="${LOCAL_SERVER_IMAGE:-aegis-server:latest}"
+LOCAL_DC_IMAGE="${LOCAL_DC_IMAGE:-aegis-dc:latest}"
+LOCAL_FRONTEND_IMAGE="${LOCAL_FRONTEND_IMAGE:-aegis-frontend:latest}"
 
 info() {
   printf '[release] %s\n' "$*"
@@ -75,20 +80,7 @@ prepare_release_dir() {
     "${RELEASE_DIR}/backend/scripts"
 }
 
-build_agent_artifact() {
-  info "building shared eBPF builder image (${EBPF_BUILDER_IMAGE})"
-  docker build --platform "${DOCKER_PLATFORM}" \
-    -f "${ROOT_DIR}/docker/ebpf-builder-base/Dockerfile" \
-    -t "${EBPF_BUILDER_IMAGE}" \
-    "${ROOT_DIR}"
-
-  info "building Linux AMD64 agent artifacts inside ${EBPF_BUILDER_IMAGE}"
-  docker build --platform "${DOCKER_PLATFORM}" \
-    -f "${ROOT_DIR}/agent/Dockerfile" \
-    --build-arg "EBPF_BASE_IMAGE=${EBPF_BUILDER_IMAGE}" \
-    -t "${AGENT_ARTIFACT_IMAGE}" \
-    "${ROOT_DIR}/agent"
-
+extract_agent_artifact() {
   local agent_container
   agent_container="$(docker create "${AGENT_ARTIFACT_IMAGE}")"
   if ! docker cp "${agent_container}:/out/." "${RELEASE_DIR}/build-context/"; then
@@ -105,6 +97,23 @@ build_agent_artifact() {
   test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64" || die "missing Linux AMD64 agent binary"
   test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz" || die "missing Linux AMD64 agent archive"
   compgen -G "${RELEASE_DIR}/build-context/bpf/*.bpf.o" >/dev/null || die "missing eBPF objects from agent image"
+}
+
+build_agent_artifact() {
+  info "building shared eBPF builder image (${EBPF_BUILDER_IMAGE})"
+  docker build --platform "${DOCKER_PLATFORM}" \
+    -f "${ROOT_DIR}/docker/ebpf-builder-base/Dockerfile" \
+    -t "${EBPF_BUILDER_IMAGE}" \
+    "${ROOT_DIR}"
+
+  info "building Linux AMD64 agent artifacts inside ${EBPF_BUILDER_IMAGE}"
+  docker build --platform "${DOCKER_PLATFORM}" \
+    -f "${ROOT_DIR}/agent/Dockerfile" \
+    --build-arg "EBPF_BASE_IMAGE=${EBPF_BUILDER_IMAGE}" \
+    -t "${AGENT_ARTIFACT_IMAGE}" \
+    "${ROOT_DIR}/agent"
+
+  extract_agent_artifact
 }
 
 build_builder_service_image() {
@@ -838,6 +847,52 @@ copy_env_example() {
   cp "${ROOT_DIR}/.env.example" "${RELEASE_DIR}/.env.example"
 }
 
+require_local_image() {
+  docker image inspect "$1" >/dev/null 2>&1 || die "required local image is missing: $1"
+}
+
+reuse_local_image() {
+  local source_image="$1"
+  local release_image="$2"
+  local image_metadata
+
+  require_local_image "${source_image}"
+  image_metadata="$(docker image inspect --format '{{.Id}} created={{.Created}} platform={{.Os}}/{{.Architecture}}' "${source_image}")"
+  info "using local image ${source_image} (${image_metadata}) as ${release_image}"
+  if [ "${source_image}" != "${release_image}" ]; then
+    docker tag "${source_image}" "${release_image}"
+  fi
+}
+
+build_minio_with_agent_image() {
+  info "building MinIO image with preloaded agent artifact"
+  docker build --platform "${DOCKER_PLATFORM}" -f "${RELEASE_DIR}/Dockerfile.minio" -t aegis-system/minio-with-agent:latest "${RELEASE_DIR}"
+}
+
+prepare_local_images() {
+  info "reusing local Linux AMD64 images for the release"
+  reuse_local_image "${LOCAL_API_SERVER_IMAGE}" aegis-system/api-server:latest
+  reuse_local_image "${LOCAL_SERVER_IMAGE}" aegis-system/server:latest
+  reuse_local_image "${LOCAL_DC_IMAGE}" aegis-system/dc:latest
+  reuse_local_image "${LOCAL_FRONTEND_IMAGE}" aegis-system/frontend:latest
+
+  for image in \
+    "${AGENT_ARTIFACT_IMAGE}" \
+    "${BUILDER_SERVICE_IMAGE}" \
+    "${EBPF_BUILDER_IMAGE}" \
+    pgvector/pgvector:pg16 \
+    redis:7-alpine \
+    confluentinc/cp-kafka:7.5.0 \
+    confluentinc/cp-zookeeper:7.5.0 \
+    minio/minio:latest \
+    minio/mc:latest; do
+    require_local_image "${image}"
+  done
+
+  extract_agent_artifact
+  build_minio_with_agent_image
+}
+
 build_images() {
   info "building application images"
   docker build --platform "${DOCKER_PLATFORM}" -f "${ROOT_DIR}/api-server/Dockerfile" -t aegis-system/api-server:latest "${ROOT_DIR}/api-server"
@@ -854,8 +909,7 @@ build_images() {
   docker pull minio/minio:latest
   docker pull minio/mc:latest
 
-  info "building MinIO image with preloaded agent artifact"
-  docker build --platform "${DOCKER_PLATFORM}" -f "${RELEASE_DIR}/Dockerfile.minio" -t aegis-system/minio-with-agent:latest "${RELEASE_DIR}"
+  build_minio_with_agent_image
 }
 
 save_image() {
@@ -908,8 +962,18 @@ main() {
   require_cmd zip
   docker info >/dev/null 2>&1 || die "Docker daemon is not available"
 
-  build_agent_artifact
-  build_images
+  case "${USE_LOCAL_IMAGES}" in
+    0)
+      build_agent_artifact
+      build_images
+      ;;
+    1)
+      prepare_local_images
+      ;;
+    *)
+      die "USE_LOCAL_IMAGES must be 0 or 1, got: ${USE_LOCAL_IMAGES}"
+      ;;
+  esac
   export_images
   zip_release
 

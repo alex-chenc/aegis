@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"api-server/internal/assistant"
@@ -15,6 +16,7 @@ import (
 type WeakPasswordServiceForTools interface {
 	AnalyzeAssetApplications(ctx context.Context, req model.AnalyzeAssetApplicationsRequest, createdBy *uuid.UUID) (*service.AnalyzeAssetApplicationsResponse, error)
 	CreateTaskByApplication(ctx context.Context, req model.CreateTaskByApplicationRequest, createdBy *uuid.UUID) (*service.CreateTaskByApplicationResponse, error)
+	CreateTasksByApplications(ctx context.Context, req model.CreateTasksByApplicationsRequest, createdBy *uuid.UUID) (*service.CreateTasksByApplicationsResponse, error)
 	GenerateAIDictionary(ctx context.Context, req model.AIGenerateDictionaryRequest, createdBy *uuid.UUID) (*service.DictionarySummary, error)
 	GetTaskProgress(taskID uuid.UUID) (*model.TaskProgressResponse, error)
 	ListTaskCollectionProgress(taskID uuid.UUID, page, pageSize int) ([]service.WeakPasswordCollectionProgressDTO, int64, error)
@@ -119,6 +121,13 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 			Function:  "AnalyzeAssetApplications",
 			Notes:     "The backend enforces online_agents_only=true and deduplicates by host and application_type.",
 		},
+		ResultContract: assistant.ToolResultContract{
+			FactBindings: []assistant.ToolFactBinding{{
+				Kind:       "candidate_application_resolved",
+				ItemsField: "analysis.candidates",
+				IDField:    "candidate_application_id",
+			}},
+		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -171,28 +180,63 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Idempotent:         false,
 		DefaultWhitelisted: false,
 		Enabled:            true,
+		DefaultTimeout:     120 * time.Second,
+		ExecutionContract: assistant.ToolExecutionContract{
+			Mode:                 assistant.ToolExecutionAsynchronous,
+			CompletionCapability: "weak_password_progress",
+		},
+		ResultContract: assistant.ToolResultContract{
+			AcceptedOnSuccess: true,
+			FactBindings: []assistant.ToolFactBinding{{
+				Kind:       "task_resolved",
+				ItemsField: "created",
+				IDField:    "task_id",
+			}},
+		},
 		ServiceBinding: assistant.ServiceBinding{
 			Component: "weak_password_service",
 			File:      "api-server/internal/service/weak_password_service.go",
-			Function:  "CreateTaskByApplication",
+			Function:  "CreateTasksByApplications",
 		},
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"candidate_application_id": map[string]interface{}{"type": "string"},
+				"candidate_application_ids": map[string]interface{}{
+					"type":     "array",
+					"minItems": 1,
+					"items":    map[string]interface{}{"type": "string", "format": "uuid"},
+				},
 			},
-			"required": []string{"candidate_application_id"},
+			"required":             []string{"candidate_application_ids"},
+			"additionalProperties": false,
 		},
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			if deps.Service == nil {
 				return nil, fmt.Errorf("weak password service not configured")
 			}
-			req := model.CreateTaskByApplicationRequest{CandidateApplicationID: getStringArg(args, "candidate_application_id", "")}
+			candidateIDs, err := getStringSliceArg(args, "candidate_application_ids")
+			if err != nil || len(candidateIDs) == 0 {
+				return nil, fmt.Errorf("candidate_application_ids is required")
+			}
+			req := model.CreateTasksByApplicationsRequest{CandidateApplicationIDs: candidateIDs}
 			req.DictionaryPolicy.UseDefault1000 = true
 			req.AIPolicy.RepairCollectionErrors = true
 			req.AIPolicy.DetectionRounds = 10
 			req.AIPolicy.MaxAgentToolCallsPerApp = 10
-			return deps.Service.CreateTaskByApplication(ctx, req, nil)
+			resp, err := deps.Service.CreateTasksByApplications(ctx, req, nil)
+			if err != nil {
+				return nil, err
+			}
+			if resp == nil || len(resp.Created) == 0 {
+				return nil, fmt.Errorf("no weak-password assessment tasks were created")
+			}
+			return map[string]interface{}{
+				"status":      model.TaskStatusPending,
+				"created":     resp.Created,
+				"skipped":     resp.Skipped,
+				"next_action": "Monitor every created task_id with the progress companion tool until the aggregate status is terminal.",
+				"route_path":  "/risk/weak-password",
+			}, nil
 		},
 	}); err != nil {
 		return err
@@ -260,6 +304,33 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		Idempotent:         true,
 		DefaultWhitelisted: true,
 		Enabled:            true,
+		ResultContract: assistant.ToolResultContract{
+			OperationStatusField: "status",
+			// QueryProgress is a read-only observer. Every terminal workflow
+			// state is successful terminal evidence for the observation,
+			// while the raw status and failed-task details continue to
+			// describe the scan result.
+			SuccessValues: []string{
+				model.TaskStatusCompleted,
+				model.TaskStatusPartialFailed,
+				model.TaskStatusFailed,
+				model.TaskStatusCancelled,
+			},
+			PendingValues: []string{
+				model.TaskStatusPending,
+				model.TaskStatusAnalyzingAssets,
+				model.TaskStatusCollectingCredentials,
+				model.TaskStatusRepairingCollection,
+				model.TaskStatusMatching,
+				"running",
+			},
+			SatisfiesCapabilities: []string{"weak_password_scan"},
+			FactBindings: []assistant.ToolFactBinding{{
+				Kind:       "task_resolved",
+				ItemsField: "tasks",
+				IDField:    "task_id",
+			}},
+		},
 		ServiceBinding: assistant.ServiceBinding{
 			Component: "weak_password_service",
 			File:      "api-server/internal/service/weak_password_service.go",
@@ -268,39 +339,79 @@ func RegisterWeakPasswordTools(registry *assistant.ToolRegistry, deps WeakPasswo
 		ArgsSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"task_id":   map[string]interface{}{"type": "string"},
+				"task_ids": map[string]interface{}{
+					"type":     "array",
+					"minItems": 1,
+					"items":    map[string]interface{}{"type": "string", "format": "uuid"},
+				},
 				"page_size": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
 			},
-			"required": []string{"task_id"},
+			"required":             []string{"task_ids"},
+			"additionalProperties": false,
 		},
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			_ = ctx
 			if deps.Service == nil {
 				return nil, fmt.Errorf("weak password service not configured")
 			}
-			taskID, err := uuid.Parse(getStringArg(args, "task_id", ""))
-			if err != nil {
-				return nil, fmt.Errorf("invalid task_id: %w", err)
+			rawTaskIDs, err := getStringSliceArg(args, "task_ids")
+			if err != nil || len(rawTaskIDs) == 0 {
+				return nil, fmt.Errorf("task_ids is required")
 			}
 			pageSize := getIntArg(args, "page_size", 20)
 			if pageSize <= 0 || pageSize > 50 {
 				pageSize = 20
 			}
-			progress, err := deps.Service.GetTaskProgress(taskID)
-			if err != nil {
-				return nil, err
+			tasks := make([]map[string]interface{}, 0, len(rawTaskIDs))
+			progresses := make([]*model.TaskProgressResponse, 0, len(rawTaskIDs))
+			var collectionTotal int64
+			matchedFindings := 0
+			for _, rawTaskID := range rawTaskIDs {
+				taskID, err := uuid.Parse(rawTaskID)
+				if err != nil {
+					return nil, fmt.Errorf("invalid task_id %q: %w", rawTaskID, err)
+				}
+				progress, err := deps.Service.GetTaskProgress(taskID)
+				if err != nil {
+					return nil, err
+				}
+				items, total, err := deps.Service.ListTaskCollectionProgress(taskID, 1, pageSize)
+				if err != nil {
+					return nil, err
+				}
+				progresses = append(progresses, progress)
+				matchedFindings += progress.MatchedFindings
+				collectionTotal += total
+				tasks = append(tasks, map[string]interface{}{
+					"task_id":                   taskID.String(),
+					"task_progress":             progress,
+					"collection_progress":       items,
+					"collection_progress_total": total,
+				})
 			}
-			items, total, err := deps.Service.ListTaskCollectionProgress(taskID, 1, pageSize)
-			if err != nil {
-				return nil, err
+			summary := summarizeWeakPasswordTaskProgresses(progresses)
+			result := map[string]interface{}{
+				"status":                    summary.status,
+				"task_ids":                  rawTaskIDs,
+				"tasks":                     tasks,
+				"task_total":                summary.total,
+				"task_completed":            summary.completed,
+				"task_failed":               summary.failed,
+				"task_running":              summary.running,
+				"failed_tasks":              summary.failedTasks,
+				"collection_progress_total": collectionTotal,
+				"matched_findings":          matchedFindings,
+				"next_action":               "Poll again while any task is active. On terminal failure, inspect error_code and error_message in the per-task collection progress.",
+				"route_path":                "/risk/weak-password",
 			}
-			return map[string]interface{}{
-				"task_progress":             progress,
-				"collection_progress":       items,
-				"collection_progress_total": total,
-				"next_action":               "Poll again while collection or matching is active. On failure, inspect error_code and error_message in collection_progress.",
-				"route_path":                "/risk/weak-password/tasks/" + taskID.String(),
-			}, nil
+			// Preserve the single-task projection for callers that display the
+			// original progress payload while the assistant uses batch status.
+			if len(tasks) == 1 {
+				result["task_progress"] = tasks[0]["task_progress"]
+				result["collection_progress"] = tasks[0]["collection_progress"]
+				result["route_path"] = "/risk/weak-password/tasks/" + rawTaskIDs[0]
+			}
+			return result, nil
 		},
 	}); err != nil {
 		return err
@@ -343,4 +454,64 @@ func getOptionalStringSliceArg(args map[string]interface{}, key string) []string
 		return nil
 	}
 	return values
+}
+
+func aggregateWeakPasswordTaskStatus(progresses []*model.TaskProgressResponse) string {
+	return summarizeWeakPasswordTaskProgresses(progresses).status
+}
+
+type weakPasswordTaskProgressSummary struct {
+	status      string
+	total       int
+	completed   int
+	failed      int
+	running     int
+	failedTasks []map[string]interface{}
+}
+
+func summarizeWeakPasswordTaskProgresses(progresses []*model.TaskProgressResponse) weakPasswordTaskProgressSummary {
+	summary := weakPasswordTaskProgressSummary{
+		total:       len(progresses),
+		failedTasks: make([]map[string]interface{}, 0),
+	}
+	if len(progresses) == 0 {
+		summary.status = model.TaskStatusFailed
+		return summary
+	}
+	for _, progress := range progresses {
+		if progress == nil {
+			summary.failed++
+			continue
+		}
+		switch progress.Status {
+		case model.TaskStatusCompleted:
+			summary.completed++
+		case model.TaskStatusPartialFailed, model.TaskStatusFailed, model.TaskStatusCancelled:
+			summary.failed++
+			errorCode := strings.TrimSpace(progress.LastErrorCode)
+			if errorCode == "" {
+				errorCode = strings.TrimSpace(progress.CurrentStage)
+			}
+			summary.failedTasks = append(summary.failedTasks, map[string]interface{}{
+				"task_id":          progress.TaskID,
+				"application_name": progress.CurrentApplication,
+				"status":           progress.Status,
+				"error_code":       errorCode,
+				"error_message":    strings.TrimSpace(progress.Message),
+			})
+		default:
+			summary.running++
+		}
+	}
+	switch {
+	case summary.running > 0:
+		summary.status = "running"
+	case summary.failed == 0:
+		summary.status = model.TaskStatusCompleted
+	case summary.completed == 0:
+		summary.status = model.TaskStatusFailed
+	default:
+		summary.status = model.TaskStatusPartialFailed
+	}
+	return summary
 }

@@ -2076,13 +2076,15 @@ func (s *WeakPasswordService) GetTaskProgress(taskID uuid.UUID) (*model.TaskProg
 		lastErr = call.ErrorCode
 	}
 	resp := &model.TaskProgressResponse{
-		TaskID:        task.ID.String(),
-		Status:        task.Status,
-		Progress:      task.Progress,
-		CurrentStage:  task.CurrentStage,
-		Message:       task.CurrentStage,
-		LastAgentTool: lastTool,
-		LastErrorCode: lastErr,
+		TaskID:             task.ID.String(),
+		Status:             task.Status,
+		Progress:           task.Progress,
+		CurrentStage:       task.CurrentStage,
+		MatchedFindings:    task.MatchedFindings,
+		FailedApplications: task.FailedApplications,
+		Message:            task.CurrentStage,
+		LastAgentTool:      lastTool,
+		LastErrorCode:      lastErr,
 	}
 	if app != nil {
 		resp.CurrentHostID = app.HostID.String()

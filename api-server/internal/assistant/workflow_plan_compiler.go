@@ -12,6 +12,7 @@ const (
 	assetInventoryWorkflowID            = "asset_inventory"
 	vulnerabilityAssessmentWorkflowID   = "vulnerability_assessment"
 	vulnerabilityRemediationWorkflowID  = "vulnerability_remediation"
+	weakPasswordAssessmentWorkflowID    = "weak_password_assessment"
 	detectionPackageLifecycleWorkflowID = "detection_package_lifecycle"
 )
 
@@ -68,6 +69,7 @@ func NewWorkflowPlanCompilerRegistry() *WorkflowPlanCompilerRegistry {
 	registry.Register(&AssetInventoryCompiler{})
 	registry.Register(&VulnerabilityAssessmentCompiler{})
 	registry.Register(&VulnerabilityRemediationCompiler{})
+	registry.Register(&WeakPasswordAssessmentCompiler{})
 	registry.Register(&DetectionPackageLifecycleCompiler{})
 	return registry
 }
@@ -458,6 +460,170 @@ func (c *VulnerabilityAssessmentCompiler) buildStatusStep(input WorkflowCompileI
 		Postconditions: contract.Postconditions,
 		Condition:      "requires previous step to produce: scan_id",
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Weak-password assessment compiler
+// ---------------------------------------------------------------------------
+
+// WeakPasswordAssessmentCompiler turns a weak-password request into a typed
+// host-resolution, candidate-analysis, batch-task, and aggregate-progress
+// workflow. Candidate and task IDs always come from prior tool evidence; the
+// model is never asked to regenerate those references.
+type WeakPasswordAssessmentCompiler struct{}
+
+func (c *WeakPasswordAssessmentCompiler) WorkflowID() string {
+	return weakPasswordAssessmentWorkflowID
+}
+
+func (c *WeakPasswordAssessmentCompiler) Compile(input WorkflowCompileInput) (*WorkflowCompileResult, error) {
+	breakdown := input.Breakdown
+	if breakdown == nil || !containsExactString(input.AcceptedTools, "Credential.WeakPassword.Scan") {
+		return nil, nil
+	}
+	for _, toolName := range []string{
+		"Credential.WeakPassword.AnalyzeApplications",
+		"Credential.WeakPassword.QueryProgress",
+	} {
+		if !containsExactString(input.AcceptedTools, toolName) {
+			return nil, newCompilePlanError(
+				"completion_contract",
+				"Credential.WeakPassword.Scan",
+				"completion_capability",
+				fmt.Sprintf("weak-password assessment requires the mapped %s tool", toolName),
+			)
+		}
+	}
+
+	scenario, hostIDs, selectors := classifyAssetScope(breakdown)
+	steps := make([]ToolPlanStep, 0, 4)
+	switch scenario {
+	case "all_hosts":
+		// AnalyzeAssetApplications owns the all-online-hosts selection and
+		// deduplication semantic, so a separate Host.Resolve step is unnecessary.
+		steps = append(steps, c.buildAnalyzeStep(input, nil, false))
+	case "exact_uuids":
+		steps = append(steps, c.buildAnalyzeStep(input, dedupeStrings(hostIDs), false))
+	case "selector":
+		if !containsExactString(input.AcceptedTools, "Host.Resolve") {
+			return &WorkflowCompileResult{Clarification: localizedClarification(
+				breakdown,
+				"无法解析弱口令检查目标。请提供精确的主机 UUID，或先提供可解析的主机名/IP。",
+				"Unable to resolve weak-password targets. Provide exact host UUIDs or a resolvable hostname/IP.",
+			)}, nil
+		}
+		steps = append(steps, c.buildResolveStep(input, selectors))
+		steps = append(steps, c.buildAnalyzeStep(input, nil, true))
+	default:
+		return &WorkflowCompileResult{Clarification: localizedClarification(
+			breakdown,
+			"弱口令检查需要明确的目标：主机 UUID、主机名/IP，或所有在线主机。请补充检查范围。",
+			"Weak-password assessment requires exact host UUIDs, hostnames/IPs, or all online hosts. Please specify the target scope.",
+		)}, nil
+	}
+
+	steps = append(steps, c.buildScanStep(input), c.buildProgressStep(input))
+	return &WorkflowCompileResult{Steps: steps}, nil
+}
+
+func (c *WeakPasswordAssessmentCompiler) buildResolveStep(input WorkflowCompileInput, selectors []string) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName("Host.Resolve")
+	return ToolPlanStep{
+		ToolName:         "Host.Resolve",
+		Capability:       "resolve_hosts",
+		Args:             map[string]interface{}{"host_selectors": dedupeStrings(selectors), "require_online": true},
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           "Resolve weak-password assessment targets to exact online host UUIDs.",
+		ArgSources: map[string]ArgSource{
+			"host_selectors": {SourceType: "user_message", SourceRef: "host_selector", Confidence: 0.8},
+			"require_online": {SourceType: "policy_default", SourceRef: "weak_password_targets", Confidence: 1},
+		},
+		Preconditions:  contract.Preconditions,
+		Postconditions: contract.Postconditions,
+	}
+}
+
+func (c *WeakPasswordAssessmentCompiler) buildAnalyzeStep(input WorkflowCompileInput, hostIDs []string, fromPreviousStep bool) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName("Credential.WeakPassword.AnalyzeApplications")
+	args := map[string]interface{}{"online_agents_only": true}
+	argSources := map[string]ArgSource{
+		"online_agents_only": {SourceType: "policy_default", SourceRef: "online_weak_password_targets", Confidence: 1},
+	}
+	condition := ""
+	if fromPreviousStep {
+		argSources["host_ids"] = ArgSource{SourceType: "previous_step", SourceRef: "host", Confidence: 0.5}
+		condition = "requires previous step to produce: host_ids"
+	} else if len(hostIDs) > 0 {
+		args["host_ids"] = dedupeStrings(hostIDs)
+		argSources["host_ids"] = ArgSource{SourceType: "intent_scope", SourceRef: "host_uuid", Confidence: 0.95}
+	}
+	if applicationTypes := weakPasswordApplicationTypes(input.Breakdown); len(applicationTypes) > 0 {
+		args["application_types"] = applicationTypes
+		argSources["application_types"] = ArgSource{SourceType: "intent_parameter", SourceRef: "application_types", Confidence: 0.9}
+	}
+	return ToolPlanStep{
+		ToolName:         "Credential.WeakPassword.AnalyzeApplications",
+		Capability:       "weak_password_asset_analysis",
+		Args:             args,
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           "Analyze password-authenticated application candidates on validated online hosts.",
+		ArgSources:       argSources,
+		Preconditions:    contract.Preconditions,
+		Postconditions:   contract.Postconditions,
+		Condition:        condition,
+	}
+}
+
+func (c *WeakPasswordAssessmentCompiler) buildScanStep(input WorkflowCompileInput) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName("Credential.WeakPassword.Scan")
+	return ToolPlanStep{
+		ToolName:         "Credential.WeakPassword.Scan",
+		Capability:       "weak_password_scan",
+		Args:             map[string]interface{}{},
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           "Create weak-password assessment tasks for every candidate produced by analysis.",
+		ArgSources: map[string]ArgSource{
+			"candidate_application_ids": {SourceType: "previous_step", SourceRef: "candidate_application", Confidence: 0.5},
+		},
+		Preconditions:  contract.Preconditions,
+		Postconditions: contract.Postconditions,
+		Condition:      "requires previous step to produce: candidate_application_ids",
+	}
+}
+
+func (c *WeakPasswordAssessmentCompiler) buildProgressStep(input WorkflowCompileInput) ToolPlanStep {
+	contract, _ := input.Mapper.ContractForToolName("Credential.WeakPassword.QueryProgress")
+	return ToolPlanStep{
+		ToolName:         "Credential.WeakPassword.QueryProgress",
+		Capability:       "weak_password_progress",
+		Args:             map[string]interface{}{},
+		Risk:             contract.Risk,
+		RequiresApproval: contract.RequiresApproval,
+		Reason:           "Poll every created weak-password task until the aggregate workflow reaches a terminal state.",
+		ArgSources: map[string]ArgSource{
+			"task_ids": {SourceType: "previous_step", SourceRef: "task", Confidence: 0.5},
+		},
+		Preconditions:  contract.Preconditions,
+		Postconditions: contract.Postconditions,
+		Condition:      "requires previous step to produce: task_ids",
+	}
+}
+
+func weakPasswordApplicationTypes(breakdown *IntentBreakdown) []string {
+	if breakdown == nil {
+		return nil
+	}
+	for _, key := range []string{"application_types", "application_type"} {
+		if value, ok := breakdown.Parameters[key]; ok {
+			if values := dedupeStrings(toStringSlice(value)); len(values) > 0 {
+				return values
+			}
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

@@ -410,6 +410,8 @@ type TaskProgressResponse struct {
 	MaxAgentToolCalls  int    `json:"max_agent_tool_calls"`
 	LastAgentTool      string `json:"last_agent_tool"`
 	LastErrorCode      string `json:"last_error_code"`
+	MatchedFindings    int    `json:"matched_findings"`
+	FailedApplications int    `json:"failed_applications"`
 	Message            string `json:"message"`
 }
 

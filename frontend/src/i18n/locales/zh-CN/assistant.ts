@@ -12,6 +12,12 @@ export default {
     running: '业务操作仍在执行。',
     failed: '业务操作执行失败，详情见返回结果。',
     skipped: '业务操作已跳过。',
+    weakPasswordCompleted: '已完成',
+    weakPasswordPartialFailed: '部分失败',
+    weakPasswordFailed: '失败',
+    weakPasswordCancelled: '已取消',
+    weakPasswordRunning: '执行中',
+    weakPasswordProgress: '弱密码扫描{status}：总计 {total}，完成 {completed}，失败 {failed}，运行中 {running}，命中 {findings} 条。',
   },
   step: {
     completed: '已完成',

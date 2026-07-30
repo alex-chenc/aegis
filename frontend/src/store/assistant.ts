@@ -1436,11 +1436,37 @@ export const useAssistantStore = defineStore('assistant', () => {
   function summarizeToolResult(result: any) {
     if (typeof result === 'string') return result
     if (result === undefined || result === null) return ''
+    const weakPasswordSummary = summarizeWeakPasswordProgressResult(result)
+    if (weakPasswordSummary) return weakPasswordSummary
     try {
       return JSON.stringify(result).slice(0, 500)
     } catch {
       return String(result).slice(0, 500)
     }
+  }
+
+  function summarizeWeakPasswordProgressResult(result: any) {
+    if (!result || typeof result !== 'object') return ''
+    if (typeof result.status !== 'string' || typeof result.task_total !== 'number') return ''
+
+    const statusLabels: Record<string, string> = {
+      completed: translate('assistant.outcome.weakPasswordCompleted'),
+      partial_failed: translate('assistant.outcome.weakPasswordPartialFailed'),
+      failed: translate('assistant.outcome.weakPasswordFailed'),
+      cancelled: translate('assistant.outcome.weakPasswordCancelled'),
+      running: translate('assistant.outcome.weakPasswordRunning'),
+    }
+    const status = statusLabels[result.status]
+    if (!status) return ''
+
+    return translate('assistant.outcome.weakPasswordProgress', {
+      status,
+      total: result.task_total,
+      completed: Number(result.task_completed || 0),
+      failed: Number(result.task_failed || 0),
+      running: Number(result.task_running || 0),
+      findings: Number(result.matched_findings || 0),
+    })
   }
 
   function normalizeAssistantPlan(plan: Partial<AssistantPlan> & Record<string, any>): NonNullable<AssistantMessage['plan']> {

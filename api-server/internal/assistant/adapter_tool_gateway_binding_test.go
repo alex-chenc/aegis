@@ -237,6 +237,38 @@ func TestAssistantToolGatewayAllowsOnlyMappedCompletionToolAndBindsCurrentStepOu
 	}
 }
 
+func TestAssistantToolGatewayRetainsPluralReferenceFactsAcrossCompletionPolls(t *testing.T) {
+	gateway := &AssistantToolGatewayAdapter{
+		executionPlan: &ToolExecutionPlan{Steps: []ToolPlanStep{{
+			StepID:   "authorized_01",
+			ToolName: "Example.Batch.Start",
+		}}},
+		priorStepOutcomes: make(map[string]capturedStepOutcome),
+		logger:            zap.NewNop(),
+	}
+	gateway.captureStepOutcome("authorized_01", "Example.Batch.Start", &agentruntime.ToolOutcome{
+		OperationStatus: agentruntime.OperationAccepted,
+		Terminal:        false,
+		Facts: []map[string]interface{}{
+			{"kind": "task_resolved", "id": "task-1"},
+			{"kind": "task_resolved", "id": "task-2"},
+		},
+	})
+
+	// Completion responses commonly contain only aggregate progress. Replacing
+	// the current-step outcome must not discard plural references required by
+	// the next automatic poll.
+	gateway.captureStepOutcome("authorized_01", "Example.Batch.Progress", &agentruntime.ToolOutcome{
+		OperationStatus: agentruntime.OperationRunning,
+		Terminal:        false,
+	})
+
+	ids, ok := resolveEntityIDsFromFacts(gateway.orderedPriorOutcomes("authorized_01", true), "task_ids")
+	if !ok || len(ids) != 2 || ids[0] != "task-1" || ids[1] != "task-2" {
+		t.Fatalf("completion polling lost plural task references: %#v", ids)
+	}
+}
+
 // TestAssistantToolGatewaySkipsStepWhenPreviousStepArgUnresolvable verifies
 // that a step whose required previous_step argument cannot be resolved (its
 // producer did not run) is skipped rather than dispatched with a model-invented

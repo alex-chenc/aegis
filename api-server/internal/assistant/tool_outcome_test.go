@@ -80,6 +80,25 @@ func TestNormalizeToolOutcomeUsesTerminalStatusEvidence(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolOutcomeCompletesSuccessfulObservationOfTerminalFailure(t *testing.T) {
+	tool := &ToolSpec{
+		Name:       "Example.QueryProgress",
+		Capability: "query_progress",
+		ResultContract: ToolResultContract{
+			OperationStatusField: "status",
+			SuccessValues:        []string{"completed", "partial_failed", "failed", "cancelled"},
+			PendingValues:        []string{"pending", "running"},
+		},
+	}
+
+	for _, observedStatus := range []string{"partial_failed", "failed", "cancelled"} {
+		outcome := normalizeToolOutcome(tool, map[string]interface{}{"status": observedStatus})
+		if outcome.OperationStatus != agentruntime.OperationSucceeded || !outcome.Terminal {
+			t.Fatalf("status %q produced outcome %#v, want terminal successful observation", observedStatus, outcome)
+		}
+	}
+}
+
 func TestNormalizeToolOutcomeRejectsMissingDeclaredStatusEvidence(t *testing.T) {
 	tool := &ToolSpec{
 		Capability: "get_example_status",

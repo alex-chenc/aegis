@@ -228,6 +228,13 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 			a.onToolResult(result.CallID, result.Data, outcome)
 		}
 		if asyncPoll && outcome.Terminal && a.logger != nil {
+			observedStatus := ""
+			if tool != nil && tool.ResultContract.OperationStatusField != "" {
+				observedStatus = strings.ToLower(strings.TrimSpace(resultStringAtPath(
+					resultMap(result.Data),
+					tool.ResultContract.OperationStatusField,
+				)))
+			}
 			a.logger.Info("assistant asynchronous operation reached terminal state",
 				zap.String("session_id", a.sessionID),
 				zap.String("run_id", a.runID),
@@ -235,6 +242,7 @@ func (a *AssistantToolGatewayAdapter) Call(ctx context.Context, req agentruntime
 				zap.String("tool_name", result.ToolName),
 				zap.String("poll_attempt", pollAttempt),
 				zap.String("operation_status", string(outcome.OperationStatus)),
+				zap.String("observed_status", observedStatus),
 			)
 		}
 		return agentruntime.ToolResponse{
@@ -699,8 +707,16 @@ func (a *AssistantToolGatewayAdapter) captureStepOutcome(stepID, toolName string
 		terminal:     outcome.Terminal,
 	}
 	a.outcomesMu.Lock()
-	if existing, ok := a.priorStepOutcomes[stepID]; ok && len(captured.operationRef) == 0 {
-		captured.operationRef = existing.operationRef
+	if existing, ok := a.priorStepOutcomes[stepID]; ok {
+		if len(captured.operationRef) == 0 {
+			captured.operationRef = existing.operationRef
+		}
+		if len(captured.sideEffects) == 0 {
+			captured.sideEffects = existing.sideEffects
+		}
+		if len(captured.facts) == 0 {
+			captured.facts = existing.facts
+		}
 	}
 	a.priorStepOutcomes[stepID] = captured
 	a.outcomesMu.Unlock()

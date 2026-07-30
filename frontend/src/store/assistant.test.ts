@@ -1331,6 +1331,48 @@ describe('assistant store stream events', () => {
     expect(store.toolCalls[0].error_message).toContain('业务操作执行失败')
   })
 
+  it('displays a terminal partial weak-password result without marking the query as failed', () => {
+    const store = useAssistantStore()
+    store.currentSession = { ...session }
+
+    store.applyStreamEvent({
+      type: 'tool_call',
+      session_id: 'session-1',
+      run_id: 'run-weak-password',
+      payload: {
+        call_id: 'call-weak-password-progress',
+        tool_name: 'Credential.WeakPassword.QueryProgress',
+        args: { task_ids: ['task-1', 'task-2'] },
+      },
+    })
+    store.applyStreamEvent({
+      type: 'tool_result',
+      session_id: 'session-1',
+      run_id: 'run-weak-password',
+      payload: {
+        call_id: 'call-weak-password-progress',
+        result: {
+          status: 'partial_failed',
+          task_total: 6,
+          task_completed: 2,
+          task_failed: 4,
+          task_running: 0,
+          matched_findings: 2,
+        },
+        operation_status: 'succeeded',
+        terminal: true,
+      },
+    })
+
+    expect(store.toolCalls).toHaveLength(1)
+    expect(store.toolCalls[0].status).toBe('completed')
+    expect(store.toolCalls[0].error_message).toBeFalsy()
+    expect(store.toolCalls[0].result_summary).toContain('部分失败')
+    expect(store.toolCalls[0].result_summary).toContain('总计 6')
+    expect(store.toolCalls[0].result_summary).toContain('失败 4')
+    expect(store.toolCalls[0].result_summary).toContain('命中 2')
+  })
+
   it('does not mark a failed goal as a completed session when the stream closes', () => {
     const store = useAssistantStore()
     store.currentSession = { ...session }

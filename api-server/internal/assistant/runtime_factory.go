@@ -183,6 +183,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 	// 8. 构建 agent-runtime 配置
 	runtimeConfig := DefaultAgentRuntimeConfig(req.MaxIterations)
 	profile := "assistant"
+	asyncObservationProfile := fixedPlanAsyncObservationNotApplicable
 	if req.UseAIAnalysisFlow {
 		runtimeConfig = DefaultAIAnalysisRuntimeConfig(req.MaxIterations)
 		profile = "ai_analysis"
@@ -191,7 +192,7 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		if len(req.ExecutionPlan.Steps) > runtimeConfig.MaxPlanSteps {
 			runtimeConfig.MaxPlanSteps = len(req.ExecutionPlan.Steps)
 		}
-		applyFixedPlanRuntimeLimits(&runtimeConfig, len(req.ExecutionPlan.Steps))
+		asyncObservationProfile = applyFixedPlanRuntimeLimits(&runtimeConfig, req.ExecutionPlan)
 		runtimeConfig.MaxToolFailures = 3
 		runtimeConfig.EnableAudit = false
 		runtimeConfig.EnableCorrection = false
@@ -226,6 +227,8 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		zap.Int("max_tool_calls", runtimeConfig.MaxToolCalls),
 		zap.Int("max_tool_calls_per_step", runtimeConfig.MaxToolCallsPerStep),
 		zap.Int("max_async_poll_attempts", runtimeConfig.MaxAsyncPollAttempts),
+		zap.String("async_observation_profile", asyncObservationProfile),
+		zap.Duration("task_timeout", runtimeConfig.TaskTimeout),
 	)
 
 	// 9. 创建 TaskRouter（智能提示词路由）
@@ -406,26 +409,44 @@ func (f *RuntimeFactory) buildUserContext(contextRefs []ContextRefResult) map[st
 }
 
 const (
-	fixedPlanBaseToolCallsPerStep = 6
+	fixedPlanBaseToolCallsPerStep          = 6
+	fixedPlanAsyncObservationDefault       = "default"
+	fixedPlanAsyncObservationLongRunning   = "long_running_scan"
+	fixedPlanAsyncObservationNotApplicable = "not_applicable"
 	// Fixed workflows include operations such as asset application analysis that
 	// normally take several minutes. With the bounded exponential backoff in the
 	// runtime, 24 automatic polls provide roughly a ten-minute observation
 	// window without turning a stuck operation into an unbounded session.
-	fixedPlanMaxAsyncPollAttempts = 24
-	fixedPlanAsyncCallOverhead    = 2 // primary operation plus initial completion lookup
-	fixedPlanTotalCallReserve     = 4
+	fixedPlanDefaultMaxAsyncPollAttempts = 24
+	// Vulnerability and weak-password scans are batch workflows whose normal
+	// duration can exceed one hour. With the 30-second capped backoff, 190
+	// automatic polls provide roughly 93 minutes of observation while the
+	// two-hour task timeout remains the final deterministic boundary.
+	fixedPlanLongRunningMaxAsyncPollAttempts = 190
+	fixedPlanLongRunningTaskTimeout          = 2 * time.Hour
+	fixedPlanAsyncCallOverhead               = 2 // primary operation plus initial completion lookup
+	fixedPlanTotalCallReserve                = 4
 )
 
 // applyFixedPlanRuntimeLimits keeps the generic tool-call limiter from
 // pre-empting the separately bounded asynchronous completion loop. Runtime
 // counts automatic completion polls as ordinary tool calls, so both the
 // per-step and total budgets must be large enough for every configured poll.
-func applyFixedPlanRuntimeLimits(config *agentruntime.RuntimeConfig, stepCount int) {
-	if config == nil || stepCount <= 0 {
-		return
+func applyFixedPlanRuntimeLimits(config *agentruntime.RuntimeConfig, plan *ToolExecutionPlan) string {
+	if config == nil || plan == nil || len(plan.Steps) == 0 {
+		return fixedPlanAsyncObservationNotApplicable
 	}
-	if config.MaxAsyncPollAttempts < fixedPlanMaxAsyncPollAttempts {
-		config.MaxAsyncPollAttempts = fixedPlanMaxAsyncPollAttempts
+	observationProfile := fixedPlanAsyncObservationDefault
+	requiredPollAttempts := fixedPlanDefaultMaxAsyncPollAttempts
+	if fixedPlanContainsLongRunningScan(plan) {
+		observationProfile = fixedPlanAsyncObservationLongRunning
+		requiredPollAttempts = fixedPlanLongRunningMaxAsyncPollAttempts
+		if config.TaskTimeout < fixedPlanLongRunningTaskTimeout {
+			config.TaskTimeout = fixedPlanLongRunningTaskTimeout
+		}
+	}
+	if config.MaxAsyncPollAttempts < requiredPollAttempts {
+		config.MaxAsyncPollAttempts = requiredPollAttempts
 	}
 	perStepBudget := fixedPlanBaseToolCallsPerStep
 	asyncBudget := config.MaxAsyncPollAttempts + fixedPlanAsyncCallOverhead
@@ -433,7 +454,21 @@ func applyFixedPlanRuntimeLimits(config *agentruntime.RuntimeConfig, stepCount i
 		perStepBudget = asyncBudget
 	}
 	config.MaxToolCallsPerStep = perStepBudget
-	config.MaxToolCalls = stepCount*perStepBudget + fixedPlanTotalCallReserve
+	config.MaxToolCalls = len(plan.Steps)*perStepBudget + fixedPlanTotalCallReserve
+	return observationProfile
+}
+
+func fixedPlanContainsLongRunningScan(plan *ToolExecutionPlan) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		switch step.ToolName {
+		case "Vulnerability.Scan.Start", "Credential.WeakPassword.Scan":
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultAgentRuntimeConfig 默认 agent-runtime 配置（对齐设计文档 4.4 节）

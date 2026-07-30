@@ -114,6 +114,62 @@ func TestCapabilityCatalogUsesClosedSelectedWorkflowAllowlist(t *testing.T) {
 	}
 }
 
+func TestWeakPasswordWorkflowCatalogIncludesHostResolution(t *testing.T) {
+	toolRegistry := NewToolRegistry()
+	for _, tool := range []*ToolSpec{
+		{
+			Name:               "Host.Resolve",
+			Domain:             DomainHost,
+			Operation:          OpGet,
+			Capability:         "resolve_hosts",
+			Description:        "Resolve host selectors.",
+			ObjectTypes:        []string{"host"},
+			Risk:               ToolRiskReadonly,
+			Enabled:            true,
+			DefaultWhitelisted: true,
+			ArgsSchema:         map[string]interface{}{"type": "object"},
+			Handler:            func(context.Context, map[string]interface{}) (interface{}, error) { return nil, nil },
+		},
+		{
+			Name:        "Credential.WeakPassword.Scan",
+			Domain:      DomainDetection,
+			Operation:   OpExecute,
+			Capability:  "weak_password_scan",
+			Description: "Start a weak-password assessment.",
+			ObjectTypes: []string{"candidate_application"},
+			Risk:        ToolRiskMedium,
+			Enabled:     true,
+			ArgsSchema:  map[string]interface{}{"type": "object"},
+			Handler:     func(context.Context, map[string]interface{}) (interface{}, error) { return nil, nil },
+		},
+	} {
+		if err := toolRegistry.Register(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	workflows, err := NewWorkflowRegistry().Resolve([]string{weakPasswordAssessmentWorkflowID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := (&Orchestrator{toolRegistry: toolRegistry}).buildCapabilityCatalog(
+		IntentResult{
+			Domains:     []string{"asset"},
+			ObjectTypes: []string{"host"},
+			WorkflowIDs: []string{weakPasswordAssessmentWorkflowID},
+		},
+		nil,
+		workflows,
+	)
+	got := make(map[string]bool, len(catalog))
+	for _, item := range catalog {
+		got[item.Capability] = true
+	}
+	if !got["resolve_hosts"] {
+		t.Fatalf("weak-password workflow must expose host resolution for hostname/IP targets: %#v", got)
+	}
+}
+
 func TestCapabilityCatalogIncludesSelectedMultiWorkflowCapabilities(t *testing.T) {
 	toolRegistry := NewToolRegistry()
 	for _, tool := range []*ToolSpec{

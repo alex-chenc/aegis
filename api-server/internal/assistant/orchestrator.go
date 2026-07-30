@@ -813,7 +813,7 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 	evidenceConflicts = append(evidenceConflicts, validateRuntimeEvidenceConsistency(response, evidence)...)
 	evidenceConflicts = dedupeStrings(evidenceConflicts)
 	if len(evidenceConflicts) > 0 {
-		o.logger.Warn("assistant final answer contradicted runtime tool evidence",
+		o.logger.Warn("assistant final answer conflicted with or omitted runtime tool evidence",
 			zap.String("session_id", input.SessionID),
 			zap.String("run_id", input.RunID),
 			zap.String("message_id", msgID),

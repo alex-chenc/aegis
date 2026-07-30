@@ -20,19 +20,37 @@ type runtimeToolEvidence struct {
 }
 
 type runtimeEvidenceLedger struct {
-	Calls                   []runtimeToolEvidence `json:"calls"`
-	ActualToolNames         []string              `json:"actual_tool_names"`
-	FailedToolNames         []string              `json:"failed_tool_names,omitempty"`
-	VulnerabilityCount      int                   `json:"vulnerability_count"`
-	OnlineHostCount         int                   `json:"online_host_count"`
-	GeneratedScriptTypes    []string              `json:"generated_script_types,omitempty"`
-	TaskGroupIDs            []string              `json:"task_group_ids,omitempty"`
-	VulnerabilityWorkflow   bool                  `json:"vulnerability_workflow"`
-	AssetCollectionTaskIDs  []string              `json:"asset_collection_task_ids,omitempty"`
-	AssetCollectionTerminal bool                  `json:"asset_collection_terminal,omitempty"`
-	AssetCollectionCoverage map[string]int        `json:"asset_collection_coverage,omitempty"`
-	DetectionPackageID      string                `json:"detection_package_id,omitempty"`
-	DetectionPackageStatus  string                `json:"detection_package_status,omitempty"`
+	Calls                            []runtimeToolEvidence `json:"calls"`
+	ActualToolNames                  []string              `json:"actual_tool_names"`
+	FailedToolNames                  []string              `json:"failed_tool_names,omitempty"`
+	VulnerabilityCount               int                   `json:"vulnerability_count"`
+	OnlineHostCount                  int                   `json:"online_host_count"`
+	GeneratedScriptTypes             []string              `json:"generated_script_types,omitempty"`
+	TaskGroupIDs                     []string              `json:"task_group_ids,omitempty"`
+	VulnerabilityWorkflow            bool                  `json:"vulnerability_workflow"`
+	VulnerabilityAssessment          bool                  `json:"vulnerability_assessment,omitempty"`
+	VulnerabilityRemediation         bool                  `json:"vulnerability_remediation,omitempty"`
+	VulnerabilityScanIDs             []string              `json:"vulnerability_scan_ids,omitempty"`
+	VulnerabilityScanStatus          string                `json:"vulnerability_scan_status,omitempty"`
+	VulnerabilityScanProgress        int                   `json:"vulnerability_scan_progress,omitempty"`
+	VulnerabilityScanTerminal        bool                  `json:"vulnerability_scan_terminal,omitempty"`
+	VulnerabilityScanFoundCount      int                   `json:"vulnerability_scan_found_count,omitempty"`
+	VulnerabilityScanFoundCountKnown bool                  `json:"vulnerability_scan_found_count_known,omitempty"`
+	WeakPasswordWorkflow             bool                  `json:"weak_password_workflow,omitempty"`
+	WeakPasswordTaskIDs              []string              `json:"weak_password_task_ids,omitempty"`
+	WeakPasswordStatus               string                `json:"weak_password_status,omitempty"`
+	WeakPasswordTerminal             bool                  `json:"weak_password_terminal,omitempty"`
+	WeakPasswordTaskTotal            int                   `json:"weak_password_task_total,omitempty"`
+	WeakPasswordTaskCompleted        int                   `json:"weak_password_task_completed,omitempty"`
+	WeakPasswordTaskFailed           int                   `json:"weak_password_task_failed,omitempty"`
+	WeakPasswordTaskRunning          int                   `json:"weak_password_task_running,omitempty"`
+	WeakPasswordFindingCount         int                   `json:"weak_password_finding_count,omitempty"`
+	WeakPasswordFindingCountKnown    bool                  `json:"weak_password_finding_count_known,omitempty"`
+	AssetCollectionTaskIDs           []string              `json:"asset_collection_task_ids,omitempty"`
+	AssetCollectionTerminal          bool                  `json:"asset_collection_terminal,omitempty"`
+	AssetCollectionCoverage          map[string]int        `json:"asset_collection_coverage,omitempty"`
+	DetectionPackageID               string                `json:"detection_package_id,omitempty"`
+	DetectionPackageStatus           string                `json:"detection_package_status,omitempty"`
 }
 
 func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidenceLedger {
@@ -46,6 +64,8 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 	taskGroups := make(map[string]bool)
 	onlineHostIDs := make(map[string]bool)
 	assetTaskIDs := make(map[string]bool)
+	vulnerabilityScanIDs := make(map[string]bool)
+	weakPasswordTaskIDs := make(map[string]bool)
 	assetCoverage := make(map[string]int)
 	assetTerminal := false
 
@@ -126,8 +146,37 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 			if outcome == nil {
 				continue
 			}
-			if strings.Contains(strings.ToLower(outcome.Capability), "vulnerability") {
+			capability := strings.ToLower(strings.TrimSpace(outcome.Capability))
+			if strings.Contains(capability, "vulnerability") {
 				ledger.VulnerabilityWorkflow = true
+			}
+			if isVulnerabilityAssessmentCapability(capability) {
+				ledger.VulnerabilityAssessment = true
+				if scanID := outcome.OperationRef["scan_id"]; scanID != "" {
+					vulnerabilityScanIDs[scanID] = true
+				}
+				if scanID, status, progress, foundCount, foundKnown, ok := vulnerabilityScanSnapshot(content); ok {
+					if scanID != "" {
+						vulnerabilityScanIDs[scanID] = true
+					}
+					if status != "" {
+						ledger.VulnerabilityScanStatus = status
+					}
+					ledger.VulnerabilityScanProgress = progress
+					if foundKnown {
+						ledger.VulnerabilityScanFoundCount = foundCount
+						ledger.VulnerabilityScanFoundCountKnown = true
+					}
+				}
+				if outcome.Terminal {
+					ledger.VulnerabilityScanTerminal = true
+				}
+			}
+			if isVulnerabilityRemediationCapability(capability) {
+				ledger.VulnerabilityRemediation = true
+			}
+			if strings.HasPrefix(capability, "weak_password_") {
+				ledger.WeakPasswordWorkflow = true
 			}
 			if outcome.OperationStatus == agentruntime.OperationFailed {
 				failedNames[observation.ToolName] = true
@@ -147,10 +196,35 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 				case "vulnerability_record":
 					ledger.VulnerabilityWorkflow = true
 					ledger.VulnerabilityCount++
+				case "task_resolved":
+					if strings.HasPrefix(capability, "weak_password_") {
+						if id := stringValue(fact["id"]); id != "" {
+							weakPasswordTaskIDs[id] = true
+						}
+					}
+				}
+			}
+			if capability == "weak_password_progress" {
+				snapshot := weakPasswordProgressEvidence(content)
+				if snapshot.status != "" {
+					ledger.WeakPasswordStatus = snapshot.status
+				}
+				ledger.WeakPasswordTerminal = outcome.Terminal
+				ledger.WeakPasswordTaskTotal = snapshot.total
+				ledger.WeakPasswordTaskCompleted = snapshot.completed
+				ledger.WeakPasswordTaskFailed = snapshot.failed
+				ledger.WeakPasswordTaskRunning = snapshot.running
+				if snapshot.findingCountKnown {
+					ledger.WeakPasswordFindingCount = snapshot.findingCount
+					ledger.WeakPasswordFindingCountKnown = true
+				}
+				for _, taskID := range snapshot.taskIDs {
+					weakPasswordTaskIDs[taskID] = true
 				}
 			}
 			for _, artifact := range outcome.Artifacts {
 				if scriptType := stringValue(artifact["script_type"]); scriptType != "" {
+					ledger.VulnerabilityRemediation = true
 					generatedTypes[scriptType] = true
 				}
 				if stringValue(artifact["result_vulnerability_id"]) != "" && ledger.VulnerabilityCount == 0 {
@@ -200,6 +274,8 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 	ledger.FailedToolNames = sortedStringSet(failedNames)
 	ledger.GeneratedScriptTypes = sortedStringSet(generatedTypes)
 	ledger.TaskGroupIDs = sortedStringSet(taskGroups)
+	ledger.VulnerabilityScanIDs = sortedStringSet(vulnerabilityScanIDs)
+	ledger.WeakPasswordTaskIDs = sortedStringSet(weakPasswordTaskIDs)
 	ledger.AssetCollectionTaskIDs = sortedStringSet(assetTaskIDs)
 	ledger.AssetCollectionTerminal = assetTerminal
 	if len(assetCoverage) > 0 {
@@ -237,6 +313,12 @@ func validateRuntimeEvidenceConsistency(answer string, ledger runtimeEvidenceLed
 		containsAnyFold(normalized, "资产采集完成", "采集已完成", "资产重采集完成", "已创建采集任务") {
 		conflicts = append(conflicts, "asset_collection_claimed_without_task_id")
 	}
+	if len(ledger.VulnerabilityScanIDs) > 0 && !answerContainsAnyReference(answer, ledger.VulnerabilityScanIDs) {
+		conflicts = append(conflicts, "vulnerability_scan_evidence_omitted")
+	}
+	if len(ledger.WeakPasswordTaskIDs) > 0 && !answerContainsAnyReference(answer, ledger.WeakPasswordTaskIDs) {
+		conflicts = append(conflicts, "weak_password_evidence_omitted")
+	}
 	return dedupeStrings(conflicts)
 }
 
@@ -249,14 +331,15 @@ func buildEvidenceGroundedFallback(ledger runtimeEvidenceLedger) string {
 	if ledger.OnlineHostCount > 0 {
 		b.WriteString(fmt.Sprintf("\n- 已确认在线目标主机：%d 台。", ledger.OnlineHostCount))
 	}
+	writeVulnerabilityScanEvidence(&b, ledger)
 	if len(ledger.GeneratedScriptTypes) > 0 {
 		b.WriteString("\n- 已生成脚本类型：" + strings.Join(ledger.GeneratedScriptTypes, "、") + "。")
-	} else if ledger.VulnerabilityWorkflow {
+	} else if ledger.VulnerabilityRemediation {
 		b.WriteString("\n- 尚未取得脚本状态为 generated 的终态证据。")
 	}
 	if len(ledger.TaskGroupIDs) > 0 {
 		b.WriteString("\n- 已创建下发任务组：" + strings.Join(ledger.TaskGroupIDs, "、") + "。")
-	} else if ledger.VulnerabilityWorkflow {
+	} else if ledger.VulnerabilityRemediation {
 		b.WriteString("\n- 尚未取得任务组 ID，不能认定任务已经下发。")
 	}
 	if len(ledger.AssetCollectionTaskIDs) > 0 {
@@ -270,6 +353,7 @@ func buildEvidenceGroundedFallback(ledger runtimeEvidenceLedger) string {
 			b.WriteString(fmt.Sprintf("\n- 采集覆盖：目标 %d 台 / 成功 %d 台 / 失败 %d 台。", total, success, failed))
 		}
 	}
+	writeWeakPasswordEvidence(&b, ledger)
 	if len(ledger.FailedToolNames) > 0 {
 		b.WriteString("\n- 实际失败的工具：" + strings.Join(ledger.FailedToolNames, "、") + "。")
 	}
@@ -298,17 +382,172 @@ func buildFailedGoalFallback(ledger runtimeEvidenceLedger) string {
 			failed := ledger.AssetCollectionCoverage["failed_hosts"]
 			b.WriteString(fmt.Sprintf("\n- 采集覆盖：目标 %d 台 / 成功 %d 台 / 失败 %d 台。", total, success, failed))
 		}
-	} else if ledger.VulnerabilityWorkflow {
+	}
+	if ledger.VulnerabilityAssessment {
+		writeVulnerabilityScanEvidence(&b, ledger)
+	}
+	if ledger.VulnerabilityRemediation {
 		if len(ledger.TaskGroupIDs) == 0 {
 			b.WriteString("\n- 未取得任务组证据，未下发任务。")
 		} else {
 			b.WriteString("\n- 已创建任务组，但本轮目标未达到成功终态。")
 		}
 	}
+	writeWeakPasswordEvidence(&b, ledger)
 	if len(ledger.ActualToolNames) > 0 {
 		b.WriteString("\n- 实际调用：" + strings.Join(ledger.ActualToolNames, "、") + "。")
 	}
 	return b.String()
+}
+
+func writeVulnerabilityScanEvidence(b *strings.Builder, ledger runtimeEvidenceLedger) {
+	if b == nil || !ledger.VulnerabilityAssessment {
+		return
+	}
+	if len(ledger.VulnerabilityScanIDs) > 0 {
+		b.WriteString("\n- 漏洞扫描任务：" + strings.Join(ledger.VulnerabilityScanIDs, "、") + "。")
+	}
+	if ledger.VulnerabilityScanStatus != "" {
+		b.WriteString(fmt.Sprintf("\n- 漏洞扫描状态：%s（%d%%）。", ledger.VulnerabilityScanStatus, ledger.VulnerabilityScanProgress))
+	} else if ledger.VulnerabilityScanProgress > 0 {
+		b.WriteString(fmt.Sprintf("\n- 漏洞扫描进度：%d%%。", ledger.VulnerabilityScanProgress))
+	}
+	if ledger.VulnerabilityScanFoundCountKnown {
+		b.WriteString(fmt.Sprintf("\n- 漏洞扫描结果：发现漏洞：%d 个。", ledger.VulnerabilityScanFoundCount))
+	}
+	if !ledger.VulnerabilityScanTerminal {
+		b.WriteString("\n- 漏洞扫描仍在后台运行，尚未达到终态。")
+	}
+}
+
+func writeWeakPasswordEvidence(b *strings.Builder, ledger runtimeEvidenceLedger) {
+	if b == nil || !ledger.WeakPasswordWorkflow {
+		return
+	}
+	if len(ledger.WeakPasswordTaskIDs) > 0 {
+		b.WriteString("\n- 弱口令扫描任务：" + strings.Join(ledger.WeakPasswordTaskIDs, "、") + "。")
+	}
+	if ledger.WeakPasswordStatus != "" {
+		b.WriteString("\n- 弱口令扫描状态：" + ledger.WeakPasswordStatus + "。")
+	}
+	if ledger.WeakPasswordTaskTotal > 0 {
+		b.WriteString(fmt.Sprintf(
+			"\n- 弱口令任务汇总：总计 %d / 完成 %d / 失败 %d / 运行中 %d。",
+			ledger.WeakPasswordTaskTotal,
+			ledger.WeakPasswordTaskCompleted,
+			ledger.WeakPasswordTaskFailed,
+			ledger.WeakPasswordTaskRunning,
+		))
+	}
+	if ledger.WeakPasswordFindingCountKnown {
+		b.WriteString(fmt.Sprintf("\n- 弱口令命中：%d 条。", ledger.WeakPasswordFindingCount))
+	}
+	if !ledger.WeakPasswordTerminal {
+		b.WriteString("\n- 弱口令扫描仍在后台运行，尚未达到聚合终态。")
+	}
+}
+
+func isVulnerabilityAssessmentCapability(capability string) bool {
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "start_vulnerability_scan", "get_vulnerability_scan_status", "stop_vulnerability_scan":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVulnerabilityRemediationCapability(capability string) bool {
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "generate_vulnerability_script", "get_vulnerability_script_status", "execute_vulnerability_host_scripts":
+		return true
+	default:
+		return false
+	}
+}
+
+func vulnerabilityScanSnapshot(content interface{}) (scanID, status string, progress, foundCount int, foundCountKnown, ok bool) {
+	payload, _ := content.(map[string]interface{})
+	if payload == nil {
+		return "", "", 0, 0, false, false
+	}
+	scan := payload
+	if nested, nestedOK := payload["scan"].(map[string]interface{}); nestedOK {
+		scan = nested
+	}
+	scanID = stringValue(scan["scan_id"])
+	status = stringValue(scan["status"])
+	if value, found := numericValue(scan["progress"]); found {
+		progress = int(value)
+	}
+	if value, found := numericValue(scan["found_vulns"]); found {
+		foundCount = int(value)
+		foundCountKnown = true
+	}
+	return scanID, status, progress, foundCount, foundCountKnown, scanID != "" || status != "" || progress > 0 || foundCountKnown
+}
+
+type weakPasswordProgressSnapshot struct {
+	status            string
+	taskIDs           []string
+	total             int
+	completed         int
+	failed            int
+	running           int
+	findingCount      int
+	findingCountKnown bool
+}
+
+func weakPasswordProgressEvidence(content interface{}) weakPasswordProgressSnapshot {
+	payload, _ := content.(map[string]interface{})
+	if payload == nil {
+		return weakPasswordProgressSnapshot{}
+	}
+	snapshot := weakPasswordProgressSnapshot{status: stringValue(payload["status"])}
+	if value, ok := numericValue(payload["matched_findings"]); ok {
+		snapshot.findingCount = int(value)
+		snapshot.findingCountKnown = true
+	}
+	tasks, _ := payload["tasks"].([]interface{})
+	snapshot.total = len(tasks)
+	nestedFindingCount := 0
+	nestedFindingKnown := false
+	for _, rawTask := range tasks {
+		task, _ := rawTask.(map[string]interface{})
+		if task == nil {
+			continue
+		}
+		if taskID := stringValue(task["task_id"]); taskID != "" {
+			snapshot.taskIDs = append(snapshot.taskIDs, taskID)
+		}
+		progress, _ := task["task_progress"].(map[string]interface{})
+		switch strings.ToLower(stringValue(progress["status"])) {
+		case "completed":
+			snapshot.completed++
+		case "partial_failed", "failed", "cancelled":
+			snapshot.failed++
+		default:
+			snapshot.running++
+		}
+		if value, ok := numericValue(progress["matched_findings"]); ok {
+			nestedFindingCount += int(value)
+			nestedFindingKnown = true
+		}
+	}
+	if !snapshot.findingCountKnown && nestedFindingKnown {
+		snapshot.findingCount = nestedFindingCount
+		snapshot.findingCountKnown = true
+	}
+	snapshot.taskIDs = dedupeStrings(snapshot.taskIDs)
+	return snapshot
+}
+
+func answerContainsAnyReference(answer string, references []string) bool {
+	for _, reference := range references {
+		if reference != "" && strings.Contains(answer, reference) {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedStringSet(values map[string]bool) []string {

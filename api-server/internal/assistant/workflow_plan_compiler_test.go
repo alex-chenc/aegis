@@ -66,6 +66,121 @@ func TestVulnerabilityAssessmentCompilerResolvesIPBeforeStartingScan(t *testing.
 	}
 }
 
+func TestWeakPasswordAssessmentCompilerCarriesResolvedHostsThroughBatchProgress(t *testing.T) {
+	registry := newWorkflowCompilerTestRegistry(t)
+	mapper := NewToolCapabilityMapper(registry)
+	breakdown := &IntentBreakdown{
+		Goal:          "检查主机 192.168.152.159 上的弱口令",
+		Domains:       []string{"asset_management"},
+		Actions:       []string{"analyze", "scan"},
+		Objects:       []IntentObject{{Type: "host", ID: "192.168.152.159", Selector: "ip_address"}},
+		Scope:         IntentScope{Kind: "unspecified"},
+		RequiresWrite: true,
+		CandidateCapabilities: []string{
+			"resolve_hosts",
+			"weak_password_asset_analysis",
+			"weak_password_scan",
+			"weak_password_progress",
+		},
+		WorkflowIDs: []string{weakPasswordAssessmentWorkflowID},
+	}
+
+	result, compiled, err := NewWorkflowPlanCompilerRegistry().CompileForBreakdown(WorkflowCompileInput{
+		Breakdown: breakdown,
+		AcceptedTools: []string{
+			"Host.Resolve",
+			"Credential.WeakPassword.AnalyzeApplications",
+			"Credential.WeakPassword.Scan",
+			"Credential.WeakPassword.QueryProgress",
+		},
+		Registry: registry,
+		Mapper:   mapper,
+	})
+	if err != nil {
+		t.Fatalf("CompileForBreakdown returned error: %v", err)
+	}
+	if !compiled || result == nil || result.Clarification != "" {
+		t.Fatalf("expected executable weak-password plan, compiled=%v result=%#v", compiled, result)
+	}
+
+	steps := assignPlanStepIDs(result.Steps)
+	if got, want := toolNamesFromSteps(steps), []string{
+		"Host.Resolve",
+		"Credential.WeakPassword.AnalyzeApplications",
+		"Credential.WeakPassword.Scan",
+		"Credential.WeakPassword.QueryProgress",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected compiled tools: got %v want %v", got, want)
+	}
+	if got := steps[0].Args["host_selectors"]; !reflect.DeepEqual(got, []string{"192.168.152.159"}) {
+		t.Fatalf("Host.Resolve selectors mismatch: %#v", got)
+	}
+	if source := steps[1].ArgSources["host_ids"]; source.SourceType != "previous_step" {
+		t.Fatalf("analysis host_ids must come from Host.Resolve facts: %#v", source)
+	}
+	if source := steps[2].ArgSources["candidate_application_ids"]; source.SourceType != "previous_step" {
+		t.Fatalf("scan candidate IDs must come from analysis facts: %#v", source)
+	}
+	if source := steps[3].ArgSources["task_ids"]; source.SourceType != "previous_step" {
+		t.Fatalf("progress task IDs must come from scan facts: %#v", source)
+	}
+
+	plan := &ToolExecutionPlan{Goal: breakdown.Goal, Steps: steps}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+		t.Fatalf("compiled weak-password plan failed validation: %v", err)
+	}
+}
+
+func TestWorkflowCompilerKeepsWeakPasswordAssessmentAfterVulnerabilityScan(t *testing.T) {
+	registry := newWorkflowCompilerTestRegistry(t)
+	mapper := NewToolCapabilityMapper(registry)
+	breakdown := &IntentBreakdown{
+		Goal:          "对所有在线主机先进行漏洞扫描，再进行弱口令检查",
+		Actions:       []string{"scan", "assess"},
+		Scope:         IntentScope{Kind: "all_online_hosts"},
+		RequiresWrite: true,
+		WorkflowIDs: []string{
+			vulnerabilityAssessmentWorkflowID,
+			weakPasswordAssessmentWorkflowID,
+		},
+	}
+
+	result, compiled, err := NewWorkflowPlanCompilerRegistry().CompileForBreakdown(WorkflowCompileInput{
+		Breakdown: breakdown,
+		AcceptedTools: []string{
+			"Host.Resolve",
+			"Vulnerability.Scan.Start",
+			"Vulnerability.Scan.Status",
+			"Credential.WeakPassword.AnalyzeApplications",
+			"Credential.WeakPassword.Scan",
+			"Credential.WeakPassword.QueryProgress",
+		},
+		Registry: registry,
+		Mapper:   mapper,
+	})
+	if err != nil || !compiled || result == nil || result.Clarification != "" {
+		t.Fatalf("expected composed scan plan, compiled=%v result=%#v err=%v", compiled, result, err)
+	}
+
+	steps := assignPlanStepIDs(result.Steps)
+	if got, want := toolNamesFromSteps(steps), []string{
+		"Host.Resolve",
+		"Vulnerability.Scan.Start",
+		"Vulnerability.Scan.Status",
+		"Credential.WeakPassword.AnalyzeApplications",
+		"Credential.WeakPassword.Scan",
+		"Credential.WeakPassword.QueryProgress",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composed workflow dropped or reordered a stage: got %v want %v", got, want)
+	}
+	if _, exists := steps[3].Args["host_ids"]; exists {
+		t.Fatalf("all-online weak-password analysis should let the service own target selection: %#v", steps[3].Args)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(&ToolExecutionPlan{Goal: breakdown.Goal, Steps: steps}, nil); err != nil {
+		t.Fatalf("composed vulnerability/weak-password plan failed validation: %v", err)
+	}
+}
+
 func TestVulnerabilityRemediationCompilerDoesNotStartScanForExactCVEPOC(t *testing.T) {
 	registry := newWorkflowCompilerTestRegistry(t)
 	mapper := NewToolCapabilityMapper(registry)
@@ -724,6 +839,94 @@ func newWorkflowCompilerTestRegistry(t *testing.T) *ToolRegistry {
 				"max_rounds":  map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 10},
 			},
 			"required":             []string{"cve_id", "script_type", "host_ids"},
+			"additionalProperties": false,
+		},
+	})
+	register(&ToolSpec{
+		Name:               "Credential.WeakPassword.AnalyzeApplications",
+		Domain:             DomainDetection,
+		Operation:          OpGenerate,
+		Capability:         "weak_password_asset_analysis",
+		Description:        "Analyze weak-password candidate applications.",
+		Risk:               ToolRiskLow,
+		DefaultWhitelisted: true,
+		ResultContract: ToolResultContract{
+			FactBindings: []ToolFactBinding{{
+				Kind:       "candidate_application_resolved",
+				ItemsField: "analysis.candidates",
+				IDField:    "candidate_application_id",
+			}},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"host_ids": map[string]interface{}{
+					"type":  "array",
+					"items": map[string]interface{}{"type": "string", "format": "uuid"},
+				},
+				"online_agents_only": map[string]interface{}{"type": "boolean"},
+			},
+			"additionalProperties": false,
+		},
+	})
+	register(&ToolSpec{
+		Name:               "Credential.WeakPassword.Scan",
+		Domain:             DomainDetection,
+		Operation:          OpExecute,
+		Capability:         "weak_password_scan",
+		Description:        "Create weak-password tasks for candidate applications.",
+		Risk:               ToolRiskMedium,
+		RequiresApproval:   true,
+		DefaultWhitelisted: false,
+		ExecutionContract: ToolExecutionContract{
+			Mode:                 ToolExecutionAsynchronous,
+			CompletionCapability: "weak_password_progress",
+		},
+		ResultContract: ToolResultContract{
+			AcceptedOnSuccess: true,
+			FactBindings: []ToolFactBinding{{
+				Kind:       "task_resolved",
+				ItemsField: "created",
+				IDField:    "task_id",
+			}},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"candidate_application_ids": map[string]interface{}{
+					"type":     "array",
+					"minItems": 1,
+					"items":    map[string]interface{}{"type": "string", "format": "uuid"},
+				},
+			},
+			"required":             []string{"candidate_application_ids"},
+			"additionalProperties": false,
+		},
+	})
+	register(&ToolSpec{
+		Name:               "Credential.WeakPassword.QueryProgress",
+		Domain:             DomainDetection,
+		Operation:          OpGet,
+		Capability:         "weak_password_progress",
+		Description:        "Get weak-password batch progress.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ResultContract: ToolResultContract{
+			OperationStatusField:  "status",
+			SuccessValues:         []string{"completed", "partial_failed", "failed", "cancelled"},
+			PendingValues:         []string{"pending", "running"},
+			SatisfiesCapabilities: []string{"weak_password_scan"},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"task_ids": map[string]interface{}{
+					"type":     "array",
+					"minItems": 1,
+					"items":    map[string]interface{}{"type": "string", "format": "uuid"},
+				},
+			},
+			"required":             []string{"task_ids"},
 			"additionalProperties": false,
 		},
 	})

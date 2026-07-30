@@ -12,6 +12,12 @@ export default {
     running: 'The operation is still running.',
     failed: 'The operation failed. See the result for details.',
     skipped: 'The operation was skipped.',
+    weakPasswordCompleted: 'completed',
+    weakPasswordPartialFailed: 'partially failed',
+    weakPasswordFailed: 'failed',
+    weakPasswordCancelled: 'cancelled',
+    weakPasswordRunning: 'running',
+    weakPasswordProgress: 'Weak-password scan {status}: {total} total, {completed} completed, {failed} failed, {running} running, {findings} findings.',
   },
   step: {
     completed: 'Completed',

@@ -92,15 +92,142 @@ func TestRuntimeEvidenceCountsResolvedOnlineHostAndExcludesRejectedCandidate(t *
 
 func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
 	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{
-		ActualToolNames:       []string{"Host.Resolve"},
-		FailedToolNames:       []string{"Host.Resolve"},
-		VulnerabilityWorkflow: true,
+		ActualToolNames:          []string{"Host.Resolve"},
+		FailedToolNames:          []string{"Host.Resolve"},
+		VulnerabilityWorkflow:    true,
+		VulnerabilityRemediation: true,
 	})
 	if !strings.Contains(fallback, "任务未完成") || strings.Contains(strings.ToLower(fallback), "completed") {
 		t.Fatalf("failed-goal fallback = %q", fallback)
 	}
 	if !strings.Contains(fallback, "未下发任务") {
 		t.Fatalf("fallback must state missing task dispatch evidence: %q", fallback)
+	}
+}
+
+func TestRuntimeEvidenceReportsRunningVulnerabilityScanWithoutRemediationClaims(t *testing.T) {
+	scanID := "92d158f6-e8e8-460d-9e61-43fdd7533933"
+	result := &agentruntime.TaskResult{
+		StepExecutions: []agentruntime.StepExecution{{
+			ReactTurns: []agentruntime.ReactTurn{{
+				Observation: &agentruntime.Observation{
+					CallID:   "call-scan-status",
+					ToolName: "Vulnerability.Scan.Status",
+					Status:   agentruntime.ToolCallSuccess,
+					Content:  `{"scan":{"scan_id":"` + scanID + `","status":"analyzing","progress":84}}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "get_vulnerability_scan_status",
+						OperationStatus: agentruntime.OperationRunning,
+						Terminal:        false,
+						OperationRef:    map[string]string{"type": "get_vulnerability_scan_status", "scan_id": scanID},
+					},
+				},
+			}},
+		}},
+	}
+
+	ledger := buildRuntimeEvidenceLedger(result)
+	if !ledger.VulnerabilityAssessment || ledger.VulnerabilityRemediation {
+		t.Fatalf("vulnerability workflow classification is wrong: %#v", ledger)
+	}
+	if got := ledger.VulnerabilityScanIDs; len(got) != 1 || got[0] != scanID {
+		t.Fatalf("scan IDs = %#v, want %s", got, scanID)
+	}
+	if ledger.VulnerabilityScanStatus != "analyzing" || ledger.VulnerabilityScanProgress != 84 {
+		t.Fatalf("scan status/progress = %s/%d", ledger.VulnerabilityScanStatus, ledger.VulnerabilityScanProgress)
+	}
+
+	fallback := buildFailedGoalFallback(ledger)
+	for _, forbidden := range []string{"脚本", "任务组", "未下发任务"} {
+		if strings.Contains(fallback, forbidden) {
+			t.Fatalf("scan-only fallback contains remediation claim %q: %q", forbidden, fallback)
+		}
+	}
+	if !strings.Contains(fallback, scanID) || !strings.Contains(fallback, "84%") || !strings.Contains(fallback, "仍在后台运行") {
+		t.Fatalf("scan-only fallback does not preserve running evidence: %q", fallback)
+	}
+}
+
+func TestRuntimeEvidenceRejectsOmittedCompletedScanAndWeakPasswordResults(t *testing.T) {
+	scanID := "19b7a5cd-5360-474e-a3fa-fd1af3745a0b"
+	taskID1 := "4dd7615c-b447-498a-ac7a-ac660a3d5e2b"
+	taskID2 := "994c18fe-bb55-490b-a140-544db812be32"
+	result := &agentruntime.TaskResult{
+		StepExecutions: []agentruntime.StepExecution{{
+			ReactTurns: []agentruntime.ReactTurn{
+				{Observation: &agentruntime.Observation{
+					CallID:   "call-vulnerability-status",
+					ToolName: "Vulnerability.Scan.Status",
+					Status:   agentruntime.ToolCallSuccess,
+					Content:  `{"scan":{"scan_id":"` + scanID + `","status":"completed","progress":100,"found_vulns":3}}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "get_vulnerability_scan_status",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+						OperationRef:    map[string]string{"scan_id": scanID},
+					},
+				}},
+				{Observation: &agentruntime.Observation{
+					CallID:   "call-weak-scan",
+					ToolName: "Credential.WeakPassword.Scan",
+					Status:   agentruntime.ToolCallSuccess,
+					Content:  `{"status":"pending"}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "weak_password_scan",
+						OperationStatus: agentruntime.OperationAccepted,
+						Terminal:        false,
+						Facts: []map[string]interface{}{
+							{"kind": "task_resolved", "id": taskID1},
+							{"kind": "task_resolved", "id": taskID2},
+						},
+					},
+				}},
+				{Observation: &agentruntime.Observation{
+					CallID:   "call-weak-progress",
+					ToolName: "Credential.WeakPassword.QueryProgress",
+					Status:   agentruntime.ToolCallSuccess,
+					Content: `{"status":"partial_failed","matched_findings":2,"tasks":[` +
+						`{"task_id":"` + taskID1 + `","task_progress":{"status":"completed","matched_findings":2}},` +
+						`{"task_id":"` + taskID2 + `","task_progress":{"status":"failed","matched_findings":0}}]}`,
+					Outcome: &agentruntime.ToolOutcome{
+						Capability:      "weak_password_progress",
+						OperationStatus: agentruntime.OperationSucceeded,
+						Terminal:        true,
+					},
+				}},
+			},
+		}},
+	}
+
+	ledger := buildRuntimeEvidenceLedger(result)
+	if !ledger.VulnerabilityScanFoundCountKnown || ledger.VulnerabilityScanFoundCount != 3 {
+		t.Fatalf("vulnerability count evidence = known:%v count:%d", ledger.VulnerabilityScanFoundCountKnown, ledger.VulnerabilityScanFoundCount)
+	}
+	if !ledger.WeakPasswordWorkflow || !ledger.WeakPasswordTerminal {
+		t.Fatalf("weak-password evidence was not classified: %#v", ledger)
+	}
+	if ledger.WeakPasswordTaskTotal != 2 || ledger.WeakPasswordTaskCompleted != 1 || ledger.WeakPasswordTaskFailed != 1 {
+		t.Fatalf("weak-password task summary is wrong: %#v", ledger)
+	}
+	if !ledger.WeakPasswordFindingCountKnown || ledger.WeakPasswordFindingCount != 2 {
+		t.Fatalf("weak-password finding evidence = known:%v count:%d", ledger.WeakPasswordFindingCountKnown, ledger.WeakPasswordFindingCount)
+	}
+	if containsDecisionString(ledger.FailedToolNames, "Credential.WeakPassword.QueryProgress") {
+		t.Fatalf("terminal partial failure must not be classified as a query-tool failure: %#v", ledger.FailedToolNames)
+	}
+
+	conflicts := validateRuntimeEvidenceConsistency("资产采集已完成。", ledger)
+	for _, code := range []string{"vulnerability_scan_evidence_omitted", "weak_password_evidence_omitted"} {
+		if !containsDecisionString(conflicts, code) {
+			t.Fatalf("missing completeness conflict %s: %#v", code, conflicts)
+		}
+	}
+
+	fallback := buildEvidenceGroundedFallback(ledger)
+	for _, expected := range []string{scanID, "发现漏洞：3 个", taskID1, "完成 1", "失败 1", "弱口令命中：2 条"} {
+		if !strings.Contains(fallback, expected) {
+			t.Fatalf("evidence fallback missing %q: %q", expected, fallback)
+		}
 	}
 }
 
