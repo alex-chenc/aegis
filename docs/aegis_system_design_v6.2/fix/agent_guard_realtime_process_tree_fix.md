@@ -1,6 +1,6 @@
 # Agent Guard 实时进程树与会话标识修复
 
-**版本**：6.2-P1/P4 修复
+**版本**：6.2-P1/P4 真实会话修复
 **范围**：Agent、eBPF、DC 既有行为投影、api-server、frontend
 **部署约束**：不删除或回填历史数据；仅滚动更新 frontend、api-server 与本机 Agent，
 不重启 PostgreSQL、Kafka、server 或 dc
@@ -38,8 +38,9 @@ instance 时才查询并验证该实例是否属于 scope。
 3. DC 继续使用现有 `agent_behavior_events` 不可变表保存进程事实，不增加可变树表。
 4. API 每次展开执行单元或进程节点时，重新读取该 scope 的最新进程事实，以
    `pid + start_ticks` 建节点，以 PPID 建直接父子边；退出只改变节点状态，不删除历史。
-5. `activity_window` 在 UI 明确标记为推断窗口；可信 Tool/Hook 可以携带签名覆盖的
-   `external_session_id`，上层展示真实来源会话标识。
+5. Codex 使用原生 `SessionStart`、`PreToolUse`、`SessionEnd` Hook 直接上报真实
+   `session_id`；每个真实 ID 创建独立行为 session/unit，页面原样展示该 ID。
+   同一实例已有真实 Hook 会话时，不再混显 `activity_window`。
 6. 运行实例选择器只默认展示 running 当前实例，并使用 API 返回的 total，
    不再把固定 `page_size=100` 显示为真实总数。
    数据库中状态仍为 running、但超过 90 秒（三次心跳周期）未收到 Agent 心跳的历史实例按 stale 投影，
@@ -74,6 +75,41 @@ sched fork/exec/exit
 - `activity_window`：缺少来源会话时的推断窗口，只用于 OS 行为聚合，UI 不得称为
   Codex 会话。
 
+Codex 0.145.0 的原生 Hook 标准输入提供 `session_id`。Aegis 不读取不稳定的
+transcript 格式，也不从时间窗口推测 Codex 会话：
+
+```text
+SessionStart(session_id, hook PPID)
+  -> 固定 PPID + /proc start_ticks 为该会话根进程
+  -> 创建 confirmed BehaviorSession + local_process_tree
+  -> 追加 session_root 进程事实（PID/PPID/脱敏 cmdline）
+
+PreToolUse(session_id)
+  -> 共享 app-server 场景下，在工具子进程 fork 前激活对应会话根
+  -> 已归属的其他会话子树不变
+
+sched_process_fork/exec/exit
+  -> 继承根进程的 session/unit 标签
+
+SessionEnd(session_id)
+  -> 结束对应 session/unit 并清理其后代标签
+  -> 不停止仍被其他会话共享的 Codex app-server RuntimeInstance
+```
+
+Hook helper 只上传 lifecycle、来源 session ID、PID、start_ticks、时间和签名，禁止
+上传 prompt、response、transcript、环境变量、工具参数或输出。事件同时通过
+`SO_PEERCRED + allowed UID + Ed25519 + event replay` 校验。安装后使用：
+
+```bash
+/opt/aegis-agent/aegis-codex-hook provision
+```
+
+命令生成私钥、可信 source manifest 和 `~/.codex/hooks.json` 三个 Hook 点，并输出
+需要写入 `/etc/aegis-agent/config.toml` 的三项非敏感配置。非托管 Hook 仍必须按
+Codex 官方机制在 `/hooks` 中审查信任；新建或恢复的会话随后生效。
+受管主机可改用 `--hooks '' --managed-requirements /etc/codex/requirements.toml`；
+helper 只在目标 requirements 文件不存在时创建，避免覆盖管理员现有策略。
+
 完整 P5 会话内容、turn/item 和跨进程 resume 仍使用独立
 `agent_conversation_sessions` 方案。本修复只建立可信来源会话标识和 OS 行为关联，
 不采集提示词或响应正文。
@@ -88,10 +124,12 @@ sched fork/exec/exit
   reconciler 丢失 PID 时产生同等停止转换。
 - Manager：exit 在 `/proc/<pid>` 已消失后仍可使用 tracker 快照生成行为并排队停止状态。
 - Tool Adapter：`external_session_id` 受签名保护、长度/控制字符校验，状态事件透传。
+- Codex Hook：SessionStart 使用首个 Hook 父 PID 建根；PreToolUse 在共享父进程下
+  切换当前 session；SessionEnd 只关闭对应 session/unit；签名篡改和重放拒绝。
 - API：乱序行为事实按 `pid + start_ticks` 去重，直接父子关系正确，PID 重用不合并，
-  exit 后节点状态为 stopped；展开进程返回直接子进程和该进程的行为证据。
-- Frontend：真实 external session 与 inferred activity window 文案不同；PID/PPID 和
-  running/stopped 状态可见。
+  exit 后节点状态为 stopped；根和子进程均显示 `PID + 脱敏 cmdline`。
+- Frontend：真实 `external_session_id` 原样显示；同实例有真实会话时隐藏推断窗口；
+  PID/PPID/cmdline 和 running/stopped 状态可见。
 
 ## 6. 日志、安全与回滚
 

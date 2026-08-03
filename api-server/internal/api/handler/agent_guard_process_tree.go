@@ -1,8 +1,7 @@
 package handler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ type agentGuardProcessSnapshot struct {
 	StartTicks  string
 	Name        string
 	Exe         string
+	Cmdline     string
 	Status      string
 	ParentKey   string
 	FirstSeenAt time.Time
@@ -68,6 +68,9 @@ func buildAgentGuardProcessTree(events []model.AgentBehaviorEvent) agentGuardPro
 			}
 			if event.ProcessExe != "" {
 				node.Exe = event.ProcessExe
+			}
+			if cmdline := agentGuardCommandLine(event.CommandArgv); cmdline != "" {
+				node.Cmdline = cmdline
 			}
 			if event.Operation == "exit" {
 				node.Status = "stopped"
@@ -143,13 +146,20 @@ func agentGuardProcessKey(pid int, startTicks string) string {
 
 func agentGuardSessionLabel(session model.AgentBehaviorSession) string {
 	if value := strings.TrimSpace(session.ExternalSessionID); value != "" {
-		digest := sha256.Sum256([]byte(value))
-		return "source session #" + hex.EncodeToString(digest[:6])
+		return value
 	}
 	if session.Source == "activity_window" {
 		return "inferred activity window"
 	}
 	return session.Source + " session"
+}
+
+func agentGuardCommandLine(raw []byte) string {
+	var argv []string
+	if len(raw) == 0 || json.Unmarshal(raw, &argv) != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(argv, " "))
 }
 
 func (h *AgentGuardHandler) panoramaProcessNode(
@@ -165,15 +175,18 @@ func (h *AgentGuardHandler) panoramaProcessNode(
 	if err != nil {
 		return agentGuardPanoramaNode{}, err
 	}
-	label := strings.TrimSpace(process.Name)
-	if label == "" {
-		label = "PID " + strconv.Itoa(process.PID)
+	label := "PID " + strconv.Itoa(process.PID)
+	if process.Cmdline != "" {
+		label += " · " + process.Cmdline
+	} else if process.Name != "" {
+		label += " · " + process.Name
 	}
 	return agentGuardPanoramaNode{
 		ID: token, NodeType: "process", Label: label, HasChildren: len(process.Children) > 0 || process.EventCount > 0,
 		ChildCount: int64(len(process.Children)) + process.EventCount,
 		OccurredAt: process.LastSeenAt.UTC().Format(time.RFC3339Nano),
-		PID:        process.PID, PPID: process.PPID, StartTicks: process.StartTicks, ProcessStatus: process.Status,
+		PID:        process.PID, PPID: process.PPID, StartTicks: process.StartTicks,
+		ProcessStatus: process.Status, Cmdline: process.Cmdline,
 	}, nil
 }
 

@@ -427,6 +427,13 @@ func (r *AgentGuardQueryRepository) ListSessions(
 	db = applyAgentGuardEqual(db, "execution_unit_id", query.ExecutionUnitID)
 	db = applyAgentGuardEqual(db, "status", query.Status)
 	db = applyAgentGuardEqual(db, "source", query.Source)
+	if query.PreferTrusted {
+		db = db.Where(`source <> 'activity_window' OR NOT EXISTS (
+			SELECT 1 FROM agent_behavior_sessions trusted
+			WHERE trusted.instance_id = agent_behavior_sessions.instance_id
+			AND trusted.source IN ('agent_official', 'adapter_hook', 'aegis_wrapper')
+		)`)
+	}
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count agent behavior sessions: %w", err)
 	}

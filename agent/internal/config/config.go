@@ -23,6 +23,7 @@ type Config struct {
 	AgentGuardEnabled                bool   `toml:"AgentGuardEnabled"`
 	AgentGuardBehaviorMonitorEnabled bool   `toml:"AgentGuardBehaviorMonitorEnabled"`
 	AgentGuardToolAdapterEnabled     bool   `toml:"AgentGuardToolAdapterEnabled"`
+	AgentGuardSessionHookEnabled     bool   `toml:"AgentGuardSessionHookEnabled"`
 	AgentGuardToolSourceManifest     string `toml:"AgentGuardToolSourceManifest"`
 	AgentGuardToolHookSocket         string `toml:"AgentGuardToolHookSocket"`
 	AgentGuardEnforcementEnabled     bool   `toml:"AgentGuardEnforcementEnabled"`

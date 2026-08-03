@@ -40,8 +40,8 @@ describe('AgentPanoramaExplorer', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('python')
-    expect(wrapper.text()).toContain('PID 4120 · PPID 4110 · 运行中')
+	expect(wrapper.text()).toContain('PID 4120 · python')
+	expect(wrapper.text()).toContain('PPID 4110 · 运行中')
     await wrapper.get('[data-testid="panorama-expand-process-1"]').trigger('click')
     await flushPromises()
     expect(loadChildren).toHaveBeenCalledWith('process-1')
@@ -76,6 +76,27 @@ describe('AgentPanoramaExplorer', () => {
     expect(wrapper.text()).toContain('推断活动窗口（非 Codex 会话）')
     expect(wrapper.text()).toContain('未获得来源会话 ID')
   })
+
+	it('shows the real Codex session id and PID plus cmdline', async () => {
+		const wrapper = mount(AgentPanoramaExplorer, {
+			props: {
+				nodes: [{
+					id: 'session-real', node_type: 'session', label: 'masked',
+					external_session_id: 'thr_real_123', session_source: 'agent_official',
+					session_confidence: 'confirmed', has_children: false,
+				}, {
+					id: 'process-real', node_type: 'process', label: 'codex', pid: 4100, ppid: 1,
+					cmdline: 'codex app-server', process_status: 'running', has_children: false,
+				}],
+				loadChildren: vi.fn().mockResolvedValue([]), mode: 'behavior',
+			},
+			global: { stubs: { 'el-tag': true, 'el-alert': true, 'el-empty': true } },
+		})
+		expect(wrapper.text()).toContain('thr_real_123')
+		expect(wrapper.text()).toContain('PID 4100 · codex app-server')
+		await wrapper.get('[data-testid="panorama-node-session-real"]').trigger('click')
+		expect(wrapper.text()).toContain('会话 ID')
+	})
 
   it('shows tool semantics only with trusted provenance and keeps missing hooks explicit', async () => {
     const wrapper = mount(AgentPanoramaExplorer, {

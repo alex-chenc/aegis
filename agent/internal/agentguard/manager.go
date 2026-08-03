@@ -28,6 +28,7 @@ type ManagerConfig struct {
 	Enabled                bool
 	BehaviorMonitorEnabled bool
 	ToolAdapterEnabled     bool
+	SessionHookEnabled     bool
 	ToolSourceManifest     string
 	ToolHookSocket         string
 	ToolAdapter            *TrustedToolAdapter
@@ -65,6 +66,7 @@ type Manager struct {
 	monitorAllowed bool
 	monitorEnabled atomic.Bool
 	toolEnabled    atomic.Bool
+	sessionEnabled atomic.Bool
 	reconcileReset chan time.Duration
 	isolationScan  isolationStateScanner
 	capabilities   GuardCapabilities
@@ -137,6 +139,7 @@ func NewManager(cfg ManagerConfig, scanner ProcessScanner, reporter RuntimeRepor
 	manager.actions.report = manager.reportActionResult
 	manager.monitorEnabled.Store(cfg.BehaviorMonitorEnabled)
 	manager.toolEnabled.Store(false)
+	manager.sessionEnabled.Store(false)
 	return manager
 }
 
@@ -178,7 +181,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		logger.Info("agent_guard_disabled", zap.String("host_id", m.cfg.HostID))
 		return nil
 	}
-	if m.cfg.ToolAdapterEnabled && m.toolAdapter == nil && m.cfg.ToolSourceManifest != "" {
+	if (m.cfg.ToolAdapterEnabled || m.cfg.SessionHookEnabled) && m.toolAdapter == nil && m.cfg.ToolSourceManifest != "" {
 		adapter, err := LoadTrustedToolAdapter(m.cfg.ToolSourceManifest)
 		if err != nil {
 			return err
@@ -201,6 +204,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			zap.String("host_id", m.cfg.HostID),
 			zap.String("error_code", errorCode(err)))
 	}
+	m.sessionEnabled.Store(m.cfg.SessionHookEnabled && m.toolAdapter != nil && m.cfg.ToolHookSocket != "")
 	if err := m.reconcileOnce(); err != nil {
 		return err
 	}
@@ -221,12 +225,13 @@ func (m *Manager) Start(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := m.setToolIngressDesired(m.toolEnabled.Load()); err != nil {
+	if err := m.setToolIngressDesired(m.toolEnabled.Load() || m.sessionEnabled.Load()); err != nil {
 		return err
 	}
 	logger.Info("agent_guard_started",
 		zap.String("host_id", m.cfg.HostID),
 		zap.Bool("behavior_monitor_enabled", m.monitorEnabled.Load()),
+		zap.Bool("session_hook_enabled", m.sessionEnabled.Load()),
 		zap.String("coverage", string(m.currentEnforcementCoverage())),
 		zap.Bool("namespace_read", m.capabilities.NamespaceRead),
 		zap.Bool("mountinfo_read", m.capabilities.MountInfoRead),
@@ -322,7 +327,7 @@ func (m *Manager) ApplyBundle(payload string) error {
 	previousToolEnabled := m.toolEnabled.Load()
 	desiredToolEnabled := m.cfg.ToolAdapterEnabled && bundle.Defaults.ToolAdapterEnabled &&
 		m.toolAdapter != nil && m.cfg.ToolHookSocket != ""
-	if desiredToolEnabled {
+	if desiredToolEnabled || m.sessionEnabled.Load() {
 		if err := m.setToolIngressDesired(true); err != nil {
 			if previousErr == nil {
 				if rollback, compileErr := CompileKernelPolicy(previous); compileErr == nil {
@@ -334,7 +339,7 @@ func (m *Manager) ApplyBundle(payload string) error {
 	}
 	bundle, err = m.bundles.CommitValidated(bundle)
 	if err != nil {
-		_ = m.setToolIngressDesired(previousToolEnabled)
+		_ = m.setToolIngressDesired(previousToolEnabled || m.sessionEnabled.Load())
 		if previousErr == nil {
 			if rollback, compileErr := CompileKernelPolicy(previous); compileErr == nil {
 				_ = m.applyCompiledKernelPolicy(previous, rollback)
@@ -358,7 +363,7 @@ func (m *Manager) ApplyBundle(payload string) error {
 	}
 	m.monitorEnabled.Store(m.monitorAllowed && bundle.Defaults.BehaviorMonitorEnabled)
 	m.toolEnabled.Store(desiredToolEnabled)
-	if err := m.setToolIngressDesired(desiredToolEnabled); err != nil {
+	if err := m.setToolIngressDesired(desiredToolEnabled || m.sessionEnabled.Load()); err != nil {
 		return err
 	}
 	m.actions.SetFreezeTimeout(time.Duration(bundle.Defaults.FreezeTimeoutSeconds) * time.Second)
@@ -546,6 +551,133 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 	return event, nil
 }
 
+// ObserveTrustedPayload routes the shared signed hook socket without inferring
+// lifecycle or tool semantics from process names.
+func (m *Manager) ObserveTrustedPayload(payload []byte) (BehaviorEvent, error) {
+	var header struct {
+		Operation string `json:"operation"`
+	}
+	if json.Unmarshal(payload, &header) != nil {
+		return BehaviorEvent{}, errors.New("agent_guard_hook_event_json_invalid")
+	}
+	switch header.Operation {
+	case SessionEventStarted, SessionEventActivated, SessionEventEnded:
+		return m.ObserveTrustedSessionPayload(payload)
+	default:
+		return m.ObserveTrustedToolPayload(payload)
+	}
+}
+
+func (m *Manager) ObserveTrustedSessionPayload(payload []byte) (BehaviorEvent, error) {
+	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.sessionEnabled.Load() || m.toolAdapter == nil {
+		return BehaviorEvent{}, errors.New("session_lifecycle_unobservable")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.DisallowUnknownFields()
+	var input TrustedSessionEvent
+	if err := decoder.Decode(&input); err != nil {
+		return BehaviorEvent{}, errors.New("agent_guard_session_event_json_invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return BehaviorEvent{}, errors.New("agent_guard_session_event_json_invalid")
+	}
+	verified, err := m.toolAdapter.VerifySession(input)
+	if err != nil {
+		return BehaviorEvent{}, err
+	}
+
+	root := ProcessIdentity{PID: input.PID, StartTicks: input.StartTicks}
+	if input.Operation == SessionEventEnded {
+		session, unit, changed, endErr := m.tracker.EndTrustedSession(
+			verified.Source.SourceType, input.ExternalSessionID, root, input.OccurredAt,
+		)
+		if endErr != nil {
+			return BehaviorEvent{}, endErr
+		}
+		if changed {
+			m.queueExecutionUnitStatus(unit, "agent_execution_unit_stopped")
+			m.queueSessionStatus(session, "agent_behavior_session_stopped")
+			m.syncKernelSubjects()
+			logger.Info("agent_guard_trusted_session_ended",
+				zap.String("host_id", m.cfg.HostID),
+				zap.String("instance_id", session.InstanceID),
+				zap.String("session_id", session.SessionID),
+				zap.String("external_session_ref", stableID("external_session", input.ExternalSessionID)),
+				zap.Uint32("root_pid", input.PID),
+				zap.String("source", verified.Source.SourceType))
+		}
+		return BehaviorEvent{}, nil
+	}
+
+	process, err := m.scanner.ReadPID(input.PID)
+	if err != nil || process.Identity != root {
+		return BehaviorEvent{}, errors.New("agent_guard_session_process_identity_stale")
+	}
+	subject, ok := m.tracker.Attribute(process)
+	if !ok {
+		subject = m.tracker.OnExec(process)
+		ok = subject.InstanceID != ""
+	}
+	if !ok || subject.Confidence != ConfidenceConfirmed {
+		return BehaviorEvent{}, errors.New("agent_guard_session_process_not_confirmed")
+	}
+	session, unit, changed, err := m.tracker.StartTrustedSession(
+		process, subject, verified.Source.SourceType, input.ExternalSessionID, input.OccurredAt,
+	)
+	if err != nil {
+		return BehaviorEvent{}, err
+	}
+	m.queueTrustedSessionStarted(session, unit, changed)
+	m.syncKernelSubjects()
+	if input.Operation == SessionEventActivated && !changed {
+		return BehaviorEvent{}, nil
+	}
+	logger.Info("agent_guard_trusted_session_started",
+		zap.String("host_id", m.cfg.HostID),
+		zap.String("instance_id", session.InstanceID),
+		zap.String("session_id", session.SessionID),
+		zap.String("execution_unit_id", unit.UnitID),
+		zap.String("external_session_ref", stableID("external_session", input.ExternalSessionID)),
+		zap.Uint32("root_pid", input.PID),
+		zap.String("source", verified.Source.SourceType))
+
+	event, accepted := m.observeRawEvent(RawBehavior{
+		EventID: input.EventID, EventType: "agent_behavior", OccurredAt: input.OccurredAt,
+		Category: CategoryProcess, Operation: "session_root", Outcome: OutcomeSuccess,
+		Process: process, Argv: process.Argv,
+		Resource: Resource{Type: "process", Identity: process.Exe},
+		Source:   verified.Source.SourceType, Sensor: lifecycleSensor(input.Operation), Visibility: "complete",
+		Decision: DecisionAudit, Severity: "info",
+		Evidence: map[string]any{"trusted_proof": verified.Proof},
+	})
+	if !accepted {
+		return BehaviorEvent{}, errors.New("agent_guard_session_root_unattributed")
+	}
+	return event, nil
+}
+
+func lifecycleSensor(operation string) string {
+	if operation == SessionEventActivated {
+		return "PreToolUse"
+	}
+	return "SessionStart"
+}
+
+func (m *Manager) queueTrustedSessionStarted(session BehaviorSession, unit ExecutionUnit, changed bool) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	wasSessionStarted := m.startedSessions[session.SessionID]
+	wasUnitStarted := m.startedUnits[unit.UnitID]
+	m.queuePendingLifecyclesLocked()
+	if changed && wasUnitStarted {
+		m.queueExecutionUnitStatus(unit, "agent_execution_unit_updated")
+	}
+	if changed && wasSessionStarted {
+		m.queueSessionStatus(session, "agent_behavior_session_updated")
+	}
+}
+
 func (m *Manager) setToolIngressDesired(enabled bool) error {
 	m.toolIngressMu.Lock()
 	if !enabled {
@@ -563,7 +695,7 @@ func (m *Manager) setToolIngressDesired(enabled bool) error {
 	}
 	ingress, err := StartToolHookReceiver(
 		m.cfg.ToolHookSocket, m.toolAdapter.SocketPolicy(),
-		m.toolAdapter.AuthorizePeer, m.ObserveTrustedToolPayload,
+		m.toolAdapter.AuthorizePeer, m.ObserveTrustedPayload,
 	)
 	if err != nil {
 		return err
@@ -757,7 +889,7 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 		Operation:  operation,
 		Outcome:    outcome,
 		Process:    process,
-		Argv:       strings.Fields(stringValue(eventMap["commandline"])),
+		Argv:       processCommandArgv(process, stringValue(eventMap["commandline"])),
 		Resource:   resource,
 		Source:     "ebpf",
 		Sensor:     eventType,
@@ -773,6 +905,13 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 		}, process, normalized)
 	}
 	return true
+}
+
+func processCommandArgv(process ProcessSnapshot, fallback string) []string {
+	if len(process.Argv) > 0 {
+		return append([]string(nil), process.Argv...)
+	}
+	return strings.Fields(fallback)
 }
 
 func (m *Manager) observeProcessExit(eventMap map[string]any, pid uint32) bool {

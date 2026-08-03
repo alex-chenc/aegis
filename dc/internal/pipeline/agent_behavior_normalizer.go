@@ -379,6 +379,9 @@ func redactArgv(values []string) []string {
 }
 
 func redactText(value string) string {
+	// jsonb cannot store \u0000. Keep the projection resilient to older agents
+	// and process-title padding even when collection-side sanitization is absent.
+	value = strings.ReplaceAll(strings.ToValidUTF8(value, "\uFFFD"), "\x00", " ")
 	value = truncate(value)
 	lower := strings.ToLower(value)
 	if index := strings.Index(lower, "bearer "); index >= 0 {

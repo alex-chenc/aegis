@@ -1,6 +1,7 @@
 .PHONY: all build clean test bpf package upload docker-base-image docker-build
 
 BINARY_NAME=aegis-agent
+HOOK_BINARY_NAME=aegis-codex-hook
 BPF_DIR=internal/ebpf/bpf
 BPF_OBJ_DIR=internal/ebpf/bpf/obj
 ROOT_DIR?=$(abspath ..)
@@ -44,13 +45,15 @@ build:
 	@echo "Building agent..."
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/$(BINARY_NAME)-linux-amd64 ./cmd/agent
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ./dist/$(BINARY_NAME)-linux-arm64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/$(HOOK_BINARY_NAME)-linux-amd64 ./cmd/aegis-codex-hook
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ./dist/$(HOOK_BINARY_NAME)-linux-arm64 ./cmd/aegis-codex-hook
 
 package:
 	@echo "Packaging agent..."
 	@mkdir -p dist/bpf
 	@cp $(BPF_OBJ_DIR)/*.ringbuf.bpf.o dist/bpf/ 2>/dev/null || true
 	@cp $(BPF_OBJ_DIR)/*.perf.bpf.o dist/bpf/ 2>/dev/null || true
-	cd dist && tar -czf $(BINARY_NAME).tar.gz $(BINARY_NAME)-linux-amd64 bpf/*.bpf.o
+	cd dist && tar -czf $(BINARY_NAME).tar.gz $(BINARY_NAME)-linux-amd64 $(HOOK_BINARY_NAME)-linux-amd64 bpf/*.bpf.o
 	@echo "Package created: dist/$(BINARY_NAME).tar.gz"
 
 upload:

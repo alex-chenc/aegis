@@ -53,7 +53,13 @@ func (r *AgentBehaviorEventRepository) CreateWithContext(ctx context.Context, ev
 		if err := rejectReplayedToolProof(tx, event); err != nil {
 			return err
 		}
-		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(event)
+		// Only raw_event_id denotes an idempotent Kafka replay. A collision on
+		// host/boot/sequence is a producer defect and must surface as an error,
+		// never masquerade as a replay while dropping a distinct behavior event.
+		result := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "raw_event_id"}},
+			DoNothing: true,
+		}).Create(event)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -298,11 +304,13 @@ func (r *AgentGuardStateRepository) UpsertWithContext(
 				"isolation_actual":    gorm.Expr("EXCLUDED.isolation_actual"),
 				"isolation_diff":      gorm.Expr("EXCLUDED.isolation_diff"),
 				"status": gorm.Expr(
-					"CASE WHEN agent_execution_units.status = 'stopped' THEN agent_execution_units.status ELSE EXCLUDED.status END",
+					"CASE WHEN EXCLUDED.last_seen_at >= agent_execution_units.last_seen_at THEN EXCLUDED.status ELSE agent_execution_units.status END",
 				),
 				"last_seen_at": gorm.Expr("GREATEST(agent_execution_units.last_seen_at, EXCLUDED.last_seen_at)"),
-				"stopped_at":   gorm.Expr("COALESCE(agent_execution_units.stopped_at, EXCLUDED.stopped_at)"),
-				"updated_at":   gorm.Expr("GREATEST(agent_execution_units.updated_at, EXCLUDED.updated_at)"),
+				"stopped_at": gorm.Expr(
+					"CASE WHEN EXCLUDED.last_seen_at >= agent_execution_units.last_seen_at THEN EXCLUDED.stopped_at ELSE agent_execution_units.stopped_at END",
+				),
+				"updated_at": gorm.Expr("GREATEST(agent_execution_units.updated_at, EXCLUDED.updated_at)"),
 			}),
 		}).Create(projection.Unit)
 		return result.RowsAffected == 1, result.Error
@@ -329,11 +337,13 @@ func (r *AgentGuardStateRepository) UpsertWithContext(
 				"correlation_token_hash": gorm.Expr("EXCLUDED.correlation_token_hash"),
 				"completeness":           gorm.Expr("EXCLUDED.completeness"),
 				"status": gorm.Expr(
-					"CASE WHEN agent_behavior_sessions.status = 'ended' THEN agent_behavior_sessions.status ELSE EXCLUDED.status END",
+					"CASE WHEN EXCLUDED.last_seen_at >= agent_behavior_sessions.last_seen_at THEN EXCLUDED.status ELSE agent_behavior_sessions.status END",
 				),
 				"last_seen_at": gorm.Expr("GREATEST(agent_behavior_sessions.last_seen_at, EXCLUDED.last_seen_at)"),
-				"ended_at":     gorm.Expr("COALESCE(agent_behavior_sessions.ended_at, EXCLUDED.ended_at)"),
-				"updated_at":   gorm.Expr("GREATEST(agent_behavior_sessions.updated_at, EXCLUDED.updated_at)"),
+				"ended_at": gorm.Expr(
+					"CASE WHEN EXCLUDED.last_seen_at >= agent_behavior_sessions.last_seen_at THEN EXCLUDED.ended_at ELSE agent_behavior_sessions.ended_at END",
+				),
+				"updated_at": gorm.Expr("GREATEST(agent_behavior_sessions.updated_at, EXCLUDED.updated_at)"),
 			}),
 		}).Create(projection.Session)
 		return result.RowsAffected == 1, result.Error

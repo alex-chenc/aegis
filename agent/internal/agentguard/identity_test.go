@@ -56,6 +56,63 @@ func TestTrackerForkExecExitAndPIDReuse(t *testing.T) {
 	}
 }
 
+func TestTrustedSessionLifecycleUsesExternalIDAndHookRootProcess(t *testing.T) {
+	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
+	controller := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex", "app-server")
+	controller.PPID = 1
+	instance, ok := tracker.ObserveController(controller)
+	if !ok {
+		t.Fatal("expected confirmed Codex controller")
+	}
+	baseSubject, ok := tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("controller attribution missing")
+	}
+
+	session, unit, changed, err := tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAgentOfficial, "thr_real_123", time.Now().UTC(),
+	)
+	if err != nil || !changed {
+		t.Fatalf("start trusted session: session=%#v unit=%#v changed=%v err=%v", session, unit, changed, err)
+	}
+	if session.InstanceID != instance.InstanceID || session.ExternalSessionID != "thr_real_123" ||
+		session.Source != ToolSourceAgentOfficial || session.Confidence != ConfidenceConfirmed || session.Status != "active" {
+		t.Fatalf("trusted session identity=%#v", session)
+	}
+	if unit.SessionID != session.SessionID || unit.RootProcess != controller.Identity || unit.Status != "observed" {
+		t.Fatalf("trusted unit root=%#v", unit)
+	}
+
+	child := ProcessSnapshot{
+		Identity: ProcessIdentity{PID: 4110, StartTicks: 110}, PPID: controller.Identity.PID,
+		Exe: "/usr/bin/bash", Argv: []string{"bash", "-lc", "printf ok"},
+	}
+	if !tracker.OnFork(controller.Identity, child) {
+		t.Fatal("trusted root did not propagate to child")
+	}
+	childSubject, ok := tracker.LookupProcess(child.Identity)
+	if !ok || childSubject.SessionID != session.SessionID || childSubject.UnitID != unit.UnitID {
+		t.Fatalf("child not mounted under trusted session: %#v", childSubject)
+	}
+
+	endedSession, endedUnit, ended, err := tracker.EndTrustedSession(
+		ToolSourceAgentOfficial, "thr_real_123", controller.Identity, time.Now().UTC(),
+	)
+	if err != nil || !ended || endedSession.Status != "ended" || endedUnit.Status != "stopped" {
+		t.Fatalf("end trusted session: session=%#v unit=%#v ended=%v err=%v", endedSession, endedUnit, ended, err)
+	}
+	if _, ok := tracker.LookupProcess(child.Identity); ok {
+		t.Fatal("ended session kept descendant attribution")
+	}
+	current, ok := tracker.LookupProcess(controller.Identity)
+	if !ok || current.InstanceID != instance.InstanceID || current.SessionID == session.SessionID {
+		t.Fatalf("shared controller was not restored after session end: %#v", current)
+	}
+	if runtime, _ := tracker.Instance(instance.InstanceID); runtime.Status != "running" {
+		t.Fatalf("session end stopped shared runtime instance: %#v", runtime)
+	}
+}
+
 func TestTrackerCgroupAttributionDoesNotDependOnPPID(t *testing.T) {
 	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
 	controller := ProcessSnapshot{
@@ -176,7 +233,7 @@ func TestTrackerExitStopsControllerSessionAndUnitButChildExitDoesNot(t *testing.
 	}
 }
 
-func TestLateForkDoesNotOverwriteControllerAttribution(t *testing.T) {
+func TestForkedCodexExecKeepsParentAttribution(t *testing.T) {
 	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
 	parent := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex")
 	parentInstance, ok := tracker.ObserveController(parent)
@@ -185,23 +242,56 @@ func TestLateForkDoesNotOverwriteControllerAttribution(t *testing.T) {
 	}
 	child := confirmedProcess(4200, 200, "/opt/codex/bin/codex", "codex")
 	child.PPID = parent.Identity.PID
-	childSubject := tracker.OnExec(child)
-	if childSubject.InstanceID == "" || childSubject.InstanceID == parentInstance.InstanceID {
-		t.Fatalf("expected child controller instance, got %#v", childSubject)
-	}
-
-	// Fork and exec are read from different eBPF maps. A delayed fork event must
-	// not replace the stronger controller attribution already established by exec.
 	if !tracker.OnFork(parent.Identity, child) {
-		t.Fatal("expected delayed fork to be accepted without changing attribution")
+		t.Fatal("expected forked child attribution")
+	}
+	childSubject := tracker.OnExec(child)
+	if childSubject.InstanceID != parentInstance.InstanceID {
+		t.Fatalf("forked Codex child created a duplicate instance: %#v", childSubject)
 	}
 	exit, ok := tracker.ExitPID(child.Identity.PID, time.Now().UTC())
-	if !ok || !exit.InstanceStopped || exit.Instance.InstanceID != childSubject.InstanceID {
-		t.Fatalf("late fork stole controller attribution: %#v", exit)
+	if !ok || exit.InstanceStopped {
+		t.Fatalf("child exit stopped parent controller: %#v", exit)
 	}
 	parentAfter, ok := tracker.Instance(parentInstance.InstanceID)
 	if !ok || parentAfter.Status != "running" {
 		t.Fatalf("child exit changed parent lifecycle: %#v", parentAfter)
+	}
+}
+
+func TestCodexExecBeforeForkEventInheritsKnownPPID(t *testing.T) {
+	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
+	parent := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex")
+	parentInstance, ok := tracker.ObserveController(parent)
+	if !ok {
+		t.Fatal("expected parent controller")
+	}
+	child := confirmedProcess(4200, 200, "/opt/codex/bin/codex", "codex")
+	child.PPID = parent.Identity.PID
+
+	subject := tracker.OnExec(child)
+	if subject.InstanceID != parentInstance.InstanceID {
+		t.Fatalf("exec-before-fork created duplicate instance: %#v", subject)
+	}
+	if len(tracker.Instances()) != 1 {
+		t.Fatalf("runtime instance count=%d, want 1", len(tracker.Instances()))
+	}
+}
+
+func TestReconcilerRepairsForkedCodexBeforeControllerDiscovery(t *testing.T) {
+	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
+	controller := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex")
+	instance, _ := tracker.ObserveController(controller)
+	transientChild := confirmedProcess(4200, 200, "/opt/codex/bin/codex", "codex")
+	transientChild.PPID = controller.Identity.PID
+
+	stats := NewReconciler(tracker).Reconcile([]ProcessSnapshot{controller, transientChild})
+	if stats.ControllersDiscovered != 0 {
+		t.Fatalf("forked Codex child discovered as controller: %#v", stats)
+	}
+	subject, ok := tracker.LookupProcess(transientChild.Identity)
+	if !ok || subject.InstanceID != instance.InstanceID {
+		t.Fatalf("forked child did not inherit parent: %#v", subject)
 	}
 }
 

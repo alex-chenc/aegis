@@ -44,6 +44,35 @@ func TestBuildAgentGuardProcessTreeUsesPIDStartTicksAndLatestExitState(t *testin
 	}
 }
 
+func TestAgentGuardSessionAndProcessLabelsExposeRealSessionIDPIDAndRedactedCmdline(t *testing.T) {
+	session := model.AgentBehaviorSession{ExternalSessionID: "thr_real_123", Source: "agent_official"}
+	if got := agentGuardSessionLabel(session); got != "thr_real_123" {
+		t.Fatalf("real session id was not displayed: %q", got)
+	}
+	event := model.AgentBehaviorEvent{
+		Category: "process", Operation: "exec", PID: intPtr(4100), PPID: intPtr(1),
+		ProcessStartTicks: "100", ProcessName: "codex", ProcessExe: "/usr/bin/codex",
+		CommandArgv: []byte(`["codex","app-server","--token=[REDACTED]"]`),
+		OccurredAt:  time.Now().UTC(),
+	}
+	tree := buildAgentGuardProcessTree([]model.AgentBehaviorEvent{event})
+	root := tree.Nodes["4100:100"]
+	if root == nil || root.Cmdline != "codex app-server --token=[REDACTED]" {
+		t.Fatalf("cmdline projection=%#v", root)
+	}
+	handler := &AgentGuardHandler{scopeSigner: testAgentGuardSigner(t)}
+	node, err := handler.panoramaProcessNode(service.AgentGuardPanoramaNodeRef{
+		HostID: uuid.NewString(), InstanceID: uuid.NewString(), SessionID: uuid.NewString(),
+		ExecutionUnitID: uuid.NewString(),
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Label != "PID 4100 · codex app-server --token=[REDACTED]" || node.Cmdline != root.Cmdline {
+		t.Fatalf("process label=%#v", node)
+	}
+}
+
 func intPtr(value int) *int { return &value }
 
 func TestAgentGuardPanoramaRebuildsPIDTreeFromFreshProcessFacts(t *testing.T) {

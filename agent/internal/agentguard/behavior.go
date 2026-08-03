@@ -35,7 +35,14 @@ type BehaviorNormalizer struct {
 }
 
 func NewBehaviorNormalizer(hostID, hostBootID string, tracker *IdentityTracker) *BehaviorNormalizer {
-	return &BehaviorNormalizer{hostID: hostID, hostBootID: hostBootID, tracker: tracker}
+	// host_boot_id is stable across Agent service restarts, so a counter that
+	// restarts at zero collides with the database's host/boot/sequence unique
+	// key and silently suppresses new behavior projections. Seed from wall time
+	// and increment atomically for the lifetime of this process.
+	return &BehaviorNormalizer{
+		hostID: hostID, hostBootID: hostBootID, tracker: tracker,
+		sequence: uint64(time.Now().UnixNano()),
+	}
 }
 
 func (n *BehaviorNormalizer) Normalize(raw RawBehavior) (BehaviorEvent, bool) {
@@ -221,6 +228,10 @@ func isSecretFlag(value string) bool {
 }
 
 func RedactString(value string) string {
+	// PostgreSQL jsonb rejects the JSON Unicode escape for NUL. Process title
+	// rewrites can leave NUL padding in procfs/eBPF strings, so normalize it at
+	// the collection boundary before the value can enter any behavior field.
+	value = strings.ReplaceAll(strings.ToValidUTF8(value, "\uFFFD"), "\x00", " ")
 	value = bearerPattern.ReplaceAllString(value, "${1}[REDACTED]")
 	value = keyValueSecretPattern.ReplaceAllString(value, "${1}=[REDACTED]")
 	parsed, err := url.Parse(value)

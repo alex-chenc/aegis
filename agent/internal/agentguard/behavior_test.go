@@ -60,6 +60,27 @@ func TestNormalizerRedactsSecretsAndRejectsUnattributed(t *testing.T) {
 	}
 }
 
+func TestNormalizerRemovesProcfsNULPaddingFromCommandLine(t *testing.T) {
+	tracker, child := newAttributedTracker(t)
+	normalizer := NewBehaviorNormalizer("host-1", "boot-1", tracker)
+	event, ok := normalizer.Normalize(RawBehavior{
+		OccurredAt: time.Now(), Category: CategoryProcess, Operation: "session_root",
+		Outcome: OutcomeSuccess, Process: child,
+		Argv:     []string{"codex\x00\x00", "app-server\x00--listen"},
+		Resource: Resource{Type: "process", Identity: "/opt/codex\x00"},
+	})
+	if !ok {
+		t.Fatal("expected attributed event")
+	}
+	encoded := event.MustJSON()
+	if strings.Contains(encoded, `\u0000`) || strings.ContainsRune(encoded, '\x00') {
+		t.Fatalf("NUL padding entered behavior JSON: %q", encoded)
+	}
+	if got := strings.Join(event.Actor.Argv, " "); !strings.Contains(got, "codex") || !strings.Contains(got, "app-server") {
+		t.Fatalf("command line was not preserved: %q", got)
+	}
+}
+
 func TestResolvePathUsesCwdDirFDAndContainerRoot(t *testing.T) {
 	got := ResolvePath(PathInput{RawPath: "../tmp/file.txt", CWD: "/work/sub"})
 	if got.ResolvedPath != "/work/tmp/file.txt" || got.Resolution != "cwd" {

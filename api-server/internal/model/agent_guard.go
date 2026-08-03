@@ -581,6 +581,7 @@ type AgentBehaviorSessionQuery struct {
 	ExecutionUnitID string `form:"execution_unit_id" json:"execution_unit_id"`
 	Status          string `form:"status" json:"status"`
 	Source          string `form:"source" json:"source"`
+	PreferTrusted   bool   `form:"prefer_trusted" json:"prefer_trusted"`
 }
 
 type AgentExecutionUnitQuery struct {

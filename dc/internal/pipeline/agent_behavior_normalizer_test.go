@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -85,6 +86,35 @@ func TestNormalizeAgentBehaviorRedactsSecretsAndTracksCollectionGaps(t *testing.
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("projection missing %q: %s", marker, text)
+		}
+	}
+}
+
+func TestNormalizeAgentBehaviorRemovesNULBeforeJSONBProjection(t *testing.T) {
+	hostID := uuid.New()
+	eventID := uuid.NewString()
+	raw := `{"schema":"aegis.agent_behavior.v1","event_id":"` + eventID +
+		`","host_id":"` + hostID.String() +
+		`","host_boot_id":"boot","agent_sequence":1,"instance_id":"` + uuid.NewString() +
+		`","execution_unit_id":"` + uuid.NewString() + `","session_id":"` + uuid.NewString() +
+		`","occurred_at":"2026-08-03T10:00:00Z","occurred_monotonic_ns":1,` +
+		`"category":"process","operation":"session_root","outcome":"success",` +
+		`"attribution_confidence":"confirmed","actor":{"pid":10,"ppid":1,"start_ticks":2,` +
+		`"exe":"/opt/codex\u0000","argv":["codex\u0000app-server"]},` +
+		`"resource":{"type":"process","identity":"/opt/codex\u0000"},` +
+		`"collection":{"source":"adapter_hook","sensor":"SessionStart","lost_events_since_last":0}}`
+
+	got, err := NormalizeAgentBehavior(eventID, hostID, raw)
+	if err != nil {
+		t.Fatalf("NormalizeAgentBehavior: %v", err)
+	}
+	for name, data := range map[string][]byte{
+		"command_argv": got.CommandArgv,
+		"resource":     got.Resource,
+		"raw_event":    []byte(SanitizeAgentGuardEventData(raw)),
+	} {
+		if bytes.Contains(data, []byte(`\u0000`)) || bytes.ContainsRune(data, '\x00') {
+			t.Fatalf("%s retained PostgreSQL-incompatible NUL: %q", name, data)
 		}
 	}
 }

@@ -31,4 +31,7 @@ func TestAgentInstallScriptEnablesGuardMonitoringByDefault(t *testing.T) {
 		strings.Contains(body, "AgentGuardBehaviorMonitorEnabled = false") {
 		t.Fatal("install script still disables Agent Guard monitoring")
 	}
+	if !strings.Contains(body, "AgentGuardSessionHookEnabled = false") {
+		t.Fatal("install script must keep trusted lifecycle hooks opt-in")
+	}
 }

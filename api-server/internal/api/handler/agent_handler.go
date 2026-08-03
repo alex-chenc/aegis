@@ -103,6 +103,11 @@ if [ -f ${INSTALL_DIR}/aegis-agent-linux-amd64 ]; then
 elif [ -f ${INSTALL_DIR}/aegis-agent-linux-arm64 ]; then
     mv ${INSTALL_DIR}/aegis-agent-linux-arm64 ${INSTALL_DIR}/aegis-agent
 fi
+if [ -f ${INSTALL_DIR}/aegis-codex-hook-linux-amd64 ]; then
+    mv ${INSTALL_DIR}/aegis-codex-hook-linux-amd64 ${INSTALL_DIR}/aegis-codex-hook
+elif [ -f ${INSTALL_DIR}/aegis-codex-hook-linux-arm64 ]; then
+    mv ${INSTALL_DIR}/aegis-codex-hook-linux-arm64 ${INSTALL_DIR}/aegis-codex-hook
+fi
 
 if [ ! -f ${INSTALL_DIR}/aegis-agent ]; then
     echo "解压失败，未找到 aegis-agent 文件！"
@@ -111,6 +116,9 @@ if [ ! -f ${INSTALL_DIR}/aegis-agent ]; then
     exit 1
 fi
 chmod +x ${INSTALL_DIR}/aegis-agent
+if [ -f ${INSTALL_DIR}/aegis-codex-hook ]; then
+    chmod +x ${INSTALL_DIR}/aegis-codex-hook
+fi
 
 # 创建配置文件
 echo "[3/6] 创建配置文件..."
@@ -122,6 +130,7 @@ HostID = ""
 AgentGuardEnabled = true
 AgentGuardBehaviorMonitorEnabled = true
 AgentGuardToolAdapterEnabled = false
+AgentGuardSessionHookEnabled = false
 AgentGuardToolSourceManifest = ""
 AgentGuardToolHookSocket = ""
 AgentGuardEnforcementEnabled = false

@@ -168,6 +168,34 @@ func TestAgentGuardQueryRepositoryFiltersRuntimeData(t *testing.T) {
 	}
 }
 
+func TestListSessionsPrefersRealHookSessionsOverActivityWindow(t *testing.T) {
+	db := setupAgentGuardQueryTestDB(t)
+	repo := NewAgentGuardQueryRepository(db)
+	instanceID, hostID, unitID := uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	for _, row := range []struct {
+		id, source, external string
+	}{
+		{uuid.NewString(), "activity_window", ""},
+		{uuid.NewString(), "agent_official", "thr_real_123"},
+	} {
+		if err := db.Exec(`INSERT INTO agent_behavior_sessions
+			(id,host_id,instance_id,execution_unit_id,external_session_id,source,confidence,status,
+			 behavior_count,finding_count,completeness,started_at,last_seen_at,created_at,updated_at)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, row.id, hostID, instanceID, unitID,
+			row.external, row.source, "confirmed", "active", 0, 0, `{}`, now, now, now, now).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, total, err := repo.ListSessions(context.Background(), model.AgentBehaviorSessionQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: 20},
+		InstanceID:          instanceID.String(), PreferTrusted: true,
+	})
+	if err != nil || total != 1 || len(items) != 1 || items[0].ExternalSessionID != "thr_real_123" {
+		t.Fatalf("preferred sessions total=%d items=%#v err=%v", total, items, err)
+	}
+}
+
 func TestAgentGuardQueryRepositoryTypedNotFound(t *testing.T) {
 	repo := NewAgentGuardQueryRepository(setupAgentGuardQueryTestDB(t))
 	ctx := context.Background()

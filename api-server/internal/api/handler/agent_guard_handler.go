@@ -973,6 +973,8 @@ type agentGuardPanoramaNode struct {
 	PPID              int                                   `json:"ppid,omitempty"`
 	StartTicks        string                                `json:"process_start_ticks,omitempty"`
 	ProcessStatus     string                                `json:"process_status,omitempty"`
+	Cmdline           string                                `json:"cmdline,omitempty"`
+	ExternalSessionID string                                `json:"external_session_id,omitempty"`
 	SessionSource     string                                `json:"session_source,omitempty"`
 	SessionConfidence string                                `json:"session_confidence,omitempty"`
 	Trust             *service.AgentGuardPanoramaTrust      `json:"trust,omitempty"`
@@ -1150,6 +1152,7 @@ func (h *AgentGuardHandler) panoramaInstanceChildren(
 	sessions, total, err := h.query.ListSessions(c.Request.Context(), model.AgentBehaviorSessionQuery{
 		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: page, PageSize: pageSize},
 		InstanceID:          ref.ObjectID,
+		PreferTrusted:       true,
 	})
 	if err != nil {
 		h.fail(c, err)
@@ -1174,6 +1177,7 @@ func (h *AgentGuardHandler) panoramaInstanceChildren(
 			ChildCount:    boolToInt64(session.ExecutionUnitID != nil),
 			OccurredAt:    session.StartedAt.UTC().Format(time.RFC3339Nano),
 			SessionSource: session.Source, SessionConfidence: session.Confidence,
+			ExternalSessionID: session.ExternalSessionID,
 		})
 	}
 	agentGuardSuccess(c, agentGuardPanoramaPage(nodes, total, page, pageSize))

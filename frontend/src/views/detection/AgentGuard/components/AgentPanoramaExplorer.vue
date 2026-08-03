@@ -83,6 +83,14 @@
             <dt>{{ t('agentGuard.panorama.visibility') }}</dt>
             <dd>{{ selected.collection.visibility }}</dd>
           </div>
+          <div v-if="selected.external_session_id">
+            <dt>{{ t('agentGuard.panorama.sessionId') }}</dt>
+            <dd>{{ selected.external_session_id }}</dd>
+          </div>
+          <div v-if="selected.cmdline">
+            <dt>{{ t('agentGuard.panorama.cmdline') }}</dt>
+            <dd>{{ selected.cmdline }}</dd>
+          </div>
           <div v-if="selected.collection?.lost_events_since_last">
             <dt>{{ t('agentGuard.panorama.lostEvents') }}</dt>
             <dd>{{ selected.collection.lost_events_since_last }}</dd>
@@ -218,6 +226,14 @@ function nodeKind(type: string) {
 }
 
 function nodeLabel(node: PanoramaTreeNode) {
+  if (node.node_type === 'process' && node.pid) {
+    if (node.label?.startsWith(`PID ${node.pid}`)) return node.label
+    const command = node.cmdline || node.label
+    return command ? `PID ${node.pid} · ${command}` : `PID ${node.pid}`
+  }
+  if (node.node_type === 'session' && node.external_session_id) {
+    return node.external_session_id
+  }
   if (node.node_type === 'session' && node.session_source === 'activity_window') {
     return t('agentGuard.panorama.inferredActivityWindow')
   }
@@ -226,7 +242,7 @@ function nodeLabel(node: PanoramaTreeNode) {
 
 function nodeMeta(node: PanoramaTreeNode) {
   if (node.pid) {
-    const parts = [`PID ${node.pid}`]
+    const parts: string[] = []
     if (node.ppid !== undefined) parts.push(`PPID ${node.ppid}`)
     if (node.process_status) parts.push(t(`agentGuard.processStatus.${node.process_status}`))
     return parts.join(' · ')

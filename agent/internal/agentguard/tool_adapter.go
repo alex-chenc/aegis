@@ -27,10 +27,14 @@ const (
 	ToolSourceAegisWrapper  = "aegis_wrapper"
 	ToolSourceRemoteSensor  = "aegis_remote_sensor"
 
-	ToolEventStarted   = "tool_call_started"
-	ToolEventCompleted = "tool_call_completed"
-	ToolEventFailed    = "tool_call_failed"
-	toolManifestSchema = "aegis.agent_guard.tool_sources.v1"
+	ToolEventStarted      = "tool_call_started"
+	ToolEventCompleted    = "tool_call_completed"
+	ToolEventFailed       = "tool_call_failed"
+	SessionEventStarted   = "session_started"
+	SessionEventActivated = "session_activated"
+	SessionEventEnded     = "session_ended"
+	ToolManifestSchemaV1  = "aegis.agent_guard.tool_sources.v1"
+	toolManifestSchema    = ToolManifestSchemaV1
 )
 
 var safeToolName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$`)
@@ -84,6 +88,23 @@ type TrustedToolEvent struct {
 	Remote            *RemoteSensorEvidence `json:"remote,omitempty"`
 }
 
+// TrustedSessionEvent is the metadata-only envelope emitted by native product
+// lifecycle hooks. It deliberately excludes prompts, responses, transcripts,
+// tool arguments, environment values, and command output.
+type TrustedSessionEvent struct {
+	EventID           string    `json:"event_id"`
+	SourceID          string    `json:"source_id"`
+	SourceVersion     string    `json:"source_version"`
+	Operation         string    `json:"operation"`
+	ExternalSessionID string    `json:"external_session_id"`
+	PID               uint32    `json:"pid"`
+	StartTicks        uint64    `json:"start_ticks"`
+	LifecycleReason   string    `json:"lifecycle_reason,omitempty"`
+	OccurredAt        time.Time `json:"occurred_at"`
+	IssuedAt          time.Time `json:"issued_at"`
+	Proof             string    `json:"proof,omitempty"`
+}
+
 type RemoteSensorEvidence struct {
 	SourceID              string    `json:"source_id"`
 	SourceVersion         string    `json:"source_version"`
@@ -107,6 +128,11 @@ type verifiedToolEvent struct {
 	CorrelationHash string
 	Proof           TrustedProof
 	Remote          *RemoteSensorEvidence
+}
+
+type verifiedSessionEvent struct {
+	Source TrustedToolSource
+	Proof  TrustedProof
 }
 
 type toolCorrelationLink struct {
@@ -189,6 +215,10 @@ func toolManifestDigest(manifest TrustedToolSourceManifest) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func TrustedToolManifestDigest(manifest TrustedToolSourceManifest) (string, error) {
+	return toolManifestDigest(manifest)
 }
 
 func validateTrustedToolSource(source TrustedToolSource) error {
@@ -344,6 +374,52 @@ func (a *TrustedToolAdapter) Verify(event TrustedToolEvent) (verifiedToolEvent, 
 	return verifiedToolEvent{Source: source, CorrelationHash: correlationHash, Proof: proof, Remote: remote}, nil
 }
 
+func (a *TrustedToolAdapter) VerifySession(event TrustedSessionEvent) (verifiedSessionEvent, error) {
+	if a == nil {
+		return verifiedSessionEvent{}, errors.New("session_lifecycle_unobservable")
+	}
+	source, ok := a.sources[event.SourceID]
+	if !ok || source.SourceVersionMismatch(event.SourceVersion) || source.SourceType == ToolSourceRemoteSensor {
+		return verifiedSessionEvent{}, errors.New("agent_guard_tool_source_untrusted")
+	}
+	if _, err := uuid.Parse(event.EventID); err != nil {
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_event_id_invalid")
+	}
+	if event.ExternalSessionID == "" || !validExternalSessionID(event.ExternalSessionID) {
+		return verifiedSessionEvent{}, errors.New("agent_guard_tool_session_invalid")
+	}
+	if event.PID == 0 || event.StartTicks == 0 {
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_process_invalid")
+	}
+	switch event.Operation {
+	case SessionEventStarted, SessionEventActivated, SessionEventEnded:
+	default:
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_operation_invalid")
+	}
+	if event.LifecycleReason != "" && !safeToolName.MatchString(event.LifecycleReason) {
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_reason_invalid")
+	}
+	if !validIssuedTime(a.now(), event.OccurredAt, event.IssuedAt) {
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_event_time_invalid")
+	}
+	proof, err := verifySessionProof(source, event)
+	if err != nil {
+		return verifiedSessionEvent{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, exists := a.seen[event.EventID]; exists {
+		return verifiedSessionEvent{}, errors.New("agent_guard_session_event_replayed")
+	}
+	a.seen[event.EventID] = a.now().UTC()
+	for id, seenAt := range a.seen {
+		if a.now().Sub(seenAt) > 24*time.Hour {
+			delete(a.seen, id)
+		}
+	}
+	return verifiedSessionEvent{Source: source, Proof: proof}, nil
+}
+
 func (s TrustedToolSource) SourceVersionMismatch(version string) bool {
 	return strings.TrimSpace(version) == "" || version != s.Version
 }
@@ -364,6 +440,41 @@ func verifyToolProof(source TrustedToolSource, event TrustedToolEvent) (TrustedP
 	sum := sha256.Sum256(signature)
 	proofDigest := "sha256:" + hex.EncodeToString(sum[:])
 	return TrustedProof{Verified: true, Verifier: source.Verifier, ProofDigest: proofDigest, IssuedAt: event.IssuedAt.UTC()}, nil
+}
+
+func verifySessionProof(source TrustedToolSource, event TrustedSessionEvent) (TrustedProof, error) {
+	signed := event
+	signed.Proof = ""
+	data, err := json.Marshal(signed)
+	if err != nil {
+		return TrustedProof{}, err
+	}
+	publicKey, _ := base64.StdEncoding.DecodeString(source.PublicKey)
+	signature, err := base64.StdEncoding.DecodeString(event.Proof)
+	if err != nil || !ed25519.Verify(publicKey, data, signature) {
+		return TrustedProof{}, errors.New("agent_guard_session_event_signature_invalid")
+	}
+	sum := sha256.Sum256(signature)
+	return TrustedProof{
+		Verified: true, Verifier: source.Verifier,
+		ProofDigest: "sha256:" + hex.EncodeToString(sum[:]), IssuedAt: event.IssuedAt.UTC(),
+	}, nil
+}
+
+// SignTrustedSessionEvent is shared with the small local Codex hook helper.
+// The private key never crosses the local hook boundary or enters an event.
+func SignTrustedSessionEvent(event *TrustedSessionEvent, privateKey ed25519.PrivateKey) error {
+	if event == nil || len(privateKey) != ed25519.PrivateKeySize {
+		return errors.New("agent_guard_session_signing_key_invalid")
+	}
+	signed := *event
+	signed.Proof = ""
+	data, err := json.Marshal(signed)
+	if err != nil {
+		return err
+	}
+	event.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, data))
+	return nil
 }
 
 func (a *TrustedToolAdapter) verifyRemote(evidence RemoteSensorEvidence) (RemoteSensorEvidence, error) {

@@ -270,6 +270,7 @@ func main() {
 		Enabled:                cfg.AgentGuardEnabled,
 		BehaviorMonitorEnabled: cfg.AgentGuardBehaviorMonitorEnabled,
 		ToolAdapterEnabled:     cfg.AgentGuardToolAdapterEnabled,
+		SessionHookEnabled:     cfg.AgentGuardSessionHookEnabled,
 		ToolSourceManifest:     cfg.AgentGuardToolSourceManifest,
 		ToolHookSocket:         cfg.AgentGuardToolHookSocket,
 		EnforcementEnabled:     cfg.AgentGuardEnforcementEnabled,

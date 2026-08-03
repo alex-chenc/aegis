@@ -123,6 +123,8 @@ export default {
     aiOnlyNotice: '智能研判不代表已证实事实，且不能单独触发自动阻断。',
   },
   panorama: {
+	sessionId: '会话 ID',
+	cmdline: '进程命令行',
     inferredActivityWindow: '推断活动窗口（非 Codex 会话）',
     inferredSessionHint: '仅按进程活动推断，未获得来源会话 ID',
     tree: '行为关系树',

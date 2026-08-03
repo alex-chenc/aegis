@@ -59,6 +59,7 @@ type fakeAgentGuardQuery struct {
 	actions         []model.AgentGuardAction
 	lastAgentQuery  model.AgentGuardAgentQuery
 	lastInstance    model.AgentRuntimeInstanceQuery
+	lastSession     model.AgentBehaviorSessionQuery
 	lastFinding     model.AgentSecurityFindingQuery
 	lastAction      model.AgentGuardActionQuery
 	listAgentsCalls int
@@ -96,7 +97,8 @@ func (f *fakeAgentGuardQuery) GetInstance(context.Context, uuid.UUID) (*model.Ag
 	item := f.instances[0]
 	return &item, nil
 }
-func (f *fakeAgentGuardQuery) ListSessions(context.Context, model.AgentBehaviorSessionQuery) ([]model.AgentBehaviorSession, int64, error) {
+func (f *fakeAgentGuardQuery) ListSessions(_ context.Context, query model.AgentBehaviorSessionQuery) ([]model.AgentBehaviorSession, int64, error) {
+	f.lastSession = query
 	return f.sessions, int64(len(f.sessions)), nil
 }
 func (f *fakeAgentGuardQuery) GetSession(_ context.Context, id uuid.UUID) (*model.AgentBehaviorSession, error) {

@@ -123,6 +123,8 @@ export default {
     aiOnlyNotice: 'AI assessment is not a proven fact and cannot trigger automatic blocking on its own.',
   },
   panorama: {
+	sessionId: 'Session ID',
+	cmdline: 'Process command line',
     inferredActivityWindow: 'Inferred activity window (not a Codex session)',
     inferredSessionHint: 'Inferred from process activity; no source session ID is available',
     tree: 'Behavior relationship tree',

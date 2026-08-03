@@ -146,6 +146,18 @@ func signTrustedToolEvent(event *TrustedToolEvent, privateKey ed25519.PrivateKey
 	event.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, data))
 }
 
+func (f toolAdapterFixture) sessionEvent(process ProcessSnapshot, operation, externalSessionID string) TrustedSessionEvent {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	event := TrustedSessionEvent{
+		EventID: uuid.NewString(), SourceID: "claude-official-hook", SourceVersion: "1.0.0",
+		Operation: operation, ExternalSessionID: externalSessionID,
+		PID: process.Identity.PID, StartTicks: process.Identity.StartTicks,
+		LifecycleReason: "startup", OccurredAt: now, IssuedAt: now,
+	}
+	SignTrustedSessionEvent(&event, f.toolPrivate)
+	return event
+}
+
 func signRemoteEvidence(evidence *RemoteSensorEvidence, privateKey ed25519.PrivateKey) {
 	signed := *evidence
 	signed.Proof = ""
@@ -254,6 +266,87 @@ func TestTrustedToolExternalSessionIdentityIsSignedAndValidated(t *testing.T) {
 	signTrustedToolEvent(&invalid, fixture.toolPrivate)
 	if _, err := fixture.adapter.Verify(invalid); err == nil || !strings.Contains(err.Error(), "session") {
 		t.Fatalf("oversized external session accepted: %v", err)
+	}
+}
+
+func TestTrustedCodexSessionLifecycleIsSignedAndBoundToRootProcess(t *testing.T) {
+	fixture := newToolAdapterFixture(t)
+	root := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex", "app-server")
+	start := fixture.sessionEvent(root, SessionEventStarted, "thr_real_123")
+	verified, err := fixture.adapter.VerifySession(start)
+	if err != nil || verified.Source.SourceType != ToolSourceAgentOfficial {
+		t.Fatalf("verify session start: verified=%#v err=%v", verified, err)
+	}
+
+	tampered := fixture.sessionEvent(root, SessionEventEnded, "thr_real_123")
+	tampered.ExternalSessionID = "thr_other"
+	if _, err := fixture.adapter.VerifySession(tampered); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("tampered lifecycle event accepted: %v", err)
+	}
+
+	missingID := fixture.sessionEvent(root, SessionEventStarted, "")
+	if _, err := fixture.adapter.VerifySession(missingID); err == nil || !strings.Contains(err.Error(), "session") {
+		t.Fatalf("lifecycle without session id accepted: %v", err)
+	}
+}
+
+func TestManagerTrustedSessionStartMountsForkTreeAndEndClosesOnlySession(t *testing.T) {
+	fixture := newToolAdapterFixture(t)
+	root := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex", "app-server")
+	root.ConfigEvidence = []string{".codex/config.toml"}
+	child := ProcessSnapshot{
+		Identity: ProcessIdentity{PID: 4110, StartTicks: 110}, PPID: root.Identity.PID,
+		Exe: "/usr/bin/bash", Argv: []string{"bash", "-lc", "printf ok"},
+	}
+	scanner := &fakeScanner{processes: map[uint32]ProcessSnapshot{root.Identity.PID: root, child.Identity.PID: child}}
+	manager := NewManager(ManagerConfig{
+		Enabled: true, BehaviorMonitorEnabled: true, SessionHookEnabled: true,
+		ToolAdapter: fixture.adapter, HostID: "host-1", StateDir: t.TempDir(),
+		ReconcileInterval: time.Hour, FlushInterval: time.Hour, SpoolCapacity: 64,
+	}, scanner, nil)
+	manager.sessionEnabled.Store(true)
+	manager.tracker.ObserveController(root)
+
+	start := fixture.sessionEvent(root, SessionEventStarted, "thr_real_123")
+	payload, _ := json.Marshal(start)
+	rootEvent, err := manager.ObserveTrustedSessionPayload(payload)
+	if err != nil || rootEvent.Operation != "session_root" || rootEvent.Actor.PID != root.Identity.PID {
+		t.Fatalf("observe session start: event=%#v err=%v", rootEvent, err)
+	}
+	if rootEvent.EventType != "agent_behavior" {
+		t.Fatalf("session root must use the existing DC behavior route: %#v", rootEvent)
+	}
+	if !manager.tracker.OnFork(root.Identity, child) {
+		t.Fatal("session root did not mount child")
+	}
+	childSubject, ok := manager.tracker.LookupProcess(child.Identity)
+	if !ok || childSubject.SessionID != rootEvent.SessionID || childSubject.UnitID != rootEvent.ExecutionUnitID {
+		t.Fatalf("child scope=%#v root event=%#v", childSubject, rootEvent)
+	}
+
+	end := fixture.sessionEvent(root, SessionEventEnded, "thr_real_123")
+	end.LifecycleReason = "other"
+	SignTrustedSessionEvent(&end, fixture.toolPrivate)
+	payload, _ = json.Marshal(end)
+	if _, err := manager.ObserveTrustedSessionPayload(payload); err != nil {
+		t.Fatalf("observe session end: %v", err)
+	}
+	for _, session := range manager.tracker.Sessions() {
+		if session.ExternalSessionID == "thr_real_123" && session.Status != "ended" {
+			t.Fatalf("session not ended: %#v", session)
+		}
+	}
+	for _, instance := range manager.tracker.Instances() {
+		if instance.Controller == root.Identity && instance.Status != "running" {
+			t.Fatalf("shared runtime stopped by session end: %#v", instance)
+		}
+	}
+
+	activate := fixture.sessionEvent(root, SessionEventActivated, "thr_real_123")
+	payload, _ = json.Marshal(activate)
+	resumedRoot, err := manager.ObserveTrustedSessionPayload(payload)
+	if err != nil || resumedRoot.Operation != "session_root" || resumedRoot.SessionID != rootEvent.SessionID {
+		t.Fatalf("resume ended session from PreToolUse: event=%#v err=%v", resumedRoot, err)
 	}
 }
 

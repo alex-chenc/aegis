@@ -170,6 +170,8 @@ export interface PanoramaTreeNode {
   ppid?: number
   process_start_ticks?: string
   process_status?: 'running' | 'stopped' | 'unknown' | string
+  cmdline?: string
+  external_session_id?: string
   session_source?: 'agent_official' | 'adapter_hook' | 'aegis_wrapper' | 'activity_window' | 'execution_unit' | string
   session_confidence?: 'confirmed' | 'probable' | 'inferred' | string
   event_id?: string

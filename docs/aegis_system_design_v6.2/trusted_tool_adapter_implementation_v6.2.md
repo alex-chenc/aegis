@@ -87,6 +87,22 @@ Agent 只在内存中使用 correlation token，并上报 `sha256:<64hex>`；原
 不写入 RuntimeEvent、日志或数据库。DC 只把 hash 当 join key，并且必须再次
 匹配真实 process/resource 或远端 OS sensor event 后才建立证据边。
 
+### 3.1 Codex 会话生命周期元数据
+
+同一签名 manifest/socket 还允许独立的 metadata-only 生命周期 operation：
+`session_started`、`session_activated`、`session_ended`。它们必须携带非空
+`external_session_id`、根 `pid + start_ticks`、时间和 Ed25519 proof，不携带工具名、
+correlation token 或任何会话正文。
+
+- `SessionStart` 产生 `session_started`，首个 Hook helper 的 PPID 固定为会话根。
+- `PreToolUse` 产生 `session_activated`，用于共享 Codex app-server 在 fork 工具进程前
+  切换当前真实会话，事件本身不产生工具语义。
+- `SessionEnd` 产生 `session_ended`，精确关闭该 external session 的行为 session/unit。
+
+生命周期由独立本地开关 `AgentGuardSessionHookEnabled` 控制，不会因为启用它而把
+`collection.tool_adapter_enabled` 或工具语义自动升级为可信。工具事件仍严格遵守本章
+原有三重灰度和 correlation 契约。
+
 ## 4. 远端证据和动作边界
 
 远端关联采用精确 event ID、host、execution unit、hash 和 ±5 分钟窗口的有界

@@ -160,20 +160,30 @@ func (t *IdentityTracker) OnFork(parent ProcessIdentity, child ProcessSnapshot) 
 func (t *IdentityTracker) OnExec(process ProcessSnapshot) GuardSubject {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var launchedBy string
 	if current, ok := t.processLabels[process.Identity.PID]; ok && current.Identity.StartTicks == process.Identity.StartTicks {
-		launchedBy = current.Subject.InstanceID
-	}
-	match := t.profiles.MatchController(process)
-	if match.Profile != nil && match.Confidence == ConfidenceConfirmed {
-		instance, _ := t.observeControllerLocked(process, match, launchedBy)
-		return t.processLabels[instance.Controller.PID].Subject
-	}
-	if current, ok := t.processLabels[process.Identity.PID]; ok && current.Identity.StartTicks == process.Identity.StartTicks {
+		// A forked Codex process can remain executable as "codex" briefly before
+		// execve installs the actual tool binary. It is still a descendant of the
+		// existing controller/session and must not become another runtime instance.
 		current.Process = process
 		t.processLabels[process.Identity.PID] = current
 		t.touchLocked(current.Subject, time.Now().UTC())
 		return current.Subject
+	}
+	// sched_process_exec may be consumed before the matching fork event. PPID
+	// from procfs is sufficient to inherit an already confirmed controller or
+	// Hook session and prevents the transient forked `codex` image from being
+	// registered as a second runtime instance.
+	if parent, ok := t.processLabels[process.PPID]; ok && parent.Identity.PID == process.PPID {
+		t.processLabels[process.Identity.PID] = processLabel{
+			Identity: process.Identity, Process: process, Subject: parent.Subject,
+		}
+		t.touchLocked(parent.Subject, time.Now().UTC())
+		return parent.Subject
+	}
+	match := t.profiles.MatchController(process)
+	if match.Profile != nil && match.Confidence == ConfidenceConfirmed {
+		instance, _ := t.observeControllerLocked(process, match, "")
+		return t.processLabels[instance.Controller.PID].Subject
 	}
 	return GuardSubject{Confidence: ConfidenceUnattributed}
 }
@@ -593,6 +603,161 @@ func (t *IdentityTracker) ObserveTrustedSession(
 	return session, changed
 }
 
+// StartTrustedSession creates a real product session from an authenticated
+// lifecycle hook. The first process observed by that hook becomes the root of
+// a dedicated local process tree; later fork/exec attribution inherits this
+// session and unit from the root label.
+func (t *IdentityTracker) StartTrustedSession(
+	process ProcessSnapshot,
+	subject GuardSubject,
+	source, externalSessionID string,
+	observedAt time.Time,
+) (BehaviorSession, ExecutionUnit, bool, error) {
+	if !process.Identity.Valid() || !validExternalSessionID(externalSessionID) || externalSessionID == "" ||
+		!trustedLifecycleSource(source) {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session identity is incomplete")
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	instance, ok := t.instances[subject.InstanceID]
+	if !ok || instance.Confidence != ConfidenceConfirmed || instance.Status != "running" {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session runtime instance is unavailable")
+	}
+	if label, exists := t.processLabels[process.Identity.PID]; exists &&
+		(label.Identity != process.Identity || label.Subject.InstanceID != instance.InstanceID) {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session root attribution conflicts")
+	}
+	if process.Identity != instance.Controller {
+		label, exists := t.processLabels[process.Identity.PID]
+		if !exists || label.Identity != process.Identity || label.Subject.InstanceID != instance.InstanceID {
+			return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session root is outside runtime instance")
+		}
+	}
+
+	sessionID := stableID("session", instance.InstanceID, source, externalSessionID)
+	unitID := stableID("unit", sessionID, string(IsolationLocalProcessTree))
+	session, exists := t.sessions[sessionID]
+	changed := !exists || session.Status != "active"
+	if !exists {
+		session = BehaviorSession{
+			SessionID: sessionID, InstanceID: instance.InstanceID,
+			ExternalSessionID: externalSessionID, Source: source,
+			Confidence: ConfidenceConfirmed, Status: "active",
+			FirstSeenAt: observedAt, LastSeenAt: observedAt,
+		}
+	} else {
+		session.ExternalSessionID = externalSessionID
+		session.Source = source
+		session.Confidence = ConfidenceConfirmed
+		session.Status = "active"
+		session.LastSeenAt = observedAt
+	}
+	unit, unitExists := t.units[unitID]
+	if !unitExists || unit.Status != "observed" || unit.RootProcess != process.Identity {
+		changed = true
+	}
+	if !unitExists {
+		unit = ExecutionUnit{
+			UnitID: unitID, InstanceID: instance.InstanceID, SessionID: sessionID,
+			Type: IsolationLocalProcessTree, RootProcess: process.Identity,
+			Coverage: instance.Coverage, Status: "observed",
+			FirstSeenAt: observedAt, LastSeenAt: observedAt,
+		}
+	} else {
+		unit.RootProcess = process.Identity
+		unit.Status = "observed"
+		unit.LastSeenAt = observedAt
+	}
+	rootSubject := GuardSubject{
+		InstanceID: instance.InstanceID, SessionID: sessionID, UnitID: unitID,
+		Confidence: ConfidenceConfirmed,
+	}
+	t.sessions[sessionID] = session
+	t.units[unitID] = unit
+	t.processLabels[process.Identity.PID] = processLabel{
+		Identity: process.Identity, Process: process, Subject: rootSubject,
+	}
+	return session, unit, changed, nil
+}
+
+// EndTrustedSession closes only the matching product session and execution
+// unit. A shared Codex controller remains a running runtime instance and is
+// restored to its default activity attribution for future sessions.
+func (t *IdentityTracker) EndTrustedSession(
+	source, externalSessionID string,
+	root ProcessIdentity,
+	observedAt time.Time,
+) (BehaviorSession, ExecutionUnit, bool, error) {
+	if !root.Valid() || !validExternalSessionID(externalSessionID) || externalSessionID == "" ||
+		!trustedLifecycleSource(source) {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session identity is incomplete")
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var session BehaviorSession
+	for _, candidate := range t.sessions {
+		if candidate.Source == source && candidate.ExternalSessionID == externalSessionID {
+			candidateUnitID := stableID("unit", candidate.SessionID, string(IsolationLocalProcessTree))
+			if candidateUnit, ok := t.units[candidateUnitID]; ok && candidateUnit.RootProcess == root {
+				session = candidate
+				break
+			}
+		}
+	}
+	if session.SessionID == "" {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session was not found")
+	}
+	unitID := stableID("unit", session.SessionID, string(IsolationLocalProcessTree))
+	unit, ok := t.units[unitID]
+	if !ok {
+		return BehaviorSession{}, ExecutionUnit{}, false, fmt.Errorf("trusted session unit was not found")
+	}
+	if session.Status == "ended" && unit.Status == "stopped" {
+		return session, unit, false, nil
+	}
+	session.Status = "ended"
+	session.LastSeenAt = observedAt
+	unit.Status = "stopped"
+	unit.LastSeenAt = observedAt
+	t.sessions[session.SessionID] = session
+	t.units[unit.UnitID] = unit
+
+	instance := t.instances[session.InstanceID]
+	for pid, label := range t.processLabels {
+		if label.Subject.SessionID != session.SessionID {
+			continue
+		}
+		if label.Identity == instance.Controller {
+			label.Subject = defaultControllerSubject(instance.InstanceID, instance.Confidence)
+			t.processLabels[pid] = label
+			continue
+		}
+		delete(t.processLabels, pid)
+	}
+	return session, unit, true, nil
+}
+
+func trustedLifecycleSource(source string) bool {
+	switch source {
+	case ToolSourceAgentOfficial, ToolSourceAdapterHook, ToolSourceAegisWrapper:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t *IdentityTracker) Units() []ExecutionUnit {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -777,6 +942,31 @@ func (r *Reconciler) Reconcile(processes []ProcessSnapshot) ReconcileStats {
 		}
 	}
 
+	// Repair descendants from already known parents before controller discovery.
+	// A forked controller binary otherwise appears briefly as a second Codex
+	// controller before it execs the requested shell/tool process.
+	repairDescendants := func() {
+		for pass := 0; pass < 4; pass++ {
+			repaired := false
+			for _, process := range processes {
+				if r.tracker.RefreshProcess(process, observedAt) {
+					continue
+				}
+				parent, ok := byPID[process.PPID]
+				if !ok {
+					continue
+				}
+				if r.tracker.OnFork(parent.Identity, process) {
+					stats.ProcessLabelsRepaired++
+					repaired = true
+				}
+			}
+			if !repaired {
+				break
+			}
+		}
+	}
+	repairDescendants()
 	for _, process := range processes {
 		if r.tracker.RefreshProcess(process, observedAt) {
 			continue
@@ -785,25 +975,9 @@ func (r *Reconciler) Reconcile(processes []ProcessSnapshot) ReconcileStats {
 			stats.ControllersDiscovered++
 		}
 	}
-	for pass := 0; pass < 4; pass++ {
-		repaired := false
-		for _, process := range processes {
-			if r.tracker.RefreshProcess(process, observedAt) {
-				continue
-			}
-			parent, ok := byPID[process.PPID]
-			if !ok {
-				continue
-			}
-			if r.tracker.OnFork(parent.Identity, process) {
-				stats.ProcessLabelsRepaired++
-				repaired = true
-			}
-		}
-		if !repaired {
-			break
-		}
-	}
+	// Newly discovered top-level controllers can have descendants in the same
+	// procfs snapshot; attach those after discovery as well.
+	repairDescendants()
 
 	return stats
 }
