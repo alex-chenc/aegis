@@ -631,10 +631,6 @@ func (h *AgentGuardHandler) ListFindings(c *gin.Context) {
 	if !h.applyFindingScope(c, &query) {
 		return
 	}
-	if len(query.InstanceIDs) == 0 && (c.Query("asset_id") != "" || c.Query("agent_scope_key") != "") {
-		agentGuardPage(c, []model.AgentSecurityFinding{}, 0)
-		return
-	}
 	items, total, err := h.query.ListFindings(c.Request.Context(), query)
 	if err != nil {
 		h.fail(c, err)
@@ -1481,16 +1477,12 @@ func (h *AgentGuardHandler) applyFindingScope(c *gin.Context, query *model.Agent
 	if assetID == "" && scopeKey == "" {
 		return true
 	}
-	instanceQuery := model.AgentRuntimeInstanceQuery{
-		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: agentGuardMaxPageSize},
-	}
 	if assetID != "" {
 		if _, err := uuid.Parse(assetID); err != nil {
 			agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "asset_id must be a UUID", nil)
 			return false
 		}
 		query.AssetID = assetID
-		instanceQuery.AssetIDs = []string{assetID}
 	} else {
 		if h.scopeSigner == nil {
 			h.failWith(c, http.StatusServiceUnavailable, "agent_guard_scope_unavailable", "Agent scope verification is unavailable")
@@ -1518,44 +1510,56 @@ func (h *AgentGuardHandler) applyFindingScope(c *gin.Context, query *model.Agent
 			return false
 		}
 		query.HostID = scope.HostID
-		instanceQuery.HostID = scope.HostID
 		if scope.AssetID != "" {
 			if _, parseErr := uuid.Parse(scope.AssetID); parseErr != nil {
 				h.failWith(c, http.StatusBadRequest, "agent_guard_scope_invalid", "Agent scope contains an invalid asset identity")
 				return false
 			}
 			query.AssetID = scope.AssetID
-			instanceQuery.AssetIDs = []string{scope.AssetID}
 		} else {
 			query.AgentType = scope.AgentType
 			query.ProfileKey = scope.ProfileKey
-			instanceQuery.AgentTypes = []string{scope.AgentType}
-			instanceQuery.ProfileKey = scope.ProfileKey
 		}
+	}
+
+	// A logical Agent scope is stable across runtime PID epochs. Do not enumerate
+	// its complete instance history: the finding repository can apply the signed
+	// host/type/profile or asset predicate directly, and history grows without a
+	// fixed upper bound. Only explicit instance filters need membership checks.
+	requestedInstanceIDs := append([]string(nil), query.InstanceIDs...)
+	if query.InstanceID != "" {
+		requestedInstanceIDs = append(requestedInstanceIDs, query.InstanceID)
+	}
+	requestedInstanceIDs = uniqueStrings(requestedInstanceIDs)
+	if len(requestedInstanceIDs) == 0 {
+		return true
+	}
+	if len(requestedInstanceIDs) > agentGuardMaxPageSize {
+		h.failWith(c, http.StatusConflict, "agent_guard_scope_too_broad", "Agent scope contains too many requested runtime instances")
+		return false
+	}
+	instanceQuery := model.AgentRuntimeInstanceQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: len(requestedInstanceIDs)},
+		HostID:              query.HostID,
+		InstanceIDs:         requestedInstanceIDs,
+		ProfileKey:          query.ProfileKey,
+	}
+	if query.AssetID != "" {
+		instanceQuery.AssetIDs = []string{query.AssetID}
+	}
+	if query.AgentType != "" {
+		instanceQuery.AgentTypes = []string{query.AgentType}
 	}
 	instances, total, err := h.query.ListInstances(c.Request.Context(), instanceQuery)
 	if err != nil {
 		h.fail(c, err)
 		return false
 	}
-	if total > agentGuardMaxPageSize {
-		h.failWith(c, http.StatusConflict, "agent_guard_scope_too_broad", "Agent scope contains too many runtime instances")
+	if total != int64(len(requestedInstanceIDs)) || len(instances) != len(requestedInstanceIDs) {
+		h.failWith(c, http.StatusForbidden, "agent_guard_scope_invalid", "instance_id is outside the selected Agent scope")
 		return false
 	}
-	allowed := make(map[string]struct{}, len(instances))
-	query.InstanceIDs = make([]string, 0, len(instances))
-	for _, instance := range instances {
-		id := instance.ID.String()
-		allowed[id] = struct{}{}
-		query.InstanceIDs = append(query.InstanceIDs, id)
-	}
-	if query.InstanceID != "" {
-		if _, exists := allowed[query.InstanceID]; !exists {
-			h.failWith(c, http.StatusForbidden, "agent_guard_scope_invalid", "instance_id is outside the selected Agent scope")
-			return false
-		}
-		query.InstanceIDs = []string{query.InstanceID}
-	}
+	query.InstanceIDs = requestedInstanceIDs
 	return true
 }
 

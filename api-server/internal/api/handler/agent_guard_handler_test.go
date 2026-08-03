@@ -63,6 +63,7 @@ type fakeAgentGuardQuery struct {
 	lastAction      model.AgentGuardActionQuery
 	listAgentsCalls int
 	instanceCalls   int
+	instanceTotal   int64
 }
 
 func (f *fakeAgentGuardQuery) GetOverview(context.Context) (*model.AgentGuardOverview, error) {
@@ -82,7 +83,11 @@ func (f *fakeAgentGuardQuery) ListAgents(_ context.Context, query model.AgentGua
 func (f *fakeAgentGuardQuery) ListInstances(_ context.Context, query model.AgentRuntimeInstanceQuery) ([]model.AgentRuntimeInstance, int64, error) {
 	f.instanceCalls++
 	f.lastInstance = query
-	return f.instances, int64(len(f.instances)), nil
+	total := int64(len(f.instances))
+	if f.instanceTotal > 0 && len(query.InstanceIDs) == 0 {
+		total = f.instanceTotal
+	}
+	return f.instances, total, nil
 }
 func (f *fakeAgentGuardQuery) GetInstance(context.Context, uuid.UUID) (*model.AgentRuntimeInstance, error) {
 	if len(f.instances) == 0 {
@@ -424,13 +429,102 @@ func TestAgentGuardFindingScopeUsesResolvedInstanceIDsAndRedactsEvidence(t *test
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if len(query.lastFinding.InstanceIDs) != 1 || query.lastFinding.InstanceIDs[0] != instanceID.String() {
-		t.Fatalf("finding query not scoped to resolved instance: %#v", query.lastFinding)
+	if query.lastFinding.AssetID != assetID.String() || len(query.lastFinding.InstanceIDs) != 0 {
+		t.Fatalf("finding query did not preserve direct asset scope: %#v", query.lastFinding)
 	}
 	for _, secret := range []string{"secret-event", "/secret", "secret summary"} {
 		if strings.Contains(response.Body.String(), secret) {
 			t.Fatalf("finding list leaked %q: %s", secret, response.Body.String())
 		}
+	}
+}
+
+func TestAgentGuardFindingLogicalScopeDoesNotEnumerateHistoricalInstances(t *testing.T) {
+	hostID := uuid.New()
+	signer := testAgentGuardSigner(t)
+	query := &fakeAgentGuardQuery{instanceTotal: 636}
+	engine := newAgentGuardHandlerTestEngine(t, query, signer)
+	scopeKey, err := signer.Sign(service.AgentGuardScope{
+		HostID: hostID.String(), AgentType: "codex", ProfileKey: "codex-linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveAgentGuardRequest(
+		engine,
+		http.MethodGet,
+		"/api/v1/agent-guard/findings?agent_scope_key="+scopeKey+"&page=1&page_size=20",
+		nil,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if query.instanceCalls != 0 {
+		t.Fatalf("logical scope enumerated %d runtime-instance pages", query.instanceCalls)
+	}
+	if query.lastFinding.HostID != hostID.String() || query.lastFinding.AgentType != "codex" ||
+		query.lastFinding.ProfileKey != "codex-linux" {
+		t.Fatalf("finding scope not preserved: %#v", query.lastFinding)
+	}
+}
+
+func TestAgentGuardFindingLogicalScopeValidatesOnlySelectedInstance(t *testing.T) {
+	hostID := uuid.New()
+	instanceID := uuid.New()
+	signer := testAgentGuardSigner(t)
+	query := &fakeAgentGuardQuery{
+		instanceTotal: 636,
+		instances: []model.AgentRuntimeInstance{{
+			ID: instanceID, HostID: hostID, AgentType: "codex", ProfileKey: "codex-linux",
+		}},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, signer)
+	scopeKey, err := signer.Sign(service.AgentGuardScope{
+		HostID: hostID.String(), AgentType: "codex", ProfileKey: "codex-linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveAgentGuardRequest(
+		engine,
+		http.MethodGet,
+		"/api/v1/agent-guard/findings?agent_scope_key="+scopeKey+"&instance_id="+instanceID.String(),
+		nil,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if query.instanceCalls != 1 || len(query.lastInstance.InstanceIDs) != 1 ||
+		query.lastInstance.InstanceIDs[0] != instanceID.String() {
+		t.Fatalf("scope enumerated history instead of selected instance: %#v", query.lastInstance)
+	}
+}
+
+func TestAgentGuardFindingLogicalScopeRejectsExplicitForeignInstance(t *testing.T) {
+	hostID := uuid.New()
+	signer := testAgentGuardSigner(t)
+	query := &fakeAgentGuardQuery{}
+	engine := newAgentGuardHandlerTestEngine(t, query, signer)
+	scopeKey, err := signer.Sign(service.AgentGuardScope{
+		HostID: hostID.String(), AgentType: "codex", ProfileKey: "codex-linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveAgentGuardRequest(
+		engine,
+		http.MethodGet,
+		"/api/v1/agent-guard/findings?agent_scope_key="+scopeKey+"&instance_id="+uuid.NewString(),
+		nil,
+	)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if query.instanceCalls != 1 || len(query.lastInstance.InstanceIDs) != 1 {
+		t.Fatalf("explicit instance membership was not checked: %#v", query.lastInstance)
 	}
 }
 

@@ -22,6 +22,12 @@ Codex 对话会话；可信 Adapter 即使知道来源会话，也没有上传 `
 使 `sched_process_fork` 程序无法挂载。fork/exit 生命周期改用 raw tracepoint，规避
 perf-event 依赖；安装脚本只默认开启监控，Tool Adapter、执行阻断与冻结仍保持关闭。
 
+逻辑 Agent scope 的 finding 查询曾先枚举 scope 下全部 runtime instance，再受限于
+100 条分页上限。历史实例持续增长后，即使当前只有少量运行实例也会返回
+`agent_guard_scope_too_broad`。目标行为是让仓储层直接用签名 scope 中的
+`host_id + agent_type + profile_key`（或 `asset_id`）约束 finding；只有客户端显式指定
+instance 时才查询并验证该实例是否属于 scope。
+
 ## 2. 成功标准
 
 1. eBPF fork 流同时产生 fork 和主线程 exit 事件；事件包含 PID、PPID、UID 和 comm。
@@ -40,6 +46,8 @@ perf-event 依赖；安装脚本只默认开启监控，Tool Adapter、执行阻
    不计入当前运行数量，也不需要直接改写历史数据。
 7. 安装脚本默认启动 Agent Guard 监控模式；fork/exit eBPF 对象声明并使用 raw
    tracepoint，目标主机日志出现 `program=fork attach=raw_tracepoint`。
+8. 逻辑 Agent scope 的 finding 查询不枚举历史 runtime instance，不受实例累计数量影响；
+   显式 instance 仍执行严格归属校验。
 
 ## 3. 数据流
 
@@ -75,6 +83,7 @@ sched fork/exec/exit
 - eBPF Go 解码：fork 与 exit 共用 map 时能生成正确 event type、PID、PPID。
 - eBPF 配置/对象：fork 使用 raw tracepoint，两个对象均能加载为 RawTracepoint 类型。
 - 安装脚本：api-server 与 server 的兼容脚本都默认开启 Guard 与行为监控，但不启用阻断。
+- API scope：超过 100 个历史实例时逻辑 scope 查询仍成功；显式越权 instance 被拒绝。
 - IdentityTracker：controller exit 转 stopped；child exit 不停止 controller；
   reconciler 丢失 PID 时产生同等停止转换。
 - Manager：exit 在 `/proc/<pid>` 已消失后仍可使用 tracker 快照生成行为并排队停止状态。
