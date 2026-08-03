@@ -44,12 +44,17 @@ V6.2 必须继承当前前端的真实设计系统，而不是建设一套独立
 - `frontend/src/views/detection/Alerts.vue`、`Rules.vue`、`Policies.vue`：筛选卡、表格、分页、开关、危险操作样式。
 - `frontend/src/components/ProcessTree.vue`：进程关系、PID/PPID、cmdline 和风险节点的现有表达方式。
 
-V6.2 在侧边栏新增独立“智能体防护”父菜单，父菜单下只允许两个可见子菜单：
+V6.2 在侧边栏新增独立“智能体防护”父菜单，P5 后父菜单下有三个可见子菜单：
 
 1. 智能体事件感知与防护。
 2. 智能体逃逸防护。
+3. 智能体会话检测。
 
-策略、规则、运行实例、行为流水和安全结论作为这两个子页内部的区域、抽屉或详情状态，不再占用一级或二级侧边栏菜单。不把 Agent Guard 策略混入通用 MITRE 阻断策略，因为 Agent Guard 的目标是 Agent 类型、全行为域、关联规则和隔离规则，不是单一 MITRE ID。
+策略、规则、运行实例、行为流水和安全结论作为事件/逃逸子页内部区域、抽屉或
+详情状态；会话列表、会话分析、风险标记和采集覆盖作为会话检测子页内部区域，
+不再占用一级或二级侧边栏菜单。不把 Agent Guard 策略混入通用 MITRE 阻断
+策略，因为 Agent Guard 的目标是 Agent 类型、全行为域、关联规则和隔离规则，
+不是单一 MITRE ID。
 
 ## 3. 路由
 
@@ -62,6 +67,9 @@ V6.2 在侧边栏新增独立“智能体防护”父菜单，父菜单下只允
 
 /detection/agent-guard/escape
   智能体逃逸防护
+
+/detection/agent-guard/sessions
+  智能体会话检测
 ```
 
 Agent 详情不导航到独立页面，通过 `asset_id/instance_id/finding_id/event_id`
@@ -154,6 +162,7 @@ frontend/src/
 智能体防护
   智能体事件感知与防护
   智能体逃逸防护
+  智能体会话检测
 ```
 
 禁止把“概览、策略、内置规则、运行实例、行为全景、行为流水、安全结论”继续展开为七个并列子菜单。它们分别收纳为：
@@ -161,10 +170,11 @@ frontend/src/
 - “智能体事件感知与防护”：统计、五个内置规则、运行实例、行为全景树、行为事件、Finding、智能分析和策略配置入口。
 - “智能体逃逸防护”：沙箱覆盖、沙箱执行树、隔离基线/diff、逃逸事件和 freeze/resume/kill。
 
-两个子菜单使用当前 `App.vue` 的蓝青渐变激活态；页面不再增加一套横向产品导航。页面内部可以使用筛选器、分段控件、抽屉和详情路由，但不能形成第三层全局菜单。
+三个子菜单使用当前 `App.vue` 的蓝青渐变激活态；页面不再增加一套横向产品导航。页面内部可以使用筛选器、分段控件、抽屉和详情路由，但不能形成第三层全局菜单。
 
 视觉与产品交互基线以
 [agent_guard_frontend_prd_v6.2.md](agent_guard_frontend_prd_v6.2.md)
+及 [agent_session_detection_frontend_prd_v6.2.md](agent_session_detection_frontend_prd_v6.2.md)
 为准。
 
 ## 6. 子页一：智能体事件感知与防护
@@ -1167,3 +1177,35 @@ WebSocket 更新策略：
 12. 所有高风险动作具备原因、二次确认、结果和审计入口。
 13. 对一个 execution unit 的 freeze/resume/kill 不会影响同机其他 Agent，
     页面不提供主机级“全部冻结”入口。
+
+## 20. P5 智能体会话检测
+
+P5 新增：
+
+```text
+/detection/agent-guard/sessions
+```
+
+外层是服务端分页会话列表，一行一个 Codex、Claude Code 或 OpenCode source
+session，展示 Agent、主机/UID、项目摘要、消息/工具计数、采集完整性、AI verdict
+和风险标记；外层禁止出现 prompt、assistant、tool args/result 正文。
+
+点击会话打开 80% 详情抽屉，固定三个 Tab：
+
+1. 完整会话：user/assistant/tool/permission/compact/subagent/lifecycle 时序。
+2. AI 语义分析：verdict、category、证据、反证、不确定性和人工 marking 处置。
+3. 关联行为：tool call 与 PID、文件、网络、提权、逃逸、Finding 的证据链。
+
+新增目录建议：
+
+```text
+frontend/src/api/agentSessionDetection.ts
+frontend/src/types/agentSessionDetection.ts
+frontend/src/store/agentSessionDetection.ts
+frontend/src/views/detection/AgentSessionDetection/**
+frontend/src/i18n/locales/{zh-CN,en-US}/agentSessionDetection.ts
+```
+
+完整字段、交互、权限、虚拟列表、reveal/export 和测试以
+[agent_session_detection_frontend_prd_v6.2.md](agent_session_detection_frontend_prd_v6.2.md)
+为准。

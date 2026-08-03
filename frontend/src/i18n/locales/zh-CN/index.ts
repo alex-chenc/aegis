@@ -11,5 +11,6 @@ import generatedScript from './generatedScript'
 import weakPassword from './weakPassword'
 import execution from './execution'
 import analysis from './analysis'
+import agentGuard from './agentGuard'
 
-export default { common, app, routes, auth, errors, notifications, assistant, generated, dynamic, generatedScript, weakPassword, execution, analysis }
+export default { common, app, routes, auth, errors, notifications, assistant, generated, dynamic, generatedScript, weakPassword, execution, analysis, agentGuard }

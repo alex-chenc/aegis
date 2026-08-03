@@ -53,7 +53,8 @@ func (c *failingAgentClient) SyncConfig(context.Context, *pb.ConfigSyncRequest, 
 
 func TestExecuteBlockCommandPreservesAgentFailureReason(t *testing.T) {
 	hostID := uuid.New()
-	reason := "quarantine_file failed for target /tmp/missing: missing target"
+	unitID := uuid.New()
+	reason := "freeze_execution_unit failed: cgroup freezer unavailable"
 	grpcServer := &GRPCServer{}
 	grpcServer.agentConnections.Store(hostID, &AgentConnection{
 		HostID:         hostID,
@@ -63,10 +64,10 @@ func TestExecuteBlockCommandPreservesAgentFailureReason(t *testing.T) {
 
 	impl := &APIServerToServerImpl{grpcServer: grpcServer}
 	resp, err := impl.ExecuteBlockCommand(context.Background(), &pb.ExecuteBlockCommandRequest{
-		CommandId: "BLK-test",
+		CommandId: "AG-GUARD-" + uuid.NewString(),
 		HostId:    hostID.String(),
-		Action:    "quarantine_file",
-		Target:    "/tmp/missing",
+		Action:    "freeze_execution_unit",
+		Target:    unitID.String(),
 	})
 	if err != nil {
 		t.Fatalf("expected nil grpc error, got %v", err)

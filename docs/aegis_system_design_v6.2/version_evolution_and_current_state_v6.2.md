@@ -1,8 +1,8 @@
 # Aegis V6.2 版本演进与当前实现基线
 
-**版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计基线
+**版本**：6.2
+**日期**：2026-08-03
+**状态**：P0～P4 代码实现基线；专用宿主机发布门禁待验证
 
 ## 1. 文档目的
 
@@ -83,6 +83,26 @@ V6.2 遵守以下 V6.1 规则：
 | 智能分析无专用安全边界 | 当前 Assistant/LLM 面向其他业务 | 有界脱敏 evidence、固定 JSON Schema、无工具、AI-only 不阻断 |
 | 无隔离覆盖状态 | 页面无法区分无沙箱、监控、阻断和远程不可见 | 新增 capability/coverage 状态 |
 | 服务端链路不适合同步阻断 | Kafka/DC 为异步处理 | 本地策略决策，服务端只接收结果 |
+
+### 4.3 P0～P4 实施后的当前代码事实
+
+2026-08-03 已形成以下代码基线：
+
+| 已实现能力 | 实际位置 | 验证事实 |
+| --- | --- | --- |
+| 11 张表、五规则、六 Profile | `migrations/029_v6.2_agent_guard.sql`、`api-server/internal/model/agent_guard_manifest.go` | SQL/Go/Agent stable key、version、canonical digest 回归；冲突不覆盖 |
+| 运行身份、session、execution unit、PID/cgroup 归属 | `agent/internal/agentguard/` | 多 Agent/多实例、PID reuse、fork、cgroup v1/v2、container 与 ambiguous 回归 |
+| monitor-only 行为与状态链 | `agent/internal/ebpf/`、`server/internal/grpc_server/`、`dc/internal/pipeline/` | bundle/config status 跨服务契约、投影/重放/脱敏测试 |
+| 五规则、Finding、逃逸 audit | `dc/internal/pipeline/agent_*` | attempt/success/inconclusive、乱序/重放、五规则与跨事件 evidence graph |
+| 有界智能分析 | `api-server/internal/service/agent_guard_analysis_service.go` | 固定 Schema、event ID、提示注入边界、AI-only action ceiling |
+| BPF LSM 与 execution-unit freeze/action | `agent/internal/ebpf/bpf/agent_guard_lsm.bpf.c`、`agent/internal/agentguard/actions.go`、各服务 action 文件 | BPF build/readelf、状态机、protected target、timeout/auto-resume 非破坏性测试 |
+| 可信工具语义和远端关联 | `agent/internal/agentguard/tool_*`、`dc/internal/pipeline/agent_tool_semantics.go` | Ed25519/signed Unix ingress、tool→process→resource、remote sensor/no-sensor、tool-only no-action |
+| Agent Guard API 与前端 | `api-server/internal/api/handler/agent_guard_handler.go`、`frontend/src/views/detection/AgentGuard/` | 细粒度权限、脱敏 Panorama、动作确认/timeline、38 个前端定向测试和 production build |
+| fresh/upgrade 发布结构 | `scripts/build_release_package.sh`、`docker-compose.yml` | release contract、Compose config、generate-only v6.2 通过，默认关闭 |
+
+代码完成不等于发布资格通过。当前未在专用宿主机执行真实 LSM `EPERM` 和
+freeze/resume，也未对运行中共享 Compose 栈写入端到端测试数据。完整证据、
+基线问题和剩余门禁见 [implementation_status_v6.2.md](implementation_status_v6.2.md)。
 
 ## 5. V6.2 继承与替换矩阵
 

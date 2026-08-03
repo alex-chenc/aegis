@@ -7,7 +7,7 @@ type Role = 'security_analyst' | 'security_developer' | 'admin'
 const PERMISSIONS: Record<Role, string[]> = {
   security_analyst: ['view', 'draft', 'ai_generate'],
   security_developer: ['view', 'draft', 'ai_generate', 'build', 'review', 'sign'],
-  admin: ['view', 'draft', 'ai_generate', 'build', 'review', 'sign', 'enable', 'disable', 'uninstall', 'rollback', 'allowlist'],
+  admin: ['view', 'draft', 'ai_generate', 'build', 'review', 'sign', 'enable', 'disable', 'uninstall', 'rollback', 'allowlist', 'agent_guard_action'],
 }
 
 function getDefaultRole(): Role {

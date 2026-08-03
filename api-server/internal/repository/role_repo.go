@@ -6,6 +6,18 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	PermissionAgentGuardRead          = "agent_guard:read"
+	PermissionAgentGuardEvidenceRead  = "agent_guard:evidence:read"
+	PermissionAgentGuardAnalysisRead  = "agent_guard:analysis:read"
+	PermissionAgentGuardPolicyWrite   = "agent_guard:policy:write"
+	PermissionAgentGuardPolicyPublish = "agent_guard:policy:publish"
+	PermissionAgentGuardAnalysisRun   = "agent_guard:analysis:run"
+	PermissionAgentGuardActionFreeze  = "agent_guard:action:freeze"
+	PermissionAgentGuardActionResume  = "agent_guard:action:resume"
+	PermissionAgentGuardActionKill    = "agent_guard:action:kill"
+)
+
 type RoleRepo struct {
 	db *gorm.DB
 }
@@ -61,9 +73,48 @@ func (r *RoleRepo) SetRole(userID, role string) error {
 
 func (r *RoleRepo) HasPermission(role, operation string) bool {
 	permissions := map[string][]string{
-		model.RoleSecurityAnalyst:   {"view", "draft", "ai_generate"},
-		model.RoleSecurityDeveloper: {"view", "draft", "ai_generate", "build", "review", "sign"},
-		model.RoleAdmin:             {"view", "draft", "ai_generate", "build", "review", "sign", "enable", "disable", "uninstall", "rollback", "allowlist"},
+		model.RoleSecurityAnalyst: {
+			"view",
+			"draft",
+			"ai_generate",
+			PermissionAgentGuardRead,
+			PermissionAgentGuardAnalysisRead,
+		},
+		model.RoleSecurityDeveloper: {
+			"view",
+			"draft",
+			"ai_generate",
+			"build",
+			"review",
+			"sign",
+			PermissionAgentGuardRead,
+			PermissionAgentGuardEvidenceRead,
+			PermissionAgentGuardAnalysisRead,
+			PermissionAgentGuardPolicyWrite,
+			PermissionAgentGuardAnalysisRun,
+		},
+		model.RoleAdmin: {
+			"view",
+			"draft",
+			"ai_generate",
+			"build",
+			"review",
+			"sign",
+			"enable",
+			"disable",
+			"uninstall",
+			"rollback",
+			"allowlist",
+			PermissionAgentGuardRead,
+			PermissionAgentGuardEvidenceRead,
+			PermissionAgentGuardAnalysisRead,
+			PermissionAgentGuardPolicyWrite,
+			PermissionAgentGuardPolicyPublish,
+			PermissionAgentGuardAnalysisRun,
+			PermissionAgentGuardActionFreeze,
+			PermissionAgentGuardActionResume,
+			PermissionAgentGuardActionKill,
+		},
 	}
 	ops, ok := permissions[role]
 	if !ok {

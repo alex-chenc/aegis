@@ -26,16 +26,16 @@ type EventReporter interface {
 type EventCallback func(eventMap map[string]interface{})
 
 type Pipeline struct {
-	collector    *Collector
-	ruleLoader   *sigma.Loader
-	reporter     EventReporter
-	hostID       string
-	hostname     string
-	metrics      *monitor.Metrics
-	seq          uint64
-	flushEvery   time.Duration
-	toolManager  *tools.ToolManager
-	eventCb      EventCallback
+	collector   *Collector
+	ruleLoader  *sigma.Loader
+	reporter    EventReporter
+	hostID      string
+	hostname    string
+	metrics     *monitor.Metrics
+	seq         uint64
+	flushEvery  time.Duration
+	toolManager *tools.ToolManager
+	eventCb     EventCallback
 }
 
 func NewPipeline(collector *Collector, ruleLoader *sigma.Loader, reporter EventReporter, hostID string, metrics *monitor.Metrics) *Pipeline {
@@ -108,16 +108,13 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 
 	logger.Debug("Event captured",
 		zap.String("type", event.EventType),
-		zap.String("cmd", event.CommandLine),
 		zap.Int("pid", event.PID))
 
 	// Debug logging for network events
 	if event.EventType == "network_accept" || event.EventType == "network_connect" {
 		logger.Debug("[NetworkEvent] Processing network event",
 			zap.String("type", event.EventType),
-			zap.String("src_ip", event.SrcIP),
 			zap.Uint16("src_port", event.SrcPort),
-			zap.String("dst_ip", event.DstIP),
 			zap.Uint16("dst_port", event.DstPort),
 			zap.String("protocol", event.Protocol),
 			zap.String("direction", event.NetworkDirection),
@@ -126,31 +123,25 @@ func (p *Pipeline) appendMatchedEvents(batch []*pb.RuntimeEvent, event Event) []
 
 	// Debug logging for file access events
 	if event.EventType == "file_access" {
-		logger.Info("[FileEvent] Processing file access event",
-			zap.String("path", event.FilePath),
+		logger.Debug("[FileEvent] Processing file access event",
 			zap.String("action", event.FileAction),
 			zap.String("flags", event.FileFlags),
 			zap.String("process", event.ProcessName),
 			zap.Int("pid", event.PID),
 			zap.String("category", fmt.Sprintf("%v", eventMap["category"])),
-			zap.String("target_filename", fmt.Sprintf("%v", eventMap["TargetFilename"])),
-			zap.String("target_filename_lower", fmt.Sprintf("%v", eventMap["targetfilename"])),
 			zap.String("event_action", fmt.Sprintf("%v", eventMap["event.action"])))
 	}
 
 	matches := p.ruleLoader.MatchAll(eventMap)
 	if len(matches) == 0 {
 		if event.EventType == "file_access" {
-			logger.Info("[FileEvent] No Sigma rules matched",
-				zap.String("path", event.FilePath),
+			logger.Debug("[FileEvent] No Sigma rules matched",
 				zap.String("action", event.FileAction))
 		}
 		if event.EventType == "network_accept" || event.EventType == "network_connect" {
 			logger.Debug("[NetworkEvent] No Sigma rules matched",
 				zap.String("type", event.EventType),
-				zap.String("src_ip", event.SrcIP),
 				zap.Uint16("src_port", event.SrcPort),
-				zap.String("dst_ip", event.DstIP),
 				zap.Uint16("dst_port", event.DstPort),
 				zap.String("protocol", event.Protocol))
 		}
@@ -188,22 +179,23 @@ func (p *Pipeline) buildEventMap(event Event) map[string]any {
 	}
 
 	eventMap := map[string]any{
-		"event_type":     event.EventType,
-		"pid":            event.PID,
-		"ppid":           event.PPID,
-		"uid":            event.UID,
-		"host_id":        event.HostID,
-		"hostname":       event.Hostname,
-		"process_name":   event.ProcessName,
-		"comm":           event.ProcessName,
-		"commandline":    cmdLine,
-		"image":          exePath,
-		"exe":            exePath,
-		"file_path":      event.FilePath,
-		"args_truncated": event.ArgsTruncated,
-		"ProcessName":    event.ProcessName,
-		"CommandLine":    cmdLine,
-		"Image":          exePath,
+		"event_type":           event.EventType,
+		"pid":                  event.PID,
+		"ppid":                 event.PPID,
+		"uid":                  event.UID,
+		"host_id":              event.HostID,
+		"timestamp_ns":         event.MonotonicNS,
+		"hostname":             event.Hostname,
+		"process_name":         event.ProcessName,
+		"comm":                 event.ProcessName,
+		"commandline":          cmdLine,
+		"image":                exePath,
+		"exe":                  exePath,
+		"file_path":            event.FilePath,
+		"args_truncated":       event.ArgsTruncated,
+		"ProcessName":          event.ProcessName,
+		"CommandLine":          cmdLine,
+		"Image":                exePath,
 		"process.command_line": cmdLine,
 	}
 
@@ -261,6 +253,19 @@ func (p *Pipeline) buildEventMap(event Event) map[string]any {
 
 	case "privilege_change":
 		eventMap["category"] = "privilege_escalation"
+	case "agent_guard_syscall":
+		eventMap["category"] = event.SecurityCategory
+		eventMap["security_category"] = event.SecurityCategory
+		eventMap["security_operation"] = event.SecurityOperation
+		eventMap["security_target"] = event.SecurityTarget
+		eventMap["security_secondary"] = event.SecuritySecondary
+		eventMap["security_arg0"] = event.SecurityArg0
+		eventMap["security_arg1"] = event.SecurityArg1
+		eventMap["security_arg2"] = event.SecurityArg2
+		eventMap["return_code"] = event.SyscallReturn
+		eventMap["security_decision"] = event.SecurityDecision
+		eventMap["security_policy_slot"] = event.SecurityPolicySlot
+		eventMap["security_rule_slot"] = event.SecurityRuleSlot
 	}
 
 	return eventMap

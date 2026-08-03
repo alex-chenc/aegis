@@ -3,12 +3,14 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"aegis-agent/internal/agentguard"
 	"aegis-agent/internal/asset"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/config"
@@ -22,6 +24,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const CallbackPort = 19095 // Port for Server to call back to Agent
@@ -36,6 +39,9 @@ type Client struct {
 	ruleLoader                         *sigma.Loader
 	blocker                            *blocker.Blocker
 	configManager                      *configmgr.ConfigManager
+	agentGuardActions                  AgentGuardActionHandler
+	registeredHandler                  func(string) error
+	runtimeConfig                      *config.Config
 	conn                               *grpc.ClientConn
 	client                             pb.AgentServiceClient
 	stream                             pb.AgentService_ExecuteCommandClient
@@ -46,6 +52,14 @@ type Client struct {
 	callbackLis                        net.Listener
 	callbackPort                       int32
 	mu                                 sync.RWMutex
+	connMu                             sync.RWMutex
+}
+
+type AgentGuardActionHandler interface {
+	ExecuteAgentGuardAction(
+		ctx context.Context,
+		commandID, action, target, reason string,
+	) (agentguard.ActionResult, error)
 }
 
 func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.ToolManager, ruleLoader *sigma.Loader, blockerInst *blocker.Blocker) *Client {
@@ -57,6 +71,7 @@ func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.T
 		toolManager:   toolManager,
 		ruleLoader:    ruleLoader,
 		blocker:       blockerInst,
+		runtimeConfig: cfg,
 		configManager: configmgr.NewConfigManager(),
 		heartbeatDone: make(chan struct{}),
 		callbackPort:  CallbackPort,
@@ -65,6 +80,18 @@ func NewClient(cfg *config.Config, exec *executor.Executor, toolManager *tools.T
 
 func (c *Client) ConfigManager() *configmgr.ConfigManager {
 	return c.configManager
+}
+
+func (c *Client) SetAgentGuardActionHandler(handler AgentGuardActionHandler) {
+	c.mu.Lock()
+	c.agentGuardActions = handler
+	c.mu.Unlock()
+}
+
+func (c *Client) SetRegisteredHandler(handler func(string) error) {
+	c.mu.Lock()
+	c.registeredHandler = handler
+	c.mu.Unlock()
 }
 
 func (c *Client) Run() error {
@@ -97,15 +124,19 @@ func (c *Client) connect() error {
 		return fmt.Errorf("failed to start callback server: %w", err)
 	}
 
-	var err error
-	c.conn, err = grpc.NewClient(c.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(c.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		c.cleanupFailedConnect()
 		return err
 	}
 
-	c.client = pb.NewAgentServiceClient(c.conn)
-	c.ctx, c.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	c.connMu.Lock()
+	c.conn = conn
+	c.client = pb.NewAgentServiceClient(conn)
+	c.ctx = ctx
+	c.cancel = cancel
+	c.connMu.Unlock()
 
 	if err := c.register(); err != nil {
 		c.cleanupFailedConnect()
@@ -182,9 +213,22 @@ func (c *Client) register() error {
 		return fmt.Errorf("registration failed: %s", resp.Message)
 	}
 
+	previousHostID := c.hostID
 	c.hostID = resp.HostId
+	if err := config.UpdateHostID(c.runtimeConfig, c.hostID); err != nil {
+		return fmt.Errorf("persist canonical host identity: %w", err)
+	}
+	c.mu.RLock()
+	registeredHandler := c.registeredHandler
+	c.mu.RUnlock()
+	if registeredHandler != nil {
+		if err := registeredHandler(c.hostID); err != nil {
+			return fmt.Errorf("initialize registered agent runtime: %w", err)
+		}
+	}
 	logger.Info("Registered successfully",
 		zap.String("host_id", c.hostID),
+		zap.Bool("host_id_changed", previousHostID != c.hostID),
 		zap.String("ip", assetInfo.IPAddress),
 		zap.String("hostname", assetInfo.Hostname),
 		zap.String("os", assetInfo.OSType))
@@ -192,17 +236,22 @@ func (c *Client) register() error {
 }
 
 func (c *Client) cleanupFailedConnect() {
-	if c.cancel != nil {
-		c.cancel()
-		c.cancel = nil
+	c.connMu.Lock()
+	cancel := c.cancel
+	conn := c.conn
+	c.cancel = nil
+	c.conn = nil
+	c.client = nil
+	c.ctx = nil
+	c.connMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if c.conn != nil {
-		if err := c.conn.Close(); err != nil {
+	if conn != nil {
+		if err := conn.Close(); err != nil {
 			logger.Warn("Failed to close grpc connection after failed connect", zap.Error(err))
 		}
-		c.conn = nil
 	}
-	c.client = nil
 	c.StopCallbackServer()
 }
 
@@ -287,8 +336,7 @@ func (c *Client) run() {
 			if block := req.GetBlock(); block != nil {
 				logger.Info("Received block command via stream",
 					zap.String("command_id", block.CommandId),
-					zap.String("action", block.Action),
-					zap.String("target", block.Target))
+					zap.String("action", block.Action))
 				c.handleBlockCommand(block)
 			}
 
@@ -340,7 +388,7 @@ func (c *Client) run() {
 }
 
 func (c *Client) handleBlockCommand(cmd *pb.BlockCommand) {
-	err := c.blocker.Execute(cmd.Action, cmd.Target)
+	err := c.executeBlockCommand(context.Background(), cmd)
 	if err != nil {
 		logger.Error("Block command failed",
 			zap.String("command_id", cmd.CommandId),
@@ -505,16 +553,28 @@ func (c *Client) sendToolResult(taskID, resultJSON string) {
 }
 
 func (c *Client) cleanup() {
-	if c.cancel != nil {
-		c.cancel()
+	c.connMu.RLock()
+	cancel := c.cancel
+	conn := c.conn
+	c.connMu.RUnlock()
+	if cancel != nil {
+		cancel()
 	}
 	select {
 	case <-c.heartbeatDone:
 	case <-time.After(2 * time.Second):
 	}
-	if c.conn != nil {
-		c.conn.Close()
+	if conn != nil {
+		conn.Close()
 	}
+	c.connMu.Lock()
+	if c.conn == conn {
+		c.conn = nil
+		c.client = nil
+		c.ctx = nil
+		c.cancel = nil
+	}
+	c.connMu.Unlock()
 	// Stop callback server on cleanup/reconnect - prevents port binding conflicts
 	c.StopCallbackServer()
 }
@@ -580,19 +640,33 @@ func (c *Client) ReportEvents(events []*pb.RuntimeEvent) error {
 		return nil
 	}
 
-	resp, err := c.client.ReportEvent(c.ctx, &pb.ReportEventRequest{
+	c.connMu.RLock()
+	grpcClient := c.client
+	ctx := c.ctx
+	c.connMu.RUnlock()
+	if grpcClient == nil || ctx == nil {
+		return fmt.Errorf("agent event transport is not connected")
+	}
+
+	resp, err := grpcClient.ReportEvent(ctx, &pb.ReportEventRequest{
 		HostId: c.hostID,
 		Events: events,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to report events: %w", err)
+		return fmt.Errorf("report_events_%s: %w", reportEventGRPCCode(err), err)
 	}
 
-	if resp.Success {
-		logger.Debug("Events reported", zap.Int("sent", len(events)), zap.Int32("received", resp.ReceivedCount))
+	if !resp.Success {
+		return fmt.Errorf("report_events_rejected: accepted %d of %d", resp.ReceivedCount, len(events))
 	}
+	logger.Debug("Events reported", zap.Int("sent", len(events)), zap.Int32("received", resp.ReceivedCount))
 
 	return nil
+}
+
+func reportEventGRPCCode(err error) string {
+	code := strings.ToLower(status.Code(err).String())
+	return strings.ReplaceAll(code, " ", "_")
 }
 
 func (c *Client) HandleToolCall(ctx context.Context, req *pb.ToolRequest) (*pb.ToolResponse, error) {
@@ -673,21 +747,20 @@ func (c *Client) HandleRuleUpdate(ctx context.Context, req *pb.RuleUpdateRequest
 }
 
 func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (*pb.BlockResponse, error) {
-	_ = ctx
 	if cmd == nil {
 		return &pb.BlockResponse{
 			Success: false,
 			Error:   "block command is nil",
 		}, nil
 	}
-	logger.Info("Block command received", zap.String("command_id", cmd.CommandId), zap.String("action", cmd.Action), zap.String("target", cmd.Target))
+	logger.Info("Block command received", zap.String("command_id", cmd.CommandId), zap.String("action", cmd.Action))
 
-	err := c.blocker.Execute(cmd.Action, cmd.Target)
+	err := c.executeBlockCommand(ctx, cmd)
 	if err != nil {
 		return &pb.BlockResponse{
 			CommandId: cmd.CommandId,
 			Success:   false,
-			Error:     fmt.Sprintf("%s failed for target %q: %v", cmd.Action, cmd.Target, err),
+			Error:     fmt.Sprintf("%s failed: %v", cmd.Action, err),
 		}, nil
 	}
 
@@ -695,6 +768,26 @@ func (c *Client) HandleBlockCommand(ctx context.Context, cmd *pb.BlockCommand) (
 		CommandId: cmd.CommandId,
 		Success:   true,
 	}, nil
+}
+
+func (c *Client) executeBlockCommand(ctx context.Context, cmd *pb.BlockCommand) error {
+	if cmd == nil {
+		return errors.New("block command is nil")
+	}
+	if agentguard.IsAgentGuardAction(cmd.Action) {
+		c.mu.RLock()
+		handler := c.agentGuardActions
+		c.mu.RUnlock()
+		if handler == nil {
+			return errors.New("agent_guard_action_handler_unavailable")
+		}
+		_, err := handler.ExecuteAgentGuardAction(ctx, cmd.CommandId, cmd.Action, cmd.Target, cmd.Reason)
+		return err
+	}
+	if c.blocker == nil {
+		return errors.New("blocker_unavailable")
+	}
+	return c.blocker.Execute(cmd.Action, cmd.Target)
 }
 
 // ExecuteBlockCommand is an alias for HandleBlockCommand to implement AgentServiceServer interface

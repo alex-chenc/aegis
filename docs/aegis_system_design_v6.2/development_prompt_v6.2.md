@@ -1,14 +1,14 @@
-# Aegis V6.2 智能体运行防护开发主提示词
+# Aegis V6.2 智能体运行防护与会话审计开发主提示词
 
 **版本**：6.2  
-**日期**：2026-07-30  
+**日期**：2026-08-03
 **状态**：可用于开发  
-**默认执行范围**：完整 V6.2，按 P0 → P4 阶段门禁推进
+**默认执行范围**：完整 V6.2，按 P0 → P5 阶段门禁推进
 
 ## 1. 使用说明
 
 将“开发提示词”代码块完整复制给负责开发的 AI 编程智能体。提示词默认要求
-智能体检查当前仓库中最早未完成的阶段，从该阶段开始继续，按 P0 → P4 顺序
+智能体检查当前仓库中最早未完成的阶段，从该阶段开始继续，按 P0 → P5 顺序
 推进；每个阶段必须形成可测试、可构建、可回滚的完整增量，不能跨阶段散落
 半成品。
 
@@ -18,14 +18,14 @@
 执行范围：AUTO
 ```
 
-改为 `P0`、`P1`、`P2`、`P3` 或 `P4`。`AUTO` 表示先审计当前代码和测试，
+改为 `P0`、`P1`、`P2`、`P3`、`P4` 或 `P5`。`AUTO` 表示先审计当前代码和测试，
 选择最早未满足完成证据的阶段继续；它不表示凭文件名猜测进度。
 
 ## 2. 开发提示词
 
 ```text
 你是 Aegis 项目的资深 Linux 安全、eBPF、Go 和 Vue 全栈开发智能体。你需要在
-/code/aegis 仓库中落地 Aegis V6.2“智能体运行防护”，覆盖 frontend、
+/code/aegis 仓库中落地 Aegis V6.2“智能体运行防护与会话审计”，覆盖 frontend、
 api-server、server、dc、PostgreSQL、proto、Agent/eBPF、测试、日志、灰度和
 回滚。你的任务是交付真实可运行、证据可追溯且不夸大防护能力的实现，不是只
 输出分析、伪代码、演示页面或与后端断开的 mock。
@@ -34,8 +34,8 @@ api-server、server、dc、PostgreSQL、proto、Agent/eBPF、测试、日志、�
 
 AUTO 的含义：
 
-1. 先依据代码、migration、测试和构建结果审计 P0～P4 的真实完成度。
-2. 从最早未完成的阶段开始，按 P0 → P4 顺序实施。
+1. 先依据代码、migration、测试和构建结果审计 P0～P5 的真实完成度。
+2. 从最早未完成的阶段开始，按 P0 → P5 顺序实施。
 3. 一个阶段未通过门禁前，不得开始依赖它的下一阶段。
 4. 如果一次运行无法完成全部阶段，必须完成当前阶段的最小完整闭环并明确
    报告下一阶段，不能在多个阶段留下不可构建的半成品。
@@ -67,6 +67,8 @@ AUTO 的含义：
    - docs/aegis_system_design_v6.2/database_design_v6.2.md
    - docs/aegis_system_design_v6.2/frontend_design_v6.2.md
    - docs/aegis_system_design_v6.2/agent_guard_frontend_prd_v6.2.md
+   - docs/aegis_system_design_v6.2/agent_session_detection_design_v6.2.md
+   - docs/aegis_system_design_v6.2/agent_session_detection_frontend_prd_v6.2.md
    - docs/aegis_system_design_v6.2/implementation_test_rollout_v6.2.md
 5. 实地阅读受影响的当前代码、测试、配置、proto 和 migration。重点核实：
    - proto/agent_comm.proto 的 ConfigSync、RuntimeEvent、BlockCommand。
@@ -86,7 +88,8 @@ AUTO 的含义：
 4. 当前代码作为“现状事实”和应遵循的工程模式。
 5. V6.1、V6.0、V5.8、V5.7、V5.6 等旧文档只用于理解继承能力。
 
-前端信息架构和交互以 agent_guard_frontend_prd_v6.2.md 为最终产品基线；
+事件/逃逸页面以 agent_guard_frontend_prd_v6.2.md 为产品基线；会话检测页面以
+agent_session_detection_frontend_prd_v6.2.md 为产品基线；
 接口以 backend_api_protocol_design_v6.2.md 为准；数据库以
 database_design_v6.2.md 为准；Agent/eBPF 以
 agent_ebpf_enforcement_design_v6.2.md 为准。发现文档与当前代码不兼容时，
@@ -94,7 +97,7 @@ agent_ebpf_enforcement_design_v6.2.md 为准。发现文档与当前代码不兼
 
 二、产品目标与明确边界
 
-V6.2 只建设两个闭环：
+V6.2 建设三个相互关联但可独立降级的闭环：
 
 1. 智能体事件感知与防护：
    - 识别 Codex、OpenClaw、Hermes 等 Agent 资产和运行实例。
@@ -110,10 +113,20 @@ V6.2 只建设两个闭环：
      credential/capability 提升等逃逸证据。
    - 能力允许时通过 BPF LSM 在危险操作生效前返回 EPERM，并按明确策略
      freeze 单个 execution unit。
+3. 智能体会话检测：
+   - 提取 Codex、Claude Code、OpenCode 的产品正式会话。
+   - 规范化用户消息、助手可见回复、工具调用/结果状态、权限决策、compact、
+     子智能体和生命周期事件。
+   - 使用有界、脱敏、异步 AI 识别恶意意图并形成可人工确认的风险标记。
+   - 将会话意图、工具语义与 OS 行为证据关联，明确区分 planned、attempted、
+     executed，不把“讨论了危险操作”显示成“已经执行”。
+   - 新增第三个子标签“智能体会话检测”，提供完整会话、AI 语义分析和关联
+     行为三个详情视图。
 
 本版本不建设：
 
-- 提示词内容防护、越狱文本分类或提示词代理。
+- 提示词/工具调用的实时代理、改写、内联审批或前置阻断；P5 只做异步会话
+  审计和恶意语义标记。
 - 通用 MCP 网关、模型网关、工具审批平台。
 - 文件/网络内容采集、stdin/stdout/stderr 采集或 TLS 明文采集。
 - 依靠 LLM 直接执行主机工具、修改策略或触发阻断。
@@ -238,7 +251,7 @@ V6.2 只建设两个闭环：
 
 七、数据库与状态机
 
-新增且保持 model/migration/repository/API 一致的 11 张表：
+P0～P4 新增且保持 model/migration/repository/API 一致的 11 张表：
 
 1. agent_guard_adapter_profiles
 2. agent_behavior_rule_definitions
@@ -252,9 +265,20 @@ V6.2 只建设两个闭环：
 10. agent_security_analysis_runs
 11. agent_guard_actions
 
+P5 追加且保持 model/migration/repository/API/前端类型一致的 7 张表：
+
+12. agent_conversation_sessions
+13. agent_conversation_items
+14. agent_conversation_tool_calls
+15. agent_conversation_artifacts
+16. agent_conversation_collection_cursors
+17. agent_session_analysis_runs
+18. agent_session_risk_markings
+
 要求：
 
-- 新增 migrations/029_v6.2_agent_guard.sql，不修改任何已发布 migration。
+- P0～P4 使用 migrations/029_v6.2_agent_guard.sql；P5 新增
+  migrations/030_v6.2_agent_session_detection.sql，不修改任何已发布 migration。
 - migration 可重复检查，seed 使用稳定 ID/version/digest 和幂等冲突策略。
 - published policy 内容不可原地编辑，只能发布新 version。
 - 受理、dispatching、running 不是完成；applied、denied、frozen 等状态必须
@@ -283,6 +307,19 @@ Agent/eBPF
   -> api-server/WebSocket
   -> frontend
 
+会话审计链：
+
+Codex/Claude Code managed hooks + versioned transcript tailer
+OpenCode Aegis plugin + authenticated local API/SSE + sanitized export fallback
+  -> Agent agentsession normalizer/redactor/cursor/spool
+  -> gRPC AgentSessionBatch
+  -> Server
+  -> Kafka topic aegis.agent.sessions.v1
+  -> DC session projector/behavior linker/analysis request
+  -> PostgreSQL
+  -> api-server/WebSocket
+  -> frontend
+
 要求：
 
 - server 只负责连接、转发、Kafka 生产和重连补发，不复制策略判断。
@@ -292,6 +329,8 @@ Agent/eBPF
   告警和 action 投影。
 - Agent 负责实例/执行单元归属、内核采集、本地 bundle、同步决策和真实动作。
 - Agent Guard 核心 BPF 随签名 Agent 发布，不作为可动态卸载的 DetectionPackage。
+- P5 会话正文不复用 P4 trusted tool adapter 的受限 OS 语义事件；使用独立
+  Schema、协议、Kafka topic、表、权限和保留策略，关闭它不能影响 OS 防护。
 
 九、HTTP、配置和前端契约
 
@@ -304,9 +343,13 @@ HTTP 根路径为 /api/v1/agent-guard，至少实现文档定义的：
 - /panorama 及节点懒加载
 - /behaviors、/findings、/analysis-runs
 - freeze/resume/kill action 和 action 查询
+- /session-detection/sessions、items、tool-calls、analysis-runs、markings、
+  related-behaviors、collection-status，以及 analyze、mark、reveal、export
 
-/agents 必须按 host_id + asset_id 返回一行 Agent 基本信息；只有确认的运行实例
-而没有静态 asset 时，返回稳定、服务端签名的 agent_scope_key，asset_id 可为空。
+/agents 必须按 host_id + 规范化 agent_type 返回一行逻辑 Agent 基本信息；同类型
+多个 controller 作为该行下的独立运行实例。非删除静态资产存在时可返回一个当前
+asset_id 作为兼容定位信息，但详情查询优先使用稳定、服务端签名的
+agent_scope_key；只有确认运行实例而没有静态 asset 时，asset_id 可为空。
 该接口只返回基础摘要，不返回 cmdline、完整路径、外链地址、隔离基线或分析正文。
 抽屉打开后再按选中 Agent 懒加载实例、全景、Finding 和 execution unit。
 
@@ -319,17 +362,19 @@ schema/version/digest、签名或可信完整性验证、目标范围、Profile�
 现有深色侧栏、64px 顶栏、浅蓝渐变内容区、白色卡片、现有风险色、i18n 和
 最小 1280px 桌面布局。不得创建独立大屏、霓虹风或第二套导航。
 
-侧边栏“智能体防护”只能有两个可见子菜单：
+侧边栏“智能体防护”只能有三个可见子菜单：
 
 1. 智能体事件感知与防护
    路由：/detection/agent-guard/events
 2. 智能体逃逸防护
    路由：/detection/agent-guard/escape
+3. 智能体会话检测
+   路由：/detection/agent-guard/sessions
 
 /detection/agent-guard 重定向到 events。策略、规则、实例、全景、行为流水、
-Finding 和分析不得成为更多并列侧边栏菜单。
+Finding、分析、会话列表和采集策略不得成为更多并列侧边栏菜单。
 
-两个外层页面只显示：
+事件和逃逸两个外层页面只显示：
 
 - KPI。
 - 筛选。
@@ -341,6 +386,11 @@ Finding 和分析不得成为更多并列侧边栏菜单。
 
 外层禁止显示进程树、cmdline、文件路径、连接地址、规则/Finding 证据、
 隔离基线或 freeze/resume/kill。
+
+会话检测外层页面显示 KPI、筛选和服务端分页会话列表。列表可以显示 Agent、
+主机、会话标题/脱敏摘要、开始/最近活动、item/tool 数、采集覆盖、AI verdict、
+风险标签和人工状态，但禁止显示消息正文、工具输入/输出、完整路径、secret 或
+关联行为证据正文。
 
 点击 Agent 行或“查看详情”打开右侧大型 el-drawer，宽 72%～80%、最小 880px。
 抽屉头显示 Agent、主机/IP、类型、实例数和覆盖状态；使用“全部实例”和各
@@ -372,6 +422,18 @@ cursor/分页和必要的虚拟滚动，禁止一次返回万级全树。
 抽屉状态与 asset_id/instance_id/finding_id/event_id/detail_tab query 同步，
 刷新或分享链接能恢复；关闭抽屉保留外层筛选、分页和滚动位置。WebSocket 更新
 不得打断当前选择或重置展开状态。权限不足时由后端 403 兜底。
+
+点击会话行打开宽 80% 的右侧详情抽屉，固定只有三个 Tab：
+
+1. 完整会话：按真实 sequence 展示 user/assistant/tool/permission/compact/
+   subagent/lifecycle item，长会话使用虚拟列表和 cursor。
+2. AI 语义分析：展示 verdict、confidence、风险类别、证据、反证、不确定性、
+   攻击链、分析历史和人工标记，并能定位真实 item/tool/behavior。
+3. 关联行为：展示 planned/attempted/executed、关联置信度和 P0～P4 OS 行为
+   时间轴；无 OS 证据时显示未证实，禁止伪造执行结果。
+
+正文默认走 metadata_only/redacted_text。reveal/copy/export 必须由服务端细分
+权限、理由、审批和审计控制，正文不得进入 URL、普通日志、通知或列表接口。
 
 十、分阶段实施和门禁
 
@@ -429,6 +491,25 @@ P4：可信工具语义、远程执行关联与 Profile 扩展
 - 门禁：没有 Hook 不伪造工具语义；没有远端传感器不伪造远端行为；新增产品
   优先只新增 Profile，只有出现新隔离族才新增内核能力。
 
+P5：智能体会话检测
+
+- P5.0：新增 migration 030、7 张表、Session/Item/ToolCall Schema、只读 API、
+  权限、审计、第三个菜单和页面骨架。
+- P5.1：Agent 建立独立 agentsession ingress/cursor/spool/redactor；Codex 和
+  Claude Code 使用 managed hook + versioned transcript tailer；OpenCode 使用
+  Aegis plugin + authenticated local API/SSE，对固定版本 CLI sanitized export
+  仅作回补。新增追加式 AgentSessionBatch、Server ingest、专用 Kafka topic 和
+  DC 幂等投影。禁止读取 OpenCode 内部 DB/auth.json。
+- P5.2：实现长会话分段/滚动摘要、固定 AI Schema、item/tool/event 引用校验、
+  风险 marking、反证、不确定性和人工确认；AI-only 只告警、不自动阻断。
+- P5.3：使用稳定 ID/hash 关联会话、工具和 OS 事实，准确区分 planned、
+  attempted、executed；完成列表和三个详情 Tab。
+- P5.4：只在明确授权范围启用原文，完成 reveal/copy/export 权限审计、保留/
+  删除、多 Agent、长会话、断网、rotate/truncate、重放和规模化验证。
+- 门禁：三类 Adapter 均有真实版本 fixture 和 E2E；secret 不出现在 proto、Kafka、
+  DB、日志或无权限 UI；跨 Agent/session 不串联；AI 引用真实且不能触发动作；
+  collector 关闭不影响 P0～P4。
+
 十一、Feature Flag 和发布顺序
 
 实现并遵守 implementation_test_rollout_v6.2.md 中的开关，至少包括：
@@ -437,9 +518,18 @@ P4：可信工具语义、远程执行关联与 Profile 扩展
 - dc：PROJECTION、RULES、FINDINGS、ANALYSIS_REQUEST、ALERT。
 - agent：enabled、behavior_monitor_enabled、tool_adapter_enabled、
   enforcement_enabled、freeze_enabled。
+- api-server P5：AGENT_SESSION_DETECTION_ENABLED、ANALYSIS_ENABLED、
+  REVEAL_ENABLED、EXPORT_ENABLED。
+- dc P5：AGENT_SESSION_PROJECTION_ENABLED、BEHAVIOR_LINK_ENABLED、
+  ANALYSIS_REQUEST_ENABLED、ALERT_ENABLED。
+- server P5：AGENT_SESSION_INGEST_ENABLED、AGENT_SESSION_KAFKA_TOPIC。
+- agent P5：agent_session.enabled、hook_ingress_enabled、
+  transcript_tail_enabled、history_backfill_enabled。
 
 默认关闭 Agent Guard/enforcement/freeze；monitor、projection、rules、
 findings、alert、analysis、escape audit、deny、freeze 必须按文档逐级开启。
+P5 按 consumer/migration → read-only UI → metadata-only → redacted-text → AI
+shadow → marking/alert → behavior link → 授权 reveal/export 顺序开启。
 先部署消费者再部署生产者。停用 enforcement 时先恢复非人工 hold 的 unit，
 停止新 freeze，清理 deny action，detach LSM；保留审计历史。
 
@@ -517,6 +607,16 @@ Frontend：
 13. 抽屉树准确显示 PID、PPID、脱敏 cmdline、文件名/路径、外链目标和 outcome。
 14. 万级树使用 lazy loading/cursor，不在单次响应返回全树。
 15. 日志、事件和页面不泄露测试 password/token/secret、文件内容或网络 payload。
+16. Codex、Claude Code、OpenCode 会话增量提取完整，重复/乱序/rotate/truncate/
+    compact/断网回补不重复、不丢失且 coverage 准确。
+17. Hook/transcript/API/export 同一会话对账幂等；伪造 Hook、错误 owner/mode、
+    不支持格式和跨用户文件安全拒绝或降级。
+18. 会话中的提示注入只能作为不可信数据，AI 结构化引用必须指向真实 item/tool/
+    event；讨论危险操作不能被显示为 executed。
+19. 无 session content 权限时列表、WebSocket、通知、URL、日志和 API 都不泄露
+    正文；reveal/copy/export 均留下主体、理由、范围和结果审计。
+20. 同机多 Agent、多实例、多会话分别展示，session 行和详情抽屉状态在刷新、
+    WebSocket 更新和长列表虚拟滚动下保持稳定。
 
 十四、阶段完成后的自检和输出
 
@@ -543,17 +643,21 @@ Frontend：
 
 只有同时满足以下条件才能报告“V6.2 开发完成”：
 
-1. P0～P4 所有要求与当前实现、文档和 feature flag 一致。
-2. 11 张表、migration、model、repository、API 和前端类型一致。
+1. P0～P5 所有要求与当前实现、文档和 feature flag 一致。
+2. P0～P4 的 11 张表与 P5 的 7 张表在 migration、model、repository、API 和
+   前端类型中一致。
 3. Codex、OpenClaw、Hermes 有真实 Profile/归属回归证据。
 4. 五个内置规则具备稳定 ID/version/digest、幂等 seed、参数/例外和联合测试。
 5. 行为、Finding、智能分析和 action 证据链不可变且可追溯。
 6. AI-only 永不自动 freeze，BPF LSM/能力降级/远端不可观测语义真实。
-7. 两个前端子页、Agent 外层列表和详情抽屉符合最终 PRD。
+7. 三个前端子页符合最终 PRD；事件/逃逸保留 Agent 外层列表，会话检测具备
+   会话列表和“完整会话/AI 语义分析/关联行为”三个详情 Tab。
 8. 至少完成一条 monitor-only 全行为端到端链、一条可复核跨事件攻击链，
    并在专用支持环境完成一条 LSM deny + freeze/resume 链。
 9. 所有受影响组件的定向测试和构建通过，或明确标注无法完成而不得宣称完成。
 10. 日志和数据不存在敏感内容泄露，灰度停止条件和回滚经过验证。
+11. Codex、Claude Code、OpenCode 的会话 Adapter、独立协议/Kafka/DC、AI
+    marking、OS 行为关联、正文权限/审计和保留删除通过真实集成验证。
 ```
 
 ## 3. 建议使用方式

@@ -50,7 +50,9 @@ services:
       - "log_min_duration_statement=1000"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      # PostgreSQL executes this directory only for a new, empty data volume.
+      # Existing volumes skip it and are upgraded only by db-migrate below.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     ports:
       - "${DB_PORT:-5432}:5432"
     networks:
@@ -61,6 +63,33 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # V6.2 Agent Guard schema upgrade. This service intentionally runs only the
+  # idempotent V6.2 migration and never replays historical migrations.
+  db-migrate:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+    volumes:
+      - ./migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
+    command:
+      - "psql"
+      - "-v"
+      - "ON_ERROR_STOP=1"
+      - "-h"
+      - "postgres"
+      - "-U"
+      - "aegis_user"
+      - "-d"
+      - "aegis_db"
+      - "-f"
+      - "/migrations/029_v6.2_agent_guard.sql"
+    networks:
+      - aegis-network
 
   # Redis 高速缓存
   redis:
@@ -210,6 +239,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -253,6 +284,13 @@ services:
       KAFKA_GROUP_ID: aegis-api-server-consumer
       # Builder gRPC 配置
       BUILDER_GRPC_ADDRESS: builder:19096
+      # V6.2 Agent Guard rollout flags
+      AGENT_GUARD_ENABLED: ${AGENT_GUARD_ENABLED:-false}
+      AGENT_GUARD_POLICY_WRITE_ENABLED: ${AGENT_GUARD_POLICY_WRITE_ENABLED:-false}
+      AGENT_GUARD_ANALYSIS_ENABLED: ${AGENT_GUARD_ANALYSIS_ENABLED:-false}
+      AGENT_GUARD_ACTION_ENABLED: ${AGENT_GUARD_ACTION_ENABLED:-false}
+      AGENT_GUARD_TOOL_ADAPTER_ENABLED: ${AGENT_GUARD_TOOL_ADAPTER_ENABLED:-false}
+      AGENT_GUARD_SCOPE_SIGNING_KEY: ${AGENT_GUARD_SCOPE_SIGNING_KEY:-}
     ports:
       - "8082:8082"
       - "19093:19093"
@@ -312,6 +350,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
@@ -347,6 +387,8 @@ services:
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       AGENT_HEARTBEAT_TIMEOUT: 90
       AGENT_SCRIPT_TIMEOUT: 300
+      # V6.2 Agent Guard action transport remains disabled until DC gates are enabled.
+      AGENT_GUARD_ACTION_CONSUMER_ENABLED: ${AGENT_GUARD_ACTION_CONSUMER_ENABLED:-false}
     ports:
       - "19090:19090"
       - "19094:19094"
@@ -367,6 +409,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
@@ -390,6 +434,16 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+      # V6.2 Agent Guard rollout flags
+      AGENT_GUARD_PROJECTION_ENABLED: ${AGENT_GUARD_PROJECTION_ENABLED:-false}
+      AGENT_BEHAVIOR_RULES_ENABLED: ${AGENT_BEHAVIOR_RULES_ENABLED:-false}
+      AGENT_BEHAVIOR_FINDINGS_ENABLED: ${AGENT_BEHAVIOR_FINDINGS_ENABLED:-false}
+      AGENT_BEHAVIOR_ANALYSIS_REQUEST_ENABLED: ${AGENT_BEHAVIOR_ANALYSIS_REQUEST_ENABLED:-false}
+      AGENT_GUARD_ALERT_ENABLED: ${AGENT_GUARD_ALERT_ENABLED:-false}
+      AGENT_GUARD_ACTION_ENABLED: ${AGENT_GUARD_ACTION_ENABLED:-false}
+      AGENT_GUARD_DENY_ENABLED: ${AGENT_GUARD_DENY_ENABLED:-false}
+      AGENT_GUARD_FREEZE_ENABLED: ${AGENT_GUARD_FREEZE_ENABLED:-false}
+      AGENT_GUARD_ACTION_PUBLISH_ENABLED: ${AGENT_GUARD_ACTION_PUBLISH_ENABLED:-false}
     ports:
       - "19092:19092"
     networks:

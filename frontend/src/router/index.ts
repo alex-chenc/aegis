@@ -224,6 +224,22 @@ const routes = [
     meta: { titleKey: 'routes.detectionPackageEdit' }
   },
   {
+    path: '/detection/agent-guard',
+    redirect: '/detection/agent-guard/events'
+  },
+  {
+    path: '/detection/agent-guard/events',
+    name: 'AgentGuardEvents',
+    component: () => import('../views/detection/AgentGuard/EventProtection.vue'),
+    meta: { titleKey: 'routes.agentGuardEvents', permission: 'agent_guard:read' }
+  },
+  {
+    path: '/detection/agent-guard/escape',
+    name: 'AgentGuardEscape',
+    component: () => import('../views/detection/AgentGuard/EscapeProtection.vue'),
+    meta: { titleKey: 'routes.agentGuardEscape', permission: 'agent_guard:read' }
+  },
+  {
     path: '/risk/weak-password',
     name: 'WeakPassword',
     component: WeakPasswordIndex,

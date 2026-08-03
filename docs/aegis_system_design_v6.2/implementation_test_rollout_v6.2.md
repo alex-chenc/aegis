@@ -1,8 +1,8 @@
 # Aegis V6.2 实施、测试与发布计划
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-03
+**状态**：P0～P4 已形成代码增量并进入发布资格验证；P5 方案完成，待实施
 
 ## 1. 实施原则
 
@@ -24,6 +24,10 @@ api-server:
   AGENT_GUARD_POLICY_WRITE_ENABLED=false
   AGENT_GUARD_ANALYSIS_ENABLED=false
   AGENT_GUARD_ACTION_ENABLED=false
+  AGENT_SESSION_DETECTION_ENABLED=false
+  AGENT_SESSION_ANALYSIS_ENABLED=false
+  AGENT_SESSION_REVEAL_ENABLED=false
+  AGENT_SESSION_EXPORT_ENABLED=false
 
 dc:
   AGENT_GUARD_PROJECTION_ENABLED=false
@@ -31,6 +35,14 @@ dc:
   AGENT_BEHAVIOR_FINDINGS_ENABLED=false
   AGENT_BEHAVIOR_ANALYSIS_REQUEST_ENABLED=false
   AGENT_GUARD_ALERT_ENABLED=false
+  AGENT_SESSION_PROJECTION_ENABLED=false
+  AGENT_SESSION_BEHAVIOR_LINK_ENABLED=false
+  AGENT_SESSION_ANALYSIS_REQUEST_ENABLED=false
+  AGENT_SESSION_ALERT_ENABLED=false
+
+server:
+  AGENT_SESSION_INGEST_ENABLED=false
+  AGENT_SESSION_KAFKA_TOPIC=aegis.agent.sessions.v1
 
 agent:
   agent_guard.enabled=false
@@ -38,6 +50,10 @@ agent:
   agent_guard.tool_adapter_enabled=false
   agent_guard.enforcement_enabled=false
   agent_guard.freeze_enabled=false
+  agent_session.enabled=false
+  agent_session.hook_ingress_enabled=false
+  agent_session.transcript_tail_enabled=false
+  agent_session.history_backfill_enabled=false
 ```
 
 开关规则：
@@ -47,6 +63,9 @@ agent:
 - api-server action 开关关闭时 GET 页面仍可用。
 - DC projection、rules、findings、analysis、alert 按顺序开启。
 - analysis 关闭或失败不影响规则 finding 和行为事实。
+- 会话采集、投影、AI 分析、正文 reveal/export 和告警使用独立开关；关闭会话
+  采集不影响 P0～P4 的 OS 行为防护。
+- 会话采集默认从 `metadata_only` 或 `redacted_text` 灰度，禁止直接全局开启原文。
 - 不允许前端 feature flag 绕过后端开关。
 
 ## 3. 阶段划分
@@ -236,6 +255,63 @@ agent:
 远程完整防护的前提是远端环境可以部署 Aegis Agent 或受信传感器。不能部署时继续显示 `remote_unobservable`。
 
 没有可信工具 Hook 时继续显示 `tool_semantics_unobservable`，不能根据进程名伪造工具调用；OS 行为覆盖状态单独计算。
+
+### P5：智能体会话检测
+
+### 目标
+
+从 Codex、Claude Code 和 OpenCode 提取产品正式会话，将用户消息、助手可见
+回复、工具调用/结果状态、权限决策、compact、子智能体和生命周期事件规范化，
+在独立数据链路中完成 AI 语义识别、风险标记及与 P0～P4 OS 行为证据的关联。
+
+P5 是异步审计能力，不进入提示词或工具调用的实时同步阻断路径。AI-only 结论
+只能告警或进入人工处置；自动 deny/freeze 仍必须满足 P0～P4 的确定性证据和
+动作授权条件。
+
+### 分阶段工作项
+
+#### P5.0：契约、数据库和只读页面
+
+- 新增 `migrations/030_v6.2_agent_session_detection.sql` 和 7 张会话审计表。
+- 新增统一 Session/Item/ToolCall Schema、只读 API、权限、审计和第三个子菜单
+  “智能体会话检测”。
+- 页面先支持无数据、未启用、无权限、partial 和 unsupported 状态。
+
+#### P5.1：metadata + redacted_text 采集
+
+- Agent 新增独立 `agentsession` 采集域、socket、cursor、spool 和版本化 parser。
+- Codex/Claude Code 使用受管 Hook 实时定位，会话 transcript 以版本适配器增量
+  补全；OpenCode 使用 Aegis 插件，认证本机 API/SSE 对账，固定版本 CLI
+  `export --sanitize` 仅作回补。
+- 新增 `AgentSessionBatch` 追加式协议、Server ingest 和专用 Kafka topic
+  `aegis.agent.sessions.v1`，DC 幂等投影；禁止读取 OpenCode 内部数据库或
+  `auth.json`。
+
+#### P5.2：AI 语义分析与风险标记
+
+- 实现长会话分段、滚动摘要和会话级聚合；输入先统一脱敏并标记为不可信数据。
+- 固定输出 Schema、引用 item/tool/event ID 校验、反证和不确定性。
+- 标记提示词注入/越狱意图、凭据与数据窃取、提权/逃逸、持久化、破坏、
+  外传、供应链和防御规避等风险；人工确认覆盖模型标记但不改写原始分析。
+
+#### P5.3：OS 行为联合分析与完整页面
+
+- 使用稳定 session/instance/unit/process/token hash 将会话意图、工具语义和
+  OS 行为关联，明确区分 planned、attempted、executed。
+- 完成会话列表和 80% 详情抽屉；抽屉固定为“完整会话”“AI 语义分析”
+  “关联行为”三个 Tab，支持虚拟列表、证据定位和人工标记。
+
+#### P5.4：授权原文、合规和规模化
+
+- 按组织/主机/Agent 策略逐步启用 `redacted_text`；`full_text` 仅用于明确授权
+  场景，并受 reveal/copy/export 细分权限、理由、审批、审计和保留期控制。
+- 验证多 Agent、多实例、长会话、断网回补、rotate/truncate、Kafka 重放和
+  数据清理。
+
+详细设计见
+[agent_session_detection_design_v6.2.md](agent_session_detection_design_v6.2.md)，
+页面 PRD 见
+[agent_session_detection_frontend_prd_v6.2.md](agent_session_detection_frontend_prd_v6.2.md)。
 
 ## 4. 文件级变更清单
 
@@ -696,6 +772,14 @@ docker compose up -d --build
 14. 在测试主机开启 LSM deny。
 15. 灰度生产 deny。
 16. 针对明确 critical 规则开启 freeze。
+17. 执行 migration 030，先部署能忽略/消费会话事件的 DC、api-server 和 Server，
+    所有 P5 开关保持关闭。
+18. 发布第三个子标签和只读页面，验证权限、空状态和采集覆盖状态。
+19. 单台测试主机仅开启 `metadata_only`，分别验证 Codex、Claude Code、OpenCode。
+20. 小范围开启 `redacted_text`，执行 secret/redaction、断网回补和格式兼容测试。
+21. 开启会话 AI shadow analysis；确认 AI-only action attempt 始终为 0。
+22. 开启风险标记和告警，再开启 OS 行为关联，验证 planned/attempted/executed。
+23. 仅对有合规依据的范围开启正文 reveal/export；`full_text` 不作为全局默认。
 
 先部署消费者再部署生产者，避免新事件到达时无解析能力。
 
@@ -719,6 +803,14 @@ docker compose up -d --build
 - deny 失败。
 - freeze 失败/auto resume。
 - bundle failed/stale。
+- 三类会话 Adapter 的 discovered/collecting/partial/unsupported/error 分布。
+- session/item/tool-call 采集量、重复率、missing sequence、parser failure 和
+  transcript/API reconcile 差异。
+- 会话端到端延迟、spool/Kafka lag、数据库写入延迟和长会话加载耗时。
+- redaction 命中、fail-closed、疑似 secret 泄漏数；后者必须为 0。
+- AI 会话分析 pending/timeout/invalid_reference、风险标记误报率和人工复核差异。
+- 会话与 OS 行为关联率、错误关联率及 planned/attempted/executed 分布。
+- reveal/copy/export 次数、拒绝数、审批和审计完整率。
 
 停止扩量条件：
 
@@ -730,6 +822,10 @@ docker compose up -d --build
 - event loss 或 delivery 状态不可解释。
 - 规则错误跨实例/session 关联。
 - 智能分析发生证据引用不存在、提示注入越界或 AI-only 自动动作。
+- 任一会话正文、secret、工具输出出现在普通日志、URL、通知或无正文权限 API。
+- parser 版本不匹配导致会话结构错位，或跨 Agent/跨 session 串联。
+- missing sequence、Kafka/spool 丢失或采集覆盖下降无法解释。
+- reveal/export 绕过服务端权限、理由、审批或审计。
 
 ## 11. 回滚
 
@@ -748,6 +844,15 @@ docker compose up -d --build
 - `AGENT_BEHAVIOR_RULES_ENABLED=false`
 - `behavior_monitor_enabled=false`
 - `agent_guard.enabled=false`
+- `AGENT_SESSION_REVEAL_ENABLED=false`
+- `AGENT_SESSION_EXPORT_ENABLED=false`
+- `AGENT_SESSION_ANALYSIS_ENABLED=false`
+- `AGENT_SESSION_ALERT_ENABLED=false`
+- `AGENT_SESSION_BEHAVIOR_LINK_ENABLED=false`
+- `agent_session.history_backfill_enabled=false`
+- `agent_session.transcript_tail_enabled=false`
+- `agent_session.hook_ingress_enabled=false`
+- `agent_session.enabled=false`
 
 关闭 enforcement 时应先：
 
@@ -758,6 +863,11 @@ docker compose up -d --build
 5. 保留行为 reader 或按开关关闭。
 
 关闭智能分析不删除已完成 analysis run，也不降低规则 finding；关闭关联规则不删除原始行为事实。
+
+关闭会话检测时按 reveal/export → analysis/alert → behavior link → backfill/tailer →
+hook ingress → collector 的顺序执行；先停止新采集并 flush 已接受批次，再保留
+7 张表、cursor、risk marking 和访问审计。不得通过删除 transcript 或用户本地
+会话目录完成 Aegis 回滚。
 
 ### 11.3 组件级
 
@@ -785,6 +895,11 @@ docker compose up -d --build
 | 远程沙箱不可见 | 虚假安全 | remote_unobservable，要求远端 Agent |
 | 服务端策略错误 | 多主机影响 | draft/validate/preview/version/灰度/快速 audit 回滚 |
 | 内核已被控制 | eBPF 可被绕过 | 明确信任边界、Agent 自保护、外部完整性监控 |
+| 上游会话格式变化 | 会话缺失或错位 | 首选官方 Hook/API、版本化 parser、fixture 契约、partial/unsupported 降级 |
+| 会话内容含凭据/源码 | 隐私与合规泄漏 | metadata/redacted 默认、采集前脱敏、加密、细粒度 reveal/export 和保留期 |
+| Hook 被伪造或跨用户读取 | 会话归属错误/越权 | 独立 socket、SO_PEERCRED、source UID、文件 owner/mode、session/instance 多证据 |
+| AI 把讨论误判为执行 | 错误恶意标记 | planned/attempted/executed 分离、OS 事实关联、反证、人工确认、不自动阻断 |
+| 长会话和重放放大成本 | 队列/模型/数据库压力 | cursor、batch、去重、分段摘要、预算、专用 Kafka topic、保留期与分区 |
 
 ## 13. 完成定义
 
@@ -805,3 +920,11 @@ V6.2 开发完成必须满足：
 - 前端不误报 applied/denied/frozen。
 - 日志不泄露敏感数据。
 - 灰度、停止条件和回滚经过演练。
+- Codex、Claude Code、OpenCode 三类会话 Adapter 具有版本化 fixture、增量采集、
+  rotate/truncate、断网回补、幂等和降级测试。
+- 7 张会话审计表、migration 030、proto、Kafka、DC、API 和前端类型一致。
+- “智能体会话检测”第三个子标签按 PRD 完成，列表和三个详情 Tab 可追溯到
+  真实 item/tool/behavior 证据。
+- AI 风险标记包含结构化输出、真实引用、反证、不确定性、人工确认和失败降级；
+  AI-only 不触发自动 deny/freeze。
+- reveal/copy/export 的服务端权限、理由/审批、访问审计、保留和删除策略通过验证。

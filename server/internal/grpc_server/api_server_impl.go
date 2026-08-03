@@ -359,6 +359,9 @@ func (s *APIServerToServerImpl) UpdateAgentRules(ctx context.Context, req *pb.Up
 
 // ExecuteBlockCommand executes a block command on an agent
 func (s *APIServerToServerImpl) ExecuteBlockCommand(ctx context.Context, req *pb.ExecuteBlockCommandRequest) (*pb.ExecuteBlockCommandResponse, error) {
+	if req == nil {
+		return &pb.ExecuteBlockCommandResponse{Success: false, Error: ErrAgentGuardBlockCommandInvalid.Error()}, nil
+	}
 	hostID, err := uuid.Parse(req.HostId)
 	if err != nil {
 		return &pb.ExecuteBlockCommandResponse{
@@ -376,13 +379,26 @@ func (s *APIServerToServerImpl) ExecuteBlockCommand(ctx context.Context, req *pb
 		Target:    req.Target,
 		Reason:    req.Reason,
 	}
+	if err := ValidateAgentGuardBlockCommand(hostID, blockCmd); err != nil {
+		logger.Warn("agent_guard_block_command_rejected",
+			zap.String("command_id", req.CommandId),
+			zap.String("host_id", req.HostId),
+			zap.String("action", req.Action),
+			zap.String("error_code", "invalid_agent_guard_block_command"))
+		return &pb.ExecuteBlockCommandResponse{
+			CommandId: req.CommandId,
+			Success:   false,
+			Error:     err.Error(),
+		}, nil
+	}
 
 	// Send block command to agent
 	if err := s.grpcServer.SendBlockCommand(hostID, blockCmd); err != nil {
-		logger.Error("failed to execute block command",
-			zap.Error(err),
+		logger.Warn("agent_guard_block_command_forward_failed",
 			zap.String("host_id", req.HostId),
 			zap.String("command_id", req.CommandId),
+			zap.String("action", req.Action),
+			zap.String("error_code", "agent_command_failed"),
 		)
 		return &pb.ExecuteBlockCommandResponse{
 			CommandId: req.CommandId,
@@ -391,7 +407,7 @@ func (s *APIServerToServerImpl) ExecuteBlockCommand(ctx context.Context, req *pb
 		}, nil
 	}
 
-	logger.Info("block command executed",
+	logger.Info("agent_guard_block_command_forwarded",
 		zap.String("host_id", req.HostId),
 		zap.String("command_id", req.CommandId),
 		zap.String("action", req.Action),
@@ -631,9 +647,99 @@ func (s *APIServerToServerImpl) UninstallDetectionPackage(ctx context.Context, r
 
 // SyncAgentConfig syncs configuration to agents
 func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.SyncAgentConfigRequest) (*pb.SyncAgentConfigResponse, error) {
+	if req == nil {
+		return &pb.SyncAgentConfigResponse{
+			Success: false,
+			Message: "config sync request is required",
+		}, nil
+	}
 	affected := int32(0)
+	pendingReconnect := false
+
+	if req.HostId == "" {
+		for _, cfg := range req.Configs {
+			if cfg != nil && cfg.ConfigType == agentGuardBundleConfigType {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: "agent_guard_bundle requires an explicit host_id",
+				}, nil
+			}
+		}
+	}
+
+	var targetHostID uuid.UUID
+	if req.HostId != "" {
+		var err error
+		targetHostID, err = uuid.Parse(req.HostId)
+		if err != nil {
+			return &pb.SyncAgentConfigResponse{
+				Success: false,
+				Message: fmt.Sprintf("invalid host_id: %v", err),
+			}, nil
+		}
+	}
 
 	for _, cfg := range req.Configs {
+		if cfg == nil {
+			continue
+		}
+		if cfg.ConfigType == agentGuardBundleConfigType {
+			config := &pb.ConfigSync{
+				ConfigType: cfg.ConfigType,
+				Action:     "full_sync",
+				Payload:    cfg.ConfigJson,
+			}
+			snapshot, err := s.grpcServer.cacheAgentGuardBundle(targetHostID, config)
+			if err != nil {
+				logger.Warn("agent_guard_bundle_cache_rejected",
+					zap.String("host_id", targetHostID.String()),
+					zap.String("error_code", agentGuardBundleErrorCode(err)),
+				)
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: err.Error(),
+				}, nil
+			}
+
+			value, connected := s.grpcServer.agentConnections.Load(targetHostID)
+			if !connected {
+				pendingReconnect = true
+				logger.Info("agent_guard_bundle_cached_for_reconnect",
+					zap.String("host_id", targetHostID.String()),
+					zap.Int64("bundle_version", snapshot.Version),
+					zap.String("bundle_digest", snapshot.Digest),
+				)
+				continue
+			}
+			connection, ok := value.(*AgentConnection)
+			if !ok {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: "invalid agent connection state",
+				}, nil
+			}
+			if err := s.grpcServer.dispatchAgentConfig(ctx, connection, snapshot.Config); err != nil {
+				logger.Warn("agent_guard_bundle_dispatch_failed",
+					zap.String("host_id", targetHostID.String()),
+					zap.Int64("bundle_version", snapshot.Version),
+					zap.String("bundle_digest", snapshot.Digest),
+					zap.String("error_code", "agent_config_dispatch_failed"),
+				)
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: err.Error(),
+				}, nil
+			}
+			affected++
+			logger.Info("agent_guard_bundle_dispatched",
+				zap.String("host_id", targetHostID.String()),
+				zap.Int64("bundle_version", snapshot.Version),
+				zap.String("bundle_digest", snapshot.Digest),
+				zap.String("channel", agentConfigChannel(connection)),
+			)
+			continue
+		}
+
 		var commandReq *pb.CommandRequest
 
 		if cfg.ConfigType == "dynamic_ebpf_hook_allowlist" {
@@ -674,14 +780,7 @@ func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.Syn
 				return true
 			})
 		} else {
-			hostID, err := uuid.Parse(req.HostId)
-			if err != nil {
-				return &pb.SyncAgentConfigResponse{
-					Success: false,
-					Message: fmt.Sprintf("invalid host_id: %v", err),
-				}, nil
-			}
-			value, ok := s.grpcServer.agentConnections.Load(hostID)
+			value, ok := s.grpcServer.agentConnections.Load(targetHostID)
 			if !ok {
 				return &pb.SyncAgentConfigResponse{
 					Success: false,
@@ -706,10 +805,14 @@ func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.Syn
 		)
 	}
 
+	message := "config sync sent"
+	if pendingReconnect {
+		message = "agent guard bundle cached for reconnect"
+	}
 	return &pb.SyncAgentConfigResponse{
 		Success:        true,
 		AffectedAgents: affected,
-		Message:        "config sync sent",
+		Message:        message,
 	}, nil
 }
 

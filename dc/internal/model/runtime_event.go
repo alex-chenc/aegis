@@ -8,11 +8,11 @@ import (
 
 // RuntimeEvent represents a security event from an agent
 type RuntimeEvent struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
+	ID            uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	EventID       string    `gorm:"uniqueIndex;not null" json:"event_id"`
 	HostID        uuid.UUID `gorm:"index;not null" json:"host_id"`
 	EventType     string    `gorm:"index" json:"event_type"`
-	EventData     string    `gorm:"type:text" json:"event_data"`
+	EventData     string    `gorm:"type:jsonb" json:"event_data"`
 	MatchedRuleID string    `gorm:"index" json:"matched_rule_id"`
 	MitreID       string    `gorm:"index" json:"mitre_id"`
 	Severity      string    `gorm:"index" json:"severity"`

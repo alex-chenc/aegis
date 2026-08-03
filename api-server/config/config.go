@@ -14,6 +14,7 @@ type Config struct {
 	MinIO       MinIOConfig       `mapstructure:"minio"`
 	LLM         LLMConfig         `mapstructure:"llm"`
 	Agent       AgentConfig       `mapstructure:"agent"`
+	AgentGuard  AgentGuardConfig  `mapstructure:"agent_guard"`
 	SelfHealing SelfHealingConfig `mapstructure:"self_healing"`
 	Kafka       KafkaConfig       `mapstructure:"kafka"`
 	GRPC        GRPCConfig        `mapstructure:"grpc"`
@@ -80,6 +81,18 @@ type AgentConfig struct {
 	AuthToken               string `mapstructure:"auth_token"`
 	HeartbeatTimeoutSeconds int    `mapstructure:"heartbeat_timeout_seconds"`
 	ScriptTimeoutSeconds    int    `mapstructure:"script_timeout_seconds"`
+}
+
+// AgentGuardConfig keeps every V6.2 control-plane write capability behind an
+// explicit flag. Read routes remain registered so operators can inspect
+// unsupported, monitor-only, and disabled states without enabling protection.
+type AgentGuardConfig struct {
+	Enabled            bool   `mapstructure:"enabled"`
+	PolicyWriteEnabled bool   `mapstructure:"policy_write_enabled"`
+	AnalysisEnabled    bool   `mapstructure:"analysis_enabled"`
+	ActionEnabled      bool   `mapstructure:"action_enabled"`
+	ToolAdapterEnabled bool   `mapstructure:"tool_adapter_enabled"`
+	ScopeSigningKey    string `mapstructure:"scope_signing_key"`
 }
 
 type SelfHealingConfig struct {
@@ -170,6 +183,24 @@ func overrideFromEnv(cfg *Config) {
 	if authToken := getEnv("AGENT_AUTH_TOKEN"); authToken != "" {
 		cfg.Agent.AuthToken = authToken
 	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_ENABLED"); ok {
+		cfg.AgentGuard.Enabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_POLICY_WRITE_ENABLED"); ok {
+		cfg.AgentGuard.PolicyWriteEnabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_ANALYSIS_ENABLED"); ok {
+		cfg.AgentGuard.AnalysisEnabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_ACTION_ENABLED"); ok {
+		cfg.AgentGuard.ActionEnabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_TOOL_ADAPTER_ENABLED"); ok {
+		cfg.AgentGuard.ToolAdapterEnabled = enabled
+	}
+	if signingKey := getEnv("AGENT_GUARD_SCOPE_SIGNING_KEY"); signingKey != "" {
+		cfg.AgentGuard.ScopeSigningKey = signingKey
+	}
 	if grpcServerAddr := getEnv("GRPC_SERVER_ADDRESS"); grpcServerAddr != "" {
 		cfg.GRPC.ServerAddress = grpcServerAddr
 	}
@@ -195,6 +226,18 @@ func getEnvInt(key string) int {
 	}
 	i, _ := strconv.Atoi(val)
 	return i
+}
+
+func getEnvBool(key string) (bool, bool) {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		return false, false
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
 }
 
 func Get() *Config {

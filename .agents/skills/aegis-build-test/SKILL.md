@@ -1,6 +1,6 @@
 ---
 name: aegis-build-test
-description: 构建、测试和验证 Aegis 的 api-server、server、dc、agent、frontend 或 Docker Compose 数据流。用于代码变更后的定向测试、组件构建、eBPF 构建、服务健康检查、API 冒烟、Agent 打包上传和跨服务集成验证。
+description: 构建、测试和验证 Aegis 的 api-server、server、dc、agent、builder、frontend 或 Docker Compose 数据流。用于代码变更后的定向测试、组件构建、eBPF 镜像内构建、服务健康检查、API 冒烟、Agent 打包上传和跨服务集成验证。
 ---
 
 # Aegis 构建与验证
@@ -15,7 +15,8 @@ description: 构建、测试和验证 Aegis 的 api-server、server、dc、agent
 | `server/` | 在该模块运行相关包测试；需要扩大覆盖时运行 `go test ./...` | `make build` |
 | `dc/` | 在该模块运行相关包测试；需要扩大覆盖时运行 `go test ./...` | `make build` |
 | `agent/` Go 代码 | 运行相关包测试 | `make build` |
-| `agent/` eBPF 或打包链路 | 运行相关包测试 | `make bpf` 后运行 `make build`；需要制品时运行 `make package` |
+| `agent/` eBPF 或打包链路 | 运行相关包测试 | 在 `aegis-agent-builder-ubi8:5.8.0` 内构建（见下），或 `cd agent && make docker-build` |
+| `builder/` | 运行相关包测试 | 在 `aegis-agent-builder-ubi8:5.8.0` 内构建（见下） |
 | `frontend/` | `npm run test -- <file>`，按需补充 `npm run type-check` 和 `npm run lint` | `npm run build` |
 | Compose、协议或跨服务链路 | 先验证各受影响组件，再做 Compose 冒烟或数据流验证 | 仅重建受影响服务 |
 
@@ -25,11 +26,58 @@ description: 构建、测试和验证 Aegis 的 api-server、server、dc、agent
 
 1. 从变更文件、调用路径和失败现象确定受影响组件与行为。
 2. 先运行能覆盖该行为的定向测试；失败时保留完整错误证据并定位原因。
-3. 运行受影响组件的构建。Agent 的运行时采集变更必须先构建 eBPF。
+3. 运行受影响组件的构建。Agent 的 eBPF/打包与 `builder/` 服务都在共享 builder 镜像内构建，先确认 `aegis-agent-builder-ubi8:5.8.0` 存在（见下）。
 4. 仅在组件边界、配置、协议、数据库或事件流改变时增加集成验证。
 5. 记录已运行命令、结果和未运行检查的原因。
 
 不要用全栈构建代替定向测试，也不要为了减少命令次数跳过必需的生成、构建或证据检查。
+
+## 共享 eBPF Builder 镜像
+
+Agent 的 eBPF 程序和 `builder/` 服务都依赖 clang、llvm、kernel-headers 与 eBPF 头文件，宿主机通常不具备。两者都必须在共享 builder 镜像 `aegis-agent-builder-ubi8:5.8.0` 内构建；不要直接在宿主机运行 `make bpf`，除非已确认本地具备完整 eBPF 工具链与 `/opt/aegis/ebpf/include` 头文件。
+
+builder 镜像本身由 `docker/ebpf-builder-base/Dockerfile` 构建（基于 Red Hat UBI 8.10，内含 Go、clang/llvm、kernel-headers 与 eBPF include），是 Agent 与 builder 的共同前置依赖。构建前先确认镜像存在：
+
+```bash
+docker image inspect aegis-agent-builder-ubi8:5.8.0 >/dev/null 2>&1 \
+  || docker build -f docker/ebpf-builder-base/Dockerfile -t aegis-agent-builder-ubi8:5.8.0 .
+# 等价：cd agent && make docker-base-image
+```
+
+### Agent 制品（镜像内构建）
+
+`agent/Dockerfile` 以 builder 镜像为构建阶段，执行 `make BPF_TARGET_ARCH=x86 BPF_TRANSPORT=all all`（eBPF + Go 交叉编译 + 打包），再把 `dist/` 拷到运行阶段 `/out/`：
+
+```bash
+cd agent
+make docker-build          # 先重建 builder 镜像，再构建 agent 制品镜像 aegis-agent-artifacts:local
+# 或不重建基础镜像、直接构建：
+docker build -f agent/Dockerfile \
+  --build-arg EBPF_BASE_IMAGE=aegis-agent-builder-ubi8:5.8.0 \
+  -t aegis-agent-artifacts:local agent/
+```
+
+ARM64 产物用 `--build-arg BPF_TARGET_ARCH=arm`。需要本机 `dist/` 制品（如上传 MinIO）时从镜像拷出，不要在宿主机重跑 `make bpf`：
+
+```bash
+cid=$(docker create aegis-agent-artifacts:local)
+mkdir -p agent/dist && docker cp "$cid:/out/aegis-agent.tar.gz" agent/dist/aegis-agent.tar.gz
+docker rm "$cid" >/dev/null
+```
+
+### Builder 服务（镜像内构建）
+
+`builder/Dockerfile` 同样以 builder 镜像作为构建与运行基础，编译 `builder/` Go 服务并暴露 19096：
+
+```bash
+docker build -f builder/Dockerfile \
+  --build-arg EBPF_BASE_IMAGE=aegis-agent-builder-ubi8:5.8.0 \
+  -t aegis-system/builder:latest .
+# 或经 Compose（builder 服务无 profile，可直接构建）：
+docker compose up -d --build builder
+```
+
+Compose 中 `ebpf-builder-base` 服务带 `profiles: [build]`，需要单独重建基础镜像时用 `docker compose --profile build up -d --build ebpf-builder-base`。
 
 ## 服务与数据流验证
 
@@ -61,7 +109,7 @@ api-server -> Server:19094 -> Agent stream
 
 ## Agent 制品与 MinIO
 
-需要上传 Agent 时，在 `agent/` 中运行 `make all` 和 `make upload`。从环境或用户批准的密钥来源读取 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`；不得把凭证写入 skill、源码、命令输出或文档。上传后验证 `agent-artifacts/aegis-agent.tar.gz` 可读取且非空。
+需要上传 Agent 时，先用上一节的方法在 `aegis-agent-builder-ubi8:5.8.0` 内构建并把 `aegis-agent.tar.gz` 拷到 `agent/dist/`，再在 `agent/` 中运行 `make upload`。从环境或用户批准的密钥来源读取 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`；不得把凭证写入 skill、源码、命令输出或文档。上传后验证 `agent-artifacts/aegis-agent.tar.gz` 可读取且非空。
 
 卸载目标机 Agent、覆盖远程制品、停止服务或执行 `docker compose down -v` 会改变外部状态或删除数据，执行前必须获得用户确认。
 

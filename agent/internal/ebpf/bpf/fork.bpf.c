@@ -11,6 +11,32 @@ struct fork_event {
     __u8 child_comm[TASK_COMM_LEN];
 };
 
+struct guard_subject {
+    __u64 instance_slot;
+    __u64 unit_slot;
+    __u64 policy_slot;
+    __u64 process_epoch;
+    __u32 flags;
+    __u32 pad;
+};
+
+// These maps are reused by the LSM collection. Keeping fork propagation in
+// kernel closes the user-space reconciliation window for newly created
+// descendants.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);
+    __type(value, struct guard_subject);
+} guarded_pids SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16384);
+    __type(key, __u64);
+    __type(value, struct guard_subject);
+} guarded_cgroups SEC(".maps");
+
 // Tracepoint argument structure for sched_process_fork
 struct sched_process_fork_args {
     unsigned short common_type;
@@ -38,6 +64,11 @@ int trace_fork(struct sched_process_fork_args *ctx)
     e.child_pid = ctx->child_pid;
     e.uid = bpf_get_current_uid_gid() & 0xFFFFFFFF;
 
+    struct guard_subject *parent =
+        bpf_map_lookup_elem(&guarded_pids, &e.parent_pid);
+    if (parent)
+        bpf_map_update_elem(&guarded_pids, &e.child_pid, parent, BPF_ANY);
+
     bpf_probe_read_kernel_str(e.parent_comm, sizeof(e.parent_comm), ctx->parent_comm);
     bpf_probe_read_kernel_str(e.child_comm, sizeof(e.child_comm), ctx->child_comm);
 
@@ -51,6 +82,14 @@ int trace_fork(struct sched_process_fork_args *ctx)
 #elif defined(AEGIS_EVENT_PERF)
     bpf_perf_event_output(ctx, &fork_events, BPF_F_CURRENT_CPU, &e, sizeof(e));
 #endif
+    return 0;
+}
+
+SEC("tracepoint/sched/sched_process_exit")
+int trace_guarded_process_exit(void *ctx)
+{
+    __u32 tgid = bpf_get_current_pid_tgid() >> 32;
+    bpf_map_delete_elem(&guarded_pids, &tgid);
     return 0;
 }
 

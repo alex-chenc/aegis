@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +24,9 @@ import (
 )
 
 func main() {
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+
 	// Initialize logger with default config
 	if err := logger.Init(&logger.Config{
 		Level:      "info",
@@ -93,6 +97,37 @@ func main() {
 	grpcServer.SetSystemConfigRepo(systemConfigRepo)
 	grpcServer.SetDetectionPackageRepo(detectionPackageRepo)
 
+	var agentGuardActionConsumer *queue.KafkaConsumer
+	if cfg.AgentGuard.ActionConsumerEnabled {
+		groupID := cfg.Kafka.GroupID
+		if groupID == "" {
+			groupID = "aegis-server"
+		}
+		agentGuardActionConsumer = queue.NewKafkaConsumer(
+			cfg.Kafka.Brokers,
+			"aegis.block.commands",
+			groupID+"-agent-guard-actions",
+			grpcServer.HandleAgentGuardBlockMessage,
+			logger.Get(),
+		)
+		defer func() {
+			if err := agentGuardActionConsumer.Close(); err != nil {
+				logger.Warn("agent_guard_action_consumer_close_failed",
+					zap.String("error_code", "agent_guard_action_consumer_close_failed"),
+					zap.Error(err))
+			}
+		}()
+		go func() {
+			if err := agentGuardActionConsumer.Start(serviceCtx); err != nil && serviceCtx.Err() == nil {
+				logger.Error("agent_guard_action_consumer_failed",
+					zap.String("error_code", "agent_guard_action_consumer_failed"),
+					zap.Error(err))
+			}
+		}()
+	}
+	logger.Info("agent_guard_action_transport_configured",
+		zap.Bool("consumer_enabled", cfg.AgentGuard.ActionConsumerEnabled))
+
 	// Create APIServerToServer gRPC server on different port (19094)
 	apiServerGRPCPort := 19094
 	apiServerLis, err := net.Listen("tcp", fmt.Sprintf(":%d", apiServerGRPCPort))
@@ -143,6 +178,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info("Shutting down server...")
+	cancelService()
 
 	grpcServer.Stop()
 	apiServerGRPCServer.GracefulStop()

@@ -1,23 +1,35 @@
 package config
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	ServerAddr      string `toml:"ServerAddr"`
-	APIServerAddr   string `toml:"APIServerAddr"`
-	AuthToken       string `toml:"AuthToken"`
-	HostID          string `toml:"HostID"`
-	EventBufferSize int    `toml:"EventBufferSize"`
-	RuleDir         string `toml:"RuleDir"`
-	QuarantineDir   string `toml:"QuarantineDir"`
-	LogLevel        string `toml:"LogLevel"`
+	ServerAddr                       string `toml:"ServerAddr"`
+	APIServerAddr                    string `toml:"APIServerAddr"`
+	AuthToken                        string `toml:"AuthToken"`
+	HostID                           string `toml:"HostID"`
+	EventBufferSize                  int    `toml:"EventBufferSize"`
+	RuleDir                          string `toml:"RuleDir"`
+	QuarantineDir                    string `toml:"QuarantineDir"`
+	LogLevel                         string `toml:"LogLevel"`
+	AgentGuardEnabled                bool   `toml:"AgentGuardEnabled"`
+	AgentGuardBehaviorMonitorEnabled bool   `toml:"AgentGuardBehaviorMonitorEnabled"`
+	AgentGuardToolAdapterEnabled     bool   `toml:"AgentGuardToolAdapterEnabled"`
+	AgentGuardToolSourceManifest     string `toml:"AgentGuardToolSourceManifest"`
+	AgentGuardToolHookSocket         string `toml:"AgentGuardToolHookSocket"`
+	AgentGuardEnforcementEnabled     bool   `toml:"AgentGuardEnforcementEnabled"`
+	AgentGuardFreezeEnabled          bool   `toml:"AgentGuardFreezeEnabled"`
+	AgentGuardStateDir               string `toml:"AgentGuardStateDir"`
+	AgentGuardSpoolCapacity          int    `toml:"AgentGuardSpoolCapacity"`
+	AgentGuardReconcileSeconds       int    `toml:"AgentGuardReconcileSeconds"`
 }
 
 const configPath = "/etc/aegis-agent/config.toml"
@@ -65,6 +77,21 @@ func LoadConfig() (*Config, error) {
 		updated = true
 	}
 
+	if cfg.AgentGuardStateDir == "" {
+		cfg.AgentGuardStateDir = "/var/lib/aegis/agent-guard"
+		updated = true
+	}
+
+	if cfg.AgentGuardSpoolCapacity <= 0 {
+		cfg.AgentGuardSpoolCapacity = 4096
+		updated = true
+	}
+
+	if cfg.AgentGuardReconcileSeconds <= 0 {
+		cfg.AgentGuardReconcileSeconds = 30
+		updated = true
+	}
+
 	if updated {
 		if err := saveConfig(&cfg); err != nil {
 			return nil, err
@@ -72,6 +99,21 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func UpdateHostID(cfg *Config, hostID string) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	hostID = strings.TrimSpace(hostID)
+	if _, err := uuid.Parse(hostID); err != nil {
+		return fmt.Errorf("invalid canonical host ID: %w", err)
+	}
+	if cfg.HostID == hostID {
+		return nil
+	}
+	cfg.HostID = hostID
+	return saveConfig(cfg)
 }
 
 func DeriveAPIServerAddr(serverAddr string) string {

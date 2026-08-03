@@ -1069,3 +1069,33 @@ Repository 必须提供：
 - immutable 内置规则不能被 Repository 删除或原地修改。
 - GORM model 与 SQL 字段一致。
 - 回滚镜像连接包含新表的数据库不报错。
+
+## 21. P5 会话检测数据库扩展
+
+P5 新增独立 migration：
+
+```text
+migrations/030_v6.2_agent_session_detection.sql
+```
+
+新增 7 张表：
+
+1. `agent_conversation_sessions`
+2. `agent_conversation_items`
+3. `agent_conversation_tool_calls`
+4. `agent_conversation_artifacts`
+5. `agent_conversation_collection_cursors`
+6. `agent_session_analysis_runs`
+7. `agent_session_risk_markings`
+
+不得把 prompt/assistant/tool result 正文加入现有 `agent_behavior_sessions` 或
+`runtime_events`。产品会话与行为 session 通过明确关联字段连接；原始授权内容
+只在 MinIO 加密对象中保存，PostgreSQL 保存脱敏正文、digest、object metadata、
+analysis 和 marking。
+
+升级顺序：先 030 和 DC consumer，再 api-server/Server/Frontend，最后部署
+Agent Adapter；所有 feature flag 默认关闭。回滚保留 7 张表和审计，按 retention
+删除正文/artifact，不 DROP 表、不删除用户 Codex/Claude/OpenCode session。
+
+完整字段、唯一键、索引、cursor、保留期和状态见
+[agent_session_detection_design_v6.2.md](agent_session_detection_design_v6.2.md)。

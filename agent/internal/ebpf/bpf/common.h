@@ -88,6 +88,7 @@ struct pt_regs {
 #define FILE_ACTION_RENAME      5
 #define FILE_ACTION_CHMOD       6
 #define FILE_ACTION_CHOWN       7
+#define FILE_ACTION_OPEN_READ   8
 
 // Write intent flags
 #define O_WRONLY     00000001

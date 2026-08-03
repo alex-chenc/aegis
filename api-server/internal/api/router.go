@@ -34,6 +34,7 @@ type Router struct {
 	assetHandler           *handler.AssetHandler
 	weakPasswordHandler    *handler.WeakPasswordHandler
 	assistantHandler       *handler.AssistantHandler
+	agentGuardHandler      *handler.AgentGuardHandler
 }
 
 func NewRouter(
@@ -58,6 +59,7 @@ func NewRouter(
 	assetHandler *handler.AssetHandler,
 	weakPasswordHandler *handler.WeakPasswordHandler,
 	assistantHandler *handler.AssistantHandler,
+	agentGuardHandler *handler.AgentGuardHandler,
 ) *Router {
 	return &Router{
 		roleRepo:               roleRepo,
@@ -81,6 +83,7 @@ func NewRouter(
 		assetHandler:           assetHandler,
 		weakPasswordHandler:    weakPasswordHandler,
 		assistantHandler:       assistantHandler,
+		agentGuardHandler:      agentGuardHandler,
 	}
 }
 
@@ -155,6 +158,23 @@ func (r *Router) Setup() {
 		// V6.1 弱密码检测接口
 		if r.weakPasswordHandler != nil {
 			r.weakPasswordHandler.RegisterRoutes(v1)
+		}
+
+		// Agent Guard V6.2: publishing, analysis, evidence and each destructive
+		// manual action retain explicit, independent permission boundaries.
+		if r.agentGuardHandler != nil {
+			r.agentGuardHandler.RegisterRoutes(
+				v1,
+				r.roleMiddleware(repository.PermissionAgentGuardRead),
+				r.roleMiddleware(repository.PermissionAgentGuardEvidenceRead),
+				r.roleMiddleware(repository.PermissionAgentGuardAnalysisRead),
+				r.roleMiddleware(repository.PermissionAgentGuardAnalysisRun),
+				r.roleMiddleware(repository.PermissionAgentGuardPolicyWrite),
+				r.roleMiddleware(repository.PermissionAgentGuardPolicyPublish),
+				r.roleMiddleware(repository.PermissionAgentGuardActionFreeze),
+				r.roleMiddleware(repository.PermissionAgentGuardActionResume),
+				r.roleMiddleware(repository.PermissionAgentGuardActionKill),
+			)
 		}
 
 		// 模板接口

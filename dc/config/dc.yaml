@@ -32,3 +32,16 @@ aggregation:
 alert:
   severity_threshold: "medium"
   auto_block: true
+
+# V6.2 Agent Guard starts in monitor-only. P2 rule/finding/analysis/alert
+# stages remain independently disabled until their rollout gates pass.
+agent_guard:
+  projection_enabled: false
+  rules_enabled: false
+  findings_enabled: false
+  analysis_request_enabled: false
+  alert_enabled: false
+  action_enabled: false
+  deny_enabled: false
+  freeze_enabled: false
+  action_publish_enabled: false

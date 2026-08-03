@@ -122,6 +122,21 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <el-sub-menu index="agent-guard">
+          <template #title>
+            <el-icon><Connection /></el-icon>
+            <span>{{ t('app.menu.agentGuard') }}</span>
+          </template>
+          <el-menu-item index="/detection/agent-guard/events">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>{{ t('app.menu.agentGuardEvents') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/detection/agent-guard/escape">
+            <el-icon><Warning /></el-icon>
+            <span>{{ t('app.menu.agentGuardEscape') }}</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/risk/weak-password">
           <el-icon><Lock /></el-icon>
           <span>{{ t('app.menu.weakPassword') }}</span>

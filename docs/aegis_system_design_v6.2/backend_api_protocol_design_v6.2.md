@@ -1076,3 +1076,50 @@ aegis_agent_panorama_nodes_returned_total{node_type}
 - 不得向旧 Agent 下发 freeze action。
 
 如果后续事件查询量和 JSON 解析成本证明需要顶层字段，再以新增字段号方式扩展 `RuntimeEvent`，不得修改或复用已有字段号。
+
+## 16. P5 会话检测后端与协议扩展
+
+P5 会话内容不复用 `RuntimeEvent.event_data_json`，新增 additive
+`AgentSessionBatch` gRPC 和专用 Kafka topic `aegis.agent.sessions.v1`，避免
+敏感大文本进入通用安全事件消费者和日志。
+
+组件边界：
+
+- Agent `internal/agentsession` 负责三种产品 Adapter、脱敏、cursor、spool、
+  batch；不做 AI 判定。
+- Server 校验连接/批次并写专用 topic，不解析正文。
+- DC 会话 pipeline 负责幂等投影、sequence gap、tool/OS 行为关联和分析触发。
+- api-server 负责采集策略、权限、会话查询、AI 语义分析、marking、reveal/export
+  审批和审计。
+
+新增 HTTP 根路径：
+
+```text
+/api/v1/agent-guard/session-detection
+```
+
+核心 API：
+
+```text
+GET  /overview
+GET  /coverage
+GET  /sessions
+GET  /sessions/:id
+GET  /sessions/:id/items
+GET  /sessions/:id/tool-calls
+GET  /sessions/:id/analysis-runs
+GET  /sessions/:id/markings
+GET  /sessions/:id/related-behaviors
+GET  /sessions/:id/collection-status
+POST /sessions/:id/analyze
+POST /markings/:id/confirm
+POST /markings/:id/dismiss
+POST /markings/:id/false-positive
+POST /sessions/:id/content/reveal
+POST /sessions/:id/export
+```
+
+列表和 WebSocket 只返回 metadata/risk，不返回正文。items 使用 opaque cursor；
+reveal/export 必须 POST、鉴权、审批和审计。完整 proto、Schema、错误码、内容
+限制和 AI 输出见
+[agent_session_detection_design_v6.2.md](agent_session_detection_design_v6.2.md)。

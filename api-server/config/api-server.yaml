@@ -53,6 +53,16 @@ agent:
   heartbeat_timeout_seconds: 60
   script_timeout_seconds: 300
 
+# V6.2 Agent Guard is read-only and disabled by default. Enable capabilities in
+# rollout order; never enable ACTION before policy and Agent enforcement gates.
+agent_guard:
+  enabled: false
+  policy_write_enabled: false
+  analysis_enabled: false
+  action_enabled: false
+  tool_adapter_enabled: false
+  scope_signing_key: ""
+
 # Self Healing Configuration
 self_healing:
   max_retries: 3

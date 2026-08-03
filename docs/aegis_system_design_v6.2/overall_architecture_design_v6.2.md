@@ -1,8 +1,8 @@
 # Aegis V6.2 智能体运行防护总体架构设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-03
+**状态**：P0～P4 已实施；P5 会话检测设计完成、待实施
 
 ## 1. 背景与问题
 
@@ -16,7 +16,8 @@ Codex、OpenClaw、Hermes 等 AI Agent 会根据模型决策启动 shell、Pytho
 - 沙箱内进程是否尝试加入宿主机 namespace、访问容器运行时 socket 或离开预期 cgroup。
 - 规则和智能分析分别依据了哪些真实证据，危险操作能否在发生前阻断。
 
-V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“行为事实平面 + 安全分析平面 + 防护执行平面”。
+V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“行为事实平面 +
+会话审计平面 + 安全分析平面 + 防护执行平面”。
 
 ## 2. 目标与非目标
 
@@ -34,10 +35,13 @@ V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“
 10. 对字段截断、事件丢失、不支持阻断、工具语义缺失或远程不可观测的环境诚实降级。
 11. 支持同一主机多种 Agent 并存和同一种 Agent 多运行实例，归属、统计、
     全景展示和处置目标互不串扰。
+12. 提取 Codex、Claude Code、OpenCode 的完整可见会话结构，在授权脱敏边界内
+    做 AI 恶意语义检测，并与真实 OS 行为证据关联和标记。
 
 ### 2.2 非目标
 
-- 提示词注入、越狱文本或模型内容审核。
+- 在 Agent 执行前同步拦截提示词、替换模型输入或建设通用越狱文本网关；P5
+  只做会话审计、异步语义标记和行为关联。
 - 拦截大模型 API 请求。
 - 通用 MCP Gateway 或第三方 Agent 工具审批。
 - 捕获完整 stdin/stdout/stderr、文件内容或 TLS 明文。
@@ -45,6 +49,7 @@ V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“
 - 修补未知内核漏洞或在宿主机内核已经被完全控制后保证传感器不可绕过。
 - V6.2 第一版支持 Windows/macOS 的内核阻断。
 - 依赖 LLM 做内核同步安全决策，或允许 AI-only 结论默认自动阻断。
+- 采集隐藏推理、私有 chain-of-thought，或无条件保存未脱敏工具大输出和文件正文。
 
 ## 3. 威胁模型
 
@@ -169,6 +174,17 @@ Agent A 启动 Agent B 时，B 建立独立 runtime instance；两者的
 所有自动或人工动作只定位到一个 execution unit 或一个明确 instance，不提供
 Host 级 freeze/resume/kill。
 
+### 4.9 AgentConversationSession / ConversationItem / SessionRiskMarking
+
+- `AgentConversationSession` 表示 Codex、Claude Code 或 OpenCode 的产品正式
+  会话，稳定身份包含 host、source UID、Agent type 和 source session ID。
+- `ConversationItem` 表示用户可见消息、助手可见回复、工具调用/结果、权限、
+  compact、子智能体或生命周期 item，并保留真实顺序和采集完整性。
+- `SessionRiskMarking` 表示会话 AI、会话规则、OS 行为联合或人工形成的风险
+  标记，引用真实 item/event/finding ID。
+- 产品会话与 `BehaviorSession` 分开保存，通过 instance/unit/PID/tool
+  correlation 建立强弱关系；语义风险不能代替 OS 执行事实。
+
 ## 5. 总体组件架构
 
 ```mermaid
@@ -222,7 +238,7 @@ flowchart TB
   API --> FE
 ```
 
-## 6. 三条核心业务链路
+## 6. 四条核心业务链路
 
 ### 6.1 行为采集、关联与攻击性分析链路
 
@@ -298,6 +314,32 @@ Frontend draft/validate
 ```
 
 “配置已发送”不等于“Agent 已应用”。只有 Agent 上报匹配 version/digest 的 `applied` 才能进入生效状态。
+
+### 6.4 会话采集、语义检测与行为关联链路
+
+```mermaid
+sequenceDiagram
+  participant X as Codex/Claude/OpenCode
+  participant A as Aegis Agent agentsession
+  participant S as Server/Kafka
+  participant D as DC Session Pipeline
+  participant AI as Session Semantic Analyst
+  participant UI as Session Detection UI
+
+  X->>A: Hook/Plugin/API/transcript item
+  A->>A: source auth、normalize、redact、order、spool
+  A->>S: AgentSessionBatch
+  S->>D: aegis.agent.sessions.v1
+  D->>D: 幂等投影、gap 检测、tool/OS behavior link
+  D->>AI: 有界脱敏 conversation + evidence IDs
+  AI->>D: verdict/category/evidence/counter-evidence
+  D->>UI: session/marking metadata update
+  UI->>D: 懒加载会话、分析和关联行为
+```
+
+会话内容使用独立 agentsession 通道，不进入禁止 prompt/output 的可信工具
+Adapter，不进入普通 RuntimeEvent 正文或 WebSocket 通知。详细契约见
+[agent_session_detection_design_v6.2.md](agent_session_detection_design_v6.2.md)。
 
 ## 7. 四类隔离适配器
 

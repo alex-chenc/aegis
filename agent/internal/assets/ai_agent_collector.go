@@ -110,6 +110,21 @@ func agentProfiles() []AgentProfile {
 func linuxAgentProfiles() []AgentProfile {
 	return []AgentProfile{
 		{
+			Name:        "codex",
+			DisplayName: "Codex",
+			ConfigPaths: []string{"~/.codex"},
+		},
+		{
+			Name:        "openclaw",
+			DisplayName: "OpenClaw",
+			ConfigPaths: []string{"~/.openclaw"},
+		},
+		{
+			Name:        "hermes",
+			DisplayName: "Hermes",
+			ConfigPaths: []string{"~/.hermes"},
+		},
+		{
 			Name:        "claude-code",
 			DisplayName: "Claude Code",
 			ConfigPaths: []string{"~/.claude"},

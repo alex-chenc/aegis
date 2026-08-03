@@ -47,6 +47,7 @@ type ConfigManager struct {
 	// Callbacks for V5.8 detection package handling
 	onDetectionPackage func(action, payload string) error
 	onAllowlistUpdate  func(payload string) error
+	onAgentGuardBundle func(payload string) error
 }
 
 func NewConfigManager() *ConfigManager {
@@ -70,7 +71,19 @@ func (m *ConfigManager) SetAllowlistUpdateHandler(fn func(payload string) error)
 	m.onAllowlistUpdate = fn
 }
 
+// SetAgentGuardBundleHandler installs the trusted Agent Guard full-bundle
+// validator/applicator. ConfigManager intentionally does not inspect the
+// sensitive policy payload or keep a second copy of its state.
+func (m *ConfigManager) SetAgentGuardBundleHandler(fn func(payload string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAgentGuardBundle = fn
+}
+
 func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
+	if sync == nil {
+		return fmt.Errorf("config sync is nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -92,6 +105,14 @@ func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 			return m.onAllowlistUpdate(sync.Payload)
 		}
 		return nil
+	case "agent_guard_bundle":
+		if sync.Action != "full_sync" {
+			return fmt.Errorf("agent_guard_bundle only supports full_sync")
+		}
+		if m.onAgentGuardBundle == nil {
+			return fmt.Errorf("agent_guard_bundle handler is not configured")
+		}
+		return m.onAgentGuardBundle(sync.Payload)
 	default:
 		return fmt.Errorf("unknown config type: %s", sync.ConfigType)
 	}

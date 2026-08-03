@@ -36,6 +36,11 @@ kafka:
     - localhost:9092
   groupId: aegis-server-consumer
 
+# DC action publication and this consumer are independent rollout gates. Both
+# remain disabled until the P3 dedicated-host safety gate has passed.
+agent_guard:
+  action_consumer_enabled: false
+
 log:
   level: info
   filename: server.log

@@ -31,6 +31,8 @@ export default {
   detectionPackageNew: 'New Detection Package',
   detectionPackageDetail: 'Detection Package Details',
   detectionPackageEdit: 'Edit Detection Package',
+  agentGuardEvents: 'Agent Event Visibility & Protection',
+  agentGuardEscape: 'Agent Escape Protection',
   weakPassword: 'Intelligent Weak Password Detection',
   weakPasswordTaskDetail: 'Weak Password Task Details',
   weakPasswordDictionaries: 'Weak Password Dictionaries',

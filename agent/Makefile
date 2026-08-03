@@ -11,7 +11,7 @@ BPF_TARGET_ARCH?=$(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm/')
 BPF_TRANSPORT?=all
 BPF_INCLUDE_DIR?=/opt/aegis/ebpf/include
 
-BPF_PROGRAMS=execve fork file tcp_connect accept
+BPF_PROGRAMS=execve fork file tcp_connect accept guard_monitor agent_guard_lsm
 
 all: bpf build package
 

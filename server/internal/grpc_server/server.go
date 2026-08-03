@@ -30,6 +30,10 @@ type WebSocketBroadcaster interface {
 	BroadcastAlert(alert *model.Alert)
 }
 
+type runtimeEventKafkaProducer interface {
+	SendRawEventWithContext(context.Context, queue.SecurityEventMetadata, interface{}) error
+}
+
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
 	server               *grpc.Server
@@ -44,9 +48,10 @@ type GRPCServer struct {
 	detectionPackageRepo *repository.DetectionPackageRepository
 	wsBroadcaster        WebSocketBroadcaster
 	redisClient          *storage.RedisClient
-	kafkaProducer        *queue.KafkaProducer
+	kafkaProducer        runtimeEventKafkaProducer
 	agentConnections     sync.Map
 	callbackPorts        sync.Map // hostID -> callback port
+	agentGuardBundles    sync.Map // hostID -> agentGuardBundleSnapshot
 	port                 int
 	taskResultCallback   TaskResultCallback
 
@@ -65,7 +70,7 @@ type AgentConnection struct {
 	Inbox          chan *pb.CommandExecute
 }
 
-func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, kafkaProducer *queue.KafkaProducer, port int) *GRPCServer {
+func NewGRPCServer(hostRepo *repository.HostRepository, redisClient *storage.RedisClient, kafkaProducer runtimeEventKafkaProducer, port int) *GRPCServer {
 	return &GRPCServer{
 		hostRepo:      hostRepo,
 		redisClient:   redisClient,
@@ -389,8 +394,8 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 				zap.String("task_id", result.TaskId),
 				zap.Stringer("host_id", hostID),
 				zap.Int32("exit_code", result.ExitCode),
-				zap.String("stdout", result.Stdout),
-				zap.String("stderr", result.Stderr),
+				zap.Int("stdout_bytes", len(result.Stdout)),
+				zap.Int("stderr_bytes", len(result.Stderr)),
 				zap.Bool("is_final", result.IsFinal),
 			)
 
@@ -463,34 +468,66 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 }
 
 func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest) (*pb.ReportEventResponse, error) {
-	logger.Info("events received",
-		zap.String("host_id", req.HostId),
-		zap.Int("event_count", len(req.Events)),
-	)
+	if req == nil {
+		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
+	}
 
 	hostID, err := uuid.Parse(req.HostId)
 	if err != nil {
 		logger.Error("invalid host_id in ReportEvent", zap.String("host_id", req.HostId), zap.Error(err))
 		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
 	}
-	if err := s.ensureHostRecordForEvent(ctx, hostID); err != nil {
-		logger.Error("failed to ensure host record for events",
-			zap.String("host_id", req.HostId),
-			zap.Error(err))
-		return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
+	requiresLegacyHostRecord := false
+	for _, event := range req.Events {
+		if event == nil || !isAgentGuardFamilyEvent(event.EventType) {
+			requiresLegacyHostRecord = true
+			break
+		}
+	}
+	if requiresLegacyHostRecord {
+		if err := s.ensureHostRecordForEvent(ctx, hostID); err != nil {
+			logger.Error("failed to ensure host record for events",
+				zap.String("host_id", req.HostId),
+				zap.Error(err))
+			return &pb.ReportEventResponse{Success: false, ReceivedCount: 0}, nil
+		}
 	}
 
-	for _, event := range req.Events {
+	acceptedCount := 0
+	kafkaFailures := 0
+	agentGuardCount := 0
+	agentGuardStatusCount := 0
+	for _, originalEvent := range req.Events {
+		event, metadata := normalizeRuntimeEvent(req.HostId, originalEvent)
+		isAgentGuard := isAgentGuardFamilyEvent(event.EventType)
+		if isAgentGuard {
+			agentGuardCount++
+			if event.EventType != "agent_behavior" {
+				agentGuardStatusCount++
+			}
+		}
+
+		forwarded := true
 		if s.kafkaProducer != nil {
-			if err := s.kafkaProducer.SendRawEvent(ctx, req.HostId, event); err != nil {
+			if err := s.kafkaProducer.SendRawEventWithContext(ctx, metadata, event); err != nil {
+				forwarded = false
+				kafkaFailures++
 				logger.Error("failed to send event to kafka",
-					zap.String("event_id", event.EventId),
+					zap.String("host_id", req.HostId),
+					zap.String("event_id", metadata.EventID),
+					zap.String("event_type", metadata.EventType),
+					zap.String("instance_id", metadata.InstanceID),
 					zap.Error(err),
 				)
 			}
 		}
+		if forwarded {
+			acceptedCount++
+		}
 
-		if s.runtimeEventRepo != nil {
+		// Agent Guard raw facts are persisted by DC after Kafka consumption.
+		// The legacy direct persistence path remains unchanged for old events.
+		if s.runtimeEventRepo != nil && !isAgentGuard {
 			// Use event_data_json from agent if available, otherwise build legacy event data
 			var eventDataStr string
 			if event.EventDataJson != "" {
@@ -512,12 +549,8 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 				}
 				eventDataStr = string(eventDataJSON)
 			}
-			eventID := event.EventId
-			if eventID == "" {
-				eventID = "EVT-" + uuid.New().String()[:8]
-			}
 			runtimeEvent := &model.RuntimeEvent{
-				EventID:       eventID,
+				EventID:       event.EventId,
 				HostID:        hostID,
 				EventType:     event.EventType,
 				EventData:     eventDataStr,
@@ -538,14 +571,38 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 			}
 		}
 
-		if s.alertRepo != nil && event.MatchedRuleId != "" {
+		if s.alertRepo != nil && shouldCreateLegacyAlert(event) {
 			s.createAlertFromEvent(req.HostId, event)
 		}
 	}
 
+	if agentGuardCount > 0 {
+		fields := []zap.Field{
+			zap.String("host_id", req.HostId),
+			zap.Int("event_count", agentGuardCount),
+			zap.Int("status_event_count", agentGuardStatusCount),
+			zap.Int("accepted_count", acceptedCount),
+			zap.Int("kafka_failure_count", kafkaFailures),
+		}
+		if kafkaFailures > 0 {
+			logger.Warn("agent_guard_event_batch_forward_failed", fields...)
+		} else if agentGuardStatusCount > 0 {
+			logger.Info("agent_guard_status_batch_forwarded", fields...)
+		} else {
+			logger.Debug("agent_guard_behavior_batch_forwarded", fields...)
+		}
+	} else {
+		logger.Debug("runtime_event_batch_processed",
+			zap.String("host_id", req.HostId),
+			zap.Int("event_count", len(req.Events)),
+			zap.Int("accepted_count", acceptedCount),
+			zap.Int("kafka_failure_count", kafkaFailures),
+		)
+	}
+
 	return &pb.ReportEventResponse{
-		Success:       true,
-		ReceivedCount: int32(len(req.Events)),
+		Success:       kafkaFailures == 0,
+		ReceivedCount: int32(acceptedCount),
 	}, nil
 }
 
@@ -1044,7 +1101,7 @@ func (s *GRPCServer) CollectSoftwareListForHost(ctx context.Context, hostIDStr s
 	s.storeCollectCallback(collectReq.TaskId, func(result *pb.CommandResult) {
 		logger.Info("collect callback triggered",
 			zap.String("task_id", result.TaskId),
-			zap.String("stdout", result.Stdout),
+			zap.Int("stdout_bytes", len(result.Stdout)),
 			zap.Int("lines", strings.Count(result.Stdout, "\n")))
 		responseChan <- result
 	})
@@ -1278,7 +1335,7 @@ func (s *GRPCServer) pushConfigToAgent(hostID uuid.UUID) {
 		return
 	}
 
-	configs := s.buildAllConfigs()
+	configs := s.configsForAgent(hostID)
 	if len(configs) == 0 {
 		logger.Info("no configs to push", zap.String("host_id", hostID.String()))
 		return
@@ -1295,10 +1352,24 @@ func (s *GRPCServer) pushConfigToAgent(hostID uuid.UUID) {
 			zap.String("host_id", hostID.String()),
 			zap.Error(err))
 	} else {
+		accepted := resp != nil && resp.Success
 		logger.Info("config pushed to agent",
 			zap.String("host_id", hostID.String()),
 			zap.Int("config_count", len(configs)),
-			zap.Bool("success", resp.Success))
+			zap.Bool("success", accepted))
+		if snapshot, ok := s.loadAgentGuardBundle(hostID); ok {
+			fields := []zap.Field{
+				zap.String("host_id", hostID.String()),
+				zap.Int64("bundle_version", snapshot.Version),
+				zap.String("bundle_digest", snapshot.Digest),
+				zap.String("channel", "callback"),
+			}
+			if accepted {
+				logger.Info("agent_guard_bundle_reconnect_dispatched", fields...)
+			} else {
+				logger.Warn("agent_guard_bundle_reconnect_rejected", fields...)
+			}
+		}
 	}
 }
 
@@ -1312,7 +1383,7 @@ func (s *GRPCServer) pushAgentStartupState(hostID uuid.UUID, conn *AgentConnecti
 func (s *GRPCServer) pushActiveConfigToAgent(hostID uuid.UUID, conn *AgentConnection) {
 	time.Sleep(1 * time.Second)
 
-	configs := s.buildAllConfigs()
+	configs := s.configsForAgent(hostID)
 	if len(configs) == 0 {
 		logger.Info("no configs to push via stream", zap.String("host_id", hostID.String()))
 		return
@@ -1335,9 +1406,20 @@ func (s *GRPCServer) pushActiveConfigToAgent(hostID uuid.UUID, conn *AgentConnec
 				zap.String("config_type", cfg.ConfigType),
 				zap.Error(err))
 		} else {
-			logger.Info("config pushed via stream",
-				zap.String("host_id", hostID.String()),
-				zap.String("config_type", cfg.ConfigType))
+			if cfg.ConfigType == agentGuardBundleConfigType {
+				if snapshot, ok := s.loadAgentGuardBundle(hostID); ok {
+					logger.Info("agent_guard_bundle_reconnect_dispatched",
+						zap.String("host_id", hostID.String()),
+						zap.Int64("bundle_version", snapshot.Version),
+						zap.String("bundle_digest", snapshot.Digest),
+						zap.String("channel", "stream"),
+					)
+				}
+			} else {
+				logger.Info("config pushed via stream",
+					zap.String("host_id", hostID.String()),
+					zap.String("config_type", cfg.ConfigType))
+			}
 		}
 	}
 }

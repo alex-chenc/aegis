@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"aegis-agent/internal/asset"
 
+	"aegis-agent/internal/agentguard"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
@@ -160,12 +162,16 @@ func main() {
 	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
 
 	dynpkgManager.SetAlertCallback(func(alert interface{}) {
-		logger.Info("Correlation alert triggered", zap.Any("alert", alert))
 		corrAlert, ok := alert.(correlation.CorrelationAlert)
 		if !ok {
 			logger.Error("unexpected alert type in callback")
 			return
 		}
+		logger.Info("Correlation alert triggered",
+			zap.String("spec_id", corrAlert.SpecID),
+			zap.String("package_id", corrAlert.PackageID),
+			zap.String("severity", corrAlert.Severity),
+			zap.Int("evidence_count", len(corrAlert.Evidence)))
 		evidenceJSON, _ := json.Marshal(corrAlert.Evidence)
 		// Extract PID from first evidence item
 		var pid int32
@@ -260,18 +266,50 @@ func main() {
 		return nil
 	})
 
-	collector := ebpf.NewCollector(cfg.HostID, cfg.EventBufferSize)
+	guardManager := agentguard.NewManager(agentguard.ManagerConfig{
+		Enabled:                cfg.AgentGuardEnabled,
+		BehaviorMonitorEnabled: cfg.AgentGuardBehaviorMonitorEnabled,
+		ToolAdapterEnabled:     cfg.AgentGuardToolAdapterEnabled,
+		ToolSourceManifest:     cfg.AgentGuardToolSourceManifest,
+		ToolHookSocket:         cfg.AgentGuardToolHookSocket,
+		EnforcementEnabled:     cfg.AgentGuardEnforcementEnabled,
+		FreezeEnabled:          cfg.AgentGuardFreezeEnabled,
+		HostID:                 cfg.HostID,
+		StateDir:               cfg.AgentGuardStateDir,
+		SpoolCapacity:          cfg.AgentGuardSpoolCapacity,
+		ReconcileInterval:      time.Duration(cfg.AgentGuardReconcileSeconds) * time.Second,
+	}, agentguard.NewProcFSScanner("/proc"), c)
+	c.ConfigManager().SetAgentGuardBundleHandler(guardManager.ApplyBundle)
+	c.SetAgentGuardActionHandler(guardManager)
+	var guardStartOnce sync.Once
+	var guardStartErr error
+	c.SetRegisteredHandler(func(hostID string) error {
+		guardStartOnce.Do(func() {
+			if err := guardManager.RebindHostID(hostID); err != nil {
+				guardStartErr = err
+				return
+			}
+			guardStartErr = guardManager.Start(context.Background())
+		})
+		return guardStartErr
+	})
+
+	collector := ebpf.NewCollectorWithOptions(cfg.HostID, cfg.EventBufferSize, ebpf.LoaderOptions{
+		AgentGuardEnforcementEnabled: cfg.AgentGuardEnforcementEnabled,
+		BPFLSMAvailable:              guardManager.Capabilities().BPFLSM,
+	})
 	if err := collector.Start(); err != nil {
 		logger.Fatal("Failed to start event collector", zap.Error(err))
 	}
 	logger.Info("Event collector started")
-
+	guardManager.SetKernelPolicyApplier(collector.ApplyAgentGuardKernelPolicy)
 	pipeline := ebpf.NewPipeline(collector, ruleLoader, c, cfg.HostID, metrics)
 	// Feed built-in eBPF events to the correlation engine so package-specific
 	// sigma rules (e.g. suspicious_root_exec) can be evaluated and findings
 	// fed to the correlation engine for 4-step chains.
 	pipeline.SetEventCallback(func(eventMap map[string]interface{}) {
 		dynpkgManager.ProcessEventForAll(eventMap)
+		guardManager.ObserveEventMap(eventMap)
 	})
 	pipelineDone := make(chan struct{})
 	go pipeline.Run(pipelineDone)
@@ -289,6 +327,7 @@ func main() {
 	<-sigChan
 
 	logger.Info("Shutting down...")
+	guardManager.Stop()
 	close(pipelineDone)
 	collector.Stop()
 	c.Close()

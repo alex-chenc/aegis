@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-${VERSION:-v5.7}}"
+VERSION="${1:-}"
 RELEASE_ROOT="${RELEASE_ROOT:-${ROOT_DIR}/release}"
 RELEASE_DIR="${RELEASE_ROOT}/${VERSION}"
 ZIP_NAME="aegis-${VERSION}-linux-amd64-release.zip"
@@ -16,6 +16,7 @@ LOCAL_API_SERVER_IMAGE="${LOCAL_API_SERVER_IMAGE:-aegis-api-server:latest}"
 LOCAL_SERVER_IMAGE="${LOCAL_SERVER_IMAGE:-aegis-server:latest}"
 LOCAL_DC_IMAGE="${LOCAL_DC_IMAGE:-aegis-dc:latest}"
 LOCAL_FRONTEND_IMAGE="${LOCAL_FRONTEND_IMAGE:-aegis-frontend:latest}"
+COMBINED_IMAGE_ARCHIVE="${COMBINED_IMAGE_ARCHIVE:-0}"
 
 info() {
   printf '[release] %s\n' "$*"
@@ -28,6 +29,23 @@ die() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+validate_version() {
+  if [ -z "${VERSION}" ]; then
+    die "version argument is required (for example: v6.2)"
+  fi
+
+  case "${VERSION}" in
+    [A-Za-z0-9]*)
+      case "${VERSION}" in
+        *[!A-Za-z0-9._-]*) die "version contains unsupported characters: ${VERSION}" ;;
+      esac
+      ;;
+    *)
+      die "version must start with a letter or number: ${VERSION}"
+      ;;
+  esac
 }
 
 confirm_replace_zip() {
@@ -77,22 +95,26 @@ prepare_release_dir() {
   mkdir -p \
     "${RELEASE_DIR}/images" \
     "${RELEASE_DIR}/build-context/bpf" \
-    "${RELEASE_DIR}/backend/scripts"
+    "${RELEASE_DIR}/backend/scripts" \
+    "${RELEASE_DIR}/backend/migrations"
 }
 
 extract_agent_artifact() {
   local agent_container
   agent_container="$(docker create "${AGENT_ARTIFACT_IMAGE}")"
-  if ! docker cp "${agent_container}:/out/." "${RELEASE_DIR}/build-context/"; then
+  if ! docker cp \
+      "${agent_container}:/out/aegis-agent-linux-amd64" \
+      "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64" ||
+    ! docker cp \
+      "${agent_container}:/out/aegis-agent.tar.gz" \
+      "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz" ||
+    ! docker cp \
+      "${agent_container}:/out/bpf/." \
+      "${RELEASE_DIR}/build-context/bpf/"; then
     docker rm -f "${agent_container}" >/dev/null 2>&1 || true
-    die "failed to extract agent artifacts from ${AGENT_ARTIFACT_IMAGE}"
+    die "failed to extract Linux AMD64 agent artifacts from ${AGENT_ARTIFACT_IMAGE}"
   fi
   docker rm "${agent_container}" >/dev/null
-
-  if [ -f "${RELEASE_DIR}/build-context/aegis-agent.tar.gz" ]; then
-    mv "${RELEASE_DIR}/build-context/aegis-agent.tar.gz" \
-      "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz"
-  fi
 
   test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64" || die "missing Linux AMD64 agent binary"
   test -s "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64.tar.gz" || die "missing Linux AMD64 agent archive"
@@ -175,7 +197,7 @@ write_init_sql() {
   {
     printf '%s\n' '-- Generated release database init script.'
     printf '%s\n' '-- Source files are concatenated from migrations/*.sql in lexical order.'
-    find "${ROOT_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' | sort | while read -r migration; do
+    find "${ROOT_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort | while read -r migration; do
       printf '\n-- ============================================================\n'
       printf -- '-- Source: %s\n' "$(basename "${migration}")"
       printf -- '-- ============================================================\n'
@@ -187,6 +209,15 @@ write_init_sql() {
   # release process may run with umask 0077, so explicitly make the bind mount
   # readable rather than relying on the caller's umask.
   chmod 0644 "${RELEASE_DIR}/backend/scripts/init.sql"
+}
+
+copy_release_migration() {
+  local source_migration="${ROOT_DIR}/migrations/029_v6.2_agent_guard.sql"
+  local release_migration="${RELEASE_DIR}/backend/migrations/029_v6.2_agent_guard.sql"
+
+  test -s "${source_migration}" || die "missing required V6.2 migration: ${source_migration}"
+  cp "${source_migration}" "${release_migration}"
+  chmod 0644 "${release_migration}"
 }
 
 write_release_compose() {
@@ -238,6 +269,31 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  db-migrate:
+    image: pgvector/pgvector:pg16
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD:-a_strong_db_password}
+    volumes:
+      - ./backend/migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
+    command:
+      - "psql"
+      - "-v"
+      - "ON_ERROR_STOP=1"
+      - "-h"
+      - "postgres"
+      - "-U"
+      - "aegis_user"
+      - "-d"
+      - "aegis_db"
+      - "-f"
+      - "/migrations/029_v6.2_agent_guard.sql"
+    networks:
+      - aegis-network
 
   redis:
     image: redis:7-alpine
@@ -364,6 +420,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
@@ -392,6 +450,7 @@ services:
       AGENT_AUTH_TOKEN: ${AGENT_TOKEN:-a_very_secret_agent_token}
       AGENT_HEARTBEAT_TIMEOUT: 90
       AGENT_SCRIPT_TIMEOUT: 300
+      AGENT_GUARD_ACTION_CONSUMER_ENABLED: ${AGENT_GUARD_ACTION_CONSUMER_ENABLED:-false}
     ports:
       - "19090:19090"
       - "19094:19094"
@@ -417,6 +476,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -459,6 +520,12 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+      AGENT_GUARD_ENABLED: ${AGENT_GUARD_ENABLED:-false}
+      AGENT_GUARD_POLICY_WRITE_ENABLED: ${AGENT_GUARD_POLICY_WRITE_ENABLED:-false}
+      AGENT_GUARD_ANALYSIS_ENABLED: ${AGENT_GUARD_ANALYSIS_ENABLED:-false}
+      AGENT_GUARD_ACTION_ENABLED: ${AGENT_GUARD_ACTION_ENABLED:-false}
+      AGENT_GUARD_TOOL_ADAPTER_ENABLED: ${AGENT_GUARD_TOOL_ADAPTER_ENABLED:-false}
+      AGENT_GUARD_SCOPE_SIGNING_KEY: ${AGENT_GUARD_SCOPE_SIGNING_KEY:-}
     ports:
       - "8082:8082"
       - "19093:19093"
@@ -478,6 +545,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
@@ -497,6 +566,15 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gpt-4}
+      AGENT_GUARD_PROJECTION_ENABLED: ${AGENT_GUARD_PROJECTION_ENABLED:-false}
+      AGENT_BEHAVIOR_RULES_ENABLED: ${AGENT_BEHAVIOR_RULES_ENABLED:-false}
+      AGENT_BEHAVIOR_FINDINGS_ENABLED: ${AGENT_BEHAVIOR_FINDINGS_ENABLED:-false}
+      AGENT_BEHAVIOR_ANALYSIS_REQUEST_ENABLED: ${AGENT_BEHAVIOR_ANALYSIS_REQUEST_ENABLED:-false}
+      AGENT_GUARD_ALERT_ENABLED: ${AGENT_GUARD_ALERT_ENABLED:-false}
+      AGENT_GUARD_ACTION_ENABLED: ${AGENT_GUARD_ACTION_ENABLED:-false}
+      AGENT_GUARD_DENY_ENABLED: ${AGENT_GUARD_DENY_ENABLED:-false}
+      AGENT_GUARD_FREEZE_ENABLED: ${AGENT_GUARD_FREEZE_ENABLED:-false}
+      AGENT_GUARD_ACTION_PUBLISH_ENABLED: ${AGENT_GUARD_ACTION_PUBLISH_ENABLED:-false}
     ports:
       - "19092:19092"
     networks:
@@ -847,6 +925,21 @@ copy_env_example() {
   cp "${ROOT_DIR}/.env.example" "${RELEASE_DIR}/.env.example"
 }
 
+normalize_release_permissions() {
+  # A release may be produced by a CI runner with umask 0077. Normalize the
+  # archive tree so Compose and unprivileged container users can traverse and
+  # read bind-mounted files after extraction.
+  find "${RELEASE_DIR}" -type d -exec chmod 0755 {} +
+  find "${RELEASE_DIR}" -type f -exec chmod 0644 {} +
+  chmod 0755 \
+    "${RELEASE_DIR}/start.sh" \
+    "${RELEASE_DIR}/build-context/minio-entrypoint.sh"
+
+  if [ -f "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64" ]; then
+    chmod 0755 "${RELEASE_DIR}/build-context/aegis-agent-linux-amd64"
+  fi
+}
+
 require_local_image() {
   docker image inspect "$1" >/dev/null 2>&1 || die "required local image is missing: $1"
 }
@@ -919,7 +1012,52 @@ save_image() {
   docker save "${image}" | gzip > "${RELEASE_DIR}/images/${archive}"
 }
 
+save_combined_image_archive() {
+  local compressor=(gzip -9)
+  if command -v pigz >/dev/null 2>&1; then
+    compressor=(pigz -9)
+  fi
+
+  info "saving all release images with shared-layer deduplication -> images/aegis-images.tar.gz"
+  docker save \
+    aegis-system/api-server:latest \
+    aegis-system/server:latest \
+    aegis-system/dc:latest \
+    aegis-system/frontend:latest \
+    "${BUILDER_SERVICE_IMAGE}" \
+    "${EBPF_BUILDER_IMAGE}" \
+    aegis-system/minio-with-agent:latest \
+    pgvector/pgvector:pg16 \
+    redis:7-alpine \
+    confluentinc/cp-kafka:7.5.0 \
+    confluentinc/cp-zookeeper:7.5.0 \
+    minio/minio:latest \
+    minio/mc:latest |
+    "${compressor[@]}" > "${RELEASE_DIR}/images/aegis-images.tar.gz"
+
+  cat > "${RELEASE_DIR}/images/manifest.txt" <<EOF
+aegis-system/api-server:latest
+aegis-system/server:latest
+aegis-system/dc:latest
+aegis-system/frontend:latest
+${BUILDER_SERVICE_IMAGE}
+${EBPF_BUILDER_IMAGE}
+aegis-system/minio-with-agent:latest
+pgvector/pgvector:pg16
+redis:7-alpine
+confluentinc/cp-kafka:7.5.0
+confluentinc/cp-zookeeper:7.5.0
+minio/minio:latest
+minio/mc:latest
+EOF
+}
+
 export_images() {
+  if [ "${COMBINED_IMAGE_ARCHIVE}" = "1" ]; then
+    save_combined_image_archive
+    return
+  fi
+
   save_image aegis-system/api-server:latest api-server.tar.gz
   save_image aegis-system/server:latest server.tar.gz
   save_image aegis-system/dc:latest dc.tar.gz
@@ -944,13 +1082,16 @@ zip_release() {
 }
 
 main() {
+  validate_version
   prepare_release_dir
   write_minio_context
   write_init_sql
+  copy_release_migration
   write_release_compose
   write_start_script
   write_release_readme
   copy_env_example
+  normalize_release_permissions
 
   if [ "${GENERATE_ONLY:-0}" = "1" ]; then
     info "release files generated without building Docker images: ${RELEASE_DIR}"
@@ -975,6 +1116,7 @@ main() {
       ;;
   esac
   export_images
+  normalize_release_permissions
   zip_release
 
   info "release package created: ${ZIP_PATH}"

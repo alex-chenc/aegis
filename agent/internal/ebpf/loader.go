@@ -30,11 +30,18 @@ type Loader struct {
 	eventChan    chan Event
 	hostID       string
 	hostname     string
+	agentPID     uint32
 	seq          uint64
 	done         chan struct{}
 	dropCount    uint64
 	capabilities *kernel.Capabilities
 	toolManager  *tools.ToolManager
+	options      LoaderOptions
+}
+
+type LoaderOptions struct {
+	AgentGuardEnforcementEnabled bool
+	BPFLSMAvailable              bool
 }
 
 type execRuntimeReaders struct {
@@ -54,6 +61,10 @@ type bpfProgramConfig struct {
 
 // NewLoader creates a new eBPF loader with kernel capability detection.
 func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
+	return NewLoaderWithOptions(hostID, eventChan, LoaderOptions{})
+}
+
+func NewLoaderWithOptions(hostID string, eventChan chan Event, options LoaderOptions) (*Loader, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock limit: %w", err)
 	}
@@ -75,25 +86,39 @@ func NewLoader(hostID string, eventChan chan Event) (*Loader, error) {
 		eventChan:    eventChan,
 		hostID:       hostID,
 		hostname:     hostname,
+		agentPID:     uint32(os.Getpid()),
 		done:         make(chan struct{}),
 		capabilities: caps,
 		toolManager:  tools.NewToolManager(),
+		options:      options,
 	}, nil
 }
 
 // LoadAll loads eBPF programs for all event types.
 func (l *Loader) LoadAll() error {
-	return l.loadConfiguredPrograms(defaultBPFPrograms())
+	return l.loadConfiguredPrograms(configuredBPFPrograms(l.options))
 }
 
 func defaultBPFPrograms() []bpfProgramConfig {
-	return []bpfProgramConfig{
+	return configuredBPFPrograms(LoaderOptions{})
+}
+
+func configuredBPFPrograms(options LoaderOptions) []bpfProgramConfig {
+	programs := []bpfProgramConfig{
 		{name: "execve", attachType: "tracepoint", category: "syscalls", symbol: "sys_enter_execve", mapName: "exec_events", required: true},
 		{name: "fork", attachType: "tracepoint", category: "sched", symbol: "sched_process_fork", mapName: "fork_events"},
 		{name: "file", attachType: "tracepoint", category: "syscalls", symbol: "sys_enter_openat", progName: "trace_openat", mapName: "file_events"},
 		{name: "tcp_connect", attachType: "kprobe", mapName: "conn_events"},
 		{name: "accept", attachType: "tracepoint", category: "sock", symbol: "inet_sock_set_state", progName: "trace_inet_sock_set_state", mapName: "accept_events"},
+		{name: "guard_monitor", attachType: "tracepoint", mapName: "guard_monitor_events"},
 	}
+	if options.AgentGuardEnforcementEnabled && options.BPFLSMAvailable {
+		programs = append(programs, bpfProgramConfig{
+			name: "agent_guard_lsm", attachType: "lsm",
+			mapName: "agent_guard_lsm_events",
+		})
+	}
+	return programs
 }
 
 func (l *Loader) loadConfiguredPrograms(programs []bpfProgramConfig) error {
@@ -138,15 +163,46 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 		return fmt.Errorf("failed to load spec for %s: tried paths %v, last error: %w", cfg.name, objPaths, err)
 	}
 
-	coll, err := ebpf.NewCollection(spec)
+	collectionOptions := ebpf.CollectionOptions{}
+	if cfg.name == "agent_guard_lsm" {
+		if fork := l.collections["fork"]; fork != nil {
+			replacements := make(map[string]*ebpf.Map)
+			for _, name := range []string{"guarded_pids", "guarded_cgroups"} {
+				if shared := fork.Maps[name]; shared != nil {
+					replacements[name] = shared
+				}
+			}
+			collectionOptions.MapReplacements = replacements
+		}
+	}
+	coll, err := ebpf.NewCollectionWithOptions(spec, collectionOptions)
 	if err != nil {
 		return fmt.Errorf("failed to load collection for %s: %w", cfg.name, err)
+	}
+
+	// Configure in-kernel self-PID exclusion for file events so the agent
+	// does not capture its own file operations (e.g. /proc reads performed
+	// during event enrichment), which previously caused a feedback loop.
+	if cfg.name == "file" {
+		if agentPIDMap := coll.Maps["agent_pid_config"]; agentPIDMap != nil {
+			if err := agentPIDMap.Put(uint32(0), l.agentPID); err != nil {
+				logger.Warn("agent_file_self_pid_exclusion_config_failed",
+					zap.Error(err))
+			} else {
+				logger.Info("agent_file_self_pid_exclusion_configured",
+					zap.Uint32("agent_pid", l.agentPID))
+			}
+		}
 	}
 
 	// Attach main program
 	var localLinks []link.Link
 	if cfg.name == "tcp_connect" {
 		localLinks, err = attachTCPConnect(coll)
+	} else if cfg.name == "guard_monitor" {
+		localLinks, err = attachGuardMonitorTracepoints(coll)
+	} else if cfg.name == "agent_guard_lsm" {
+		localLinks, err = attachAgentGuardLSM(coll)
 	} else {
 		var ln link.Link
 		progName := cfg.progName
@@ -174,6 +230,16 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 	// Attach additional file tracepoints
 	if cfg.name == "file" {
 		localLinks = append(localLinks, attachExtraFileTracepoints(coll)...)
+	}
+	if cfg.name == "fork" {
+		if exitProgram := coll.Programs["trace_guarded_process_exit"]; exitProgram != nil {
+			if exitLink, exitErr := link.Tracepoint("sched", "sched_process_exit", exitProgram, nil); exitErr == nil {
+				localLinks = append(localLinks, exitLink)
+			} else {
+				logger.Warn("agent_guard_guarded_pid_exit_hook_unavailable",
+					zap.String("error_code", "agent_guard_exit_hook_attach_failed"))
+			}
+		}
 	}
 
 	// Create event reader
@@ -203,6 +269,24 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 		zap.String("transport", string(l.capabilities.Transport)))
 
 	return nil
+}
+
+func attachAgentGuardLSM(coll *ebpf.Collection) ([]link.Link, error) {
+	var links []link.Link
+	for name, program := range coll.Programs {
+		attached, err := link.AttachLSM(link.LSMOptions{Program: program})
+		if err != nil {
+			logger.Warn("agent_guard_lsm_hook_attach_failed",
+				zap.String("program", name),
+				zap.String("error_code", "agent_guard_lsm_attach_failed"))
+			continue
+		}
+		links = append(links, attached)
+	}
+	if len(links) == 0 {
+		return nil, errors.New("agent_guard_lsm_no_hooks_attached")
+	}
+	return links, nil
 }
 
 func attachTCPConnect(coll *ebpf.Collection) ([]link.Link, error) {
@@ -290,6 +374,43 @@ func attachExtraFileTracepoints(coll *ebpf.Collection) []link.Link {
 	return links
 }
 
+func attachGuardMonitorTracepoints(coll *ebpf.Collection) ([]link.Link, error) {
+	syscalls := []string{
+		"setuid", "setgid", "capset", "setns", "unshare", "clone3",
+		"mount", "pivot_root", "chroot", "ptrace", "bpf", "perf_event_open",
+		"init_module", "finit_module", "delete_module",
+		"connect",
+	}
+	var links []link.Link
+	for _, syscallName := range syscalls {
+		entryProgram, entryOK := coll.Programs["guard_enter_"+syscallName]
+		exitProgram, exitOK := coll.Programs["guard_exit_"+syscallName]
+		if !entryOK || !exitOK {
+			continue
+		}
+		entryLink, err := link.Tracepoint("syscalls", "sys_enter_"+syscallName, entryProgram, nil)
+		if err != nil {
+			logger.Debug("agent_guard_monitor_hook_unavailable",
+				zap.String("operation", syscallName),
+				zap.String("phase", "enter"))
+			continue
+		}
+		exitLink, err := link.Tracepoint("syscalls", "sys_exit_"+syscallName, exitProgram, nil)
+		if err != nil {
+			_ = entryLink.Close()
+			logger.Debug("agent_guard_monitor_hook_unavailable",
+				zap.String("operation", syscallName),
+				zap.String("phase", "exit"))
+			continue
+		}
+		links = append(links, entryLink, exitLink)
+	}
+	if len(links) == 0 {
+		return nil, fmt.Errorf("no Agent Guard monitor tracepoints available")
+	}
+	return links, nil
+}
+
 func (l *Loader) readEvents(name string, rd EventReader) {
 	logger.Info("Event reader started", zap.String("program", name))
 	readCount := 0
@@ -327,6 +448,10 @@ func (l *Loader) processEvent(name string, data []byte) {
 		l.processConnEvent(data)
 	case "accept":
 		l.processAcceptEvent(data)
+	case "guard_monitor":
+		l.processGuardMonitorEvent(data)
+	case "agent_guard_lsm":
+		l.processAgentGuardLSMEvent(data)
 	}
 }
 
@@ -340,8 +465,7 @@ func (l *Loader) processExecEvent(data []byte) {
 	}
 	logger.Debug("[eBPF] processExecEvent parsed",
 		zap.Uint32("pid", e.Pid),
-		zap.Uint32("uid", e.Uid),
-		zap.String("filename", bytesToString(e.Filename[:])))
+		zap.Uint32("uid", e.Uid))
 	l.sendEvent(l.buildExecRuntimeEvent(e, execRuntimeReaders{
 		readCmdline: readProcCmdline,
 		readExe:     readProcExe,
@@ -412,15 +536,22 @@ func (l *Loader) processFileEvent(data []byte) {
 		return
 	}
 
+	// Defense-in-depth: drop events generated by the agent itself. The BPF
+	// file program already excludes the agent PID in-kernel, but keep this
+	// guard so a failed map update cannot reintroduce the feedback loop.
+	if l.agentPID != 0 && e.Pid == l.agentPID {
+		return
+	}
+
 	path := bytesToString(e.Path[:])
 	oldPath := bytesToString(e.OldPath[:])
 	comm := strings.TrimSpace(bytesToString(e.Comm[:]))
 	action := fileActionName(e.Action)
 	flags := parseFlagsToStrings(e.Flags)
 
-	logger.Info("[eBPF] File event captured",
-		zap.String("path", path),
+	logger.Debug("[eBPF] File event captured",
 		zap.String("action", action),
+		zap.String("path", path),
 		zap.Uint32("raw_action", e.Action),
 		zap.Int32("raw_flags", e.Flags),
 		zap.String("comm", comm),
@@ -437,21 +568,21 @@ func (l *Loader) processFileEvent(data []byte) {
 	dir, name := filePathParts(path)
 
 	l.sendEvent(Event{
-		EventID:        l.nextEventID(),
-		HostID:         l.hostID,
-		Hostname:       l.hostname,
-		Timestamp:      time.Now().UnixMilli(),
-		EventType:      "file_access",
-		ProcessName:    comm,
-		PID:            int(e.Pid),
-		UID:            int(e.Uid),
-		CommandLine:    cmdLine,
-		FilePath:       path,
-		FileName:       name,
-		FileDir:        dir,
-		FileAction:     action,
-		FileFlags:      strings.Join(flags, ","),
-		OldFilePath:    oldPath,
+		EventID:         l.nextEventID(),
+		HostID:          l.hostID,
+		Hostname:        l.hostname,
+		Timestamp:       time.Now().UnixMilli(),
+		EventType:       "file_access",
+		ProcessName:     comm,
+		PID:             int(e.Pid),
+		UID:             int(e.Uid),
+		CommandLine:     cmdLine,
+		FilePath:        path,
+		FileName:        name,
+		FileDir:         dir,
+		FileAction:      action,
+		FileFlags:       strings.Join(flags, ","),
+		OldFilePath:     oldPath,
 		ProcessTreeJSON: processTreeJSON,
 	})
 }
@@ -512,9 +643,7 @@ func (l *Loader) processAcceptEvent(data []byte) {
 	comm := strings.TrimSpace(bytesToString(e.Comm[:]))
 
 	logger.Debug("[eBPF] Accept event captured",
-		zap.String("src_ip", srcIP),
 		zap.Uint16("src_port", srcPort),
-		zap.String("dst_ip", dstIP),
 		zap.Uint16("dst_port", dstPort),
 		zap.String("comm", comm),
 		zap.Uint32("pid", e.Pid))
@@ -548,6 +677,107 @@ func (l *Loader) processAcceptEvent(data []byte) {
 		NetworkDirection: "inbound",
 		ProcessTreeJSON:  processTreeJSON,
 	})
+}
+
+func (l *Loader) processGuardMonitorEvent(data []byte) {
+	event, err := parseGuardMonitorEvent(data)
+	if err != nil {
+		logger.Debug("agent_guard_monitor_event_parse_failed",
+			zap.Int("data_len", len(data)))
+		return
+	}
+	l.sendEvent(l.buildGuardRuntimeEvent(*event))
+}
+
+func (l *Loader) processAgentGuardLSMEvent(data []byte) {
+	event, err := parseAgentGuardLSMEvent(data)
+	if err != nil {
+		logger.Debug("agent_guard_lsm_event_parse_failed",
+			zap.Int("data_len", len(data)))
+		return
+	}
+	category, operation := agentGuardLSMOperation(event.Operation)
+	decision := "deny"
+	if event.Action == 2 {
+		decision = "deny_and_freeze"
+	}
+	l.sendEvent(Event{
+		EventID:            l.nextEventID(),
+		HostID:             l.hostID,
+		Hostname:           l.hostname,
+		Timestamp:          time.Now().UnixMilli(),
+		MonotonicNS:        event.TimestampNS,
+		EventType:          "agent_guard_syscall",
+		ProcessName:        strings.TrimSpace(bytesToString(event.Comm[:])),
+		PID:                int(event.PID),
+		UID:                int(event.UID),
+		SecurityCategory:   category,
+		SecurityOperation:  operation,
+		SecurityTarget:     bytesToString(event.Resource[:]),
+		SyscallReturn:      -1,
+		SecurityDecision:   decision,
+		SecurityPolicySlot: event.PolicySlot,
+		SecurityRuleSlot:   event.RuleSlot,
+	})
+}
+
+func (l *Loader) buildGuardRuntimeEvent(event GuardMonitorEvent) Event {
+	category, operation := guardOperationName(event.Operation)
+	target := bytesToString(event.Target[:])
+	secondary := bytesToString(event.Secondary[:])
+	if operation == "setns" && target == "" {
+		target = readProcFDLink(event.PID, event.Arg0)
+	}
+	if operation == "finit_module" && target == "" {
+		target = readProcFDLink(event.PID, event.Arg0)
+	}
+	if target == "" {
+		switch operation {
+		case "setuid", "setgid", "bpf":
+			target = fmt.Sprintf("argument:%d", event.Arg0)
+		case "ptrace":
+			target = fmt.Sprintf("pid:%d", event.Arg1)
+		}
+	}
+	commandLine := ""
+	if value, err := readProcCmdline(event.PID); err == nil {
+		commandLine = normalizeCommandLine(value)
+	}
+	return Event{
+		EventID:           l.nextEventID(),
+		HostID:            l.hostID,
+		Hostname:          l.hostname,
+		Timestamp:         time.Now().UnixMilli(),
+		MonotonicNS:       event.TimestampNS,
+		EventType:         "agent_guard_syscall",
+		ProcessName:       strings.TrimSpace(bytesToString(event.Comm[:])),
+		PID:               int(event.PID),
+		UID:               int(event.UID),
+		GID:               int(event.GID),
+		CommandLine:       commandLine,
+		ArgsTruncated:     event.Flags&(GuardMonitorTargetTruncated|GuardMonitorSecondaryTruncated) != 0,
+		SecurityCategory:  category,
+		SecurityOperation: operation,
+		SecurityTarget:    target,
+		SecuritySecondary: secondary,
+		SecurityArg0:      event.Arg0,
+		SecurityArg1:      event.Arg1,
+		SecurityArg2:      event.Arg2,
+		SyscallReturn:     event.ReturnCode,
+	}
+}
+
+func readProcFDLink(pid uint32, fd uint64) string {
+	if pid == 0 || fd > 1<<20 {
+		return ""
+	}
+	value, err := os.Readlink(filepath.Join(
+		"/proc", fmt.Sprintf("%d", pid), "fd", fmt.Sprintf("%d", fd),
+	))
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 // captureProcessTreeJSON captures process tree at event time (before short-lived process exits)

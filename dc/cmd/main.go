@@ -15,6 +15,7 @@ import (
 	"dc/internal/kafka_consumer"
 	"dc/internal/llm"
 	"dc/internal/llm_analyzer"
+	"dc/internal/pipeline"
 	"dc/internal/repository"
 	"dc/internal/server"
 	"dc/pkg/logger"
@@ -65,6 +66,23 @@ func main() {
 	alertRepo := repository.NewAlertRepository(db)
 	blockPolicyRepo := repository.NewBlockPolicyRepository(db)
 	runtimeEventRepo := repository.NewRuntimeEventRepository(db)
+	agentBehaviorRepo := repository.NewAgentBehaviorEventRepository(db)
+	agentGuardStateRepo := repository.NewAgentGuardStateRepository(db)
+	agentFindingRepo := repository.NewAgentSecurityFindingRepository(db)
+	agentActionPublisher := pipeline.NewKafkaAgentActionPublisher(cfg.Kafka.Brokers)
+	defer func() {
+		if err := agentActionPublisher.Close(); err != nil {
+			logger.Warn("agent_guard_action_publisher_close_failed",
+				zap.String("error_code", "agent_guard_action_transport_close_failed"),
+				zap.Error(err))
+		}
+	}()
+	agentActionCoordinator := pipeline.NewAgentActionCoordinator(
+		agentFindingRepo,
+		agentFindingRepo,
+		agentActionPublisher,
+	)
+	agentRuleEngine := pipeline.NewAgentRuleEngineWithActions(agentFindingRepo, agentActionCoordinator)
 
 	// Create shared components
 	blockMgr := block_manager.NewBlockManager()
@@ -96,11 +114,38 @@ func main() {
 		llmAnalyzer,
 		alertGen,
 		agg,
+		agentBehaviorRepo,
+		agentGuardStateRepo,
+		cfg.AgentGuard.ProjectionEnabled,
+		agentRuleEngine,
+		pipeline.AgentRuleProcessingOptions{
+			RulesEnabled:    cfg.AgentGuard.RulesEnabled,
+			FindingsEnabled: cfg.AgentGuard.FindingsEnabled,
+			AlertsEnabled:   cfg.AgentGuard.AlertEnabled,
+			ActionFlags: pipeline.AgentActionFeatureFlags{
+				ActionEnabled:  cfg.AgentGuard.ActionEnabled,
+				DenyEnabled:    cfg.AgentGuard.DenyEnabled,
+				FreezeEnabled:  cfg.AgentGuard.FreezeEnabled,
+				PublishEnabled: cfg.AgentGuard.ActionPublishEnabled,
+			},
+		},
 	)
 	if err != nil {
 		logger.Fatal("Failed to create Kafka consumer", zap.Error(err))
 	}
 	defer consumer.Close()
+
+	logger.Info("agent_guard_projection_configured",
+		zap.Bool("projection_enabled", cfg.AgentGuard.ProjectionEnabled),
+		zap.Bool("rules_enabled", cfg.AgentGuard.RulesEnabled),
+		zap.Bool("findings_enabled", cfg.AgentGuard.FindingsEnabled),
+		zap.Bool("analysis_request_enabled", cfg.AgentGuard.AnalysisRequestEnabled),
+		zap.Bool("alert_enabled", cfg.AgentGuard.AlertEnabled),
+		zap.Bool("action_enabled", cfg.AgentGuard.ActionEnabled),
+		zap.Bool("deny_enabled", cfg.AgentGuard.DenyEnabled),
+		zap.Bool("freeze_enabled", cfg.AgentGuard.FreezeEnabled),
+		zap.Bool("action_publish_enabled", cfg.AgentGuard.ActionPublishEnabled),
+	)
 
 	// Load block policies from database into block manager
 	if err := blockMgr.LoadPolicies(ctx, blockPolicyRepo); err != nil {

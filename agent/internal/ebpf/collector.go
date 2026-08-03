@@ -17,6 +17,7 @@ type Event struct {
 	HostID        string
 	Hostname      string
 	Timestamp     int64
+	MonotonicNS   uint64
 	EventType     string
 	ProcessName   string
 	PID           int
@@ -46,6 +47,20 @@ type Event struct {
 	ReturnCode       int32
 	RemoteAddr       string
 
+	// Agent Guard monitor fields. These are syscall metadata only; no
+	// stdin/stdout, file content, network payload, or environment is captured.
+	SecurityCategory   string
+	SecurityOperation  string
+	SecurityTarget     string
+	SecuritySecondary  string
+	SecurityArg0       uint64
+	SecurityArg1       uint64
+	SecurityArg2       uint64
+	SyscallReturn      int64
+	SecurityDecision   string
+	SecurityPolicySlot uint64
+	SecurityRuleSlot   uint64
+
 	// Process tree JSON (captured at event time for short-lived processes)
 	ProcessTreeJSON string
 }
@@ -59,10 +74,15 @@ type Collector struct {
 	mu       sync.RWMutex
 	loader   *Loader
 	running  bool
+	options  LoaderOptions
 }
 
 // NewCollector creates a new event collector
 func NewCollector(hostID string, bufferSize int) *Collector {
+	return NewCollectorWithOptions(hostID, bufferSize, LoaderOptions{})
+}
+
+func NewCollectorWithOptions(hostID string, bufferSize int, options LoaderOptions) *Collector {
 	hostname, _ := os.Hostname()
 	if bufferSize <= 0 {
 		bufferSize = 10000
@@ -72,6 +92,7 @@ func NewCollector(hostID string, bufferSize int) *Collector {
 		hostname: hostname,
 		events:   make(chan Event, bufferSize),
 		done:     make(chan struct{}),
+		options:  options,
 	}
 }
 
@@ -85,7 +106,7 @@ func (c *Collector) Start() error {
 		return fmt.Errorf("collector already running")
 	}
 
-	loader, err := NewLoader(c.hostID, c.events)
+	loader, err := NewLoaderWithOptions(c.hostID, c.events, c.options)
 	if err != nil {
 		logger.Warn("[eBPF] event engine disabled",
 			zap.Error(err),

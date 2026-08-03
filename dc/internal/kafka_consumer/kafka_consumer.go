@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"dc/config"
-	"dc/internal/alert_generator"
 	"dc/internal/aggregator"
+	"dc/internal/alert_generator"
 	"dc/internal/event_handler"
 	"dc/internal/llm_analyzer"
+	"dc/internal/pipeline"
 	"dc/internal/repository"
 	"dc/pkg/logger"
 
@@ -29,6 +30,11 @@ func NewKafkaConsumer(
 	llmAnalyzer *llm_analyzer.LLMAnalyzer,
 	alertGen *alert_generator.AlertGenerator,
 	aggregator *aggregator.Aggregator,
+	behaviorRepo *repository.AgentBehaviorEventRepository,
+	stateRepo *repository.AgentGuardStateRepository,
+	agentGuardProjectionEnabled bool,
+	ruleProcessor event_handler.AgentGuardRuleProcessor,
+	ruleOptions pipeline.AgentRuleProcessingOptions,
 ) (*KafkaConsumer, error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        cfg.Brokers,
@@ -47,9 +53,20 @@ func NewKafkaConsumer(
 	)
 
 	return &KafkaConsumer{
-		reader:       reader,
-		eventHandler: event_handler.NewEventHandler(runtimeEventRepo, llmAnalyzer, alertGen, aggregator),
-		logger:       logger.Get(),
+		reader: reader,
+		eventHandler: event_handler.NewEventHandlerWithAgentGuardRules(
+			runtimeEventRepo,
+			llmAnalyzer,
+			alertGen,
+			aggregator,
+			behaviorRepo,
+			stateRepo,
+			agentGuardProjectionEnabled,
+			nil,
+			ruleProcessor,
+			ruleOptions,
+		),
+		logger: logger.Get(),
 	}, nil
 }
 
@@ -77,7 +94,7 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			c.logger.Error("Failed to unmarshal event",
 				zap.Error(err),
-				zap.ByteString("value", msg.Value),
+				zap.Int("payload_bytes", len(msg.Value)),
 			)
 			continue
 		}

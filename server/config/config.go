@@ -17,6 +17,7 @@ type Config struct {
 	SelfHealing SelfHealingConfig `mapstructure:"self_healing"`
 	Kafka       KafkaConfig       `mapstructure:"kafka"`
 	GRPCServer  GRPCServerConfig  `mapstructure:"grpc_server"`
+	AgentGuard  AgentGuardConfig  `mapstructure:"agent_guard"`
 }
 
 type ServerConfig struct {
@@ -80,6 +81,10 @@ type KafkaConfig struct {
 
 type GRPCServerConfig struct {
 	Port int `mapstructure:"port"`
+}
+
+type AgentGuardConfig struct {
+	ActionConsumerEnabled bool `mapstructure:"action_consumer_enabled"`
 }
 
 var globalConfig *Config
@@ -168,6 +173,9 @@ func overrideFromEnv(cfg *Config) {
 	if grpcServerPort := getEnvInt("GRPC_SERVER_PORT"); grpcServerPort != 0 {
 		cfg.GRPCServer.Port = grpcServerPort
 	}
+	if enabled, ok := getEnvBool("AGENT_GUARD_ACTION_CONSUMER_ENABLED"); ok {
+		cfg.AgentGuard.ActionConsumerEnabled = enabled
+	}
 }
 
 func getEnv(key string) string {
@@ -184,6 +192,18 @@ func getEnvInt(key string) int {
 	}
 	i, _ := strconv.Atoi(val)
 	return i
+}
+
+func getEnvBool(key string) (bool, bool) {
+	value := getEnv(key)
+	if value == "" {
+		return false, false
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
 }
 
 func Get() *Config {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	pb "api-server/pkg/api/v1"
@@ -163,6 +164,16 @@ func (c *ServerClient) SyncAgentConfig(ctx context.Context, hostID string, confi
 	})
 	if err != nil {
 		return 0, err
+	}
+	if resp == nil {
+		return 0, fmt.Errorf("config sync returned an empty response")
+	}
+	if !resp.Success {
+		message := strings.TrimSpace(resp.Message)
+		if message == "" {
+			message = "request rejected"
+		}
+		return 0, fmt.Errorf("config sync rejected: %s", message)
 	}
 	return resp.AffectedAgents, nil
 }

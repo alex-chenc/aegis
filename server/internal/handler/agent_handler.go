@@ -113,14 +113,25 @@ chmod +x ${INSTALL_DIR}/aegis-agent
 
 # 创建配置文件
 echo "[3/6] 创建配置文件..."
-cat > ${INSTALL_DIR}/config/config.toml <<EOF
+mkdir -p /etc/aegis-agent
+cat > /etc/aegis-agent/config.toml <<EOF
 ServerAddr = "${GRPC_ADDR}"
 AuthToken = "a_very_secret_agent_token"
 HostID = ""
+AgentGuardEnabled = false
+AgentGuardBehaviorMonitorEnabled = false
+AgentGuardToolAdapterEnabled = false
+AgentGuardToolSourceManifest = ""
+AgentGuardToolHookSocket = ""
+AgentGuardEnforcementEnabled = false
+AgentGuardFreezeEnabled = false
+AgentGuardStateDir = "/var/lib/aegis/agent-guard"
+AgentGuardSpoolCapacity = 4096
+AgentGuardReconcileSeconds = 30
 EOF
-# 同时创建 /etc/aegis-agent/config.toml 以兼容 agent 代码
-mkdir -p /etc/aegis-agent
-cp ${INSTALL_DIR}/config/config.toml /etc/aegis-agent/config.toml
+chmod 600 /etc/aegis-agent/config.toml
+# 安装目录只保留兼容入口，避免修改未生效的配置副本。
+ln -sfn /etc/aegis-agent/config.toml ${INSTALL_DIR}/config/config.toml
 
 # 创建卸载脚本
 echo "[4/6] 创建卸载脚本..."

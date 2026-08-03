@@ -145,6 +145,37 @@ func main() {
 	assistantInvestigationEvidenceRepo := repository.NewAssistantInvestigationEvidenceRepository(db)
 	externalMCPSourceRepo := repository.NewExternalMCPSourceRepository(db)
 	externalMCPQueryLogRepo := repository.NewExternalMCPQueryLogRepository(db)
+	agentGuardCatalogRepo := repository.NewAgentGuardCatalogRepository(db)
+	agentGuardPolicyRepo := repository.NewAgentGuardPolicyRepository(db)
+	agentGuardQueryRepo := repository.NewAgentGuardQueryRepository(db)
+	agentGuardAnalysisRepo := repository.NewAgentGuardAnalysisRepository(db)
+	agentGuardActionRepo := repository.NewAgentGuardActionRepository(db)
+
+	if err := agentGuardCatalogRepo.VerifyBuiltinManifest(context.Background()); err != nil {
+		if cfg.AgentGuard.Enabled {
+			logger.Fatal("agent guard builtin manifest verification failed", zap.Error(err))
+		}
+		logger.Warn("agent guard builtin manifest is unavailable while feature is disabled", zap.Error(err))
+	} else {
+		logger.Info("agent guard builtin manifest verified")
+	}
+
+	var agentGuardScopeSigner *service.AgentGuardScopeSigner
+	if strings.TrimSpace(cfg.AgentGuard.ScopeSigningKey) != "" {
+		agentGuardScopeSigner, err = service.NewAgentGuardScopeSigner(cfg.AgentGuard.ScopeSigningKey)
+		if err != nil {
+			logger.Fatal("invalid agent guard scope signing configuration", zap.Error(err))
+		}
+	} else if cfg.AgentGuard.Enabled {
+		logger.Fatal("agent guard scope signing key is required while feature is enabled")
+	}
+	logger.Info("agent guard control plane configured",
+		zap.Bool("enabled", cfg.AgentGuard.Enabled),
+		zap.Bool("policy_write_enabled", cfg.AgentGuard.Enabled && cfg.AgentGuard.PolicyWriteEnabled),
+		zap.Bool("analysis_enabled", cfg.AgentGuard.Enabled && cfg.AgentGuard.AnalysisEnabled),
+		zap.Bool("action_enabled", cfg.AgentGuard.Enabled && cfg.AgentGuard.ActionEnabled),
+		zap.Bool("scope_signing_configured", agentGuardScopeSigner != nil),
+	)
 
 	// V5.7 Script Audit Services (must initialize before services that depend on it)
 	blacklistChecker := checker.NewBlacklistChecker()
@@ -203,6 +234,12 @@ func main() {
 
 	// V5.0 Runtime Detection Services
 	wsService := service.NewWebSocketService()
+	agentGuardActionService := service.NewAgentGuardActionService(
+		agentGuardActionRepo,
+		serverClient,
+		cfg.AgentGuard.Enabled && cfg.AgentGuard.ActionEnabled,
+		logger.Get().Named("agent_guard_action"),
+	)
 	_ = service.NewLLMAnalysisService(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	_ = service.NewBlockService(blockRepo, alertRepo)
 	_ = service.NewRuleService(sigmaRuleRepo, kafkaProducer)
@@ -221,6 +258,35 @@ func main() {
 	// Start background workers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	var agentGuardWSConsumer *queue.KafkaConsumer
+	if cfg.AgentGuard.Enabled {
+		groupID := strings.TrimSpace(cfg.Kafka.GroupID)
+		if groupID == "" {
+			groupID = "aegis-api-server"
+		}
+		agentGuardRealtimeHandler := service.NewAgentGuardRealtimeHandler(
+			wsService,
+			logger.Get().Named("agent_guard_realtime"),
+		)
+		agentGuardRealtimeHandler.SetActionStatusUpdater(agentGuardActionService)
+		agentGuardWSConsumer = queue.NewKafkaConsumer(
+			kafkaBrokers,
+			"aegis.security.events",
+			groupID+"-agent-guard-ws",
+			agentGuardRealtimeHandler.HandleKafkaMessage,
+			logger.Get().Named("agent_guard_realtime_consumer"),
+		)
+		go func() {
+			if err := agentGuardWSConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("agent_guard_realtime_consumer_failed", zap.Error(err))
+			}
+		}()
+		logger.Info("agent_guard_realtime_consumer_started",
+			zap.String("topic", "aegis.security.events"),
+			zap.String("group_id", groupID+"-agent-guard-ws"),
+		)
+	}
 
 	templateService.StartWorkers(ctx)
 	scriptGenService.StartWorkers(ctx)
@@ -308,6 +374,42 @@ func main() {
 	weakPasswordService := service.NewWeakPasswordService(weakPasswordRepo, serverClient, logger.Get().Named("weak_password"))
 	weakPasswordService.SetConfigRepository(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	weakPasswordHandler := handler.NewWeakPasswordHandler(weakPasswordService, logger.Get().Named("weak_password_handler"))
+	agentGuardPolicyService := service.NewAgentGuardPolicyService(
+		agentGuardCatalogRepo,
+		agentGuardPolicyRepo,
+		cfg.AgentGuard.Enabled && cfg.AgentGuard.PolicyWriteEnabled,
+	)
+	agentGuardBundleService := service.NewAgentGuardBundleService(
+		agentGuardPolicyRepo,
+		agentGuardCatalogRepo,
+		serverClient,
+		cfg.AgentGuard.Enabled && cfg.AgentGuard.PolicyWriteEnabled,
+		cfg.AgentGuard.ToolAdapterEnabled,
+		logger.Get().Named("agent_guard_bundle"),
+	)
+	agentGuardAnalysisClient := service.NewConfiguredAgentGuardAnalysisClient(
+		configRepo,
+		cfg.LLM.TimeoutSeconds,
+		cfg.LLM.MaxRetries,
+	)
+	agentGuardAnalysisService := service.NewAgentGuardAnalysisService(
+		agentGuardAnalysisRepo,
+		agentGuardAnalysisClient,
+		cfg.AgentGuard.Enabled && cfg.AgentGuard.AnalysisEnabled,
+		logger.Get().Named("agent_guard_analysis"),
+	)
+	agentGuardAnalysisService.Start(ctx)
+	agentGuardHandler := handler.NewAgentGuardHandler(
+		agentGuardCatalogRepo,
+		agentGuardPolicyRepo,
+		agentGuardQueryRepo,
+		agentGuardPolicyService,
+		agentGuardScopeSigner,
+		logger.Get().Named("agent_guard_handler"),
+	)
+	agentGuardHandler.SetBundleService(agentGuardBundleService)
+	agentGuardHandler.SetAnalysisService(agentGuardAnalysisService)
+	agentGuardHandler.SetActionService(agentGuardActionService)
 	logger.Info("Weak password detection module initialized")
 
 	// V6.0 Assistant
@@ -547,7 +649,7 @@ func main() {
 	}
 
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler, agentGuardHandler)
 	router.Setup()
 
 	// Start HTTP server
@@ -579,6 +681,11 @@ func main() {
 
 	// Graceful shutdown
 	cancel()
+	if agentGuardWSConsumer != nil {
+		if err := agentGuardWSConsumer.Close(); err != nil {
+			logger.Warn("agent_guard_realtime_consumer_close_failed", zap.Error(err))
+		}
+	}
 	time.Sleep(2 * time.Second)
 
 	kafkaProducer.Close()

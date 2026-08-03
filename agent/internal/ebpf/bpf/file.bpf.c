@@ -64,7 +64,30 @@ static __always_inline int is_sensitive_path(const __u8 *path)
     if (starts_with(path, "/var/spool/cron/", 16)) return 1;
     if (starts_with(path, "/tmp/", 5)) return 1;
     if (starts_with(path, "/var/tmp/", 9)) return 1;
+    if (starts_with(path, "/sys/fs/cgroup/", 15)) return 1;
+    if (starts_with(path, "/run/", 5)) return 1;
+    if (starts_with(path, "/var/run/", 9)) return 1;
 
+    return 0;
+}
+
+// Agent self-PID exclusion. The userspace loader writes the agent's own tgid
+// here so file operations performed by the agent itself - notably /proc reads
+// done while enriching events - are dropped in-kernel instead of feeding a
+// self-monitoring feedback loop.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} agent_pid_config SEC(".maps");
+
+static __always_inline int is_agent_self(void)
+{
+    __u32 key = 0;
+    __u32 *agent_pid = bpf_map_lookup_elem(&agent_pid_config, &key);
+    if (agent_pid && *agent_pid != 0 && (bpf_get_current_pid_tgid() >> 32) == *agent_pid)
+        return 1;
     return 0;
 }
 
@@ -125,22 +148,24 @@ static __always_inline void submit_file_event(
 SEC("tracepoint/syscalls/sys_enter_openat")
 int trace_openat(struct trace_event_raw_sys_enter *ctx)
 {
-    __s32 flags = (__s32)ctx->args[2];
-    if (!is_write_intent(flags))
+    if (is_agent_self())
         return 0;
 
+    __s32 flags = (__s32)ctx->args[2];
     const char *pathname = (const char *)ctx->args[1];
     if (!pathname)
         return 0;
 
     // Quick path check - only collect events for absolute paths
-    char buf[16];
+    char buf[32];
     if (bpf_probe_read_user_str(buf, sizeof(buf), pathname) < 0)
         return 0;
     if (buf[0] != '/')
         return 0;
+    if (!is_write_intent(flags) && !is_sensitive_path((const __u8 *)buf))
+        return 0;
 
-    __u32 action = FILE_ACTION_OPEN_WRITE;
+    __u32 action = is_write_intent(flags) ? FILE_ACTION_OPEN_WRITE : FILE_ACTION_OPEN_READ;
     if (flags & O_CREAT)
         action = FILE_ACTION_CREATE;
     if (flags & O_TRUNC)
@@ -154,6 +179,9 @@ int trace_openat(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_openat2")
 int trace_openat2(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     struct open_how how = {};
     struct open_how *how_ptr = (struct open_how *)ctx->args[2];
     if (!how_ptr)
@@ -162,20 +190,19 @@ int trace_openat2(struct trace_event_raw_sys_enter *ctx)
         return 0;
 
     __s32 flags = (__s32)how.flags;
-    if (!is_write_intent(flags))
-        return 0;
-
     const char *pathname = (const char *)ctx->args[1];
     if (!pathname)
         return 0;
 
-    char buf[16];
+    char buf[32];
     if (bpf_probe_read_user_str(buf, sizeof(buf), pathname) < 0)
         return 0;
     if (buf[0] != '/')
         return 0;
+    if (!is_write_intent(flags) && !is_sensitive_path((const __u8 *)buf))
+        return 0;
 
-    __u32 action = FILE_ACTION_OPEN_WRITE;
+    __u32 action = is_write_intent(flags) ? FILE_ACTION_OPEN_WRITE : FILE_ACTION_OPEN_READ;
     if (flags & O_CREAT)
         action = FILE_ACTION_CREATE;
     if (flags & O_TRUNC)
@@ -189,6 +216,9 @@ int trace_openat2(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_creat")
 int trace_creat(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[0];
     submit_file_event(ctx, FILE_ACTION_CREATE, O_CREAT, pathname, NULL);
     return 0;
@@ -198,6 +228,9 @@ int trace_creat(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_unlinkat")
 int trace_unlinkat(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[1];
     submit_file_event(ctx, FILE_ACTION_DELETE, 0, pathname, NULL);
     return 0;
@@ -207,6 +240,9 @@ int trace_unlinkat(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_renameat")
 int trace_renameat(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *oldpath = (const char *)ctx->args[1];
     const char *newpath = (const char *)ctx->args[3];
     submit_file_event(ctx, FILE_ACTION_RENAME, 0, newpath, oldpath);
@@ -217,6 +253,9 @@ int trace_renameat(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_renameat2")
 int trace_renameat2(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *oldpath = (const char *)ctx->args[1];
     const char *newpath = (const char *)ctx->args[3];
     submit_file_event(ctx, FILE_ACTION_RENAME, 0, newpath, oldpath);
@@ -227,6 +266,9 @@ int trace_renameat2(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_chmod")
 int trace_chmod(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[0];
     submit_file_event(ctx, FILE_ACTION_CHMOD, 0, pathname, NULL);
     return 0;
@@ -236,6 +278,9 @@ int trace_chmod(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_fchmodat")
 int trace_fchmodat(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[1];
     submit_file_event(ctx, FILE_ACTION_CHMOD, 0, pathname, NULL);
     return 0;
@@ -245,6 +290,9 @@ int trace_fchmodat(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_chown")
 int trace_chown(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[0];
     submit_file_event(ctx, FILE_ACTION_CHOWN, 0, pathname, NULL);
     return 0;
@@ -254,6 +302,9 @@ int trace_chown(struct trace_event_raw_sys_enter *ctx)
 SEC("tracepoint/syscalls/sys_enter_fchownat")
 int trace_fchownat(struct trace_event_raw_sys_enter *ctx)
 {
+    if (is_agent_self())
+        return 0;
+
     const char *pathname = (const char *)ctx->args[1];
     submit_file_event(ctx, FILE_ACTION_CHOWN, 0, pathname, NULL);
     return 0;
