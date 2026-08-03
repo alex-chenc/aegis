@@ -126,6 +126,7 @@ type RuntimeInstance struct {
 type BehaviorSession struct {
 	SessionID            string     `json:"session_id"`
 	InstanceID           string     `json:"instance_id"`
+	ExternalSessionID    string     `json:"external_session_id,omitempty"`
 	Source               string     `json:"source"`
 	Confidence           Confidence `json:"confidence"`
 	CorrelationTokenHash string     `json:"correlation_token_hash,omitempty"`

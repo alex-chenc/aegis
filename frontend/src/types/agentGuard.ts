@@ -166,6 +166,12 @@ export interface PanoramaTreeNode {
   has_children?: boolean
   child_count?: number
   occurred_at?: string
+  pid?: number
+  ppid?: number
+  process_start_ticks?: string
+  process_status?: 'running' | 'stopped' | 'unknown' | string
+  session_source?: 'agent_official' | 'adapter_hook' | 'aegis_wrapper' | 'activity_window' | 'execution_unit' | string
+  session_confidence?: 'confirmed' | 'probable' | 'inferred' | string
   event_id?: string
   object_id?: string
   execution_unit_id?: string

@@ -27,6 +27,14 @@ var (
 	ErrAgentGuardActionNotFound        = errors.New("agent guard action not found")
 )
 
+const (
+	agentGuardProcessFactRepositoryLimit = 5000
+	// Runtime controllers heartbeat every 30 seconds. Three intervals avoid a
+	// transient false stop while removing dead PID epochs from the live view
+	// quickly enough for the selector to reflect the host's current process set.
+	agentGuardRuntimeFreshnessWindow = 90 * time.Second
+)
+
 type AgentGuardQueryRepository struct {
 	db *gorm.DB
 }
@@ -162,7 +170,7 @@ func (r *AgentGuardQueryRepository) GetOverview(ctx context.Context) (*model.Age
 		PolicyHosts:        map[string]int64{},
 	}
 	if err := r.db.WithContext(ctx).Model(&model.AgentRuntimeInstance{}).
-		Where("status = ?", "running").
+		Where("status = ? AND last_seen_at >= ?", "running", agentGuardRuntimeFreshnessCutoff()).
 		Count(&overview.RunningInstances).Error; err != nil {
 		return nil, fmt.Errorf("count running agent instances: %w", err)
 	}
@@ -508,6 +516,12 @@ func (r *AgentGuardQueryRepository) ListBehaviors(
 	if query.ResourceKeyword != "" {
 		db = db.Where("LOWER(resource_identity) LIKE ?", "%"+strings.ToLower(query.ResourceKeyword)+"%")
 	}
+	if query.PID != nil {
+		db = db.Where("pid = ?", *query.PID)
+	}
+	if query.ProcessStartTicks != "" {
+		db = db.Where("process_start_ticks = ?", query.ProcessStartTicks)
+	}
 	db = applyAgentGuardTimeRange(db, "occurred_at", query.StartTime, query.EndTime)
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count agent behavior events: %w", err)
@@ -519,6 +533,35 @@ func (r *AgentGuardQueryRepository) ListBehaviors(
 		&items,
 	); err != nil {
 		return nil, 0, fmt.Errorf("list agent behavior events: %w", err)
+	}
+	return items, total, nil
+}
+
+func (r *AgentGuardQueryRepository) ListProcessFacts(
+	ctx context.Context,
+	query model.AgentBehaviorEventQuery,
+	limit int,
+) ([]model.AgentBehaviorEvent, int64, error) {
+	query.Category = "process"
+	query.Page, query.PageSize = 1, 100
+	db := r.db.WithContext(ctx).Model(&model.AgentBehaviorEvent{}).
+		Where("category = 'process' AND pid IS NOT NULL AND process_start_ticks IS NOT NULL")
+	for _, item := range []struct{ column, value string }{
+		{"host_id", query.HostID}, {"instance_id", query.InstanceID},
+		{"session_id", query.SessionID}, {"execution_unit_id", query.ExecutionUnitID},
+	} {
+		db = applyAgentGuardEqual(db, item.column, item.value)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count agent process facts: %w", err)
+	}
+	if limit <= 0 || limit > agentGuardProcessFactRepositoryLimit {
+		limit = agentGuardProcessFactRepositoryLimit
+	}
+	var items []model.AgentBehaviorEvent
+	if err := db.Order("occurred_at ASC, agent_sequence ASC, id ASC").Limit(limit).Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("list agent process facts: %w", err)
 	}
 	return items, total, nil
 }
@@ -789,9 +832,10 @@ func applyAgentGuardAssetFilters(db *gorm.DB, query model.AgentGuardAgentQuery) 
 		)
 	}
 	if query.RuntimeStatus != "" {
+		statusPredicate, statusArgs := agentGuardRuntimeStatusPredicate("ai.", query.RuntimeStatus)
 		db = db.Where(
-			"EXISTS (SELECT 1 FROM agent_runtime_instances ai WHERE "+logicalRuntimeMatch+" AND ai.status = ?)",
-			query.RuntimeStatus,
+			"EXISTS (SELECT 1 FROM agent_runtime_instances ai WHERE "+logicalRuntimeMatch+" AND "+statusPredicate+")",
+			statusArgs...,
 		)
 	}
 	if query.Coverage != "" {
@@ -841,7 +885,7 @@ func applyAgentGuardOrphanFilters(db *gorm.DB, query model.AgentGuardAgentQuery)
 		}
 		db = db.Where(agentGuardCanonicalTypeSQL("i.agent_type")+" IN ?", canonical)
 	}
-	db = applyAgentGuardEqual(db, "i.status", query.RuntimeStatus)
+	db = applyAgentGuardRuntimeStatus(db, "i.", query.RuntimeStatus)
 	db = applyAgentGuardEqual(db, "i.coverage_level", query.Coverage)
 	if query.IsolationType != "" {
 		db = db.Where(
@@ -946,12 +990,13 @@ func (r *AgentGuardQueryRepository) enrichAgentGuardScope(
 	coverage := ""
 	for _, instance := range instances {
 		instanceIDs = append(instanceIDs, instance.ID)
-		if instance.Status == "running" {
+		effectiveStatus := agentGuardEffectiveRuntimeStatus(instance.Status, instance.LastSeenAt, time.Now().UTC())
+		if effectiveStatus == "running" {
 			item.RunningInstanceCount++
 			item.ControllerPIDs = append(item.ControllerPIDs, instance.ControllerPID)
 			item.RuntimeStatus = "running"
-		} else if item.RuntimeStatus != "running" {
-			item.RuntimeStatus = instance.Status
+		} else if agentGuardRuntimeStatusRank(effectiveStatus) > agentGuardRuntimeStatusRank(item.RuntimeStatus) {
+			item.RuntimeStatus = effectiveStatus
 		}
 		if item.LastSeenAt == nil || instance.LastSeenAt.After(*item.LastSeenAt) {
 			lastSeen := instance.LastSeenAt
@@ -1113,7 +1158,7 @@ func applyAgentRuntimeInstanceFilters(
 		db = db.Where(prefix+"id IN ?", query.InstanceIDs)
 	}
 	db = applyAgentGuardEqual(db, prefix+"profile_key", query.ProfileKey)
-	db = applyAgentGuardEqual(db, prefix+"status", query.Status)
+	db = applyAgentGuardRuntimeStatus(db, prefix, query.Status)
 	db = applyAgentGuardEqual(db, prefix+"coverage_level", query.Coverage)
 	db = applyAgentGuardTimeRange(db, prefix+"last_seen_at", query.StartTime, query.EndTime)
 	if query.ContainerID != "" {
@@ -1124,6 +1169,52 @@ func applyAgentRuntimeInstanceFilters(
 		)
 	}
 	return db
+}
+
+func applyAgentGuardRuntimeStatus(db *gorm.DB, prefix, status string) *gorm.DB {
+	if status == "" {
+		return db
+	}
+	predicate, args := agentGuardRuntimeStatusPredicate(prefix, status)
+	return db.Where(predicate, args...)
+}
+
+func agentGuardRuntimeStatusPredicate(prefix, status string) (string, []any) {
+	switch status {
+	case "running":
+		return prefix + "status = ? AND " + prefix + "last_seen_at >= ?", []any{"running", agentGuardRuntimeFreshnessCutoff()}
+	case "stale":
+		return "(" + prefix + "status = ? OR (" + prefix + "status = ? AND " + prefix + "last_seen_at < ?))",
+			[]any{"stale", "running", agentGuardRuntimeFreshnessCutoff()}
+	default:
+		return prefix + "status = ?", []any{status}
+	}
+}
+
+func agentGuardRuntimeFreshnessCutoff() time.Time {
+	return time.Now().UTC().Add(-agentGuardRuntimeFreshnessWindow)
+}
+
+func agentGuardEffectiveRuntimeStatus(status string, lastSeenAt, now time.Time) string {
+	if status == "running" && lastSeenAt.Before(now.Add(-agentGuardRuntimeFreshnessWindow)) {
+		return "stale"
+	}
+	return status
+}
+
+func agentGuardRuntimeStatusRank(status string) int {
+	switch status {
+	case "running":
+		return 4
+	case "stale":
+		return 3
+	case "unknown":
+		return 2
+	case "stopped":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func applyAgentGuardEqual(db *gorm.DB, column string, value string) *gorm.DB {

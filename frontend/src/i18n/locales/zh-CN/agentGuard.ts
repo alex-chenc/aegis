@@ -123,6 +123,8 @@ export default {
     aiOnlyNotice: '智能研判不代表已证实事实，且不能单独触发自动阻断。',
   },
   panorama: {
+    inferredActivityWindow: '推断活动窗口（非 Codex 会话）',
+    inferredSessionHint: '仅按进程活动推断，未获得来源会话 ID',
     tree: '行为关系树',
     expand: '展开子节点',
     selectNode: '选择树节点查看证据',
@@ -139,6 +141,11 @@ export default {
     correlationMatched: '已匹配 tool call → process → resource',
     correlationUnmatched: '尚无可验证的跨层关联',
     noTimestamp: '时间未知',
+  },
+  processStatus: {
+    running: '运行中',
+    stopped: '已退出',
+    unknown: '状态未知',
   },
   baseline: {
     noIsolation: '未观察到隔离边界，不能显示为沙箱安全。',

@@ -183,6 +183,7 @@
       :agent="selectedAgent"
       :detail-tab="parsedQuery.detail.tab"
       :instances="store.instances"
+      :instance-total="store.instanceTotal"
       :selected-instance-id="parsedQuery.detail.instanceId"
       :panorama-nodes="store.panoramaNodes"
       :load-panorama-children="store.fetchPanoramaChildren"
@@ -411,12 +412,14 @@ watch(detailFingerprint, async () => {
       await store.fetchInstances(detail.assetId
         ? {
           asset_ids: [detail.assetId],
+          status: 'running',
           page: 1,
           page_size: 100,
         }
         : detail.scopeKey
           ? {
               agent_scope_key: detail.scopeKey,
+              status: 'running',
               page: 1,
               page_size: 100,
             }
@@ -597,6 +600,7 @@ function retryDetail(target: 'instances' | 'panorama' | 'analysis') {
       asset_ids: detail.assetId ? [detail.assetId] : undefined,
       agent_scope_key: detail.scopeKey || undefined,
       instance_ids: detail.instanceId ? [detail.instanceId] : undefined,
+      status: detail.instanceId ? undefined : 'running',
       page: 1,
       page_size: 100,
     })

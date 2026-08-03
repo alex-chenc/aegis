@@ -1,12 +1,12 @@
 package handler
 
 import (
-	"server/internal/grpc_server"
-	"server/internal/storage"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"server/internal/grpc_server"
+	"server/internal/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -118,8 +118,8 @@ cat > /etc/aegis-agent/config.toml <<EOF
 ServerAddr = "${GRPC_ADDR}"
 AuthToken = "a_very_secret_agent_token"
 HostID = ""
-AgentGuardEnabled = false
-AgentGuardBehaviorMonitorEnabled = false
+AgentGuardEnabled = true
+AgentGuardBehaviorMonitorEnabled = true
 AgentGuardToolAdapterEnabled = false
 AgentGuardToolSourceManifest = ""
 AgentGuardToolHookSocket = ""

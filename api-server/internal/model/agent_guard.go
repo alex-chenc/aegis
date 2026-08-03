@@ -609,6 +609,8 @@ type AgentBehaviorEventQuery struct {
 	Severity               string `form:"severity" json:"severity"`
 	RuleID                 string `form:"rule_id" json:"rule_id"`
 	PolicyID               string `form:"policy_id" json:"policy_id"`
+	PID                    *int   `form:"pid" json:"pid"`
+	ProcessStartTicks      string `form:"process_start_ticks" json:"process_start_ticks"`
 	ResourceKeyword        string `form:"resource_keyword" json:"resource_keyword"`
 	StartTime              *time.Time
 	EndTime                *time.Time

@@ -231,6 +231,32 @@ func TestTrustedToolAdapterRequiresSignedConfiguredProofAndVerifiedRemoteEvidenc
 	}
 }
 
+func TestTrustedToolExternalSessionIdentityIsSignedAndValidated(t *testing.T) {
+	fixture := newToolAdapterFixture(t)
+	process := confirmedProcess(4100, 100, "/opt/claude/bin/claude", "claude")
+	event := fixture.event(process, ToolEventStarted)
+	event.ExternalSessionID = "thr_01JABCDEFGH1234567890"
+	signTrustedToolEvent(&event, fixture.toolPrivate)
+	if _, err := fixture.adapter.Verify(event); err != nil {
+		t.Fatalf("verified external session rejected: %v", err)
+	}
+
+	tampered := fixture.event(process, ToolEventStarted)
+	tampered.ExternalSessionID = "thr_original"
+	signTrustedToolEvent(&tampered, fixture.toolPrivate)
+	tampered.ExternalSessionID = "thr_tampered"
+	if _, err := fixture.adapter.Verify(tampered); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("unsigned external session mutation accepted: %v", err)
+	}
+
+	invalid := fixture.event(process, ToolEventStarted)
+	invalid.ExternalSessionID = strings.Repeat("x", 256)
+	signTrustedToolEvent(&invalid, fixture.toolPrivate)
+	if _, err := fixture.adapter.Verify(invalid); err == nil || !strings.Contains(err.Error(), "session") {
+		t.Fatalf("oversized external session accepted: %v", err)
+	}
+}
+
 func TestToolHookIngressDefaultOffSignedEndToEndAndDisableCleanup(t *testing.T) {
 	fixture := newToolAdapterFixture(t)
 	controller := confirmedProcess(4100, 100, "/opt/claude/bin/claude", "claude")

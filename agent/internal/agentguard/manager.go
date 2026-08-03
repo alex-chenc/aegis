@@ -83,6 +83,7 @@ type Manager struct {
 	started         map[string]bool
 	startedUnits    map[string]bool
 	startedSessions map[string]bool
+	lastHeartbeat   map[string]time.Time
 	lastDrift       map[string]string
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
@@ -125,6 +126,7 @@ func NewManager(cfg ManagerConfig, scanner ProcessScanner, reporter RuntimeRepor
 		started:         make(map[string]bool),
 		startedUnits:    make(map[string]bool),
 		startedSessions: make(map[string]bool),
+		lastHeartbeat:   make(map[string]time.Time),
 		reconcileReset:  make(chan time.Duration, 1),
 		capabilities:    capabilities,
 		lastDrift:       make(map[string]string),
@@ -484,7 +486,9 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 	if !ok || subject.Confidence != ConfidenceConfirmed {
 		return BehaviorEvent{}, errors.New("agent_guard_tool_process_not_confirmed")
 	}
-	session, sessionChanged := m.tracker.ObserveTrustedSession(subject, verified.Source.SourceType, verified.CorrelationHash)
+	session, sessionChanged := m.tracker.ObserveTrustedSession(
+		subject, verified.Source.SourceType, verified.CorrelationHash, input.ExternalSessionID,
+	)
 	if session.SessionID == "" {
 		return BehaviorEvent{}, errors.New("agent_guard_tool_session_unavailable")
 	}
@@ -690,11 +694,14 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 	if pid == 0 {
 		return false
 	}
+	eventType := stringValue(eventMap["event_type"])
+	if eventType == "process_exit" {
+		return m.observeProcessExit(eventMap, pid)
+	}
 	process, err := m.scanner.ReadPID(pid)
 	if err != nil {
 		return false
 	}
-	eventType := stringValue(eventMap["event_type"])
 	switch eventType {
 	case "process_fork":
 		parent, err := m.scanner.ReadPID(process.PPID)
@@ -766,6 +773,47 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 		}, process, normalized)
 	}
 	return true
+}
+
+func (m *Manager) observeProcessExit(eventMap map[string]any, pid uint32) bool {
+	process, _, ok := m.tracker.ProcessByPID(pid)
+	if !ok {
+		return false
+	}
+	if ppid := uint32(numberValue(eventMap["ppid"])); ppid > 0 {
+		process.PPID = ppid
+	}
+	resource := Resource{Type: "process", Identity: process.Exe}
+	_, accepted := m.observeRawEvent(RawBehavior{
+		EventID: stringValue(eventMap["event_id"]), OccurredAt: time.Now().UTC(),
+		OccurredMonotonicNS: uint64(numberValue(eventMap["timestamp_ns"])),
+		Category:            CategoryProcess, Operation: "exit", Outcome: OutcomeSuccess,
+		Process: process, Resource: resource, Source: "ebpf", Sensor: "process_exit",
+		Visibility: visibilityForEvent(eventMap),
+	})
+	exit, exited := m.tracker.ExitPID(pid, time.Now().UTC())
+	if exited && exit.InstanceStopped {
+		m.queueStoppedLifecycle(exit, "ebpf_exit")
+	}
+	return accepted
+}
+
+func (m *Manager) queueStoppedLifecycle(exit ProcessExitResult, reason string) {
+	if !exit.InstanceStopped {
+		return
+	}
+	m.queueInstanceStatus(exit.Instance, "agent_instance_stopped")
+	if exit.Unit.UnitID != "" {
+		m.queueExecutionUnitStatus(exit.Unit, "agent_execution_unit_stopped")
+	}
+	if exit.Session.SessionID != "" {
+		m.queueSessionStatus(exit.Session, "agent_behavior_session_stopped")
+	}
+	logger.Info("agent_guard_instance_stopped",
+		zap.String("host_id", m.cfg.HostID),
+		zap.String("instance_id", exit.Instance.InstanceID),
+		zap.Uint32("controller_pid", exit.Process.Identity.PID),
+		zap.String("reason", reason))
 }
 
 func (m *Manager) observeGuardSemanticEvent(eventMap map[string]any, process ProcessSnapshot) bool {
@@ -1195,9 +1243,15 @@ func (m *Manager) reconcileOnce() error {
 		return fmt.Errorf("scan process identities: %w", err)
 	}
 	stats := m.reconciler.Reconcile(processes)
+	for _, exit := range stats.Exits {
+		if exit.InstanceStopped {
+			m.queueStoppedLifecycle(exit, "reconcile_missing_pid")
+		}
+	}
 	m.reconcileIsolation(processes)
 	m.lifecycleMu.Lock()
 	m.queuePendingLifecyclesLocked()
+	m.queueInstanceHeartbeatsLocked(time.Now().UTC())
 	m.lifecycleMu.Unlock()
 	m.syncKernelSubjects()
 	if stats.ProcessLabelsRepaired > 0 || stats.ExpiredLabelsRemoved > 0 || stats.ControllersDiscovered > 0 {
@@ -1235,6 +1289,7 @@ func (m *Manager) queuePendingLifecyclesLocked() {
 		}
 		m.started[instance.InstanceID] = true
 		m.queueInstanceStatus(instance, "agent_instance_started")
+		m.lastHeartbeat[instance.InstanceID] = time.Now().UTC()
 		logger.Info("agent_guard_instance_started",
 			zap.String("host_id", m.cfg.HostID),
 			zap.String("instance_id", instance.InstanceID),
@@ -1266,6 +1321,21 @@ func (m *Manager) queuePendingLifecyclesLocked() {
 			zap.String("session_id", session.SessionID),
 			zap.String("session_source", session.Source),
 			zap.String("session_confidence", string(session.Confidence)))
+	}
+}
+
+func (m *Manager) queueInstanceHeartbeatsLocked(now time.Time) {
+	interval := m.cfg.ReconcileInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	for _, instance := range m.tracker.Instances() {
+		if instance.Status != "running" || !m.started[instance.InstanceID] ||
+			now.Sub(m.lastHeartbeat[instance.InstanceID]) < interval/2 {
+			continue
+		}
+		m.queueInstanceStatus(instance, "agent_instance_updated")
+		m.lastHeartbeat[instance.InstanceID] = now
 	}
 }
 
@@ -1395,6 +1465,7 @@ func (m *Manager) queueSessionStatus(session BehaviorSession, eventType string) 
 		"schema":                 GuardSchemaV1,
 		"session_id":             session.SessionID,
 		"instance_id":            session.InstanceID,
+		"external_session_id":    session.ExternalSessionID,
 		"execution_unit_id":      unitIDForSession(m.tracker.Units(), session.SessionID),
 		"source":                 session.Source,
 		"confidence":             session.Confidence,

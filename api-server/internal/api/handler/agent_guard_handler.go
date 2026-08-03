@@ -51,6 +51,7 @@ type agentGuardQueryReader interface {
 	ListExecutionUnits(context.Context, model.AgentExecutionUnitQuery) ([]model.AgentExecutionUnit, int64, error)
 	GetExecutionUnit(context.Context, uuid.UUID) (*model.AgentExecutionUnit, error)
 	ListBehaviors(context.Context, model.AgentBehaviorEventQuery) ([]model.AgentBehaviorEvent, int64, error)
+	ListProcessFacts(context.Context, model.AgentBehaviorEventQuery, int) ([]model.AgentBehaviorEvent, int64, error)
 	GetBehavior(context.Context, string) (*model.AgentBehaviorEvent, error)
 	GetRawBehavior(context.Context, string) (*model.RuntimeEvent, error)
 	ListFindings(context.Context, model.AgentSecurityFindingQuery) ([]model.AgentSecurityFinding, int64, error)
@@ -964,16 +965,22 @@ func (h *AgentGuardHandler) failAction(c *gin.Context, action *model.AgentGuardA
 }
 
 type agentGuardPanoramaNode struct {
-	ID          string                                `json:"id"`
-	ParentID    string                                `json:"parent_id,omitempty"`
-	NodeType    string                                `json:"node_type"`
-	Label       string                                `json:"label"`
-	Severity    string                                `json:"severity,omitempty"`
-	HasChildren bool                                  `json:"has_children"`
-	ChildCount  int64                                 `json:"child_count,omitempty"`
-	OccurredAt  string                                `json:"occurred_at,omitempty"`
-	Trust       *service.AgentGuardPanoramaTrust      `json:"trust,omitempty"`
-	Collection  *service.AgentGuardPanoramaCollection `json:"collection,omitempty"`
+	ID                string                                `json:"id"`
+	ParentID          string                                `json:"parent_id,omitempty"`
+	NodeType          string                                `json:"node_type"`
+	Label             string                                `json:"label"`
+	Severity          string                                `json:"severity,omitempty"`
+	HasChildren       bool                                  `json:"has_children"`
+	ChildCount        int64                                 `json:"child_count,omitempty"`
+	OccurredAt        string                                `json:"occurred_at,omitempty"`
+	PID               int                                   `json:"pid,omitempty"`
+	PPID              int                                   `json:"ppid,omitempty"`
+	StartTicks        string                                `json:"process_start_ticks,omitempty"`
+	ProcessStatus     string                                `json:"process_status,omitempty"`
+	SessionSource     string                                `json:"session_source,omitempty"`
+	SessionConfidence string                                `json:"session_confidence,omitempty"`
+	Trust             *service.AgentGuardPanoramaTrust      `json:"trust,omitempty"`
+	Collection        *service.AgentGuardPanoramaCollection `json:"collection,omitempty"`
 }
 
 func (h *AgentGuardHandler) GetPanorama(c *gin.Context) {
@@ -988,6 +995,9 @@ func (h *AgentGuardHandler) GetPanorama(c *gin.Context) {
 	query.Page, query.PageSize = 1, agentGuardMaxPageSize
 	if !h.applyAgentScope(c, &query) {
 		return
+	}
+	if len(query.InstanceIDs) == 0 && query.Status == "" {
+		query.Status = "running"
 	}
 	if len(query.AssetIDs) == 0 && c.Query("agent_scope_key") == "" {
 		agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "Exactly one asset_id or agent_scope_key is required", nil)
@@ -1056,8 +1066,14 @@ func (h *AgentGuardHandler) GetPanoramaNodeChildren(c *gin.Context) {
 		h.panoramaSessionChildren(c, ref)
 	case "execution_unit":
 		h.panoramaExecutionUnitChildren(c, ref, page, pageSize)
-	case "process", "tool_call":
-		h.panoramaProcessChildren(c, ref)
+	case "process":
+		if ref.ExecutionUnitID == "" || ref.ProcessPID <= 0 || ref.ProcessStartTicks == "" {
+			h.panoramaBehaviorChildren(c, ref)
+			return
+		}
+		h.panoramaProcessChildren(c, ref, page, pageSize)
+	case "behavior", "process_event", "tool_call":
+		h.panoramaBehaviorChildren(c, ref)
 	default:
 		h.failWith(c, http.StatusBadRequest, "agent_guard_panorama_node_invalid", "Panorama node type is not expandable")
 	}
@@ -1072,6 +1088,7 @@ func (h *AgentGuardHandler) panoramaAgentChildren(
 	query := model.AgentRuntimeInstanceQuery{
 		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: page, PageSize: pageSize},
 		HostID:              ref.HostID,
+		Status:              "running",
 	}
 	if ref.AssetID != "" {
 		query.AssetIDs = []string{ref.AssetID}
@@ -1157,9 +1174,10 @@ func (h *AgentGuardHandler) panoramaInstanceChildren(
 			return
 		}
 		nodes = append(nodes, agentGuardPanoramaNode{
-			ID: token, NodeType: "session", Label: session.ID.String(), HasChildren: session.ExecutionUnitID != nil,
-			ChildCount: boolToInt64(session.ExecutionUnitID != nil),
-			OccurredAt: session.StartedAt.UTC().Format(time.RFC3339Nano),
+			ID: token, NodeType: "session", Label: agentGuardSessionLabel(session), HasChildren: session.ExecutionUnitID != nil,
+			ChildCount:    boolToInt64(session.ExecutionUnitID != nil),
+			OccurredAt:    session.StartedAt.UTC().Format(time.RFC3339Nano),
+			SessionSource: session.Source, SessionConfidence: session.Confidence,
 		})
 	}
 	agentGuardSuccess(c, agentGuardPanoramaPage(nodes, total, page, pageSize))
@@ -1186,12 +1204,13 @@ func (h *AgentGuardHandler) panoramaSessionChildren(c *gin.Context, ref service.
 		return
 	}
 	token, err := h.scopeSigner.SignPanoramaNode(service.AgentGuardPanoramaNodeRef{
-		NodeType:   "execution_unit",
-		ObjectID:   unit.ID.String(),
-		HostID:     ref.HostID,
-		AssetID:    ref.AssetID,
-		InstanceID: ref.InstanceID,
-		SessionID:  ref.ObjectID,
+		NodeType:        "execution_unit",
+		ObjectID:        unit.ID.String(),
+		HostID:          ref.HostID,
+		AssetID:         ref.AssetID,
+		InstanceID:      ref.InstanceID,
+		SessionID:       ref.ObjectID,
+		ExecutionUnitID: unit.ID.String(),
 	}, agentGuardPanoramaNodeTTL)
 	if err != nil {
 		h.fail(c, err)
@@ -1230,7 +1249,28 @@ func (h *AgentGuardHandler) panoramaExecutionUnitChildren(
 			trustedSession = session
 		}
 	}
-	behaviors, total, err := h.query.ListBehaviors(c.Request.Context(), model.AgentBehaviorEventQuery{
+	processFacts, processTotal, err := h.query.ListProcessFacts(c.Request.Context(), model.AgentBehaviorEventQuery{
+		HostID: ref.HostID, InstanceID: ref.InstanceID, SessionID: ref.SessionID,
+		ExecutionUnitID: ref.ObjectID,
+	}, agentGuardProcessFactLimit)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	tree := buildAgentGuardProcessTree(processFacts)
+	processRef := ref
+	processRef.ExecutionUnitID = ref.ObjectID
+	nodes := make([]agentGuardPanoramaNode, 0, len(tree.Roots)+pageSize)
+	for _, process := range tree.Roots {
+		node, nodeErr := h.panoramaProcessNode(processRef, process)
+		if nodeErr != nil {
+			h.fail(c, nodeErr)
+			return
+		}
+		nodes = append(nodes, node)
+	}
+
+	behaviors, _, err := h.query.ListBehaviors(c.Request.Context(), model.AgentBehaviorEventQuery{
 		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: page, PageSize: pageSize},
 		HostID:              ref.HostID,
 		InstanceID:          ref.InstanceID,
@@ -1241,47 +1281,93 @@ func (h *AgentGuardHandler) panoramaExecutionUnitChildren(
 		h.fail(c, err)
 		return
 	}
-	nodes := make([]agentGuardPanoramaNode, 0, len(behaviors))
 	for _, behavior := range behaviors {
-		token, signErr := h.scopeSigner.SignPanoramaNode(service.AgentGuardPanoramaNodeRef{
-			NodeType:   "process",
-			ObjectID:   behavior.RawEventID,
-			HostID:     ref.HostID,
-			AssetID:    ref.AssetID,
-			InstanceID: ref.InstanceID,
-			SessionID:  ref.SessionID,
-		}, agentGuardPanoramaNodeTTL)
-		if signErr != nil {
-			h.fail(c, signErr)
+		if behavior.Category == "process" || behavior.PID != nil && tree.Nodes[agentGuardProcessKey(*behavior.PID, behavior.ProcessStartTicks)] != nil {
+			continue
+		}
+		node, nodeErr := h.panoramaBehaviorNode(processRef, behavior, trustedSession)
+		if nodeErr != nil {
+			h.fail(c, nodeErr)
 			return
 		}
-		nodeType := "process"
-		label := behavior.ProcessName
-		projection := service.ProjectAgentGuardToolEvidence(behavior, trustedSession)
-		if behavior.Category == "tool" {
-			nodeType = "tool_call"
-			label = strings.ReplaceAll(behavior.Operation, "_", " ")
-			if projection.Trust != nil && projection.Trust.ToolSemantics == service.AgentGuardToolSemanticsTrusted {
-				label = strings.TrimSpace(behavior.ResourceIdentity)
-			}
-		} else if label == "" && behavior.PID != nil {
-			label = "PID " + strconv.Itoa(*behavior.PID)
-		}
-		if label == "" {
-			label = behavior.Category + ":" + behavior.Operation
-		}
-		nodes = append(nodes, agentGuardPanoramaNode{
-			ID: token, NodeType: nodeType, Label: label, Severity: behavior.Severity,
-			HasChildren: behavior.ResourceType != "" || behavior.RuleID != "",
-			OccurredAt:  behavior.OccurredAt.UTC().Format(time.RFC3339Nano),
-			Trust:       projection.Trust,
-			Collection:  projection.Collection,
-		})
+		nodes = append(nodes, node)
 	}
-	agentGuardSuccess(c, agentGuardPanoramaPage(nodes, total, page, pageSize))
+	if processTotal > agentGuardProcessFactLimit {
+		for index := range nodes {
+			if nodes[index].NodeType == "process" {
+				nodes[index].Collection = &service.AgentGuardPanoramaCollection{
+					Limitations: []string{"process_fact_limit_reached"},
+				}
+			}
+		}
+	}
+	agentGuardSuccess(c, agentGuardPanoramaPage(nodes, int64(len(nodes)), 1, len(nodes)))
 }
 
-func (h *AgentGuardHandler) panoramaProcessChildren(c *gin.Context, ref service.AgentGuardPanoramaNodeRef) {
+func (h *AgentGuardHandler) panoramaProcessChildren(c *gin.Context, ref service.AgentGuardPanoramaNodeRef, page, pageSize int) {
+	unitID, err := uuid.Parse(ref.ExecutionUnitID)
+	if err != nil {
+		h.fail(c, service.ErrAgentGuardNodeInvalid)
+		return
+	}
+	unit, err := h.query.GetExecutionUnit(c.Request.Context(), unitID)
+	if err != nil || unit.HostID.String() != ref.HostID || unit.InstanceID.String() != ref.InstanceID {
+		h.failWith(c, http.StatusForbidden, "agent_guard_panorama_node_invalid", "Panorama process is outside the selected execution unit")
+		return
+	}
+	facts, _, err := h.query.ListProcessFacts(c.Request.Context(), model.AgentBehaviorEventQuery{
+		HostID: ref.HostID, InstanceID: ref.InstanceID, SessionID: ref.SessionID,
+		ExecutionUnitID: ref.ExecutionUnitID,
+	}, agentGuardProcessFactLimit)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	tree := buildAgentGuardProcessTree(facts)
+	process := tree.Nodes[ref.ObjectID]
+	if process == nil || process.PID != ref.ProcessPID || process.StartTicks != ref.ProcessStartTicks {
+		h.fail(c, service.ErrAgentGuardNodeInvalid)
+		return
+	}
+	nodes := make([]agentGuardPanoramaNode, 0, len(process.Children)+pageSize)
+	for _, child := range process.Children {
+		node, nodeErr := h.panoramaProcessNode(ref, child)
+		if nodeErr != nil {
+			h.fail(c, nodeErr)
+			return
+		}
+		nodes = append(nodes, node)
+	}
+	pid := process.PID
+	behaviors, behaviorTotal, err := h.query.ListBehaviors(c.Request.Context(), model.AgentBehaviorEventQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: page, PageSize: pageSize},
+		HostID:              ref.HostID, InstanceID: ref.InstanceID, SessionID: ref.SessionID,
+		ExecutionUnitID: ref.ExecutionUnitID, PID: &pid, ProcessStartTicks: process.StartTicks,
+	})
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	var trustedSession *model.AgentBehaviorSession
+	if sessionID, parseErr := uuid.Parse(ref.SessionID); parseErr == nil {
+		trustedSession, _ = h.query.GetSession(c.Request.Context(), sessionID)
+	}
+	for _, behavior := range behaviors {
+		node, nodeErr := h.panoramaBehaviorNode(ref, behavior, trustedSession)
+		if nodeErr != nil {
+			h.fail(c, nodeErr)
+			return
+		}
+		if behavior.Category == "process" {
+			node.NodeType = "process_event"
+			node.Label = strings.ReplaceAll(behavior.Operation, "_", " ")
+		}
+		nodes = append(nodes, node)
+	}
+	agentGuardSuccess(c, agentGuardPanoramaPage(nodes, int64(len(process.Children))+behaviorTotal, page, pageSize))
+}
+
+func (h *AgentGuardHandler) panoramaBehaviorChildren(c *gin.Context, ref service.AgentGuardPanoramaNodeRef) {
 	behavior, err := h.query.GetBehavior(c.Request.Context(), ref.ObjectID)
 	if err != nil ||
 		behavior.HostID.String() != ref.HostID ||

@@ -68,6 +68,80 @@ func TestQueuePendingLifecyclesIncludesNewExecControllerDependencies(t *testing.
 	}
 }
 
+func TestManagerConsumesExitAfterProcEntryDisappearsAndReportsPIDPPID(t *testing.T) {
+	scanner := &fakeScanner{processes: map[uint32]ProcessSnapshot{}}
+	reporter := &captureReporter{}
+	manager := NewManager(ManagerConfig{
+		Enabled: true, BehaviorMonitorEnabled: true, HostID: "host-1",
+		StateDir: t.TempDir(), ReconcileInterval: time.Hour, FlushInterval: time.Hour,
+	}, scanner, reporter)
+	controller := confirmedProcess(4200, 200, "/opt/codex/bin/codex", "codex")
+	controller.PPID = 4000
+	instance, ok := manager.tracker.ObserveController(controller)
+	if !ok {
+		t.Fatal("expected controller attribution")
+	}
+	manager.queuePendingLifecycles()
+
+	if !manager.ObserveEventMap(map[string]any{
+		"event_id": "exit-4200", "event_type": "process_exit",
+		"pid": int(controller.Identity.PID), "ppid": int(controller.PPID),
+		"timestamp_ns": int64(1234),
+	}) {
+		t.Fatal("exit was rejected after /proc entry disappeared")
+	}
+	if current, _ := manager.tracker.Instance(instance.InstanceID); current.Status != "stopped" {
+		t.Fatalf("instance status=%q", current.Status)
+	}
+
+	manager.flush()
+	var foundExit, foundStopped bool
+	for _, event := range reporter.snapshot() {
+		if event.EventType == "agent_behavior" && event.Pid == int32(controller.Identity.PID) &&
+			event.Ppid == int32(controller.PPID) {
+			var body map[string]any
+			if json.Unmarshal([]byte(event.EventDataJson), &body) == nil && body["operation"] == "exit" {
+				foundExit = true
+			}
+		}
+		if event.EventType == "agent_instance_stopped" {
+			foundStopped = true
+		}
+	}
+	if !foundExit || !foundStopped {
+		t.Fatalf("exit lifecycle missing: exit=%v stopped=%v events=%d", foundExit, foundStopped, len(reporter.snapshot()))
+	}
+}
+
+func TestManagerQueuesRunningInstanceHeartbeatForFreshnessProjection(t *testing.T) {
+	manager := NewManager(ManagerConfig{
+		Enabled: true, BehaviorMonitorEnabled: true, HostID: "host-1",
+		StateDir: t.TempDir(), ReconcileInterval: 30 * time.Second, FlushInterval: time.Hour,
+	}, &fakeScanner{processes: map[uint32]ProcessSnapshot{}}, &captureReporter{})
+	controller := confirmedProcess(4200, 200, "/opt/codex/bin/codex", "codex")
+	instance, _ := manager.tracker.ObserveController(controller)
+	manager.queuePendingLifecycles()
+
+	manager.lifecycleMu.Lock()
+	manager.lastHeartbeat[instance.InstanceID] = time.Now().UTC().Add(-time.Minute)
+	manager.queueInstanceHeartbeatsLocked(time.Now().UTC())
+	manager.lifecycleMu.Unlock()
+
+	manager.statusMu.Lock()
+	events := append([]*pb.RuntimeEvent(nil), manager.pendingStatus...)
+	manager.statusMu.Unlock()
+	found := false
+	for _, event := range events {
+		if event.EventType == "agent_instance_updated" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("running instance heartbeat missing: %#v", events)
+	}
+}
+
 type fakeScanner struct {
 	processes map[uint32]ProcessSnapshot
 	isolation map[uint32]IsolationState

@@ -10,7 +10,7 @@ struct task_struct {
     struct task_struct *real_parent;
     int tgid;
     char comm[16];  /* TASK_COMM_LEN */
-};
+} __attribute__((preserve_access_index));
 
 /* Tracepoint context for sys_enter */
 struct trace_event_raw_sys_enter {

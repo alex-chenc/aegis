@@ -101,6 +101,7 @@ export const useAgentGuardStore = defineStore('agentGuard', {
     agents: [] as AgentGuardAgentSummary[],
     agentTotal: 0,
     instances: [] as AgentRuntimeInstance[],
+    instanceTotal: 0,
     panoramaNodes: [] as PanoramaTreeNode[],
     selectedPanoramaNode: null as PanoramaTreeNode | null,
     executionUnits: [] as AgentExecutionUnit[],
@@ -165,6 +166,7 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       try {
         const result = await listAgentGuardInstances(params)
         this.instances = result.items || []
+        this.instanceTotal = result.total || 0
       } catch (error) {
         this.errors.instances = errorMessage(error)
       } finally {
@@ -444,6 +446,7 @@ export const useAgentGuardStore = defineStore('agentGuard', {
 
     resetDetail() {
       this.instances = []
+      this.instanceTotal = 0
       this.panoramaNodes = []
       this.selectedPanoramaNode = null
       this.executionUnits = []

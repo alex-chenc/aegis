@@ -119,6 +119,22 @@ func (f *fakeAgentGuardQuery) GetExecutionUnit(_ context.Context, id uuid.UUID) 
 func (f *fakeAgentGuardQuery) ListBehaviors(context.Context, model.AgentBehaviorEventQuery) ([]model.AgentBehaviorEvent, int64, error) {
 	return f.behaviors, int64(len(f.behaviors)), nil
 }
+func (f *fakeAgentGuardQuery) ListProcessFacts(_ context.Context, query model.AgentBehaviorEventQuery, limit int) ([]model.AgentBehaviorEvent, int64, error) {
+	items := make([]model.AgentBehaviorEvent, 0, len(f.behaviors))
+	for _, behavior := range f.behaviors {
+		if behavior.Category != "process" || query.InstanceID != "" && (behavior.InstanceID == nil || behavior.InstanceID.String() != query.InstanceID) ||
+			query.SessionID != "" && (behavior.SessionID == nil || behavior.SessionID.String() != query.SessionID) ||
+			query.ExecutionUnitID != "" && (behavior.ExecutionUnitID == nil || behavior.ExecutionUnitID.String() != query.ExecutionUnitID) {
+			continue
+		}
+		items = append(items, behavior)
+	}
+	total := int64(len(items))
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, total, nil
+}
 func (f *fakeAgentGuardQuery) GetBehavior(_ context.Context, rawEventID string) (*model.AgentBehaviorEvent, error) {
 	for index := range f.behaviors {
 		if f.behaviors[index].RawEventID == rawEventID {
@@ -376,6 +392,9 @@ func TestAgentGuardPanoramaAcceptsFrontendSingularAssetID(t *testing.T) {
 	}
 	if got := query.lastInstance.AssetIDs; len(got) != 1 || got[0] != assetID.String() {
 		t.Fatalf("singular asset_id mapped to %#v", query.lastInstance)
+	}
+	if query.lastInstance.Status != "running" {
+		t.Fatalf("panorama included historical instances: %#v", query.lastInstance)
 	}
 	if !strings.Contains(response.Body.String(), `"node_type":"agent_asset"`) {
 		t.Fatalf("missing panorama root: %s", response.Body.String())

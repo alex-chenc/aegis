@@ -101,13 +101,16 @@ func (s *AgentGuardScopeSigner) signature(payload string) string {
 // a short-lived panorama node ID. Clients cannot turn arbitrary UUIDs into
 // repository predicates by concatenating strings.
 type AgentGuardPanoramaNodeRef struct {
-	NodeType   string `json:"node_type"`
-	ObjectID   string `json:"object_id"`
-	HostID     string `json:"host_id"`
-	AssetID    string `json:"asset_id,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
-	ExpiresAt  int64  `json:"expires_at"`
+	NodeType          string `json:"node_type"`
+	ObjectID          string `json:"object_id"`
+	HostID            string `json:"host_id"`
+	AssetID           string `json:"asset_id,omitempty"`
+	InstanceID        string `json:"instance_id,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	ExecutionUnitID   string `json:"execution_unit_id,omitempty"`
+	ProcessPID        int    `json:"process_pid,omitempty"`
+	ProcessStartTicks string `json:"process_start_ticks,omitempty"`
+	ExpiresAt         int64  `json:"expires_at"`
 }
 
 func (s *AgentGuardScopeSigner) SignPanoramaNode(ref AgentGuardPanoramaNodeRef, ttl time.Duration) (string, error) {

@@ -123,6 +123,8 @@ export default {
     aiOnlyNotice: 'AI assessment is not a proven fact and cannot trigger automatic blocking on its own.',
   },
   panorama: {
+    inferredActivityWindow: 'Inferred activity window (not a Codex session)',
+    inferredSessionHint: 'Inferred from process activity; no source session ID is available',
     tree: 'Behavior relationship tree',
     expand: 'Expand child nodes',
     selectNode: 'Select a tree node to inspect its evidence',
@@ -139,6 +141,11 @@ export default {
     correlationMatched: 'Matched tool call → process → resource',
     correlationUnmatched: 'No verifiable cross-layer correlation',
     noTimestamp: 'Unknown time',
+  },
+  processStatus: {
+    running: 'Running',
+    stopped: 'Stopped',
+    unknown: 'Unknown',
   },
   baseline: {
     noIsolation: 'No isolation boundary was observed; this is not sandbox safety.',

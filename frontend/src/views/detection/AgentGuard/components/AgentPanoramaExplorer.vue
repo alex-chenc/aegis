@@ -29,9 +29,9 @@
         </span>
         <span class="node-kind">{{ nodeKind(row.node.node_type) }}</span>
         <span class="node-copy">
-          <strong>{{ row.node.label || row.node.node_type }}</strong>
+          <strong>{{ nodeLabel(row.node) }}</strong>
           <small>
-            {{ row.node.occurred_at || t('agentGuard.panorama.noTimestamp') }}
+            {{ nodeMeta(row.node) }}
           </small>
         </span>
         <el-tag
@@ -215,6 +215,26 @@ function nodeKind(type: string) {
   if (value === 'isolation' || value === 'kernel') return 'ISO'
   if (value === 'rule' || value === 'finding') return 'R'
   return '·'
+}
+
+function nodeLabel(node: PanoramaTreeNode) {
+  if (node.node_type === 'session' && node.session_source === 'activity_window') {
+    return t('agentGuard.panorama.inferredActivityWindow')
+  }
+  return node.label || node.node_type
+}
+
+function nodeMeta(node: PanoramaTreeNode) {
+  if (node.pid) {
+    const parts = [`PID ${node.pid}`]
+    if (node.ppid !== undefined) parts.push(`PPID ${node.ppid}`)
+    if (node.process_status) parts.push(t(`agentGuard.processStatus.${node.process_status}`))
+    return parts.join(' · ')
+  }
+  if (node.node_type === 'session' && node.session_confidence === 'inferred') {
+    return t('agentGuard.panorama.inferredSessionHint')
+  }
+  return node.occurred_at || t('agentGuard.panorama.noTimestamp')
 }
 
 function hasCompletenessGap(node: PanoramaTreeNode) {

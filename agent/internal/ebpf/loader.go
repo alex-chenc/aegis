@@ -51,7 +51,7 @@ type execRuntimeReaders struct {
 
 type bpfProgramConfig struct {
 	name       string
-	attachType string // "tracepoint" or "kprobe"
+	attachType string // "tracepoint", "raw_tracepoint", "kprobe", or "lsm"
 	category   string
 	symbol     string
 	progName   string
@@ -106,7 +106,7 @@ func defaultBPFPrograms() []bpfProgramConfig {
 func configuredBPFPrograms(options LoaderOptions) []bpfProgramConfig {
 	programs := []bpfProgramConfig{
 		{name: "execve", attachType: "tracepoint", category: "syscalls", symbol: "sys_enter_execve", mapName: "exec_events", required: true},
-		{name: "fork", attachType: "tracepoint", category: "sched", symbol: "sched_process_fork", mapName: "fork_events"},
+		{name: "fork", attachType: "raw_tracepoint", symbol: "sched_process_fork", mapName: "fork_events"},
 		{name: "file", attachType: "tracepoint", category: "syscalls", symbol: "sys_enter_openat", progName: "trace_openat", mapName: "file_events"},
 		{name: "tcp_connect", attachType: "kprobe", mapName: "conn_events"},
 		{name: "accept", attachType: "tracepoint", category: "sock", symbol: "inet_sock_set_state", progName: "trace_inet_sock_set_state", mapName: "accept_events"},
@@ -199,6 +199,8 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 	var localLinks []link.Link
 	if cfg.name == "tcp_connect" {
 		localLinks, err = attachTCPConnect(coll)
+	} else if cfg.name == "fork" {
+		localLinks, err = attachForkRawTracepoints(coll, cfg)
 	} else if cfg.name == "guard_monitor" {
 		localLinks, err = attachGuardMonitorTracepoints(coll)
 	} else if cfg.name == "agent_guard_lsm" {
@@ -231,16 +233,6 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 	if cfg.name == "file" {
 		localLinks = append(localLinks, attachExtraFileTracepoints(coll)...)
 	}
-	if cfg.name == "fork" {
-		if exitProgram := coll.Programs["trace_guarded_process_exit"]; exitProgram != nil {
-			if exitLink, exitErr := link.Tracepoint("sched", "sched_process_exit", exitProgram, nil); exitErr == nil {
-				localLinks = append(localLinks, exitLink)
-			} else {
-				logger.Warn("agent_guard_guarded_pid_exit_hook_unavailable",
-					zap.String("error_code", "agent_guard_exit_hook_attach_failed"))
-			}
-		}
-	}
 
 	// Create event reader
 	eventMap, ok := coll.Maps[cfg.mapName]
@@ -269,6 +261,39 @@ func (l *Loader) loadProgram(cfg bpfProgramConfig) error {
 		zap.String("transport", string(l.capabilities.Transport)))
 
 	return nil
+}
+
+func attachForkRawTracepoints(coll *ebpf.Collection, cfg bpfProgramConfig) ([]link.Link, error) {
+	forkProgram := coll.Programs["trace_fork"]
+	if forkProgram == nil {
+		return nil, errors.New("fork raw tracepoint program missing")
+	}
+	forkLink, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    cfg.symbol,
+		Program: forkProgram,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attach raw tracepoint %s: %w", cfg.symbol, err)
+	}
+
+	exitProgram := coll.Programs["trace_guarded_process_exit"]
+	if exitProgram == nil {
+		_ = forkLink.Close()
+		return nil, errors.New("process exit raw tracepoint program missing")
+	}
+	exitLink, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "sched_process_exit",
+		Program: exitProgram,
+	})
+	if err != nil {
+		_ = forkLink.Close()
+		logger.Warn("agent_guard_guarded_pid_exit_hook_unavailable",
+			zap.String("attach", "raw_tracepoint"),
+			zap.String("error_code", "agent_guard_exit_hook_attach_failed"),
+			zap.Error(err))
+		return nil, fmt.Errorf("attach raw tracepoint sched_process_exit: %w", err)
+	}
+	return []link.Link{forkLink, exitLink}, nil
 }
 
 func attachAgentGuardLSM(coll *ebpf.Collection) ([]link.Link, error) {
@@ -515,17 +540,25 @@ func (l *Loader) processForkEvent(data []byte) {
 	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &e); err != nil {
 		return
 	}
+	eventType := "process_fork"
+	commandLine := fmt.Sprintf("fork from %s", bytesToString(e.ParentComm[:]))
+	if e.EventType == ForkEventTypeExit {
+		eventType = "process_exit"
+		commandLine = "process exit"
+	} else if e.EventType != ForkEventTypeFork {
+		return
+	}
 	l.sendEvent(Event{
 		EventID:     l.nextEventID(),
 		HostID:      l.hostID,
 		Hostname:    l.hostname,
 		Timestamp:   time.Now().UnixMilli(),
-		EventType:   "process_fork",
-		ProcessName: bytesToString(e.ParentComm[:]),
-		PID:         int(e.ChildPid),
-		PPID:        int(e.ParentPid),
-		UID:         int(e.Uid),
-		CommandLine: fmt.Sprintf("fork from %s", bytesToString(e.ParentComm[:])),
+		EventType:   eventType,
+		ProcessName: bytesToString(e.Comm[:]),
+		PID:         int(e.PID),
+		PPID:        int(e.PPID),
+		UID:         int(e.UID),
+		CommandLine: commandLine,
 	})
 }
 

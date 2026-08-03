@@ -45,6 +45,7 @@
       <AgentRuntimeSelector
         v-else
         :instances="instances"
+        :total="instanceTotal"
         :selected-instance-id="selectedInstanceId"
         @select="emit('select-instance', $event)"
       />
@@ -170,6 +171,7 @@ const props = withDefaults(defineProps<{
   agent: AgentGuardAgentSummary | null
   detailTab: AgentGuardDetailTab
   instances: AgentRuntimeInstance[]
+  instanceTotal?: number
   selectedInstanceId: string
   panoramaNodes: PanoramaTreeNode[]
   loadPanoramaChildren?: (nodeId: string) => Promise<PanoramaTreeNode[]>
@@ -203,6 +205,7 @@ const props = withDefaults(defineProps<{
   canOperateActions: false,
   actionLoading: false,
   actionError: '',
+  instanceTotal: 0,
 })
 
 const emit = defineEmits<{

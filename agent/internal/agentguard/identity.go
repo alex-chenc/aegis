@@ -13,7 +13,19 @@ import (
 
 type processLabel struct {
 	Identity ProcessIdentity
+	Process  ProcessSnapshot
 	Subject  GuardSubject
+}
+
+// ProcessExitResult is the last attributed process snapshot plus any owning
+// lifecycle entities that transitioned because the process exited.
+type ProcessExitResult struct {
+	Process         ProcessSnapshot
+	Subject         GuardSubject
+	Instance        RuntimeInstance
+	Session         BehaviorSession
+	Unit            ExecutionUnit
+	InstanceStopped bool
 }
 
 type IdentityTracker struct {
@@ -62,6 +74,11 @@ func (t *IdentityTracker) observeControllerLocked(process ProcessSnapshot, match
 		existing.LastSeenAt = time.Now().UTC()
 		existing.Status = "running"
 		t.instances[instanceID] = existing
+		t.processLabels[process.Identity.PID] = processLabel{
+			Identity: process.Identity,
+			Process:  process,
+			Subject:  defaultControllerSubject(instanceID, match.Confidence),
+		}
 		return existing, true
 	}
 
@@ -105,8 +122,17 @@ func (t *IdentityTracker) observeControllerLocked(process ProcessSnapshot, match
 	t.instances[instanceID] = instance
 	t.sessions[sessionID] = session
 	t.units[unitID] = unit
-	t.processLabels[process.Identity.PID] = processLabel{Identity: process.Identity, Subject: subject}
+	t.processLabels[process.Identity.PID] = processLabel{Identity: process.Identity, Process: process, Subject: subject}
 	return instance, true
+}
+
+func defaultControllerSubject(instanceID string, confidence Confidence) GuardSubject {
+	return GuardSubject{
+		InstanceID: instanceID,
+		SessionID:  stableID("session", instanceID, "activity"),
+		UnitID:     stableID("unit", instanceID, string(IsolationLocalProcessTree)),
+		Confidence: confidence,
+	}
 }
 
 func (t *IdentityTracker) OnFork(parent ProcessIdentity, child ProcessSnapshot) bool {
@@ -119,7 +145,14 @@ func (t *IdentityTracker) OnFork(parent ProcessIdentity, child ProcessSnapshot) 
 	if !ok || label.Identity.StartTicks != parent.StartTicks {
 		return false
 	}
-	t.processLabels[child.Identity.PID] = processLabel{Identity: child.Identity, Subject: label.Subject}
+	// Fork and exec are consumed from separate eBPF maps, so a short-lived
+	// controller's exec can be attributed before its fork event is delivered.
+	// Preserve any attribution already established for the same process epoch;
+	// in particular, never replace a controller's own subject with its parent's.
+	if current, exists := t.processLabels[child.Identity.PID]; exists && current.Identity == child.Identity {
+		return true
+	}
+	t.processLabels[child.Identity.PID] = processLabel{Identity: child.Identity, Process: child, Subject: label.Subject}
 	t.touchLocked(label.Subject, time.Now().UTC())
 	return true
 }
@@ -137,6 +170,8 @@ func (t *IdentityTracker) OnExec(process ProcessSnapshot) GuardSubject {
 		return t.processLabels[instance.Controller.PID].Subject
 	}
 	if current, ok := t.processLabels[process.Identity.PID]; ok && current.Identity.StartTicks == process.Identity.StartTicks {
+		current.Process = process
+		t.processLabels[process.Identity.PID] = current
 		t.touchLocked(current.Subject, time.Now().UTC())
 		return current.Subject
 	}
@@ -144,18 +179,97 @@ func (t *IdentityTracker) OnExec(process ProcessSnapshot) GuardSubject {
 }
 
 func (t *IdentityTracker) OnExit(identity ProcessIdentity) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
 	label, ok := t.processLabels[identity.PID]
+	t.mu.RUnlock()
 	if !ok || label.Identity.StartTicks != identity.StartTicks {
 		return
 	}
-	delete(t.processLabels, identity.PID)
-	if instance, ok := t.instances[label.Subject.InstanceID]; ok && instance.Controller == identity {
-		instance.Status = "stopped"
-		instance.LastSeenAt = time.Now().UTC()
-		t.instances[instance.InstanceID] = instance
+	_, _ = t.ExitPID(identity.PID, time.Now().UTC())
+}
+
+// ExitPID completes attribution without reading /proc. sched_process_exit is
+// delivered after the process may already be unreadable, so the tracker keeps
+// the last trusted snapshot captured at fork/exec/reconcile time.
+func (t *IdentityTracker) ExitPID(pid uint32, observedAt time.Time) (ProcessExitResult, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	label, ok := t.processLabels[pid]
+	if !ok {
+		return ProcessExitResult{}, false
 	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	delete(t.processLabels, pid)
+	result := ProcessExitResult{Process: label.Process, Subject: label.Subject}
+	if result.Process.Identity != label.Identity {
+		result.Process.Identity = label.Identity
+	}
+	if instance, exists := t.instances[label.Subject.InstanceID]; exists && instance.Controller == label.Identity {
+		instance.Status = "stopped"
+		instance.LastSeenAt = observedAt
+		t.instances[instance.InstanceID] = instance
+		result.Instance = instance
+		result.InstanceStopped = true
+		if session, exists := t.sessions[label.Subject.SessionID]; exists {
+			session.Status = "ended"
+			session.LastSeenAt = observedAt
+			t.sessions[session.SessionID] = session
+			result.Session = session
+		}
+		if unit, exists := t.units[label.Subject.UnitID]; exists {
+			unit.Status = "stopped"
+			unit.LastSeenAt = observedAt
+			t.units[unit.UnitID] = unit
+			result.Unit = unit
+		}
+	}
+	return result, true
+}
+
+// ExitController closes a controller lifecycle even when its process label was
+// lost due to cross-map event reordering. Reconciliation calls this with the
+// full PID epoch, so a reused PID cannot stop a newer instance.
+func (t *IdentityTracker) ExitController(identity ProcessIdentity, observedAt time.Time) (ProcessExitResult, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	instanceID := stableID("instance", t.hostID, identity.PID, identity.StartTicks)
+	instance, ok := t.instances[instanceID]
+	if !ok || instance.Controller != identity || instance.Status != "running" {
+		return ProcessExitResult{}, false
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	process := ProcessSnapshot{
+		Identity: identity,
+		Exe:      instance.ControllerExe,
+		UID:      instance.RunUID,
+	}
+	if label, exists := t.processLabels[identity.PID]; exists && label.Identity == identity {
+		process = label.Process
+		delete(t.processLabels, identity.PID)
+	}
+	subject := defaultControllerSubject(instanceID, instance.Confidence)
+	result := ProcessExitResult{Process: process, Subject: subject, InstanceStopped: true}
+	instance.Status = "stopped"
+	instance.LastSeenAt = observedAt
+	t.instances[instanceID] = instance
+	result.Instance = instance
+	if session, exists := t.sessions[subject.SessionID]; exists {
+		session.Status = "ended"
+		session.LastSeenAt = observedAt
+		t.sessions[subject.SessionID] = session
+		result.Session = session
+	}
+	if unit, exists := t.units[subject.UnitID]; exists {
+		unit.Status = "stopped"
+		unit.LastSeenAt = observedAt
+		t.units[subject.UnitID] = unit
+		result.Unit = unit
+	}
+	return result, true
 }
 
 func (t *IdentityTracker) LookupProcess(identity ProcessIdentity) (GuardSubject, bool) {
@@ -166,6 +280,33 @@ func (t *IdentityTracker) LookupProcess(identity ProcessIdentity) (GuardSubject,
 		return GuardSubject{}, false
 	}
 	return label.Subject, true
+}
+
+func (t *IdentityTracker) ProcessByPID(pid uint32) (ProcessSnapshot, GuardSubject, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	label, ok := t.processLabels[pid]
+	if !ok {
+		return ProcessSnapshot{}, GuardSubject{}, false
+	}
+	process := label.Process
+	if process.Identity != label.Identity {
+		process.Identity = label.Identity
+	}
+	return process, label.Subject, true
+}
+
+func (t *IdentityTracker) RefreshProcess(process ProcessSnapshot, observedAt time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	label, ok := t.processLabels[process.Identity.PID]
+	if !ok || label.Identity.StartTicks != process.Identity.StartTicks {
+		return false
+	}
+	label.Process = process
+	t.processLabels[process.Identity.PID] = label
+	t.touchLocked(label.Subject, observedAt)
+	return true
 }
 
 func (t *IdentityTracker) Attribute(process ProcessSnapshot) (GuardSubject, bool) {
@@ -261,7 +402,7 @@ func (t *IdentityTracker) AttachNamespace(instanceID string, process ProcessSnap
 		UnitID: unitID, Confidence: ConfidenceConfirmed,
 	}
 	t.processLabels[process.Identity.PID] = processLabel{
-		Identity: process.Identity, Subject: subject,
+		Identity: process.Identity, Process: process, Subject: subject,
 	}
 	return unit, nil
 }
@@ -283,6 +424,7 @@ func (t *IdentityTracker) AssignProcessToUnit(process ProcessSnapshot, unitID st
 	}
 	current.Subject.UnitID = unit.UnitID
 	current.Subject.SessionID = unit.SessionID
+	current.Process = process
 	t.processLabels[process.Identity.PID] = current
 	t.touchLocked(current.Subject, time.Now().UTC())
 	return true
@@ -431,7 +573,7 @@ func (t *IdentityTracker) Sessions() []BehaviorSession {
 
 func (t *IdentityTracker) ObserveTrustedSession(
 	subject GuardSubject,
-	source, correlationHash string,
+	source, correlationHash, externalSessionID string,
 ) (BehaviorSession, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -441,10 +583,11 @@ func (t *IdentityTracker) ObserveTrustedSession(
 		return BehaviorSession{}, false
 	}
 	changed := session.Source != source || session.Confidence != ConfidenceConfirmed ||
-		session.CorrelationTokenHash != correlationHash
+		session.CorrelationTokenHash != correlationHash || session.ExternalSessionID != externalSessionID
 	session.Source = source
 	session.Confidence = ConfidenceConfirmed
 	session.CorrelationTokenHash = correlationHash
+	session.ExternalSessionID = externalSessionID
 	session.LastSeenAt = now
 	t.sessions[subject.SessionID] = session
 	return session, changed
@@ -543,24 +686,99 @@ type ReconcileStats struct {
 	ProcessLabelsRepaired uint64
 	ExpiredLabelsRemoved  uint64
 	ContainersAttached    uint64
+	Exits                 []ProcessExitResult
 }
 
 type Reconciler struct {
-	tracker *IdentityTracker
+	tracker       *IdentityTracker
+	missingPasses map[ProcessIdentity]uint8
 }
 
 func NewReconciler(tracker *IdentityTracker) *Reconciler {
-	return &Reconciler{tracker: tracker}
+	return &Reconciler{tracker: tracker, missingPasses: make(map[ProcessIdentity]uint8)}
 }
 
 func (r *Reconciler) Reconcile(processes []ProcessSnapshot) ReconcileStats {
 	var stats ReconcileStats
+	observedAt := time.Now().UTC()
 	live := make(map[uint32]ProcessIdentity, len(processes))
 	byPID := make(map[uint32]ProcessSnapshot, len(processes))
 	for _, process := range processes {
 		live[process.Identity.PID] = process.Identity
 		byPID[process.Identity.PID] = process
-		if _, exists := r.tracker.LookupProcess(process.Identity); exists {
+	}
+
+	// Expire stale labels before discovering controllers. Otherwise a reused PID
+	// can overwrite the old label and leave the previous instance running forever.
+	expired := make([]uint32, 0)
+	r.tracker.mu.RLock()
+	for pid, label := range r.tracker.processLabels {
+		identity, ok := live[pid]
+		if ok && identity.StartTicks == label.Identity.StartTicks {
+			delete(r.missingPasses, label.Identity)
+			continue
+		}
+		// A different start_ticks is definitive PID reuse. A missing PID must
+		// survive two complete scans before the fallback declares exit, avoiding
+		// a terminal stop on one transient /proc read gap.
+		if ok {
+			expired = append(expired, pid)
+			delete(r.missingPasses, label.Identity)
+			continue
+		}
+		r.missingPasses[label.Identity]++
+		if r.missingPasses[label.Identity] >= 2 {
+			expired = append(expired, pid)
+			delete(r.missingPasses, label.Identity)
+		}
+	}
+	r.tracker.mu.RUnlock()
+	for _, pid := range expired {
+		if exit, ok := r.tracker.ExitPID(pid, observedAt); ok {
+			stats.Exits = append(stats.Exits, exit)
+			stats.ExpiredLabelsRemoved++
+		}
+	}
+
+	// A late fork used to overwrite an already confirmed controller label with
+	// its parent's subject. Even after that label exited, the instance could be
+	// left running without any label for the normal expiry loop to inspect.
+	// Reconcile running controller epochs independently as a final safety net.
+	orphanedControllers := make([]ProcessIdentity, 0)
+	r.tracker.mu.RLock()
+	for _, instance := range r.tracker.instances {
+		if instance.Status != "running" || !instance.Controller.Valid() {
+			continue
+		}
+		liveIdentity, liveNow := live[instance.Controller.PID]
+		if liveNow && liveIdentity == instance.Controller {
+			delete(r.missingPasses, instance.Controller)
+			continue
+		}
+		if label, exists := r.tracker.processLabels[instance.Controller.PID]; exists && label.Identity == instance.Controller {
+			continue
+		}
+		if liveNow {
+			orphanedControllers = append(orphanedControllers, instance.Controller)
+			delete(r.missingPasses, instance.Controller)
+			continue
+		}
+		r.missingPasses[instance.Controller]++
+		if r.missingPasses[instance.Controller] >= 2 {
+			orphanedControllers = append(orphanedControllers, instance.Controller)
+			delete(r.missingPasses, instance.Controller)
+		}
+	}
+	r.tracker.mu.RUnlock()
+	for _, identity := range orphanedControllers {
+		if exit, ok := r.tracker.ExitController(identity, observedAt); ok {
+			stats.Exits = append(stats.Exits, exit)
+			stats.ExpiredLabelsRemoved++
+		}
+	}
+
+	for _, process := range processes {
+		if r.tracker.RefreshProcess(process, observedAt) {
 			continue
 		}
 		if _, ok := r.tracker.ObserveController(process); ok {
@@ -570,7 +788,7 @@ func (r *Reconciler) Reconcile(processes []ProcessSnapshot) ReconcileStats {
 	for pass := 0; pass < 4; pass++ {
 		repaired := false
 		for _, process := range processes {
-			if _, exists := r.tracker.LookupProcess(process.Identity); exists {
+			if r.tracker.RefreshProcess(process, observedAt) {
 				continue
 			}
 			parent, ok := byPID[process.PPID]
@@ -587,14 +805,5 @@ func (r *Reconciler) Reconcile(processes []ProcessSnapshot) ReconcileStats {
 		}
 	}
 
-	r.tracker.mu.Lock()
-	for pid, label := range r.tracker.processLabels {
-		identity, ok := live[pid]
-		if !ok || identity.StartTicks != label.Identity.StartTicks {
-			delete(r.tracker.processLabels, pid)
-			stats.ExpiredLabelsRemoved++
-		}
-	}
-	r.tracker.mu.Unlock()
 	return stats
 }

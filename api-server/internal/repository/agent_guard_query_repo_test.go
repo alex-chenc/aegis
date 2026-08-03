@@ -84,6 +84,16 @@ func TestAgentGuardQueryRepositoryFiltersRuntimeData(t *testing.T) {
 			t.Fatalf("seed query table %d: %v", index, err)
 		}
 	}
+	historicalID := uuid.New()
+	if err := db.Exec(`INSERT INTO agent_runtime_instances
+		(id,host_id,profile_key,profile_version,agent_type,display_name,controller_pid,
+		 controller_start_ticks,detection_confidence,status,coverage_level,coverage_reasons,
+		 first_seen_at,last_seen_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, historicalID, hostID, "codex-linux", 1,
+		"codex", "Codex", 4090, "90", "confirmed", "running", "monitor_only", `[]`,
+		now.Add(-time.Hour), now.Add(-10*time.Minute), now.Add(-time.Hour), now.Add(-10*time.Minute)).Error; err != nil {
+		t.Fatalf("seed historical running instance: %v", err)
+	}
 
 	instances, total, err := repo.ListInstances(ctx, model.AgentRuntimeInstanceQuery{
 		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: 20},
@@ -93,6 +103,13 @@ func TestAgentGuardQueryRepositoryFiltersRuntimeData(t *testing.T) {
 	})
 	if err != nil || total != 1 || len(instances) != 1 || instances[0].ID != instanceID {
 		t.Fatalf("ListInstances total=%d items=%#v err=%v", total, instances, err)
+	}
+	stale, staleTotal, err := repo.ListInstances(ctx, model.AgentRuntimeInstanceQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: 20},
+		HostID:              hostID.String(), AgentTypes: []string{"codex"}, Status: "stale",
+	})
+	if err != nil || staleTotal != 1 || len(stale) != 1 || stale[0].ID != historicalID {
+		t.Fatalf("stale projection total=%d items=%#v err=%v", staleTotal, stale, err)
 	}
 	if _, err := repo.GetInstance(ctx, instanceID); err != nil {
 		t.Fatalf("GetInstance: %v", err)
@@ -276,6 +293,15 @@ func TestAgentGuardQueryRepositoryDeduplicatesLogicalAssetsAndMergesAssetlessRun
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.New(), hostID, nil,
 		"codex-linux", 1, "codex", "Codex", 6076, "3634", "confirmed", "running",
 		"monitor_only", `[]`, now, now, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO agent_runtime_instances
+		(id,host_id,asset_id,profile_key,profile_version,agent_type,display_name,
+		 controller_pid,controller_start_ticks,detection_confidence,status,
+		 coverage_level,coverage_reasons,first_seen_at,last_seen_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uuid.New(), hostID, nil,
+		"codex-linux", 1, "codex", "Codex", 5076, "2634", "confirmed", "running",
+		"monitor_only", `[]`, now.Add(-time.Hour), now.Add(-10*time.Minute), now.Add(-time.Hour), now.Add(-10*time.Minute)).Error; err != nil {
 		t.Fatal(err)
 	}
 

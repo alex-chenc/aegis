@@ -66,21 +66,22 @@ type TrustedToolSource struct {
 }
 
 type TrustedToolEvent struct {
-	EventID          string                `json:"event_id"`
-	SourceID         string                `json:"source_id"`
-	SourceVersion    string                `json:"source_version"`
-	Operation        string                `json:"operation"`
-	ToolName         string                `json:"tool_name"`
-	ToolCallID       string                `json:"tool_call_id"`
-	CorrelationToken string                `json:"correlation_token"`
-	PID              uint32                `json:"pid"`
-	StartTicks       uint64                `json:"start_ticks"`
-	ProcessEventID   string                `json:"process_event_id,omitempty"`
-	ResourceEventIDs []string              `json:"resource_event_ids,omitempty"`
-	OccurredAt       time.Time             `json:"occurred_at"`
-	IssuedAt         time.Time             `json:"issued_at"`
-	Proof            string                `json:"proof,omitempty"`
-	Remote           *RemoteSensorEvidence `json:"remote,omitempty"`
+	EventID           string                `json:"event_id"`
+	SourceID          string                `json:"source_id"`
+	SourceVersion     string                `json:"source_version"`
+	Operation         string                `json:"operation"`
+	ToolName          string                `json:"tool_name"`
+	ToolCallID        string                `json:"tool_call_id"`
+	ExternalSessionID string                `json:"external_session_id,omitempty"`
+	CorrelationToken  string                `json:"correlation_token"`
+	PID               uint32                `json:"pid"`
+	StartTicks        uint64                `json:"start_ticks"`
+	ProcessEventID    string                `json:"process_event_id,omitempty"`
+	ResourceEventIDs  []string              `json:"resource_event_ids,omitempty"`
+	OccurredAt        time.Time             `json:"occurred_at"`
+	IssuedAt          time.Time             `json:"issued_at"`
+	Proof             string                `json:"proof,omitempty"`
+	Remote            *RemoteSensorEvidence `json:"remote,omitempty"`
 }
 
 type RemoteSensorEvidence struct {
@@ -296,6 +297,9 @@ func (a *TrustedToolAdapter) Verify(event TrustedToolEvent) (verifiedToolEvent, 
 	if _, err := uuid.Parse(event.ToolCallID); err != nil || !safeToolName.MatchString(event.ToolName) {
 		return verifiedToolEvent{}, errors.New("agent_guard_tool_event_invalid")
 	}
+	if !validExternalSessionID(event.ExternalSessionID) {
+		return verifiedToolEvent{}, errors.New("agent_guard_tool_session_invalid")
+	}
 	if !validCorrelationToken(event.CorrelationToken) || event.PID == 0 || event.StartTicks == 0 {
 		return verifiedToolEvent{}, errors.New("agent_guard_tool_correlation_invalid")
 	}
@@ -430,6 +434,21 @@ func validCorrelationToken(value string) bool {
 	}
 	for _, char := range value {
 		if char <= ' ' || char > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+func validExternalSessionID(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 255 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x21 || char == 0x7f {
 			return false
 		}
 	}

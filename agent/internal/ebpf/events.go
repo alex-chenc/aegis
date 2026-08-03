@@ -11,6 +11,11 @@ const ExecEventArgsTruncated uint32 = 1 << 0
 const execArgSlotLen = 64
 
 const (
+	ForkEventTypeFork uint32 = iota + 1
+	ForkEventTypeExit
+)
+
+const (
 	GuardOperationSetUID uint32 = iota + 1
 	GuardOperationSetGID
 	GuardOperationCapset
@@ -61,11 +66,12 @@ type ExecEvent struct {
 }
 
 type ForkEvent struct {
-	ParentPid  uint32
-	ChildPid   uint32
-	Uid        uint32
+	EventType  uint32
+	PID        uint32
+	PPID       uint32
+	UID        uint32
+	Comm       [16]byte
 	ParentComm [16]byte
-	ChildComm  [16]byte
 }
 
 // FileEvent matches the BPF file_event struct.

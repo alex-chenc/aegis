@@ -19,7 +19,11 @@ describe('AgentPanoramaExplorer', () => {
         nodes: [{
           id: 'process-1',
           node_type: 'process',
-          label: 'python · PID 4120 · PPID 4110',
+          label: 'python',
+          pid: 4120,
+          ppid: 4110,
+          process_start_ticks: '9200',
+          process_status: 'running',
           has_children: true,
           occurred_at: '2026-07-30T10:00:00Z',
         }],
@@ -36,13 +40,41 @@ describe('AgentPanoramaExplorer', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('python · PID 4120 · PPID 4110')
+    expect(wrapper.text()).toContain('python')
+    expect(wrapper.text()).toContain('PID 4120 · PPID 4110 · 运行中')
     await wrapper.get('[data-testid="panorama-expand-process-1"]').trigger('click')
     await flushPromises()
     expect(loadChildren).toHaveBeenCalledWith('process-1')
     expect(wrapper.text()).toContain('write · payload.bin')
     await wrapper.get('[data-testid="panorama-node-file-1"]').trigger('click')
     expect(wrapper.emitted('select')?.at(-1)?.[0]).toMatchObject({ id: 'file-1' })
+  })
+
+  it('marks activity windows as inferred instead of Codex conversations', () => {
+    const wrapper = mount(AgentPanoramaExplorer, {
+      props: {
+        nodes: [{
+          id: 'session-1',
+          node_type: 'session',
+          label: 'inferred activity window',
+          session_source: 'activity_window',
+          session_confidence: 'inferred',
+          has_children: false,
+        }],
+        loadChildren: vi.fn().mockResolvedValue([]),
+        mode: 'behavior',
+      },
+      global: {
+        stubs: {
+          'el-tag': true,
+          'el-alert': true,
+          'el-empty': true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('推断活动窗口（非 Codex 会话）')
+    expect(wrapper.text()).toContain('未获得来源会话 ID')
   })
 
   it('shows tool semantics only with trusted provenance and keeps missing hooks explicit', async () => {

@@ -8,7 +8,7 @@
         :class="{ active: !selectedInstanceId }"
         @click="emit('select', '')"
       >
-        {{ t('agentGuard.runtime.allInstances', { count: instances.length }) }}
+        {{ t('agentGuard.runtime.allInstances', { count: total }) }}
       </button>
       <el-tooltip
         v-for="instance in instances"
@@ -35,6 +35,7 @@ import type { AgentRuntimeInstance } from '@/types/agentGuard'
 
 defineProps<{
   instances: AgentRuntimeInstance[]
+  total: number
   selectedInstanceId: string
 }>()
 
