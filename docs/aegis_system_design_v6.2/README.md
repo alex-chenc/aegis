@@ -1,19 +1,18 @@
 # Aegis V6.2 智能体运行防护设计文档
 
 **版本**：6.2
-**日期**：2026-08-03
-**状态**：P0～P4 代码已实施；P5 会话检测设计完成、待实施；专用宿主机发布门禁待验证
+**日期**：2026-08-06
+**状态**：Agent Guard 工具事件、真实会话边界、内置策略目录和规则命中链路已更新；完整 P5 会话正文/AI 语义检测仍待实施；专用宿主机发布门禁待验证
 **主题**：AI Agent 全行为采集、会话语义审计、操作链可视化与隔离逃逸监控/阻断
 
 ## 1. 版本定位
 
-V6.2 在 V6.1 当前实现基础上新增“智能体运行防护”能力，形成四个相互关联的闭环：
+V6.2 在 V6.1 当前实现基础上新增“智能体运行防护”能力，形成三个已区分边界的闭环和一个仍处于设计阶段的会话检测闭环：
 
-1. 识别 Codex、OpenClaw、Hermes 等 AI Agent 的运行实例、session、执行单元和实际执行进程，采集命令/进程、文件、网络、身份权限、持久化、内核与隔离控制等操作。
-2. 将离散操作关联为进程链、时间线和 PID 主干行为全景树，通过确定性规则、跨事件行为规则与 Aegis 智能分析器联合判断行为是否具有攻击性。
+1. 识别 Codex、Claude Code、OpenClaw、Hermes、Zcode 等 AI Agent 的运行实例、session、执行单元和实际执行进程，采集命令/进程、文件、网络、身份权限、持久化、内核与隔离控制等操作。
+2. 将离散操作关联为 session、工具事件、进程事实和时间线；Agent eBPF 只负责 OS 事实与 PID/PPID 关联，Agent Guard 工具命令规则由 api-server 基于上层工具事件匹配。
 3. 识别 AI Agent 实际采用的本地进程、Linux namespace、OCI 容器或远程沙箱隔离方式，监控隔离边界变化和逃逸行为；在本机能力允许时通过 BPF LSM 提前拒绝，并按策略暂停对应执行单元。
-4. 提取 Codex、Claude Code、OpenCode 的完整可见会话结构，在授权和脱敏边界内
-   进行 AI 语义检测，将恶意意图标记与真实 PID、文件、网络、提权和逃逸行为关联。
+4. 当前已实现 Codex、Claude Code、OpenClaw、Hermes、Zcode 的真实 session 生命周期 Hook 和工具事件；完整会话正文、长会话 AI 语义检测和授权导出仍属于 P5 设计，不计入当前已完成能力。
 
 敏感文件访问只是文件行为域的一类高风险证据，不再是 V6.2 的能力边界。P5
 新增会话内容审计和恶意语义标记，但不建设实时提示词阻断、通用越狱文本网关、
@@ -26,7 +25,7 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 
 ```text
 主机
-  -> 零到多个 Agent 资产（Codex/OpenClaw/Hermes）
+  -> 零到多个 Agent 资产（Codex/Claude Code/OpenClaw/Hermes/Zcode）
       -> 零到多个 Agent 运行实例（controller PID + start_ticks）
           -> 控制进程（通常在宿主机）
           -> 一个或多个执行单元
@@ -39,13 +38,20 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 
 - 同一主机支持多种 Agent 并存，也支持同一种 Agent 同时存在多个运行实例。
 - 服务端以主机作为归属和筛选范围，同机各 Agent/实例保持独立；前端点击
-  Agent 后，以选中的 Agent asset 为抽屉根节点展示其实例和进程树。
+  Agent 后，以选中的 Agent asset 为抽屉根节点展示其实例和按 session 分页的行为。
 - 行为采集覆盖控制进程和所有本机可观测执行单元。
 - 隔离逃逸判断只针对声明了隔离边界的执行单元。
 - 远程执行节点未部署 Aegis Agent 时必须显示 `remote_unobservable`，不能宣称已防护。
 - 工具调用只有在 Agent 提供可信日志、Hook 或 correlation token 时才能关联；没有 Hook 不影响 OS 行为采集，但必须显示 `tool_semantics_unobservable`。
 
-## 3. 文档索引
+## 3. 当前实现基线
+
+V6.2 各专项文档中的当前实现以
+[current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)
+为准。该基线明确了工具命令规则的唯一归属、Agent eBPF/DC 边界、运行时 Hook
+开关、内置策略目录和当前验证状态。
+
+## 4. 文档索引
 
 | 文档 | 内容 |
 | --- | --- |
@@ -54,6 +60,7 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 | [agent_behavior_telemetry_and_analysis_design_v6.2.md](agent_behavior_telemetry_and_analysis_design_v6.2.md) | 全行为域、统一事件模型、操作链、规则关联、智能研判和动作边界 |
 | [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md) | 五个首批内置规则、联合攻击链、规则页面和 PID 主干行为全景树 |
 | [agent_ebpf_enforcement_design_v6.2.md](agent_ebpf_enforcement_design_v6.2.md) | Agent 运行实例识别、进程/cgroup 归属、行为传感器、逃逸检测、BPF LSM 和暂停机制 |
+| [agent_sandbox_escape_detection_and_response_design_v6.2.md](agent_sandbox_escape_detection_and_response_design_v6.2.md) | 智能体隔离边界、逃逸分类、eBPF/LSM 事实采集、确定性本地阻断和冻结响应 |
 | [backend_api_protocol_design_v6.2.md](backend_api_protocol_design_v6.2.md) | api-server、server、dc、规则/智能分析、Kafka、gRPC、HTTP API、配置和事件契约 |
 | [database_design_v6.2.md](database_design_v6.2.md) | 数据表、字段、索引、状态机、数据保留和迁移策略 |
 | [frontend_design_v6.2.md](frontend_design_v6.2.md) | 前端路由、页面、交互、类型、实时状态和测试 |
@@ -64,8 +71,16 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 | [implementation_status_v6.2.md](implementation_status_v6.2.md) | AUTO 审计结果、当前实施阶段、真实测试证据和下一阶段入口 |
 | [trusted_tool_adapter_implementation_v6.2.md](trusted_tool_adapter_implementation_v6.2.md) | P4 signed hook manifest、Unix socket、事件签名、远端关联和三重灰度契约 |
 | [development_prompt_v6.2.md](development_prompt_v6.2.md) | 可直接交给编码智能体使用的 V6.2 全栈开发主提示词、阶段门禁和交付格式 |
+| [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md) | 2026-08-06 当前代码事实、工具规则归属、运行时设置、内置策略目录和验证边界 |
 
-## 4. 核心设计决策
+当前专项修复契约：
+
+- [agent_guard_tool_rule_ownership_api_server.md](fix/agent_guard_tool_rule_ownership_api_server.md)：工具规则唯一由 api-server 命中，Agent/DC 不重复命中。
+- [agent_guard_runtime_settings_and_hook_injection.md](fix/agent_guard_runtime_settings_and_hook_injection.md)：页面开关、即时下发和五类智能体 Hook 注入。
+- [multi_agent_native_hook_adaptation_v6.2.md](fix/multi_agent_native_hook_adaptation_v6.2.md)：Codex、Claude Code、OpenClaw、Hermes、Zcode 原生 Hook 适配。
+- [agent_guard_builtin_policy_catalog_ui.md](fix/agent_guard_builtin_policy_catalog_ui.md)：只读内置策略目录和中文规则展示。
+
+## 5. 核心设计决策
 
 | 决策 | 结论 |
 | --- | --- |
@@ -73,14 +88,15 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 | 是否仅依赖 PPID 识别子进程 | 否。本地进程使用 fork 标签传播；容器使用 container/cgroup；远程执行使用远端传感器 |
 | 服务端是否参与实时阻断 | 不参与同步决策。服务端负责策略、审计和人工处置；阻断必须在主机 Agent 本地完成 |
 | 是否采集全量 syscall | 否。采集具有安全语义的行为事件；高频 read/write 做短窗口聚合，不能以不可控数据量换取“全量”名义 |
-| 攻击性如何判断 | 本地确定性规则 + DC 单事件/序列规则 + 异步智能研判；原始事实和安全结论分开保存 |
+| Agent Guard 工具命中在哪里判断 | API-server 消费可信工具命令事件并匹配；Agent eBPF 只做 OS 事实与 PID/PPID 关联；DC 只做规范化投影 |
+| 其他运行时行为如何判断 | 旧通用 Sigma/eBPF 数据面保持独立；不得将其结果伪装成工具调用规则命中 |
 | 智能分析能否单独自动阻断 | 默认不能。AI-only 结论只告警/待确认；自动阻断需要确定性规则证据和显式策略授权 |
-| 是否能看到 Agent 工具调用 | 有可信 Adapter Hook 时关联 tool call；否则只展示可证明的 OS 行为并标记工具语义不可观测 |
+| 是否能看到 Agent 工具调用 | 有可信 Adapter Hook 时上报工具事件；规则命中由 API-server 基于工具命令行完成；没有 Hook 时只展示可证明 OS 行为并标记工具语义不可观测 |
 | 首批是否提供开箱即用规则 | 是。内置敏感目录、外链、文件生成、敏感命令和提权五个版本化规则族 |
-| 全景如何展示 | 外层只展示按 host + Agent asset 聚合的基本信息列表；点击 Agent 后在详情抽屉中按 instance → session → execution unit → PID 展示全景和分析 |
+| 全景如何展示 | 行为全景按真实 session 分页；安全分析按当前 session 展示命中规则、工具调用和可验证 PID/PPID，不展示全量进程树 |
 | tracepoint 是否能作为强阻断 | 不能。tracepoint 用于兼容监控；真正的提前拒绝使用 BPF LSM |
 | 所有内核是否宣称完整阻断 | 否。按 `full_enforcement`、`monitor_only`、`no_isolation`、`remote_unobservable` 展示真实覆盖能力 |
-| 核心防护是否使用动态 DetectionPackage | 否。Agent Guard 属于安全关键内置模块，随 Agent 签名发布；动态配置只描述产品特征和策略 |
+| 策略页面是否管理用户发布策略 | 否。当前策略入口是内置策略/规则只读目录；历史 policy API 保留兼容，Hook 开关在运行时设置页面即时下发 |
 | 是否复用现有事件流 | 是。复用 `RuntimeEvent.event_data_json`、Server Kafka 转发、DC 入库与告警链路 |
 | 是否复用现有配置同步 | 是。新增 `ConfigSync.config_type=agent_guard_bundle`，保留 V5.7/V5.8 兼容语义 |
 | 是否复用现有阻断命令 | 是。扩展 `BlockCommand.action`，支持执行单元冻结、恢复和终止 |
@@ -88,21 +104,16 @@ V6.2 使用以下分层运行模型，避免把宿主机控制进程错误地当
 | 会话如何采集 | Codex/Claude Code 使用官方 Hook 定位 + 版本化 transcript 增量解析；OpenCode 使用 Plugin/API/SSE，离线回补走官方 sanitized export |
 | 会话 AI 能否直接动作 | 不能。AI 只标记/告警；只有 P0～P4 确定性 OS 证据和显式策略才能进入动作 eligibility |
 
-## 5. 首批支持范围
+## 6. 首批支持范围
 
-第一批内置 Profile：
+当前内置 Profile 已覆盖 Codex、OpenClaw、Hermes、Claude Code、OpenCode、Gemini CLI
+和 Zcode；原生 Hook 注入已接入 Codex、Claude Code、OpenClaw、Hermes、Zcode。
+Profile 负责产品识别和隔离事实，Hook 注入名单是独立的运行时能力名单。
+后续新增产品时仍优先只新增 Profile；只有出现新的操作系统隔离族时才新增 Agent
+内核能力。
 
-- Codex Linux：控制进程 + bubblewrap/Linux namespace 执行单元。
-- OpenClaw：sandbox off、本地执行、Docker 执行、SSH/OpenShell 远程执行。
-- Hermes：local、Docker、Singularity、SSH、Modal、Daytona，以及 whole-process Docker/OpenShell。
-
-当前内置 Profile 已覆盖 Codex、OpenClaw、Hermes、Claude Code、OpenCode 和
-Gemini CLI。后续新增产品时仍优先只新增 Profile；只有出现新的操作系统隔离族
-时才新增 Agent 内核能力。
-
-P5 首批会话提取只覆盖 Codex、Claude Code、OpenCode。其他 Agent 即使已有
-运行 Profile，也必须等官方 Hook/API/稳定导出路径完成 Adapter 设计后才能显示
-会话 `complete`。
+完整 P5 会话正文提取仍需按官方 Hook/API/稳定导出路径实施。当前已落地的
+session lifecycle Hook 与工具事件不等同于完整会话正文采集。
 
 首期平台限定：
 
@@ -110,7 +121,7 @@ P5 首批会话提取只覆盖 Codex、Claude Code、OpenCode。其他 Agent 即
 - Aegis Agent 具备读取 `/proc`、加载 eBPF 和执行受控阻断所需权限。
 - BPF LSM 不可用时自动降级为监控模式，不允许静默宣称阻断已启用。
 
-## 6. 总体完成标准
+## 7. 总体完成标准
 
 V6.2 只有同时满足以下条件才算完成：
 

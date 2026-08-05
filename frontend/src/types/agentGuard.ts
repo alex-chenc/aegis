@@ -14,6 +14,38 @@ export type AgentGuardDetailTab = 'panorama' | 'analysis'
 
 export type AgentRuntimeStatus = 'running' | 'stale' | 'stopped' | 'unknown'
 
+export type AgentGuardRuntimeDispatchStatus =
+  | 'not_dispatched'
+  | 'pending'
+  | 'pending_reconnect'
+  | 'dispatched'
+  | 'failed'
+  | string
+
+export interface AgentGuardHookInjection {
+  agent_type: string
+  enabled: boolean
+  behavior_enabled?: boolean
+  escape_enabled?: boolean
+  status: string
+  error_code?: string
+  updated_at?: string
+}
+
+export interface AgentGuardRuntimeSettings {
+  schema: string
+  version: number
+  host_id: string
+  tool_adapter_enabled: boolean
+  session_hook_enabled: boolean
+  behavior_policy_enabled: boolean
+  escape_policy_enabled: boolean
+  injections: AgentGuardHookInjection[]
+  dispatch_status: AgentGuardRuntimeDispatchStatus
+  dispatch_error_code?: string
+  updated_at?: string
+}
+
 export type ExecutionUnitType =
   | 'local_process_tree'
   | 'linux_namespace'
@@ -79,6 +111,21 @@ export interface AgentRuntimeInstance {
   coverage_reasons: string[]
   high_risk_finding_count?: number
   last_seen_at?: string
+}
+
+export interface AgentBehaviorSession {
+  id: string
+  host_id: string
+  instance_id: string
+  execution_unit_id?: string
+  external_session_id?: string
+  source: string
+  confidence: string
+  status: string
+  behavior_count?: number
+  finding_count?: number
+  started_at: string
+  last_seen_at: string
 }
 
 export interface AgentExecutionUnit {
@@ -174,6 +221,14 @@ export interface PanoramaTreeNode {
   external_session_id?: string
   session_source?: 'agent_official' | 'adapter_hook' | 'aegis_wrapper' | 'activity_window' | 'execution_unit' | string
   session_confidence?: 'confirmed' | 'probable' | 'inferred' | string
+	tool_name?: string
+	tool_call_id?: string
+	turn_id?: string
+	command?: string
+	tool_input?: unknown
+	tool_response?: unknown
+	correlation_status?: 'matched' | 'unmatched' | string
+	correlation_method?: string
   event_id?: string
   object_id?: string
   execution_unit_id?: string
@@ -206,6 +261,7 @@ export interface AgentSecurityFindingSummary {
   asset_id?: string
   agent_scope_key?: string
   instance_id?: string
+  session_id?: string
   agent_type?: string
   agent_display_name?: string
   host?: {
@@ -221,10 +277,14 @@ export interface AgentSecurityFindingSummary {
   rule_hits?: Array<{
     rule_key?: string
     rule_version?: number
+    rule_name?: string
     severity?: string
+    match_kind?: string
+    event_id?: string
     event_ids?: string[]
     evidence_event_ids?: string[]
   }>
+  matched_rules?: AgentSecurityFindingRuleDetail[]
   evidence_event_ids?: string[]
   evidence_event_count?: number
   evidence_graph?: {
@@ -237,6 +297,29 @@ export interface AgentSecurityFindingSummary {
     lost_events?: number
     truncated_fields?: string[]
   }
+  escape_chain?: {
+    hook_event_ids?: string[]
+    hook_events?: Array<{
+      event_id: string
+      event_type?: string
+      tool_name?: string
+      command?: string
+      command_line?: string
+      pid?: number
+      ppid?: number
+      process_start_ticks?: string
+      process_name?: string
+      process_exe?: string
+      cwd?: string
+      outcome?: string
+      decision?: string
+      target?: string
+    }>
+    process_evidence?: Array<Record<string, unknown>>
+    proc_cgroup_evidence?: Array<Record<string, unknown>>
+    reverification?: 'complete' | 'partial' | 'inconclusive' | string
+    gaps?: string[]
+  }
   attack_stages?: Array<string | Record<string, unknown>>
   summary?: string
   counter_evidence?: string[]
@@ -245,6 +328,55 @@ export interface AgentSecurityFindingSummary {
   analysis_status?: string
   status: 'open' | 'investigating' | 'contained' | 'resolved' | 'dismissed' | string
   last_observed_at?: string
+}
+
+export interface AgentSecurityFindingRuleDetail {
+  rule_key: string
+  rule_version?: number
+  name: string
+  severity?: string
+  match_kind?: string
+  event_ids: string[]
+  process_tree?: AgentSecurityFindingProcessNode[]
+  tool_calls?: AgentSecurityFindingToolCall[]
+}
+
+export interface AgentSecurityFindingToolCall {
+  event_id: string
+  tool_name: string
+  tool_call_id?: string
+  turn_id?: string
+  command?: string
+  tool_input?: unknown
+  tool_response?: unknown
+  outcome?: string
+  occurred_at?: string
+  pid?: number
+  ppid?: number
+  process_start_ticks?: string
+  command_line?: string
+  correlation_status?: 'matched' | 'unmatched' | string
+  correlation_method?: string
+}
+
+export interface AgentSecurityFindingProcessNode {
+  id: string
+  parent_id?: string
+  pid: number
+  ppid: number
+  process_start_ticks?: string
+  process_name?: string
+  process_exe?: string
+  cmdline?: string
+  command_cwd?: string
+  command_visibility?: string
+  process_status?: string
+  first_seen_at?: string
+  last_seen_at?: string
+  event_count?: number
+  matched?: boolean
+  matched_event_ids?: string[]
+  children?: AgentSecurityFindingProcessNode[]
 }
 
 export interface AgentBehaviorIndex {
@@ -283,6 +415,8 @@ export interface BuiltinAgentBehaviorRuleSummary {
   rule_version: number
   name: string
   description?: string
+  source?: string
+  categories?: string[]
   default_enabled?: boolean
   enabled?: boolean
   engine?: string
@@ -290,8 +424,33 @@ export interface BuiltinAgentBehaviorRuleSummary {
   severity?: string
   default_action?: string
   action?: string
+  recommended_action?: string
+  parameters_schema?: Record<string, unknown>
+  default_parameters?: Record<string, unknown>
+  required_evidence?: string[]
+  allow_conditions?: string[]
+  mitre?: string[]
+  immutable?: boolean
   hits_24h?: number
   findings_24h?: number
+  digest?: string
+}
+
+export interface BuiltinAgentEscapeRuleSummary {
+  rule_key: string
+  rule_version: number
+  name: string
+  description?: string
+  hook_points?: string[]
+  required_evidence?: string[]
+  default_enabled?: boolean
+  enabled?: boolean
+  default_severity?: string
+  severity?: string
+  default_action?: string
+  action?: string
+  source?: string
+  immutable?: boolean
   digest?: string
 }
 
@@ -358,6 +517,8 @@ export interface AgentGuardPanoramaQuery {
   agent_scope_key?: string
   instance_ids?: string[]
   session_id?: string
+  page?: number
+  page_size?: number
   cursor?: string
 }
 
@@ -372,11 +533,13 @@ export interface AgentGuardExecutionUnitQuery {
 }
 
 export interface AgentGuardFindingQuery {
-  host_id?: string
-  asset_id?: string
-  agent_scope_key?: string
-  instance_id?: string
-  severity?: string
+	host_id?: string
+	asset_id?: string
+	agent_scope_key?: string
+	instance_id?: string
+	session_id?: string
+	finding_domain?: 'tool' | 'escape'
+	severity?: string
   status?: string
   page: number
   page_size: number

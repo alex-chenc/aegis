@@ -168,6 +168,47 @@ func TestAgentGuardQueryRepositoryFiltersRuntimeData(t *testing.T) {
 	}
 }
 
+func TestListFindingsFiltersByFindingDomain(t *testing.T) {
+	db := setupAgentGuardQueryTestDB(t)
+	repo := NewAgentGuardQueryRepository(db)
+	hostID, instanceID, sessionID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	insert := `INSERT INTO agent_security_findings
+		(id,finding_key,host_id,instance_id,session_id,execution_unit_id,title,severity,
+		 verdict,confidence,status,decision_sources,rule_hits,evidence_event_ids,evidence_graph,
+		 attack_stages,first_observed_at,last_observed_at,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	for _, key := range []string{
+		"tool-command:v1:AGB-BUILTIN-004:session:call-1",
+		"escape:v1:agent_sandbox_violation:event-1",
+		"single:v1:AGB-BUILTIN-004:event-2",
+	} {
+		if err := db.Exec(insert, uuid.New(), key, hostID, instanceID, sessionID, unitID,
+			key, "high", "suspicious", 0.9, "open", `[]`, `[]`, `[]`, `{}`, `[]`,
+			now, now, now, now).Error; err != nil {
+			t.Fatalf("seed finding %q: %v", key, err)
+		}
+	}
+
+	toolFindings, toolTotal, err := repo.ListFindings(context.Background(), model.AgentSecurityFindingQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: 20},
+		SessionID:           sessionID.String(),
+		FindingDomain:       model.AgentSecurityFindingDomainTool,
+	})
+	if err != nil || toolTotal != 1 || len(toolFindings) != 1 || toolFindings[0].FindingKey[:len("tool-command:v1:")] != "tool-command:v1:" {
+		t.Fatalf("tool findings total=%d items=%#v err=%v", toolTotal, toolFindings, err)
+	}
+
+	escapeFindings, escapeTotal, err := repo.ListFindings(context.Background(), model.AgentSecurityFindingQuery{
+		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: 1, PageSize: 20},
+		SessionID:           sessionID.String(),
+		FindingDomain:       model.AgentSecurityFindingDomainEscape,
+	})
+	if err != nil || escapeTotal != 1 || len(escapeFindings) != 1 || escapeFindings[0].FindingKey[:len("escape:v1:")] != "escape:v1:" {
+		t.Fatalf("escape findings total=%d items=%#v err=%v", escapeTotal, escapeFindings, err)
+	}
+}
+
 func TestListSessionsPrefersRealHookSessionsOverActivityWindow(t *testing.T) {
 	db := setupAgentGuardQueryTestDB(t)
 	repo := NewAgentGuardQueryRepository(db)
@@ -193,6 +234,60 @@ func TestListSessionsPrefersRealHookSessionsOverActivityWindow(t *testing.T) {
 	})
 	if err != nil || total != 1 || len(items) != 1 || items[0].ExternalSessionID != "thr_real_123" {
 		t.Fatalf("preferred sessions total=%d items=%#v err=%v", total, items, err)
+	}
+}
+
+func TestDeleteSessionsRemovesSessionOwnedEvidenceAtomically(t *testing.T) {
+	db := setupAgentGuardQueryTestDB(t)
+	repo := NewAgentGuardQueryRepository(db)
+	hostID, instanceID, unitID, sessionID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	eventID, findingID, analysisID := uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	if err := db.Exec(`INSERT INTO agent_behavior_sessions
+		(id,host_id,instance_id,execution_unit_id,source,confidence,status,behavior_count,
+		 finding_count,completeness,started_at,last_seen_at,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, sessionID, hostID, instanceID, unitID,
+		"adapter_hook", "confirmed", "ended", 1, 1, `{}`, now, now, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO agent_behavior_events
+		(id,raw_event_id,host_id,host_boot_id,agent_sequence,instance_id,session_id,
+		 execution_unit_id,category,operation,outcome,decision,severity,occurred_at,received_at,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, eventID, "delete-event", hostID, "boot", 1,
+		instanceID, sessionID, unitID, "tool", "tool_call_completed", "success", "audit", "info", now, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO agent_security_findings
+		(id,finding_key,host_id,instance_id,session_id,execution_unit_id,title,severity,
+		 verdict,confidence,status,decision_sources,rule_hits,evidence_event_ids,evidence_graph,
+		 attack_stages,first_observed_at,last_observed_at,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, findingID, "delete-finding", hostID,
+		instanceID, sessionID, unitID, "delete", "high", "suspicious", 0.9, "open", `[]`, `[]`, `[]`, `{}`, `[]`, now, now, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO agent_security_analysis_runs
+		(id,finding_id,attempt,status,prompt_version,input_digest,evidence_event_ids,
+		 evidence_summary,output,queued_at,created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`, analysisID, findingID, 1, "pending", "v1", "sha256:test", `[]`, `{}`, `{}`, now, now).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteSessions(context.Background(), []uuid.UUID{sessionID}); err != nil {
+		t.Fatalf("DeleteSessions: %v", err)
+	}
+	for table, id := range map[string]any{
+		"agent_behavior_sessions":      sessionID,
+		"agent_behavior_events":        eventID,
+		"agent_security_findings":      findingID,
+		"agent_security_analysis_runs": analysisID,
+	} {
+		var count int64
+		if err := db.Table(table).Where("id = ?", id).Count(&count).Error; err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s still contains deleted row", table)
+		}
 	}
 }
 
@@ -368,7 +463,7 @@ func TestBuiltinAgentGuardProfileKeyDistinguishesStoppedKnownAndUnsupportedAgent
 		"Claude Code":  "claude-code-linux",
 		"openai_codex": "codex-linux",
 		"OpenCode":     "opencode-linux",
-		"ZCode":        "",
+		"ZCode":        "zcode-linux",
 	} {
 		if got := builtinAgentGuardProfileKey(agentType); got != want {
 			t.Fatalf("builtinAgentGuardProfileKey(%q) = %q, want %q", agentType, got, want)

@@ -38,7 +38,85 @@ func TestPreToolUseHookInputAllowsOfficialExtensionFields(t *testing.T) {
 	}
 }
 
-func TestProvisionWritesSignedManifestAndThreeNativeHookPoints(t *testing.T) {
+func TestNativeProductHookEventsNormalizeToSharedContract(t *testing.T) {
+	cases := map[string]string{
+		"SessionStart":       "SessionStart",
+		"session_start":      "SessionStart",
+		"on_session_start":   "SessionStart",
+		"pre_tool_call":      "PreToolUse",
+		"post_tool_call":     "PostToolUse",
+		"PostToolUseFailure": "PostToolUseFailure",
+		"on_session_end":     "SessionEnd",
+	}
+	for input, want := range cases {
+		if got := normalizeHookEvent(input, ""); got != want {
+			t.Fatalf("normalizeHookEvent(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := normalizeHookEvent("Stop", ""); got != "Stop" {
+		t.Fatalf("Zcode Stop must not become session end: %q", got)
+	}
+	var hermes codexHookInput
+	if err := json.Unmarshal([]byte(`{"session_id":"sess_hermes","hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"id"},"extra":{"tool_call_id":"call_hermes","task_id":"turn_1"}}`), &hermes); err != nil {
+		t.Fatal(err)
+	}
+	if extraString(hermes.Extra, "tool_call_id") != "call_hermes" || extraString(hermes.Extra, "task_id") != "turn_1" {
+		t.Fatalf("Hermes hook payload fields lost: %#v", hermes)
+	}
+}
+
+func TestProvisionKeepsMultipleNativeSources(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "aegis-codex-hook")
+	if err := os.WriteFile(binary, []byte("test-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, "sources.json")
+	common := []string{"--private-key", filepath.Join(dir, "hook.key"), "--manifest", manifest,
+		"--socket", filepath.Join(dir, "hook.sock"), "--hook-binary", binary, "--state-dir", filepath.Join(dir, "state")}
+	if err := provision(append(common, "--agent-type", "claude-code", "--hooks", filepath.Join(dir, "claude.json"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := provision(append(common, "--agent-type", "hermes", "--hooks", filepath.Join(dir, "hermes.yaml"))); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := agentguard.LoadTrustedToolAdapter(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sourceID := range []string{"claude-code-hook-v1", "hermes-hook-v1"} {
+		if !adapter.AuthorizePeer(sourceID, uint32(os.Geteuid()), uint32(os.Getegid())) {
+			t.Fatalf("source %q missing after second provision", sourceID)
+		}
+	}
+}
+
+func TestProvisionOpenClawWritesNativePluginAndConfigLoadPath(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "aegis-codex-hook")
+	if err := os.WriteFile(binary, []byte("test-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "openclaw", "config.json")
+	if err := provision([]string{
+		"--agent-type", "openclaw", "--private-key", filepath.Join(dir, "hook.key"),
+		"--manifest", filepath.Join(dir, "sources.json"), "--hooks", config,
+		"--socket", filepath.Join(dir, "hook.sock"), "--hook-binary", binary,
+		"--state-dir", filepath.Join(dir, "state"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plugin := filepath.Join(dir, "openclaw", "extensions", "aegis-agent-guard", "index.js")
+	if _, err := os.Stat(plugin); err != nil {
+		t.Fatalf("OpenClaw plugin not provisioned: %v", err)
+	}
+	data, err := os.ReadFile(config)
+	if err != nil || !strings.Contains(string(data), "aegis-agent-guard") {
+		t.Fatalf("OpenClaw config does not load Aegis plugin: %v %s", err, data)
+	}
+}
+
+func TestProvisionWritesSignedManifestAndFourNativeHookPoints(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "aegis-codex-hook")
 	if err := os.WriteFile(binary, []byte("test-binary"), 0o700); err != nil {
@@ -62,10 +140,86 @@ func TestProvisionWritesSignedManifestAndThreeNativeHookPoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []string{"SessionStart", "PreToolUse", "SessionEnd"} {
+	for _, event := range []string{"SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"} {
 		if !strings.Contains(string(data), `"`+event+`"`) {
 			t.Fatalf("hook %s missing: %s", event, data)
 		}
+	}
+}
+
+func TestRemovePreservesUserHooksAndRemovesAegisHookAndManifestSource(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "aegis-codex-hook")
+	if err := os.WriteFile(binary, []byte("test-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(dir, "codex-hook.key")
+	manifest := filepath.Join(dir, "codex-hook-sources.json")
+	hooks := filepath.Join(dir, "hooks.json")
+	if err := os.WriteFile(hooks, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"user-command"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := provision([]string{
+		"--private-key", key, "--manifest", manifest, "--hooks", hooks,
+		"--socket", filepath.Join(dir, "hook.sock"), "--hook-binary", binary,
+		"--state-dir", filepath.Join(dir, "state"), "--agent-type", "codex",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := remove([]string{
+		"--manifest", manifest, "--hooks", hooks, "--hook-binary", binary,
+		"--agent-type", "codex",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "user-command") || strings.Contains(string(data), binary) {
+		t.Fatalf("unexpected hooks after removal: err=%v data=%s", err, data)
+	}
+	manifestData, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifestValue agentguard.TrustedToolSourceManifest
+	if err := json.Unmarshal(manifestData, &manifestValue); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifestValue.Sources) != 0 {
+		t.Fatalf("Aegis source was not removed: %#v", manifestValue.Sources)
+	}
+}
+
+func TestRemoveOpenClawRemovesManagedPluginAndLoadPath(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "aegis-codex-hook")
+	if err := os.WriteFile(binary, []byte("test-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "openclaw", "openclaw.json")
+	manifest := filepath.Join(dir, "sources.json")
+	if err := provision([]string{
+		"--agent-type", "openclaw", "--private-key", filepath.Join(dir, "key"),
+		"--manifest", manifest, "--hooks", config, "--socket", filepath.Join(dir, "hook.sock"),
+		"--hook-binary", binary, "--state-dir", filepath.Join(dir, "state"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(filepath.Dir(config), "extensions", "aegis-agent-guard")
+	if _, err := os.Stat(filepath.Join(pluginDir, "index.js")); err != nil {
+		t.Fatalf("managed plugin was not created: %v", err)
+	}
+	if err := remove([]string{
+		"--agent-type", "openclaw", "--manifest", manifest, "--hooks", config,
+		"--hook-binary", binary,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(config)
+	if err != nil || strings.Contains(string(data), "aegis-agent-guard") {
+		t.Fatalf("OpenClaw managed load path was not removed: err=%v data=%s", err, data)
+	}
+	if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
+		t.Fatalf("managed plugin directory still exists: %v", err)
 	}
 }
 
@@ -88,7 +242,7 @@ func TestProvisionCanWriteManagedHooksWithoutUserTrustPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"[features]", "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", "[[hooks.SessionEnd]]"} {
+	for _, expected := range []string{"[features]", "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", "[[hooks.PostToolUse]]", "[[hooks.SessionEnd]]"} {
 		if !strings.Contains(string(data), expected) {
 			t.Fatalf("managed hook %q missing: %s", expected, data)
 		}

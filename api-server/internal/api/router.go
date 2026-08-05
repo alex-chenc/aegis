@@ -171,9 +171,11 @@ func (r *Router) Setup() {
 				r.roleMiddleware(repository.PermissionAgentGuardAnalysisRun),
 				r.roleMiddleware(repository.PermissionAgentGuardPolicyWrite),
 				r.roleMiddleware(repository.PermissionAgentGuardPolicyPublish),
+				r.roleMiddleware(repository.PermissionAgentGuardSessionDelete),
 				r.roleMiddleware(repository.PermissionAgentGuardActionFreeze),
 				r.roleMiddleware(repository.PermissionAgentGuardActionResume),
 				r.roleMiddleware(repository.PermissionAgentGuardActionKill),
+				r.roleMiddleware(repository.PermissionAgentGuardSettings),
 			)
 		}
 

@@ -11,6 +11,7 @@ describe('Agent Guard P4 profiles', () => {
       'openclaw',
       'hermes',
       'claude-code',
+      'zcode',
       'opencode',
       'gemini-cli',
     ])

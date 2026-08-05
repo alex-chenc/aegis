@@ -53,6 +53,11 @@ func (n *BehaviorNormalizer) Normalize(raw RawBehavior) (BehaviorEvent, bool) {
 	if !ok || subject.Confidence == ConfidenceAmbiguous || subject.Confidence == ConfidenceUnattributed {
 		return BehaviorEvent{}, false
 	}
+	if _, ok := n.tracker.TrustedSession(subject); !ok {
+		// Process discovery alone is not enough to establish a Codex session.
+		// Require a live, signed lifecycle session before emitting any behavior.
+		return BehaviorEvent{}, false
+	}
 	if raw.OccurredAt.IsZero() {
 		raw.OccurredAt = time.Now().UTC()
 	}
@@ -103,15 +108,17 @@ func (n *BehaviorNormalizer) Normalize(raw RawBehavior) (BehaviorEvent, bool) {
 	sort.Strings(truncated)
 
 	return BehaviorEvent{
-		Schema:              BehaviorSchemaV1,
-		EventID:             eventID,
-		EventType:           raw.EventType,
-		HostID:              n.hostID,
-		HostBootID:          n.hostBootID,
-		AgentSequence:       atomic.AddUint64(&n.sequence, 1),
-		InstanceID:          subject.InstanceID,
-		ExecutionUnitID:     subject.UnitID,
-		SessionID:           trustedSessionID(raw.SessionID, subject.SessionID),
+		Schema:          BehaviorSchemaV1,
+		EventID:         eventID,
+		EventType:       raw.EventType,
+		HostID:          n.hostID,
+		HostBootID:      n.hostBootID,
+		AgentSequence:   atomic.AddUint64(&n.sequence, 1),
+		InstanceID:      subject.InstanceID,
+		ExecutionUnitID: subject.UnitID,
+		// The tracker subject is authoritative. Never let a caller-supplied
+		// session UUID move an event into another session's process stream.
+		SessionID:           subject.SessionID,
 		CorrelationID:       normalizedCorrelationID(raw.CorrelationID),
 		ParentEventID:       normalizedOptionalUUID(raw.ParentEventID),
 		AgentType:           instance.AgentType,
@@ -143,13 +150,6 @@ func (n *BehaviorNormalizer) Normalize(raw RawBehavior) (BehaviorEvent, bool) {
 			Completeness:    unit.Completeness,
 		},
 	}, true
-}
-
-func trustedSessionID(candidate, fallback string) string {
-	if parsed, err := uuid.Parse(candidate); err == nil && parsed != uuid.Nil {
-		return parsed.String()
-	}
-	return fallback
 }
 
 func normalizedCorrelationID(value string) string {

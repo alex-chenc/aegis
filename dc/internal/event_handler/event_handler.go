@@ -321,7 +321,9 @@ func (h *EventHandler) handleAgentBehavior(ctx context.Context, runtimeEvent *mo
 		)
 		return err
 	}
-	projected = pipeline.ClassifyAgentBehavior(projected, h.ruleOptions.Evaluation)
+	// Keep DC projection lossless with respect to the signed Agent fact. Tool
+	// command classification and rule matching belong to api-server; this
+	// service must not derive a second tool verdict while persisting the event.
 	inserted, err := h.behaviorRepo.CreateWithContext(ctx, projected)
 	if err != nil {
 		errorCode := "agent_behavior_projection_write_failed"
@@ -369,30 +371,17 @@ func (h *EventHandler) handleAgentBehavior(ctx context.Context, runtimeEvent *mo
 			)
 		}
 	}
-	if h.ruleProcessor == nil || !h.ruleOptions.RulesEnabled {
-		return nil
-	}
-	result, err := h.ruleProcessor.ProcessBehavior(ctx, projected, h.ruleOptions)
-	if err != nil {
-		h.logger.Error("agent_guard_rule_processing_failed",
-			zap.String("event_id", runtimeEvent.EventID),
-			zap.String("host_id", runtimeEvent.HostID.String()),
-			zap.String("category", projected.Category),
-			zap.String("operation", projected.Operation),
-			zap.String("error_code", "agent_guard_rule_processing_failed"),
-			zap.Error(err),
-		)
-		return err
-	}
-	h.logger.Info("agent_guard_rules_evaluated",
+	// Agent Guard tool rules are evaluated by api-server from the signed
+	// upper-layer tool command/input event. DC is only the behavior projection
+	// boundary; eBPF/process facts remain enrichment evidence and must not
+	// create an independent rule hit here.
+	h.logger.Debug("agent_behavior_rule_evaluation_delegated",
 		zap.String("event_id", runtimeEvent.EventID),
 		zap.String("host_id", runtimeEvent.HostID.String()),
-		zap.Int("rule_hit_count", result.HitCount),
-		zap.Int("finding_update_count", len(result.FindingUpdates)),
-		zap.Int("action_update_count", len(result.ActionUpdates)),
+		zap.String("category", projected.Category),
+		zap.String("operation", projected.Operation),
+		zap.String("rule_owner", "api-server"),
 	)
-	h.notifyFindingUpdates(ctx, runtimeEvent, result.FindingUpdates)
-	h.notifyActionUpdates(ctx, runtimeEvent, result.ActionUpdates)
 	return nil
 }
 

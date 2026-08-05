@@ -82,6 +82,9 @@ type TrustedToolEvent struct {
 	StartTicks        uint64                `json:"start_ticks"`
 	ProcessEventID    string                `json:"process_event_id,omitempty"`
 	ResourceEventIDs  []string              `json:"resource_event_ids,omitempty"`
+	TurnID            string                `json:"turn_id,omitempty"`
+	ToolInput         json.RawMessage       `json:"tool_input,omitempty"`
+	ToolResponse      json.RawMessage       `json:"tool_response,omitempty"`
 	OccurredAt        time.Time             `json:"occurred_at"`
 	IssuedAt          time.Time             `json:"issued_at"`
 	Proof             string                `json:"proof,omitempty"`
@@ -140,7 +143,25 @@ type toolCorrelationLink struct {
 	ToolEventID     string
 	ToolCallID      string
 	SessionID       string
+	CommandText     string
 	ExpiresAt       time.Time
+}
+
+type toolCorrelationState struct {
+	Link                toolCorrelationLink
+	ProcessEventID      string
+	ResourceEventIDs    []string
+	Representative      ProcessSnapshot
+	RepresentativeScore int
+	CorrelationMethod   string
+}
+
+type toolCorrelationEvidence struct {
+	Link             toolCorrelationLink
+	ProcessEventID   string
+	ResourceEventIDs []string
+	Representative   ProcessSnapshot
+	Method           string
 }
 
 type TrustedToolAdapter struct {
@@ -148,6 +169,7 @@ type TrustedToolAdapter struct {
 	mu      sync.Mutex
 	seen    map[string]time.Time
 	links   map[ProcessIdentity]toolCorrelationLink
+	states  map[string]*toolCorrelationState
 	now     func() time.Time
 	socket  ToolSocketRuntimePolicy
 }
@@ -183,7 +205,7 @@ func LoadTrustedToolAdapter(manifestPath string) (*TrustedToolAdapter, error) {
 	}
 	adapter := &TrustedToolAdapter{
 		sources: make(map[string]TrustedToolSource), seen: make(map[string]time.Time),
-		links: make(map[ProcessIdentity]toolCorrelationLink), now: time.Now,
+		links: make(map[ProcessIdentity]toolCorrelationLink), states: make(map[string]*toolCorrelationState), now: time.Now,
 	}
 	adapter.socket, err = normalizeToolSocketPolicy(manifest.Socket)
 	if err != nil {
@@ -324,7 +346,7 @@ func (a *TrustedToolAdapter) Verify(event TrustedToolEvent) (verifiedToolEvent, 
 	if _, err := uuid.Parse(event.EventID); err != nil {
 		return verifiedToolEvent{}, errors.New("agent_guard_tool_event_id_invalid")
 	}
-	if _, err := uuid.Parse(event.ToolCallID); err != nil || !safeToolName.MatchString(event.ToolName) {
+	if !validToolCallID(event.ToolCallID) || !safeToolName.MatchString(event.ToolName) {
 		return verifiedToolEvent{}, errors.New("agent_guard_tool_event_invalid")
 	}
 	if !validExternalSessionID(event.ExternalSessionID) {
@@ -340,6 +362,14 @@ func (a *TrustedToolAdapter) Verify(event TrustedToolEvent) (verifiedToolEvent, 
 	}
 	if err := validateEvidenceIDs(event.ProcessEventID, event.ResourceEventIDs); err != nil {
 		return verifiedToolEvent{}, err
+	}
+	if len(event.ToolInput) > 128<<10 || len(event.ToolResponse) > 128<<10 ||
+		len(event.ToolInput) > 0 && !json.Valid(event.ToolInput) ||
+		len(event.ToolResponse) > 0 && !json.Valid(event.ToolResponse) {
+		return verifiedToolEvent{}, errors.New("agent_guard_tool_payload_invalid")
+	}
+	if event.TurnID != "" && !validOpaqueID(event.TurnID, 255) {
+		return verifiedToolEvent{}, errors.New("agent_guard_tool_turn_invalid")
 	}
 	if !validIssuedTime(a.now(), event.OccurredAt, event.IssuedAt) {
 		return verifiedToolEvent{}, errors.New("agent_guard_tool_event_time_invalid")
@@ -477,6 +507,25 @@ func SignTrustedSessionEvent(event *TrustedSessionEvent, privateKey ed25519.Priv
 	return nil
 }
 
+// SignTrustedToolEvent is shared with local product hook helpers. Tool input
+// and output are signed together with the session/tool identity so DC can
+// evaluate the exact claimed tool invocation without trusting an unsigned UI
+// field.
+func SignTrustedToolEvent(event *TrustedToolEvent, privateKey ed25519.PrivateKey) error {
+	if event == nil || len(privateKey) != ed25519.PrivateKeySize {
+		return errors.New("agent_guard_tool_signing_key_invalid")
+	}
+	signed := *event
+	signed.Proof = ""
+	signed.Remote = nil
+	data, err := json.Marshal(signed)
+	if err != nil {
+		return err
+	}
+	event.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, data))
+	return nil
+}
+
 func (a *TrustedToolAdapter) verifyRemote(evidence RemoteSensorEvidence) (RemoteSensorEvidence, error) {
 	source, ok := a.sources[evidence.SourceID]
 	if !ok || source.SourceType != ToolSourceRemoteSensor || source.SourceVersionMismatch(evidence.SourceVersion) {
@@ -510,6 +559,13 @@ func trustedOwnedRegularFile(info os.FileInfo, maxSize int64) bool {
 func (a *TrustedToolAdapter) Bind(identity ProcessIdentity, link toolCorrelationLink) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	state := a.states[link.ToolCallID]
+	if state == nil {
+		state = &toolCorrelationState{Link: link, CorrelationMethod: "ebpf_descendant"}
+		a.states[link.ToolCallID] = state
+	} else {
+		state.Link = link
+	}
 	a.links[identity] = link
 }
 
@@ -535,8 +591,123 @@ func (a *TrustedToolAdapter) OnFork(parent, child ProcessIdentity) {
 
 func (a *TrustedToolAdapter) Complete(identity ProcessIdentity) {
 	a.mu.Lock()
+	link, ok := a.links[identity]
 	delete(a.links, identity)
+	if ok {
+		a.removeStateIfUnlinkedLocked(link.ToolCallID)
+	}
 	a.mu.Unlock()
+}
+
+// RecordEvidence stores only immutable event identifiers plus the best process
+// snapshot observed while a tool call was active. The Hook has the Codex
+// session/tool identity but no worker PID, so this is the eBPF correlation
+// boundary used to resolve the actual executor.
+func (a *TrustedToolAdapter) RecordEvidence(identity ProcessIdentity, eventID, category, operation string, process ProcessSnapshot) {
+	if a == nil || eventID == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	link, ok := a.links[identity]
+	if !ok || a.now().After(link.ExpiresAt) {
+		return
+	}
+	state := a.states[link.ToolCallID]
+	if state == nil {
+		return
+	}
+	if len(state.ResourceEventIDs) < 64 && !containsEventID(state.ResourceEventIDs, eventID) {
+		state.ResourceEventIDs = append(state.ResourceEventIDs, eventID)
+	}
+	if category != string(CategoryProcess) || operation != "exec" {
+		return
+	}
+	score := processCommandMatchScore(state.Link.CommandText, process)
+	if !state.Representative.Identity.Valid() || score > state.RepresentativeScore {
+		state.Representative = process
+		state.RepresentativeScore = score
+		state.ProcessEventID = eventID
+		if score >= 2 {
+			state.CorrelationMethod = "ebpf_command_match"
+		} else {
+			state.CorrelationMethod = "ebpf_descendant"
+		}
+	}
+}
+
+func containsEventID(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *TrustedToolAdapter) Evidence(toolCallID string) (toolCorrelationEvidence, bool) {
+	if a == nil {
+		return toolCorrelationEvidence{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state, ok := a.states[toolCallID]
+	if !ok || a.now().After(state.Link.ExpiresAt) {
+		return toolCorrelationEvidence{}, false
+	}
+	return toolCorrelationEvidence{
+		Link: state.Link, ProcessEventID: state.ProcessEventID,
+		ResourceEventIDs: append([]string(nil), state.ResourceEventIDs...),
+		Representative:   state.Representative, Method: state.CorrelationMethod,
+	}, true
+}
+
+func (a *TrustedToolAdapter) CompleteToolCall(toolCallID string) {
+	if a == nil || toolCallID == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for identity, link := range a.links {
+		if link.ToolCallID == toolCallID {
+			delete(a.links, identity)
+		}
+	}
+	delete(a.states, toolCallID)
+}
+
+func (a *TrustedToolAdapter) removeStateIfUnlinkedLocked(toolCallID string) {
+	for _, link := range a.links {
+		if link.ToolCallID == toolCallID {
+			return
+		}
+	}
+	delete(a.states, toolCallID)
+}
+
+func processCommandMatchScore(expected string, process ProcessSnapshot) int {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	observed := strings.ToLower(strings.TrimSpace(strings.Join(process.Argv, " ")))
+	if expected != "" && observed != "" && (strings.Contains(observed, expected) || strings.Contains(expected, observed)) {
+		return 3
+	}
+	expectedExe := firstCommandToken(expected)
+	observedExe := ""
+	if len(process.Argv) > 0 {
+		observedExe = filepath.Base(process.Argv[0])
+	}
+	if expectedExe != "" && strings.EqualFold(filepath.Base(expectedExe), observedExe) {
+		return 2
+	}
+	return 1
+}
+
+func firstCommandToken(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func validCorrelationToken(value string) bool {
@@ -545,6 +716,23 @@ func validCorrelationToken(value string) bool {
 	}
 	for _, char := range value {
 		if char <= ' ' || char > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+func validToolCallID(value string) bool {
+	return validOpaqueID(value, 255)
+}
+
+func validOpaqueID(value string, limit int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > limit {
+		return false
+	}
+	for _, char := range value {
+		if char <= 0x20 || char == 0x7f {
 			return false
 		}
 	}

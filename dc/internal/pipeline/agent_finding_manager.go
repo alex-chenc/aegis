@@ -75,9 +75,29 @@ func (e *AgentRuleEngine) ProcessBehavior(
 	if event == nil || !options.RulesEnabled {
 		return result, nil
 	}
-	// Trusted tool semantics never evaluate rules or reach the action
-	// coordinator. A late tool event may only materialize/enrich a finding when
-	// an independently sufficient OS-event correlation already exists.
+	classified := ClassifyAgentBehavior(event, options.Evaluation)
+	hits := EvaluateBuiltinRules(classified, options.Evaluation)
+	result.HitCount = len(hits)
+	if options.FindingsEnabled && e != nil && e.store != nil {
+		for _, hit := range hits {
+			finding := BuildSingleEventFinding(classified, hit)
+			write, err := e.store.UpsertAgentFinding(ctx, finding, options.AlertsEnabled)
+			if err != nil {
+				return result, err
+			}
+			result.FindingUpdates = appendFindingUpdate(result.FindingUpdates, write, finding.Severity)
+			// A Hook claim alone is not enough evidence for enforcement. The
+			// tool finding is visible in security analysis, while actions still
+			// require the independently observed OS event path.
+			if event.Category != "tool" {
+				if err := e.considerAction(ctx, finding, options.ActionFlags, &result); err != nil {
+					return result, err
+				}
+			}
+		}
+	}
+	// Tool events are rule-evaluated from their signed input/response, then
+	// optionally enriched with an independently observed OS correlation.
 	if event.Category == "tool" {
 		if !options.FindingsEnabled || e == nil || e.store == nil {
 			return result, nil
@@ -111,22 +131,8 @@ func (e *AgentRuleEngine) ProcessBehavior(
 		result.FindingUpdates = appendFindingUpdate(result.FindingUpdates, write, finding.Severity)
 		return result, nil
 	}
-	classified := ClassifyAgentBehavior(event, options.Evaluation)
-	hits := EvaluateBuiltinRules(classified, options.Evaluation)
-	result.HitCount = len(hits)
 	if !options.FindingsEnabled || e == nil || e.store == nil {
 		return result, nil
-	}
-	for _, hit := range hits {
-		finding := BuildSingleEventFinding(classified, hit)
-		write, err := e.store.UpsertAgentFinding(ctx, finding, options.AlertsEnabled)
-		if err != nil {
-			return result, err
-		}
-		result.FindingUpdates = appendFindingUpdate(result.FindingUpdates, write, finding.Severity)
-		if err := e.considerAction(ctx, finding, options.ActionFlags, &result); err != nil {
-			return result, err
-		}
 	}
 	events, err := e.store.ListBehaviorWindow(ctx, classified, agentCorrelationWindow)
 	if err != nil {

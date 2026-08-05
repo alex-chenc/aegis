@@ -184,7 +184,7 @@ func discoverConfigEvidence(uid uint32) []string {
 func discoverConfigEvidenceInHome(homeDir string) []string {
 	var found []string
 	for _, marker := range []string{
-		".codex", ".openclaw", ".hermes", ".claude", ".config/opencode", ".gemini",
+		".codex", ".openclaw", ".hermes", ".claude", ".zcode", ".config/opencode", ".gemini",
 	} {
 		path := filepath.Join(homeDir, marker)
 		if info, err := os.Stat(path); err == nil && info.IsDir() {

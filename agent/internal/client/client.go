@@ -406,12 +406,16 @@ func (c *Client) SyncConfig(ctx context.Context, req *pb.ConfigSyncRequest) (*pb
 		zap.Int("config_count", len(req.Configs)))
 
 	applied := make(map[string]bool)
+	success := true
+	message := "config sync completed"
 	for _, cfg := range req.Configs {
 		if err := c.configManager.ApplyConfigSync(cfg); err != nil {
 			logger.Error("Failed to apply config",
 				zap.String("config_type", cfg.ConfigType),
 				zap.Error(err))
 			applied[cfg.ConfigType] = false
+			success = false
+			message = "one or more configurations were rejected"
 		} else {
 			logger.Info("Config applied",
 				zap.String("config_type", cfg.ConfigType))
@@ -420,8 +424,8 @@ func (c *Client) SyncConfig(ctx context.Context, req *pb.ConfigSyncRequest) (*pb
 	}
 
 	return &pb.ConfigSyncResponse{
-		Success: true,
-		Message: "config sync completed",
+		Success: success,
+		Message: message,
 		Applied: applied,
 	}, nil
 }

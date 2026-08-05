@@ -1,8 +1,10 @@
 # Aegis V6.2 Agent Guard 前端设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：Agent Guard 运行时设置、真实会话分页、工具命中安全分析和只读内置规则目录已按当前实现更新；完整 P5 会话正文 UI 仍待实施
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。本文后文的旧策略编辑/发布流程仅作为历史 Bundle 兼容设计，不是当前页面入口。
 
 ## 1. 设计目标
 
@@ -10,7 +12,7 @@
 
 1. 每台主机有哪些 AI Agent、每种 Agent 有几个运行实例，实际执行进程在哪里。
 2. 一个 Agent session 依次执行了哪些命令、操作了哪些文件、连接了哪些网络目标、改变了哪些权限或隔离资源。
-3. 哪些离散操作被规则关联成攻击链，规则引用了哪些原始证据。
+3. 哪些可信工具调用命中了规则，规则引用了哪个工具事件及其可关联 PID/PPID。
 4. Aegis 智能分析器给出了什么攻击性结论、反证和不确定性，该结论是否经过规则佐证。
 5. Agent 是否真的处于 OS 隔离中，Aegis 能监控还是能阻断。
 6. 出现高危行为后，哪个执行单元被暂停、是否成功、由谁恢复。
@@ -130,21 +132,15 @@ frontend/src/
 │       ├── IsolationDiffViewer.vue
 │       ├── GuardProcessTree.vue
 │       ├── BehaviorTimeline.vue
-│       ├── AgentPanoramaTree.vue
-│       ├── PanoramaTreeNode.vue
-│       ├── PanoramaNodeDetail.vue
+│       ├── AgentPanoramaExplorer.vue
+│       ├── AgentSecurityProcessTree.vue
+│       ├── AgentSecurityAnalysis.vue
 │       ├── BuiltinRuleCard.vue
-│       ├── BuiltinRuleOverrideDrawer.vue
+│       ├── AgentGuardRuntimeSettingsDialog.vue
 │       ├── FindingEvidenceGraph.vue
 │       ├── AnalysisVerdictPanel.vue
 │       ├── EvidenceCompletenessBadge.vue
-│       ├── CollectionPolicyEditor.vue
-│       ├── AtomicRuleEditor.vue
-│       ├── CorrelationRuleEditor.vue
-│       ├── AnalysisPolicyEditor.vue
-│       ├── EscapeRuleEditor.vue
-│       ├── PolicyScopeEditor.vue
-│       ├── PolicyDeliveryTable.vue
+│       ├── BuiltinPolicyCatalog.vue
 │       ├── GuardActionDialog.vue
 │       └── GuardActionStatus.vue
 └── i18n/locales/
@@ -213,18 +209,26 @@ frontend/src/
 
 - 标题：`智能体详情 · <Agent>`。
 - 头部：主机/IP、类型、实例数、防护状态。
-- 实例 selector：全部实例和每个 controller PID。
+- 会话 ID selector：服务端分页展示 Native Hook 真实会话；运行实例作为辅助筛选，
+  不用 controller PID 伪造会话。
 - 仅两个 tabs：`行为全景`、`安全分析`。
 
-`行为全景` 使用左树右证据；`安全分析` 展示五个内置规则、Finding、
-智能研判、证据完整性和动作历史。抽屉关闭后保留外层分页、筛选和滚动位置。
+`行为全景` 展示当前会话的行为事实和实际 PID/PPID/cmdline；`安全分析` 只展示当前
+会话命中的规则名称、工具名称、工具输入/结果、匹配命令行和可关联 PID/PPID，
+不展示全量进程树，也不把全量 Finding 混入当前会话。安全分析页签标题不显示命中数量。
+抽屉关闭后保留外层分页、筛选和滚动位置。
 
 本节之后的“策略管理、运行实例、实例详情、行为流水与安全结论”均为全局
 配置入口或详情抽屉内部模块，不是外层页面区块和侧边栏菜单。
 
-## 7. 子页一内部视图：策略管理
+## 7. 子页一内部视图：策略兼容数据与内置规则目录
 
-### 7.1 列表
+当前页面不提供策略新建、编辑、发布、停用或下发状态操作。`agent_guard_policies`
+和 Bundle 仍由后端保留，用于通用 OS 原子规则、隔离逃逸、旧版本兼容和审计；当前
+Native Hook/工具适配器通过页面设置按钮使用 `agent_guard_runtime_settings.v1` 即时
+下发。下面的策略管理小节仅描述历史兼容接口，不应实现为当前 UI。
+
+### 7.1 历史策略 API 兼容说明（当前 UI 不实现）
 
 字段：
 
@@ -251,7 +255,8 @@ frontend/src/
 - 发布。
 - 停用。
 
-published 策略不能原地编辑，点击编辑应创建新 draft version。
+历史 published 策略不能原地编辑，接口层点击编辑应创建新 draft version；当前页面
+不提供该操作，避免把内置规则目录误解为用户策略发布器。
 
 ### 7.2 策略编辑
 
@@ -280,8 +285,9 @@ published 策略不能原地编辑，点击编辑应创建新 draft version。
 
 两个编辑区：
 
-1. 原子规则：单次行为或资源规则，可以编译到 Agent 本地。
-2. 关联规则：由 DC 执行的序列/聚合规则，例如下载 → 写入 → chmod → execute。
+1. 原子规则：通用单次行为或资源规则，可以编译到 Agent 本地。
+2. 关联规则：通用 OS 事件的序列/聚合规则；Agent Guard 工具命令规则不在此处
+   编辑，由 api-server 对可信工具事件匹配。
 
 规则字段：
 
@@ -362,7 +368,8 @@ PolicyDeliveryTable：
 
 ### 7.5 内置规则页
 
-在 `/detection/agent-guard/events?view=rules` 或规则配置抽屉中固定展示五个不可删除的规则：
+在 `/detection/agent-guard/events?view=rules` 或规则目录抽屉中固定展示五个不可删除、
+不可编辑的规则，按“行为监控”和“工具命令”两个内置策略视图分组：
 
 | Rule ID | 页面名称 | 关键配置 |
 | --- | --- | --- |
@@ -374,15 +381,25 @@ PolicyDeliveryTable：
 
 每个 BuiltinRuleCard 显示 rule ID/version、enabled、执行位置、当前 severity/action、今日 hit/finding、例外数和 unsupported 主机数。
 
-点击“配置”打开 BuiltinRuleOverrideDrawer，只编辑 policy override；不提供删除和修改内置定义按钮。发布前必须展示：
-
-- 默认值与 override diff。
-- 目标主机支持程度。
-- 最近 7 天 shadow hit 和预计告警量。
-- 会降级为 monitor/would_deny 的主机。
-- action 为 freeze/deny 时的风险确认。
+每个规则详情展示中文名称、英文名称、描述、类别、版本、严重级别、默认/推荐动作、
+执行位置、规则归属、所需 evidence、allow conditions、MITRE、默认参数、参数 Schema
+和 digest。页面不提供“配置”、policy override、例外、灰度、发布或删除按钮。
+`AGB-BUILTIN-004` 明确标记为“api-server 工具事件命令匹配”；eBPF 关联字段仅是补充证据。
 
 规则页面底部提供“在行为全景中查看”，跳转时携带 `rule_key`、时间和当前 Agent/主机范围。
+
+### 7.6 Agent Guard 设置按钮
+
+“智能体事件感知与防护”页提供“设置”按钮，打开运行时设置对话框：
+
+- 工具调用适配器：`AgentGuardToolAdapterEnabled`，中文名“智能体工具调用采集”。
+- 智能体会话 Hook：`AgentGuardSessionHookEnabled`，中文名“智能体会话生命周期采集”。
+- Native Hook 注入开关：Codex、Claude Code、OpenClaw、Hermes、Zcode。
+
+开关为真正的启用/关闭样式。打开后 api-server 立即保存并下发，在线 Agent 应用后
+开始上报工具和会话事件；关闭后 Agent 清理对应 Hook 配置并停止上报。页面不展示
+“待下发、等待 Agent 重连、失败、未启用”等旧状态作为功能状态；若主机离线或应用失败，
+只在保存结果/错误提示中说明原因，开关本身表达期望状态。
 
 ## 8. 子页一内部视图：运行实例
 
@@ -465,14 +482,15 @@ remote unit：
 session 列表显示：
 
 - session ID 摘要。
-- source：official/hook/wrapper/execution unit/activity window。
-- confidence：confirmed/probable/inferred。
+- source：Native Hook/verified adapter；旧的 execution unit/activity window 仅作为历史兼容来源。
+- confidence：真实 Hook 会话使用 confirmed；无可信 ID 的行为进入未归属索引，不生成可选择的官方 session。
 - 开始/结束时间。
 - 命令、文件、网络、权限、隔离行为计数。
 - finding 数和最高风险。
 - 证据完整性：drop、truncated、tool semantics、remote visibility。
 
-推导 session 必须显示“由 Aegis 活动窗口推导”，不能伪装成第三方 Agent 官方会话。
+会话 ID 服务端分页，当前安全分析只能绑定一个选中的真实会话；不能把全量 Finding
+或其他会话的行为填入当前会话。
 
 ### 9.4 隔离基线
 
@@ -525,7 +543,7 @@ unit stopped
 ### 9.7 Agent 行为全景树
 
 全景树只在选中 Agent 的 `AgentDetailDrawer > 行为全景` tab 中加载。
-抽屉顶部先选择 runtime instance，树固定主干：
+抽屉顶部先分页选择真实 Session ID，再按 runtime instance 展示，树固定主干：
 
 ```text
 Selected Agent asset/type
@@ -555,15 +573,25 @@ Selected Agent asset/type
 页面布局：
 
 ```text
-抽屉顶部：Agent 基本信息和 runtime instance selector
-Tab 顶部：Session/时间/五规则/风险/行为域筛选
+抽屉顶部：Agent 基本信息和 Session ID 分页 selector
+Tab 顶部：运行实例/时间/五规则/风险/行为域筛选
 左侧：可虚拟滚动、懒加载的行为全景树
 右侧：选中节点完整证据
+
+安全分析 tab 使用命中规则列表和工具调用列表，不使用全量行为全景树：
+
+```text
+命中规则名称
+  -> 工具名称 + tool_call_id
+  -> 工具输入/结果
+  -> 匹配命令行
+  -> 关联 PID/PPID/cmdline 或 unattributed
+```
 ```
 
 交互：
 
-- 选择具体 PID 时默认展开至首层 process；选择“全部实例”时各 instance
+- 选择具体 Session 时默认展开至首层 process；选择“全部实例”时各 instance
   为并列分支，不得合并 session/unit/process。
 - 点击节点按 cursor 加载子进程和操作。
 - 同一进程子项按 `occurred_at + agent_sequence` 排序。
@@ -572,6 +600,7 @@ Tab 顶部：Session/时间/五规则/风险/行为域筛选
 - 点击 rule hit 高亮对应行为节点；点击 finding 展示引用节点集合。
 - PID reuse 以 `PID + start_ticks` 形成不同节点。
 - 树根和节点展示 drop、truncated、remote/tool unobservable。
+- Session selector、运行实例和行为事件都使用服务端分页；安全分析不显示命中数量后缀。
 
 详细节点/API 契约见
 [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md)。
@@ -641,6 +670,24 @@ Finding 详情：
 7. **策略和动作**：policy version、自动/人工动作及真实状态。
 8. **分析历史**：model/provider/prompt version、input digest、状态和耗时。
 9. **处置记录**：调查中、已控制、已解决或误报，以及操作者。
+
+Agent Guard 工具命中详情必须额外展示：
+
+```text
+命中的规则名称（中文，支持英文名称/规则 ID 辅助查看）
+工具名称
+tool_call_id
+工具输入和结果摘要
+匹配出的命令行
+PID / PPID / cmdline（eBPF 关联成功时）
+session ID
+规则归属：api-server
+直接证据：Hook 工具 raw event ID
+```
+
+安全分析查询必须携带选中 `session_id`；没有命中工具事件时只显示该会话为空，
+不能回退到全量主机或全量 Agent findings。命令行按 Hook 工具输入的规范化/脱敏
+结果显示，使用参数边界和空格分隔，不把 JSON 原始转义串直接当作用户可读命令行。
 
 AI-only finding 显示醒目标识：
 
@@ -922,14 +969,38 @@ export interface BuiltinAgentBehaviorRuleSummary {
     | 'AGB-BUILTIN-005'
   rule_version: number
   name: string
-  enabled: boolean
+  name_en?: string
+  description?: string
+  categories: string[]
+  default_enabled: boolean
   engine: 'agent_atomic' | 'dc_single_event' | 'dc_correlation' | 'agent_and_dc'
+  execution_location?: 'agent_local' | 'dc_runtime' | 'api_server_tool_event' | string
+  rule_owner?: 'agent' | 'dc' | 'api-server' | string
   severity: 'info' | 'low' | 'medium' | 'high' | 'critical'
   action: AgentGuardDecision
-  hits_24h: number
-  findings_24h: number
-  exception_count: number
-  unsupported_host_count: number
+  recommended_action?: AgentGuardDecision
+  required_evidence?: unknown[]
+  allow_conditions?: unknown[]
+  mitre?: unknown[]
+  default_parameters?: Record<string, unknown>
+  parameters_schema?: Record<string, unknown>
+  digest?: string
+}
+
+export interface AgentGuardRuntimeSettings {
+  schema: 'aegis.agent_guard.runtime_settings.v1'
+  version: number
+  host_id: string
+  tool_adapter_enabled: boolean
+  session_hook_enabled: boolean
+  injections: Array<{
+    agent_type: 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'zcode' | string
+    enabled: boolean
+    status?: string
+    error_code?: string
+  }>
+  dispatch_status?: string
+  dispatch_error_code?: string
 }
 
 export type PanoramaNodeType =
@@ -1091,7 +1162,7 @@ WebSocket 更新策略：
 | --- | --- |
 | 无 AI Agent 资产 | 引导前往资产采集 |
 | 有资产无运行实例 | “已识别安装资产，当前未观察到运行实例” |
-| Agent Guard 未下发 | 引导查看策略和主机 Agent 版本 |
+| Agent Guard 运行时设置未应用 | 保留开关期望值，在保存结果中显示主机离线/应用错误；不把它展示成策略“待下发” |
 | 主机不支持 BPF LSM | 展示 monitor-only 原因，不建议误开 deny |
 | remote unobservable | 引导远端部署/关联 Aegis Agent |
 | unsupported profile | 展示识别证据，并引导新增/升级 Profile |
@@ -1124,11 +1195,14 @@ WebSocket 更新策略：
 - CoverageBadge 所有状态及 reason tooltip。
 - Policy editor 采集分类、原子/关联规则、路径/glob、AI-only ceiling 和 deny_and_freeze 校验。
 - 五个 BuiltinRuleCard 的稳定 ID/version、override diff、不可删除和 unsupported 状态。
+- 只读内置规则目录的中英文名称、详情字段、两个内置策略视图和规则归属。
+- Runtime settings 设置对话框的两个开关、五类 Native Hook 注入、开启/关闭即时下发语义。
 - Delivery received/applied 分离。
 - Instance detail controller 与 execution unit 分离。
-- official/inferred session 标识。
+- Native Hook 真实 session ID 分页、无可信 ID 的未归属状态。
 - BehaviorTimeline 多行为域排序、聚合和 completeness。
 - AgentPanoramaTree instance/session/unit/process 层级、懒加载、虚拟滚动和每节点分页。
+- 安全分析只展示当前 session 命中的规则、工具、命令行和关联 PID/PPID，不展示全量进程树。
 - AgentSummaryTable 一行聚合 host + Agent asset，外层不渲染证据字段。
 - AgentDetailDrawer 打开/关闭、query 恢复、实例 selector 和两个固定 tabs。
 - 同类型多个 runtime instance 在抽屉内分离，不合并 session/unit/process。
@@ -1165,11 +1239,11 @@ WebSocket 更新策略：
 2. 点击 Agent 后才打开详情抽屉；事件抽屉只有行为全景/安全分析，逃逸抽屉
    只有沙箱全景/逃逸分析。
 3. 用户能在抽屉中区分控制进程和实际 sandbox/container worker。
-4. 用户能在抽屉中切换同类型多个运行实例，再按 session 通过树状全景查看
+4. 用户能在抽屉中分页选择真实 session ID，再按运行实例通过树状全景查看
    命令、文件、网络、权限和隔离行为。
 5. 全景树 process 节点展示 PID/PPID/cmdline，文件节点展示文件名称与路径，外链节点展示连接 IP/domain/port。
-6. 五个内置规则可以查看、启停和通过 policy override 配置，但不能删除或原地修改定义。
-7. 每个 finding 能展示规则、智能研判、反证、不确定性和引用的原始行为。
+6. 五个内置规则可以查看完整中英文详情，但不能删除、编辑、启停或通过当前页面发布 policy override。
+7. 每个 finding 能展示规则、智能研判、反证、不确定性和引用的原始行为；工具命中额外展示工具、命令行和关联 PID/PPID。
 8. AI-only malicious 明确显示未满足自动阻断条件。
 9. 证据丢失、截断、工具语义缺失和远程不可观测不会被展示成“无风险”。
 10. freeze API accepted 后 UI 保持 pending，直到 Agent 终态。
@@ -1179,6 +1253,11 @@ WebSocket 更新策略：
     页面不提供主机级“全部冻结”入口。
 
 ## 20. P5 智能体会话检测
+
+当前已实现的是 Agent Native Hook 的真实会话开始/结束边界和工具调用事件展示，
+支持 Codex、Claude Code、OpenClaw、Hermes、Zcode；这不等于已经采集完整 user/assistant
+会话正文。以下完整会话、正文 reveal/export、AI 语义标记仍属于 P5 后续实现，不得
+覆盖当前“工具命中按真实 session 过滤”的前端契约。
 
 P5 新增：
 

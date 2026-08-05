@@ -73,6 +73,13 @@ func TestAgentGuardSessionAndProcessLabelsExposeRealSessionIDPIDAndRedactedCmdli
 	}
 }
 
+func TestAgentGuardCommandLineNormalizesProcfsPaddingAndControlBytes(t *testing.T) {
+	raw := []byte(`["/bin/sh\u0000\u0000","-c","printf\u0003 ok"]`)
+	if got := agentGuardCommandLine(raw); got != "/bin/sh -c printf ok" {
+		t.Fatalf("normalized cmdline=%q", got)
+	}
+}
+
 func intPtr(value int) *int { return &value }
 
 func TestAgentGuardPanoramaRebuildsPIDTreeFromFreshProcessFacts(t *testing.T) {
@@ -128,11 +135,87 @@ func TestAgentGuardPanoramaRebuildsPIDTreeFromFreshProcessFacts(t *testing.T) {
 	}
 }
 
+func TestAgentGuardPanoramaReturnsToolCallsForSelectedSession(t *testing.T) {
+	hostID, assetID, instanceID, sessionID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	query := &fakeAgentGuardQuery{
+		instances: []model.AgentRuntimeInstance{{ID: instanceID, HostID: hostID, AssetID: &assetID}},
+		sessions: []model.AgentBehaviorSession{{
+			ID: sessionID, HostID: hostID, InstanceID: instanceID, ExecutionUnitID: &unitID,
+		}},
+		units: []model.AgentExecutionUnit{{ID: unitID, HostID: hostID, InstanceID: instanceID}},
+		behaviors: []model.AgentBehaviorEvent{
+			toolBehavior("tool-1", hostID, instanceID, sessionID, unitID, "Bash", "call-1", "echo hello", time.Now().UTC()),
+		},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, testAgentGuardSigner(t))
+	response := serveAgentGuardRequest(engine, http.MethodGet,
+		"/api/v1/agent-guard/panorama?asset_id="+assetID.String()+"&session_id="+sessionID.String(), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"node_type":"tool_call"`) ||
+		strings.Contains(response.Body.String(), `"node_type":"process"`) ||
+		!strings.Contains(response.Body.String(), `"command":"echo hello"`) {
+		t.Fatalf("session tool call response=%s", response.Body.String())
+	}
+}
+
+func TestAgentGuardPanoramaPaginatesSelectedSessionToolCalls(t *testing.T) {
+	hostID, assetID, instanceID, sessionID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	base := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	query := &fakeAgentGuardQuery{
+		instances: []model.AgentRuntimeInstance{{ID: instanceID, HostID: hostID, AssetID: &assetID}},
+		sessions: []model.AgentBehaviorSession{{
+			ID: sessionID, HostID: hostID, InstanceID: instanceID, ExecutionUnitID: &unitID,
+		}},
+		units: []model.AgentExecutionUnit{{ID: unitID, HostID: hostID, InstanceID: instanceID}},
+		behaviors: []model.AgentBehaviorEvent{
+			toolBehavior("tool-1", hostID, instanceID, sessionID, unitID, "Bash", "call-1", "echo one", base),
+			toolBehavior("tool-2", hostID, instanceID, sessionID, unitID, "Bash", "call-2", "echo two", base.Add(time.Second)),
+		},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, testAgentGuardSigner(t))
+	response := serveAgentGuardRequest(engine, http.MethodGet,
+		"/api/v1/agent-guard/panorama?asset_id="+assetID.String()+"&session_id="+sessionID.String()+"&page=2&page_size=1", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Items []struct {
+				PID int `json:"pid"`
+			} `json:"items"`
+			Total int64 `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.Total != 2 || len(body.Data.Items) != 1 || !strings.Contains(response.Body.String(), `"command":"echo two"`) {
+		t.Fatalf("unexpected paginated tool calls: %s", response.Body.String())
+	}
+}
+
 func processBehavior(rawID string, hostID, instanceID, sessionID, unitID uuid.UUID, pid, ppid int, ticks, operation, name string, occurredAt time.Time) model.AgentBehaviorEvent {
 	return model.AgentBehaviorEvent{
 		RawEventID: rawID, HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
 		ExecutionUnitID: &unitID, Category: "process", Operation: operation,
 		PID: &pid, PPID: &ppid, ProcessStartTicks: ticks, ProcessName: name,
 		Severity: "info", OccurredAt: occurredAt,
+	}
+}
+
+func toolBehavior(rawID string, hostID, instanceID, sessionID, unitID uuid.UUID, name, callID, command string, occurredAt time.Time) model.AgentBehaviorEvent {
+	data, _ := json.Marshal(map[string]any{
+		"type": "tool", "identity": name, "attributes": map[string]any{
+			"tool_call_id": callID, "command": command, "correlation_status": "matched",
+		},
+	})
+	pid, ppid := 4100, 1
+	return model.AgentBehaviorEvent{
+		RawEventID: rawID, HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
+		ExecutionUnitID: &unitID, Category: "tool", Operation: "tool_call_completed", Outcome: "success",
+		PID: &pid, PPID: &ppid, ProcessStartTicks: "100", ProcessName: "codex", ResourceIdentity: name,
+		ResourceType: "tool", Resource: data, CommandArgv: []byte(`[]`), Severity: "info", OccurredAt: occurredAt,
 	}
 }

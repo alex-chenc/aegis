@@ -1,0 +1,7 @@
+{
+  "id": "aegis-agent-guard",
+  "name": "Aegis Agent Guard",
+  "description": "Reports OpenClaw session and typed tool lifecycle events to the local Aegis Agent Guard hook socket.",
+  "version": "1.0.0",
+  "activation": "startup"
+}

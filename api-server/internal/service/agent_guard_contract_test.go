@@ -49,7 +49,7 @@ func TestExportAgentGuardBundleContract(t *testing.T) {
 	if bundle.Schema != AgentGuardBundleSchema ||
 		bundle.HostID != hostID.String() ||
 		bundle.BundleVersion != 6201 ||
-		len(bundle.Profiles) != 6 ||
+		len(bundle.Profiles) != 7 ||
 		len(bundle.BuiltinRules) != 5 ||
 		len(bundle.Policies) != 1 ||
 		bundle.Defaults.Mode != "monitor_only" {

@@ -206,7 +206,10 @@ func evaluateFileCreate(event *model.AgentBehaviorEvent, attributes map[string]a
 }
 
 func evaluateSensitiveCommand(event *model.AgentBehaviorEvent) *AgentRuleHit {
-	if event.Category != "process" || event.Operation != "exec" || event.ResourceClassification == "" {
+	if event.ResourceClassification == "" ||
+		event.Category == "process" && event.Operation != "exec" ||
+		event.Category == "tool" && event.Operation != "tool_call_completed" && event.Operation != "tool_call_failed" ||
+		event.Category != "process" && event.Category != "tool" {
 		return nil
 	}
 	if !containsStringValue([]string{

@@ -385,10 +385,24 @@ func TestToolHookIngressDefaultOffSignedEndToEndAndDisableCleanup(t *testing.T) 
 	if info, err := os.Lstat(socketPath); err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
 		t.Fatalf("trusted hook socket missing or insecure: info=%v err=%v", info, err)
 	}
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller process attribution")
+	}
+	session, unit, changed, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAgentOfficial, "tool-ingress-session", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("start trusted tool session: %v", err)
+	}
+	manager.queueTrustedSessionStarted(session, unit, changed)
 
 	unsigned := fixture.event(controller, ToolEventStarted)
+	unsigned.ExternalSessionID = "tool-ingress-session"
 	unsigned.Proof = ""
 	valid := fixture.event(controller, ToolEventStarted)
+	valid.ExternalSessionID = "tool-ingress-session"
+	signTrustedToolEvent(&valid, fixture.toolPrivate)
 	connection, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -427,11 +441,13 @@ func TestToolHookIngressDefaultOffSignedEndToEndAndDisableCleanup(t *testing.T) 
 		t.Fatalf("process name was incorrectly inferred as tool semantics: %#v", processEvent)
 	}
 	remote := fixture.event(controller, ToolEventCompleted)
+	remote.ExternalSessionID = "tool-ingress-session"
 	remote.Remote = &RemoteSensorEvidence{
 		SourceID: "remote-aegis-sensor", SourceVersion: "1.0.0", EventID: uuid.NewString(),
 		CorrelationTokenHash: hashCorrelationToken(fixture.token), RemoteHostID: uuid.NewString(),
 		RemoteExecutionUnitID: uuid.NewString(), IssuedAt: remote.IssuedAt,
 	}
+	signTrustedToolEvent(&remote, fixture.toolPrivate)
 	signRemoteEvidence(remote.Remote, fixture.remotePrivate)
 	remotePayload, _ := json.Marshal(remote)
 	remoteEvent, err := manager.ObserveTrustedToolPayload(remotePayload)
@@ -453,6 +469,7 @@ func TestToolHookIngressDefaultOffSignedEndToEndAndDisableCleanup(t *testing.T) 
 		t.Fatalf("disabled hook socket was not removed: %v", err)
 	}
 	postDisable := fixture.event(controller, ToolEventStarted)
+	postDisable.ExternalSessionID = "tool-ingress-session"
 	postDisablePayload, _ := json.Marshal(postDisable)
 	if _, err := manager.ObserveTrustedToolPayload(postDisablePayload); err == nil ||
 		!strings.Contains(err.Error(), "tool_semantics_unobservable") {
@@ -494,7 +511,7 @@ func TestToolHookIngressDefaultOffSignedEndToEndAndDisableCleanup(t *testing.T) 
 			correlatedProcess = &copy
 		}
 	}
-	if toolEvent == nil || toolEvent.Category != CategoryTool || toolEvent.Operation != ToolEventStarted ||
+	if toolEvent == nil || toolEvent.EventType != "agent_behavior" || toolEvent.Category != CategoryTool || toolEvent.Operation != ToolEventStarted ||
 		toolEvent.Collection.Source != ToolSourceAgentOfficial || toolEvent.CorrelationID != hashCorrelationToken(fixture.token) {
 		t.Fatalf("signed ingress did not reach RuntimeEvent sink: %#v", toolEvent)
 	}

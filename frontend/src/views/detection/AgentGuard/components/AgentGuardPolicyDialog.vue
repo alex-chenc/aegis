@@ -2,128 +2,178 @@
   <el-dialog
     :model-value="visible"
     :title="t('agentGuard.policy.title')"
-    width="920px"
+    width="1080px"
     destroy-on-close
     @close="emit('close')"
   >
     <el-alert
       type="info"
-      :title="t('agentGuard.policy.monitorOnlyNotice')"
+      :title="t('agentGuard.policy.builtinNotice')"
       :closable="false"
       show-icon
     />
 
-    <div class="policy-toolbar">
-      <el-button type="primary" @click="showCreate = !showCreate">
-        {{ t('agentGuard.policy.create') }}
-      </el-button>
-      <el-button :loading="store.loading.policies" @click="store.fetchPolicies()">
-        {{ t('common.actions.refresh') }}
-      </el-button>
-    </div>
-
-    <el-form v-if="showCreate" label-position="top" class="policy-form" @submit.prevent="createDraft">
-      <div class="policy-form-grid">
-        <el-form-item :label="t('agentGuard.policy.key')" required>
-          <el-input v-model.trim="form.policyKey" maxlength="128" />
-        </el-form-item>
-        <el-form-item :label="t('agentGuard.policy.name')" required>
-          <el-input v-model.trim="form.name" maxlength="255" />
-        </el-form-item>
-        <el-form-item :label="t('agentGuard.policy.hostIds')" required>
-          <el-input
-            v-model="form.hostIDs"
-            type="textarea"
-            :rows="2"
-            :placeholder="t('agentGuard.policy.hostIdsHint')"
-          />
-        </el-form-item>
-        <el-form-item :label="t('agentGuard.policy.agentTypes')" required>
-          <el-select v-model="form.agentTypes" multiple>
-            <el-option
-              v-for="agentType in AGENT_GUARD_AGENT_TYPES"
-              :key="agentType"
-              :value="agentType"
-              :label="t(`agentGuard.agentTypes.${agentType}`)"
-            />
-          </el-select>
-        </el-form-item>
+    <section v-if="mode === 'escape'" class="catalog-section">
+      <div class="section-heading"><div><h3>{{ t('agentGuard.policy.escapePolicies') }}</h3><p>{{ t('agentGuard.policy.escapePoliciesHint') }}</p></div><el-tag type="danger">Hook → PID → /proc/cgroup</el-tag></div>
+      <div class="builtin-rule-list">
+        <article v-for="rule in sortedEscapeRules" :key="`${rule.rule_key}:${rule.rule_version}`" class="builtin-rule-card">
+          <div class="rule-card-heading"><div><h4>{{ rule.name }}</h4><span class="rule-key">{{ rule.rule_key }} · v{{ rule.rule_version }}</span></div><el-tag type="danger">{{ ruleAction(rule) }}</el-tag></div>
+          <p class="rule-description">{{ rule.description }}</p>
+          <div class="rule-detail-grid"><div><span class="meta-label">{{ t('agentGuard.policy.hookPoints') }}</span><div class="detail-list"><code v-for="item in rule.hook_points || []" :key="item">{{ item }}</code></div></div><div><span class="meta-label">{{ t('agentGuard.policy.requiredEvidence') }}</span><div class="detail-list"><code v-for="item in rule.required_evidence || []" :key="item">{{ item }}</code></div></div><div><span class="meta-label">{{ t('agentGuard.policy.defaultState') }}</span><span>{{ rule.default_enabled === false ? t('agentGuard.policy.disabled') : t('agentGuard.policy.enabled') }}</span></div><div><span class="meta-label">{{ t('agentGuard.policy.digest') }}</span><code class="digest">{{ rule.digest || '-' }}</code></div></div>
+        </article>
       </div>
-      <el-form-item :label="t('agentGuard.policy.toolAdapter')">
-        <el-checkbox v-model="form.toolAdapterEnabled">
-          {{ t('agentGuard.policy.toolAdapterHint') }}
-        </el-checkbox>
-      </el-form-item>
-      <el-form-item :label="t('agentGuard.policy.description')">
-        <el-input v-model="form.description" type="textarea" :rows="2" maxlength="1000" />
-      </el-form-item>
-      <div class="policy-form-actions">
-        <el-button type="primary" native-type="submit" :loading="store.loading.policies">
-          {{ t('agentGuard.policy.createAndValidate') }}
-        </el-button>
+    </section>
+
+    <section v-if="mode === 'behavior'" class="catalog-section">
+      <div class="section-heading">
+        <div>
+          <h3>{{ t('agentGuard.policy.builtinPolicies') }}</h3>
+          <p>{{ t('agentGuard.policy.builtinPoliciesHint') }}</p>
+        </div>
+        <el-tag type="success">{{ t('agentGuard.policy.builtinReadonly') }}</el-tag>
       </div>
-    </el-form>
 
-    <el-alert
-      v-if="store.errors.policies"
-      type="error"
-      :title="store.errors.policies"
-      :closable="false"
-      show-icon
-    />
-    <el-alert
-      v-if="store.policyValidation"
-      :type="store.policyValidation.valid ? 'success' : 'error'"
-      :title="store.policyValidation.valid
-        ? t('agentGuard.policy.validationPassed')
-        : t('agentGuard.policy.validationFailed')"
-      :closable="false"
-      show-icon
-    >
-      <ul v-if="store.policyValidation.errors.length" class="validation-errors">
-        <li v-for="issue in store.policyValidation.errors" :key="`${issue.field}:${issue.code}`">
-          {{ issue.field }}: {{ issue.message }}
-        </li>
-      </ul>
-    </el-alert>
+      <div class="builtin-policy-grid">
+        <article v-for="policy in builtinPolicies" :key="policy.policyKey" class="builtin-policy-card">
+          <div class="policy-card-heading">
+            <div>
+              <h4>{{ t(policy.nameKey) }}</h4>
+              <span class="policy-key">{{ policy.policyKey }}</span>
+            </div>
+            <el-tag type="warning">{{ t(policy.modeKey) }}</el-tag>
+          </div>
+          <p class="policy-description">{{ t(policy.descriptionKey) }}</p>
+          <dl class="policy-facts">
+            <div>
+              <dt>{{ t('agentGuard.policy.scope') }}</dt>
+              <dd>{{ t('agentGuard.policy.allAgents') }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('agentGuard.policy.categories') }}</dt>
+              <dd>
+                <el-tag v-for="category in policy.categoryKeys" :key="category" size="small">
+                  {{ categoryLabel(category) }}
+                </el-tag>
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t('agentGuard.policy.ruleCount') }}</dt>
+              <dd>{{ rulesForPolicy(policy).length }}</dd>
+            </div>
+          </dl>
+          <div class="policy-rule-keys">
+            <span v-for="rule in rulesForPolicy(policy)" :key="rule.rule_key" class="rule-key-chip">
+              {{ rule.rule_key }} · {{ rule.name }}
+            </span>
+          </div>
+        </article>
+      </div>
+    </section>
 
-    <el-table
-      :data="store.policies"
-      :loading="store.loading.policies"
-      row-key="id"
-      class="policy-table"
-      @row-click="loadDeliveries"
-    >
-      <el-table-column prop="name" :label="t('agentGuard.policy.name')" min-width="180" />
-      <el-table-column prop="policy_key" :label="t('agentGuard.policy.key')" min-width="170" />
-      <el-table-column prop="version" :label="t('agentGuard.policy.version')" width="90" />
-      <el-table-column prop="status" :label="t('agentGuard.policy.status')" width="120" />
-      <el-table-column :label="t('agentGuard.policy.actions')" width="190" fixed="right">
-        <template #default="{ row }">
-          <el-button
-            v-if="row.status === 'draft'"
-            size="small"
-            type="primary"
-            :loading="store.loading.policies"
-            @click.stop="publish(row)"
-          >
-            {{ t('agentGuard.policy.publish') }}
-          </el-button>
-          <el-button size="small" @click.stop="loadDeliveries(row)">
-            {{ t('agentGuard.policy.deliveries') }}
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <section v-if="mode === 'behavior'" class="catalog-section">
+      <div class="section-heading">
+        <div>
+          <h3>{{ t('agentGuard.policy.builtinRules') }}</h3>
+          <p>{{ t('agentGuard.policy.builtinRulesHint') }}</p>
+        </div>
+        <el-tag>{{ sortedRules.length }} {{ t('agentGuard.policy.ruleUnit') }}</el-tag>
+      </div>
 
-    <section v-if="store.deliveries.length" class="delivery-section">
-      <h3>{{ t('agentGuard.policy.deliveryTitle') }}</h3>
-      <el-table :data="store.deliveries" row-key="id" size="small">
-        <el-table-column prop="host_id" :label="t('agentGuard.policy.host')" min-width="230" />
-        <el-table-column prop="bundle_version" :label="t('agentGuard.policy.bundleVersion')" width="150" />
-        <el-table-column prop="status" :label="t('agentGuard.policy.status')" width="130" />
-        <el-table-column prop="error_code" :label="t('agentGuard.policy.errorCode')" min-width="180" />
-      </el-table>
+      <el-alert
+        v-if="store.errors.analysis && sortedRules.length === 0"
+        type="error"
+        :title="store.errors.analysis"
+        :closable="false"
+        show-icon
+      />
+      <el-empty
+        v-else-if="sortedRules.length === 0"
+        :description="t('agentGuard.policy.noBuiltinRules')"
+      />
+      <div v-else class="builtin-rule-list">
+        <article v-for="rule in sortedRules" :key="`${rule.rule_key}:${rule.rule_version}`" class="builtin-rule-card">
+          <div class="rule-card-heading">
+            <div>
+              <h4>{{ rule.name }}</h4>
+              <span class="rule-key">{{ rule.rule_key }} · v{{ rule.rule_version }}</span>
+            </div>
+            <div class="rule-tags">
+              <el-tag :type="severityTagType(ruleSeverity(rule))">
+                {{ severityLabel(ruleSeverity(rule)) }}
+              </el-tag>
+              <el-tag>{{ actionLabel(ruleAction(rule)) }}</el-tag>
+            </div>
+          </div>
+
+          <p class="rule-description">{{ rule.description || t('agentGuard.policy.noDescription') }}</p>
+
+          <div class="rule-meta-grid">
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.categories') }}</span>
+              <div class="meta-values">
+                <el-tag v-for="category in rule.categories || []" :key="category" size="small">
+                  {{ categoryLabel(category) }}
+                </el-tag>
+                <span v-if="!rule.categories?.length" class="muted">-</span>
+              </div>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.execution') }}</span>
+              <span>{{ executionOwnerLabel(rule) }}</span>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.defaultState') }}</span>
+              <span>{{ rule.default_enabled === false ? t('agentGuard.policy.disabled') : t('agentGuard.policy.enabled') }}</span>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.recommendedAction') }}</span>
+              <span>{{ actionLabel(rule.recommended_action || ruleAction(rule)) }}</span>
+            </div>
+          </div>
+
+          <div class="rule-detail-grid">
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.requiredEvidence') }}</span>
+              <div class="detail-list">
+                <code v-for="item in rule.required_evidence || []" :key="item">{{ item }}</code>
+                <span v-if="!rule.required_evidence?.length" class="muted">-</span>
+              </div>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.allowConditions') }}</span>
+              <div class="detail-list">
+                <code v-for="item in rule.allow_conditions || []" :key="item">{{ item }}</code>
+                <span v-if="!rule.allow_conditions?.length" class="muted">-</span>
+              </div>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.mitre') }}</span>
+              <div class="detail-list">
+                <el-tag v-for="item in rule.mitre || []" :key="item" size="small">{{ item }}</el-tag>
+                <span v-if="!rule.mitre?.length" class="muted">-</span>
+              </div>
+            </div>
+            <div>
+              <span class="meta-label">{{ t('agentGuard.policy.digest') }}</span>
+              <code class="digest">{{ rule.digest || '-' }}</code>
+            </div>
+          </div>
+
+          <details class="rule-parameters">
+            <summary>{{ t('agentGuard.policy.parameters') }}</summary>
+            <div class="parameter-columns">
+              <div>
+                <span class="meta-label">{{ t('agentGuard.policy.defaultParameters') }}</span>
+                <pre>{{ prettyJson(rule.default_parameters) }}</pre>
+              </div>
+              <div>
+                <span class="meta-label">{{ t('agentGuard.policy.parameterSchema') }}</span>
+                <pre>{{ prettyJson(rule.parameters_schema) }}</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+      </div>
     </section>
 
     <template #footer>
@@ -133,113 +183,252 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentGuardStore } from '@/store/agentGuard'
-import type { AgentGuardPolicy, AgentGuardPolicyDraftRequest } from '@/types/agentGuard'
-import { AGENT_GUARD_AGENT_TYPES } from '../agentGuardProfiles'
-import { buildAgentGuardCollectionPolicy } from '../agentGuardPolicy'
+import type { BuiltinAgentBehaviorRuleSummary, BuiltinAgentEscapeRuleSummary } from '@/types/agentGuard'
+import {
+  BUILTIN_AGENT_GUARD_POLICIES,
+  ruleExecutionOwner,
+  rulesForBuiltinPolicy,
+  type BuiltinAgentGuardPolicyView,
+} from '../agentGuardBuiltinPolicies'
 
-const props = defineProps<{ visible: boolean }>()
+const props = withDefaults(defineProps<{ visible: boolean; mode?: 'behavior' | 'escape' }>(), { mode: 'behavior' })
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const store = useAgentGuardStore()
-const showCreate = ref(false)
-const form = reactive({
-  policyKey: '',
-  name: '',
-  description: '',
-  hostIDs: '',
-  agentTypes: ['codex', 'openclaw', 'hermes'],
-  toolAdapterEnabled: false,
-})
+
+const builtinPolicies = BUILTIN_AGENT_GUARD_POLICIES
+const sortedRules = computed(() => [...store.builtinRules].sort((left, right) => left.rule_key.localeCompare(right.rule_key)))
+const sortedEscapeRules = computed<BuiltinAgentEscapeRuleSummary[]>(() => [...store.escapeRules].sort((left, right) => left.rule_key.localeCompare(right.rule_key)))
+
+function rulesForPolicy(policy: BuiltinAgentGuardPolicyView): BuiltinAgentBehaviorRuleSummary[] {
+  return rulesForBuiltinPolicy(policy, store.builtinRules)
+}
+
+function categoryLabel(category: string): string {
+  const key = `agentGuard.policy.categoryNames.${category}`
+  const translated = t(key)
+  return translated === key ? category : translated
+}
+
+function severityLabel(severity: string): string {
+  const key = `agentGuard.policy.severityNames.${severity}`
+  const translated = t(key)
+  return translated === key ? severity : translated
+}
+
+function actionLabel(action: string): string {
+  const key = `agentGuard.policy.actionNames.${action}`
+  const translated = t(key)
+  return translated === key ? action : translated
+}
+
+function executionOwnerLabel(rule: BuiltinAgentBehaviorRuleSummary): string {
+  const owner = ruleExecutionOwner(rule)
+  const key = `agentGuard.policy.executionNames.${owner}`
+  const translated = t(key)
+  return translated === key ? owner : translated
+}
+
+function ruleSeverity(rule: BuiltinAgentBehaviorRuleSummary): string {
+  return rule.severity || rule.default_severity || 'unknown'
+}
+
+function ruleAction(rule: BuiltinAgentBehaviorRuleSummary | BuiltinAgentEscapeRuleSummary): string {
+  return rule.action || rule.default_action || 'unknown'
+}
+
+function severityTagType(severity: string): 'danger' | 'warning' | 'info' | 'success' {
+  if (severity === 'critical' || severity === 'high') return 'danger'
+  if (severity === 'medium') return 'warning'
+  if (severity === 'low') return 'info'
+  return 'success'
+}
+
+function prettyJson(value?: Record<string, unknown>): string {
+  if (!value || Object.keys(value).length === 0) return '{}'
+  return JSON.stringify(value, null, 2)
+}
 
 watch(() => props.visible, visible => {
-  if (visible) void store.fetchPolicies()
+  if (visible) void (props.mode === 'escape' ? store.fetchEscapeRules() : store.fetchBuiltinRules())
 })
-
-function buildPayload(): AgentGuardPolicyDraftRequest {
-  return {
-    policy_key: form.policyKey,
-    name: form.name,
-    description: form.description,
-    priority: 100,
-    targets: {
-      host_ids: form.hostIDs.split(/[\s,]+/).map(value => value.trim()).filter(Boolean),
-      host_group_ids: [],
-      agent_types: [...form.agentTypes],
-    },
-    collection: buildAgentGuardCollectionPolicy(form.toolAdapterEnabled),
-    builtin_rule_overrides: [],
-    atomic_rules: [],
-    correlation_rules: [],
-    analysis: {
-      enabled: false,
-      trigger_severities: ['high', 'critical'],
-      ai_only_action_ceiling: 'alert',
-      evidence_window_seconds: 300,
-    },
-    escape_rules: [],
-    freeze_timeout_seconds: 300,
-  }
-}
-
-async function createDraft() {
-  if (!form.policyKey || !form.name || !form.agentTypes.length || !form.hostIDs.trim()) {
-    ElMessage.warning(t('agentGuard.policy.requiredFields'))
-    return
-  }
-  const policy = await store.createPolicy(buildPayload())
-  showCreate.value = false
-  ElMessage.success(t('agentGuard.policy.created', { version: policy.version }))
-}
-
-async function publish(policy: AgentGuardPolicy) {
-  await ElMessageBox.confirm(
-    t('agentGuard.policy.publishConfirm'),
-    t('agentGuard.policy.publish'),
-    { type: 'warning', confirmButtonText: t('agentGuard.policy.publish') },
-  )
-  await store.publishPolicy(policy.id, 'monitor-only rollout approved from Agent Guard UI')
-  ElMessage.success(t('agentGuard.policy.publishAccepted'))
-}
-
-async function loadDeliveries(policy: AgentGuardPolicy) {
-  await store.fetchPolicyDeliveries(policy.id)
-}
 </script>
 
 <style scoped>
-.policy-toolbar,
-.policy-form-actions {
+.catalog-section {
+  margin-top: 22px;
+}
+
+.section-heading,
+.policy-card-heading,
+.rule-card-heading {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin: 16px 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.policy-form {
-  padding: 16px;
-  margin-bottom: 16px;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  background: #f8fbff;
+.section-heading h3,
+.policy-card-heading h4,
+.rule-card-heading h4 {
+  margin: 0;
+  color: #172b4d;
 }
 
-.policy-form-grid {
+.section-heading p,
+.policy-description,
+.rule-description {
+  margin: 6px 0 0;
+  color: #6b7a90;
+  line-height: 1.6;
+}
+
+.builtin-policy-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 18px;
+  gap: 14px;
+  margin-top: 14px;
 }
 
-.policy-table,
-.delivery-section {
+.builtin-policy-card,
+.builtin-rule-card {
+  border: 1px solid #dfe7f3;
+  border-radius: 10px;
+  background: #fbfdff;
+  padding: 18px;
+}
+
+.policy-key,
+.rule-key,
+.muted {
+  color: #8592a6;
+  font-size: 12px;
+}
+
+.policy-facts,
+.rule-meta-grid,
+.rule-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin: 16px 0 0;
+}
+
+.policy-facts dt,
+.policy-facts dd {
+  display: inline;
+  margin: 0;
+}
+
+.policy-facts dt,
+.meta-label {
+  display: block;
+  margin-bottom: 5px;
+  color: #8592a6;
+  font-size: 12px;
+}
+
+.policy-facts dd,
+.rule-meta-grid > div > span:last-child {
+  color: #344563;
+}
+
+.policy-facts dd :deep(.el-tag) {
+  margin: 0 5px 5px 0;
+}
+
+.policy-rule-keys,
+.rule-tags,
+.meta-values,
+.detail-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.policy-rule-keys {
   margin-top: 16px;
 }
 
-.validation-errors {
-  margin: 8px 0 0;
-  padding-left: 20px;
+.rule-key-chip {
+  border-radius: 5px;
+  background: #eef5ff;
+  color: #3c6fb6;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.builtin-rule-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.rule-card-heading {
+  align-items: center;
+}
+
+.rule-tags :deep(.el-tag) {
+  margin-left: 6px;
+}
+
+.rule-meta-grid,
+.rule-detail-grid {
+  border-top: 1px solid #edf1f7;
+  padding-top: 14px;
+}
+
+.detail-list code,
+.digest {
+  border-radius: 4px;
+  background: #f1f4f8;
+  color: #52627a;
+  padding: 3px 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.rule-parameters {
+  margin-top: 16px;
+  border-top: 1px solid #edf1f7;
+  padding-top: 12px;
+}
+
+.rule-parameters summary {
+  cursor: pointer;
+  color: #3c6fb6;
+}
+
+.parameter-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  border-radius: 6px;
+  background: #f5f7fa;
+  padding: 10px;
+  color: #4b5d78;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 800px) {
+  .builtin-policy-grid,
+  .policy-facts,
+  .rule-meta-grid,
+  .rule-detail-grid,
+  .parameter-columns {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

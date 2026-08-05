@@ -18,15 +18,28 @@ import type {
   AgentGuardPolicyMutationResult,
   AgentGuardPolicyPublishResult,
   AgentGuardPolicyValidation,
+  AgentGuardRuntimeSettings,
   AgentPanoramaResponse,
+  AgentBehaviorSession,
   AgentExecutionUnit,
   AgentRuntimeInstance,
   AgentSecurityAnalysisRun,
   AgentSecurityFindingSummary,
   BuiltinAgentBehaviorRuleSummary,
+  BuiltinAgentEscapeRuleSummary,
   PanoramaTreeNode,
   PageResult,
 } from '@/types/agentGuard'
+
+export function getAgentGuardRuntimeSettings(hostId: string): Promise<AgentGuardRuntimeSettings> {
+  return request.get('/agent-guard/runtime-settings', { params: { host_id: hostId } })
+}
+
+export function updateAgentGuardRuntimeSettings(
+  settings: Pick<AgentGuardRuntimeSettings, 'host_id' | 'tool_adapter_enabled' | 'session_hook_enabled' | 'behavior_policy_enabled' | 'escape_policy_enabled' | 'injections'>,
+): Promise<AgentGuardRuntimeSettings> {
+  return request.put('/agent-guard/runtime-settings', settings)
+}
 
 export function getAgentGuardOverview(params?: {
   host_ids?: string[]
@@ -53,6 +66,21 @@ export function listAgentGuardInstances(
   params: AgentGuardInstanceQuery,
 ): Promise<PageResult<AgentRuntimeInstance>> {
   return request.get('/agent-guard/instances', { params })
+}
+
+export function listAgentGuardSessions(
+  instanceId: string,
+  params: { page?: number; page_size?: number } = {},
+): Promise<PageResult<AgentBehaviorSession>> {
+  return request.get(`/agent-guard/instances/${encodeURIComponent(instanceId)}/sessions`, {
+    params: { page: params.page || 1, page_size: params.page_size || 100 },
+  })
+}
+
+export function deleteAgentGuardSessions(sessionIds: string[]): Promise<{ deleted: number }> {
+  return request.delete('/agent-guard/sessions', {
+    data: { session_ids: sessionIds },
+  })
 }
 
 export function getAgentPanorama(
@@ -122,21 +150,36 @@ export function listBuiltinAgentBehaviorRules(
   })
 }
 
+export function listBuiltinAgentEscapeRules(
+  params: AgentGuardRuleQuery = {},
+): Promise<PageResult<BuiltinAgentEscapeRuleSummary>> {
+  return request.get('/agent-guard/escape-rules', {
+    params: { page: 1, page_size: 100, ...params },
+  })
+}
+
 export function listAgentSecurityFindings(
   params: AgentGuardFindingQuery,
 ): Promise<PageResult<AgentSecurityFindingSummary>> {
   return request.get('/agent-guard/findings', { params })
 }
 
-export function getAgentSecurityFinding(id: string): Promise<AgentSecurityFindingSummary> {
-  return request.get(`/agent-guard/findings/${encodeURIComponent(id)}`)
+export function getAgentSecurityFinding(
+  id: string,
+  params: { instance_id?: string; session_id?: string } = {},
+): Promise<AgentSecurityFindingSummary> {
+  const query = Object.fromEntries(Object.entries(params).filter(([, value]) => value))
+  return Object.keys(query).length
+    ? request.get(`/agent-guard/findings/${encodeURIComponent(id)}`, { params: query })
+    : request.get(`/agent-guard/findings/${encodeURIComponent(id)}`)
 }
 
 export function listAgentSecurityFindingAnalyses(
   id: string,
+  params: { page?: number; page_size?: number } = {},
 ): Promise<PageResult<AgentSecurityAnalysisRun>> {
   return request.get(`/agent-guard/findings/${encodeURIComponent(id)}/analyses`, {
-    params: { page: 1, page_size: 100 },
+    params: { page: params.page || 1, page_size: params.page_size || 10 },
   })
 }
 

@@ -128,6 +128,7 @@ func TestP4BuiltinProfilesMatchCanonicalControlPlaneDefinitions(t *testing.T) {
 		"claude-code-linux": "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
 		"opencode-linux":    "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
 		"gemini-cli-linux":  "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
+		"zcode-linux":       "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
 	}
 	registry := NewBuiltinProfileRegistry()
 	for key, expectedDigest := range expected {

@@ -16,7 +16,7 @@
           <div class="guard-drawer-meta">
             <span>{{ t('agentGuard.drawer.host') }}：{{ hostLabel }}</span>
             <span>{{ t('agentGuard.drawer.type') }}：{{ agent?.agent_type || '-' }}</span>
-            <span>{{ t('agentGuard.runtime.instances', { count: agent?.running_instance_count || 0 }) }}</span>
+            <span>{{ t('agentGuard.runtime.instances', { count: detailInstanceCount }) }}</span>
             <CoverageBadge
               v-if="agent"
               :coverage="agent.coverage_level"
@@ -28,9 +28,9 @@
     </template>
 
     <div class="guard-drawer-body">
-      <el-skeleton v-if="loading.instances" :rows="2" animated />
+      <el-skeleton v-if="mode === 'behavior' && loading.instances" :rows="2" animated />
       <el-alert
-        v-else-if="errors.instances"
+        v-else-if="mode === 'behavior' && errors.instances"
         type="error"
         :title="t('agentGuard.states.detailUnavailable')"
         :description="errors.instances"
@@ -43,15 +43,22 @@
         </template>
       </el-alert>
       <AgentRuntimeSelector
-        v-else
-        :instances="instances"
-        :total="instanceTotal"
-        :selected-instance-id="selectedInstanceId"
-        @select="emit('select-instance', $event)"
+        v-if="mode === 'behavior' && !loading.instances && !errors.instances"
+        :sessions="sessions"
+        :total="sessionTotal"
+        :page="sessionPage"
+        :page-size="sessionPageSize"
+        :selected-session-id="selectedSessionId"
+        :selected-session-ids="selectedSessionIds"
+        :can-delete-sessions="canDeleteSessions"
+        @select="emit('select-session', $event)"
+        @page-change="emit('session-page-change', $event)"
+        @selection-change="emit('session-selection-change', $event)"
+        @delete="emit('delete-sessions', $event)"
       />
 
-      <el-tabs :model-value="detailTab" class="guard-detail-tabs" @tab-change="changeTab">
-        <el-tab-pane :label="panoramaLabel" name="panorama">
+      <el-tabs :model-value="effectiveDetailTab" class="guard-detail-tabs" @tab-change="changeTab">
+        <el-tab-pane v-if="mode === 'behavior'" :label="panoramaLabel" name="panorama">
           <div class="detail-tab-panel">
             <el-skeleton v-if="loading.panorama" :rows="6" animated />
             <el-alert
@@ -70,31 +77,20 @@
             <AgentPanoramaExplorer
               v-else-if="panoramaNodes.length"
               :nodes="panoramaNodes"
+              :total="panoramaTotal"
+              :page="panoramaPage"
+              :page-size="panoramaPageSize"
               :mode="mode"
               :load-children="loadPanoramaChildren"
               @select="emit('select-panorama-node', $event)"
+              @page-change="emit('panorama-page-change', $event)"
             >
-              <template v-if="mode === 'escape' && selectedExecutionUnit" #detail>
-                <IsolationBaselinePanel :unit="selectedExecutionUnit" />
-              </template>
             </AgentPanoramaExplorer>
             <el-empty
               v-else
               :description="mode === 'behavior'
                 ? t('agentGuard.states.panoramaNotCollected')
                 : t('agentGuard.states.sandboxNotCollected')"
-            />
-            <AgentGuardActionPanel
-              v-if="mode === 'escape' && selectedExecutionUnit"
-              :unit="selectedExecutionUnit"
-              :host-label="hostLabel"
-              :agent-label="agent?.display_name || agent?.agent_type || '-'"
-              :instance-label="selectedInstanceLabel"
-              :actions="actions"
-              :can-operate="canOperateActions"
-              :loading="actionLoading"
-              :error="actionError"
-              @execute="(action, payload) => emit('execute-action', action, payload)"
             />
           </div>
         </el-tab-pane>
@@ -115,14 +111,34 @@
                 </el-button>
               </template>
             </el-alert>
+            <AgentEscapeAnalysis
+              v-if="mode === 'escape'"
+              :findings="findings"
+              :finding="selectedFinding"
+              :selected-finding-id="selectedFinding?.id || detailReferenceId || ''"
+              :finding-total="findingTotal"
+              :finding-page="findingPage"
+              :finding-page-size="findingPageSize"
+              @select-finding="emit('select-finding', $event)"
+              @finding-page-change="emit('finding-page-change', $event)"
+            />
             <AgentSecurityAnalysis
               v-else
               :rules="builtinRules"
               :findings="findings"
+              :selected-finding="selectedFinding"
+              :finding-total="findingTotal"
+              :finding-page="findingPage"
+              :finding-page-size="findingPageSize"
               :analyses="analyses"
-              :selected-finding-id="detailReferenceId || ''"
+              :analysis-total="analysisTotal"
+              :analysis-page="analysisPage"
+              :analysis-page-size="analysisPageSize"
+              :selected-finding-id="selectedFinding?.id || detailReferenceId || ''"
               :analysis-pending="loading.analysis"
               @select-finding="emit('select-finding', $event)"
+              @finding-page-change="emit('finding-page-change', $event)"
+              @analysis-page-change="emit('analysis-page-change', $event)"
               @analyze="emit('analyze-finding', $event)"
               @open-evidence="emit('open-evidence', $event)"
             >
@@ -144,6 +160,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
   AgentBehaviorIndex,
+  AgentBehaviorSession,
   AgentExecutionUnit,
   AgentGuardAction,
   AgentGuardActionName,
@@ -161,9 +178,8 @@ import AgentRuntimeSelector from './AgentRuntimeSelector.vue'
 import AgentPanoramaExplorer from './AgentPanoramaExplorer.vue'
 import AgentBehaviorEvidence from './AgentBehaviorEvidence.vue'
 import AgentSecurityAnalysis from './AgentSecurityAnalysis.vue'
+import AgentEscapeAnalysis from './AgentEscapeAnalysis.vue'
 import CoverageBadge from './CoverageBadge.vue'
-import IsolationBaselinePanel from './IsolationBaselinePanel.vue'
-import AgentGuardActionPanel from './AgentGuardActionPanel.vue'
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -173,12 +189,29 @@ const props = withDefaults(defineProps<{
   instances: AgentRuntimeInstance[]
   instanceTotal?: number
   selectedInstanceId: string
+  sessions?: AgentBehaviorSession[]
+  sessionTotal?: number
+  sessionPage?: number
+  sessionPageSize?: number
+  selectedSessionId?: string
+  selectedSessionIds?: string[]
+  canDeleteSessions?: boolean
   panoramaNodes: PanoramaTreeNode[]
+  panoramaTotal?: number
+  panoramaPage?: number
+  panoramaPageSize?: number
   loadPanoramaChildren?: (nodeId: string) => Promise<PanoramaTreeNode[]>
   selectedExecutionUnit?: AgentExecutionUnit | null
   builtinRules?: BuiltinAgentBehaviorRuleSummary[]
   findings: AgentSecurityFindingSummary[]
+  selectedFinding?: AgentSecurityFindingSummary | null
+  findingTotal?: number
+  findingPage?: number
+  findingPageSize?: number
   analyses?: AgentSecurityAnalysisRun[]
+  analysisTotal?: number
+  analysisPage?: number
+  analysisPageSize?: number
   selectedBehavior?: AgentBehaviorIndex | null
   actions?: AgentGuardAction[]
   canOperateActions?: boolean
@@ -198,8 +231,25 @@ const props = withDefaults(defineProps<{
 }>(), {
   loadPanoramaChildren: async () => [],
   selectedExecutionUnit: null,
+  sessions: () => [],
+  sessionTotal: 0,
+  sessionPage: 1,
+  sessionPageSize: 20,
+  selectedSessionId: '',
+  selectedSessionIds: () => [],
+  canDeleteSessions: false,
+  panoramaTotal: 0,
+  panoramaPage: 1,
+  panoramaPageSize: 20,
   builtinRules: () => [],
   analyses: () => [],
+  selectedFinding: null,
+  findingTotal: 0,
+  findingPage: 1,
+  findingPageSize: 20,
+  analysisTotal: 0,
+  analysisPage: 1,
+  analysisPageSize: 10,
   selectedBehavior: null,
   actions: () => [],
   canOperateActions: false,
@@ -213,8 +263,15 @@ const emit = defineEmits<{
   (event: 'update:detailTab', tab: AgentGuardDetailTab): void
   (event: 'tab-change', tab: AgentGuardDetailTab): void
   (event: 'select-instance', instanceId: string): void
+  (event: 'select-session', sessionId: string): void
+  (event: 'session-page-change', page: number): void
+  (event: 'session-selection-change', sessionIds: string[]): void
+  (event: 'delete-sessions', sessionIds: string[]): void
   (event: 'select-panorama-node', node: PanoramaTreeNode): void
+  (event: 'panorama-page-change', page: number): void
   (event: 'select-finding', findingId: string): void
+  (event: 'finding-page-change', page: number): void
+  (event: 'analysis-page-change', page: number): void
   (event: 'analyze-finding', findingId: string): void
   (event: 'open-evidence', eventId: string): void
   (event: 'execute-action', action: Extract<AgentGuardActionName,
@@ -239,8 +296,12 @@ const hostLabel = computed(() => {
 
 const selectedInstanceLabel = computed(() => {
   const selected = props.instances.find(instance => instance.id === props.selectedInstanceId)
-  return selected ? `PID ${selected.controller_pid}` : props.selectedInstanceId || '-'
+  return props.selectedSessionId || selected?.id || props.selectedInstanceId || '-'
 })
+
+const detailInstanceCount = computed(() =>
+  props.instanceTotal || props.instances.length || props.agent?.running_instance_count || 0,
+)
 
 const panoramaLabel = computed(() => t(
   props.mode === 'behavior'
@@ -248,15 +309,18 @@ const panoramaLabel = computed(() => t(
     : 'agentGuard.drawer.sandboxPanorama',
 ))
 
-const analysisLabel = computed(() => t(
-  props.mode === 'behavior'
-    ? 'agentGuard.drawer.securityAnalysis'
-    : 'agentGuard.drawer.escapeAnalysis',
-  { count: props.findings.length },
-))
+const analysisLabel = computed(() => props.mode === 'behavior'
+  ? t('agentGuard.drawer.securityAnalysis')
+  : t('agentGuard.drawer.escapeAnalysis', { count: props.findingTotal }))
+const effectiveDetailTab = computed<AgentGuardDetailTab>(() => props.mode === 'escape' ? 'analysis' : props.detailTab)
 
 function changeTab(value: string | number) {
-  const tab: AgentGuardDetailTab = value === 'analysis' ? 'analysis' : 'panorama'
+	if (props.mode === 'escape') {
+		emit('update:detailTab', 'analysis')
+		emit('tab-change', 'analysis')
+		return
+	}
+	const tab: AgentGuardDetailTab = value === 'analysis' ? 'analysis' : 'panorama'
   emit('update:detailTab', tab)
   emit('tab-change', tab)
 }

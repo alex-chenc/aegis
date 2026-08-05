@@ -1,11 +1,15 @@
 # Aegis V6.2 智能体会话检测前端 PRD
 
 **版本**：6.2-P5
-**日期**：2026-08-03
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：完整会话正文/AI 语义页面待实施；当前事件页已实现 Native Hook 真实 session 与工具事件安全分析
 **父导航**：智能体防护
 **子标签**：智能体会话检测
-**首批 Agent**：Codex、Claude Code、OpenCode
+**完整 P5 首批 Agent**：Codex、Claude Code、OpenCode
+
+> 当前事件页的 Native Hook 运行时支持 Codex、Claude Code、OpenClaw、Hermes、Zcode，
+> 可展示真实 session ID 和工具命中；本 PRD 的正文时序、AI 语义和风险标记属于完整 P5，
+> 不应覆盖已有的会话范围工具安全分析。
 
 ## 1. 页面目标
 

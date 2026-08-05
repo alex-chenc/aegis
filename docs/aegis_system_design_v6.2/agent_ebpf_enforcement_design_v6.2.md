@@ -1,8 +1,12 @@
 # Aegis V6.2 Agent 与 eBPF 防护详细设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：Agent OS 事实、PID/PPID 关联和本地逃逸决策设计；Agent Guard 工具命令规则由 api-server 匹配
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
+> eBPF/`/proc` 不再负责创建 Agent Guard 工具命中；它只提供 OS 事实以及工具事件到
+> 实际 PID/PPID/start_ticks/cmdline 的关联。
 
 ## 1. 设计目标
 
@@ -11,7 +15,8 @@ Agent 侧是 V6.2 的实时安全边界，负责：
 1. 识别 AI Agent 控制进程及其实际执行后端。
 2. 持续维护 session、进程、namespace、container/cgroup 与 Agent 实例的归属。
 3. 采集归属进程的命令/进程、文件、网络、身份权限、内核、IPC 和隔离控制行为。
-4. 将内核事件规范化、脱敏、关联和聚合为统一 `AgentBehaviorEvent`。
+4. 将内核事件规范化、脱敏、关联和聚合为统一 `AgentBehaviorEvent`；可信 Native Hook
+   工具事件作为独立输入转发，不在 Agent 内进行工具命令规则匹配。
 5. 执行服务端下发的原子行为策略和资源策略。
 6. 建立执行单元隔离基线，检测逃逸行为和状态漂移。
 7. 在本机内核能力允许时提前返回 `EPERM`。
@@ -450,13 +455,14 @@ exact 规则由用户态额外校验长度；prefix 直接使用 LPM。复杂 gl
 BPF_LPM_TRIE(sensitive_path_rules, ...);       // AGB-BUILTIN-001
 BPF_HASH(external_network_policy, ...);        // AGB-BUILTIN-002 的 CIDR/port 原子部分
 BPF_HASH(file_create_policy_by_unit, ...);     // AGB-BUILTIN-003
-BPF_HASH(sensitive_executable_rules, ...);     // AGB-BUILTIN-004 的 executable 原子部分
+BPF_HASH(legacy_executable_policy, ...);      // 仅兼容通用本地 executable/自保护规则，不产生 AGB-004 工具命中
 BPF_HASH(privilege_transition_policy, ...);    // AGB-BUILTIN-005
 ```
 
 边界：
 
-- 域名 externality、复杂 argv、跨事件关系和风险提升由 Agent 用户态/DC 处理。
+- 域名 externality、复杂 argv、跨事件关系和 Agent Guard 工具命令匹配由服务端处理；
+  其中 AGB-BUILTIN-004 由 api-server 对可信 Hook 工具输入执行。
 - BPF LSM 只对 exact/prefix path、CIDR/port、resolved executable 和可验证 credential/capability transition 做同步决策。
 - 文件创建、敏感命令和公网连接首期默认只采集/告警，不默认 deny。
 - 提权规则必须携带 before/after 和 outcome；只观察到 `sudo` exec 不能在内核侧标记提权成功。
@@ -507,7 +513,7 @@ Agent 端只采集“已归属 Agent 的安全语义事件”，不是把每次 
 | `AGB-BUILTIN-001` | PID/PPID/cmdline、operation、file name、raw/resolved/host path、outcome/errno |
 | `AGB-BUILTIN-002` | PID/PPID/cmdline、destination IP/port、protocol、direction、DNS 关联来源、outcome/errno |
 | `AGB-BUILTIN-003` | PID/PPID/cmdline、create attempt/result、file name/path、inode/dev、owner/mode、hash status |
-| `AGB-BUILTIN-004` | PID/PPID、resolved executable、脱敏 argv/cmdline、cwd、exit code/signal |
+| `AGB-BUILTIN-004` | Native Hook tool name/tool_call_id/tool input/result/command；PID/PPID、resolved executable、脱敏 cmdline、cwd、exit code/signal 仅由 eBPF/procfs 作为关联补充 |
 | `AGB-BUILTIN-005` | PID/PPID/cmdline、UID/GID/capability/namespace before/after、outcome/errno |
 
 事件缺少必需字段时仍上报行为事实，但 rule evaluation 为 `insufficient_evidence`，不得补默认值伪造完整 hit。
@@ -603,13 +609,15 @@ key = instance_slot + session + unit_slot + pid_epoch + category + operation + n
 
 ### 9.7 工具调用关联
 
-Adapter 可以接收产品官方 audit log、plugin hook 或 Aegis wrapper correlation token，将：
+Adapter 可以接收产品 Native Hook 的可信工具事件，将：
 
 ```text
 tool_call -> process exec -> file/network operations
 ```
 
-关联为同一 session。若没有可信 Hook，只上报 OS 行为并标记 `tool_semantics_unobservable`；不得根据进程名伪造 tool name。
+关联为同一真实 session。`tool_call_started/completed/failed` 由 api-server 消费并匹配
+AGB-BUILTIN-004；Agent 只通过 PID/start_ticks/时间/correlation 解析实际进程。若没有
+可信 Hook，只上报 OS 行为并标记 `tool_semantics_unobservable`；不得根据进程名伪造 tool name。
 
 ## 10. 隔离逃逸监控
 
@@ -978,7 +986,8 @@ aegis_agent_guard_hook_latency_seconds
 - 同机多 Agent 和同类型多 controller 分配独立 instance slot。
 - Agent A 启动 Agent B 后切换主归属并保留 launched-by 证据。
 - ambiguous 归属不复制事件且不触发自动 freeze。
-- session/correlation token 关联和 inferred session 降级。
+- Native Hook 真实 session/correlation token 关联；无可信 session ID 时进入
+  unattributed 索引，不创建可选的 inferred 官方 session（旧数据兼容除外）。
 - cgroup v1/v2/containerd/Podman ID 解析。
 - exact/prefix/glob 策略编译。
 - 相对路径、cwd、dirfd、container root 解析。
@@ -986,7 +995,8 @@ aegis_agent_guard_hook_latency_seconds
 - file/network 高频事件聚合和高危证据优先级。
 - 五个内置 rule key/version 加载、参数校验和不支持版本降级。
 - 外部地址分类、DNS evidence source 和 trusted CIDR。
-- sensitive executable 的 path/basename/argv 边界匹配。
+- 通用/自保护 executable 的 path/basename/argv 边界匹配；Agent Guard
+  `AGB-BUILTIN-004` 工具命令匹配由 api-server 完成。
 - privilege attempt/succeeded/inconclusive 和 container user namespace。
 - Profile allow 与 policy deny 优先级。
 - capability 降级产生 `would_deny`。

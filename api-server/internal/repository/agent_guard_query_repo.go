@@ -427,6 +427,17 @@ func (r *AgentGuardQueryRepository) ListSessions(
 	db = applyAgentGuardEqual(db, "execution_unit_id", query.ExecutionUnitID)
 	db = applyAgentGuardEqual(db, "status", query.Status)
 	db = applyAgentGuardEqual(db, "source", query.Source)
+	if query.TrustedOnly {
+		db = db.Where(
+			"source IN ? AND confidence = ? AND COALESCE(external_session_id, '') <> ''",
+			[]string{
+				model.AgentGuardSessionSourceAgentOfficial,
+				model.AgentGuardSessionSourceAdapterHook,
+				model.AgentGuardSessionSourceAegisWrapper,
+			},
+			"confirmed",
+		)
+	}
 	if query.PreferTrusted {
 		db = db.Where(`source <> 'activity_window' OR NOT EXISTS (
 			SELECT 1 FROM agent_behavior_sessions trusted
@@ -454,6 +465,38 @@ func (r *AgentGuardQueryRepository) GetSession(
 ) (*model.AgentBehaviorSession, error) {
 	var item model.AgentBehaviorSession
 	return &item, r.getAgentGuardByID(ctx, &item, id, ErrAgentGuardSessionNotFound)
+}
+
+// DeleteSessions removes the selected trusted sessions and the session-owned
+// behavior/finding records in one transaction. A finding without its session
+// would otherwise reappear in the instance-wide analysis view, which is the
+// exact data leak the session selector is intended to prevent.
+func (r *AgentGuardQueryRepository) DeleteSessions(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`
+			DELETE FROM agent_security_analysis_runs
+			WHERE finding_id IN (
+				SELECT id FROM agent_security_findings WHERE session_id IN ?
+			)`, ids).Error; err != nil {
+			return fmt.Errorf("delete agent security analyses for sessions: %w", err)
+		}
+		if err := tx.Model(&model.AgentSecurityFinding{}).
+			Where("session_id IN ?", ids).Delete(&model.AgentSecurityFinding{}).Error; err != nil {
+			return fmt.Errorf("delete agent security findings for sessions: %w", err)
+		}
+		if err := tx.Model(&model.AgentBehaviorEvent{}).
+			Where("session_id IN ?", ids).Delete(&model.AgentBehaviorEvent{}).Error; err != nil {
+			return fmt.Errorf("delete agent behavior events for sessions: %w", err)
+		}
+		if err := tx.Model(&model.AgentBehaviorSession{}).
+			Where("id IN ?", ids).Delete(&model.AgentBehaviorSession{}).Error; err != nil {
+			return fmt.Errorf("delete agent behavior sessions: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *AgentGuardQueryRepository) ListExecutionUnits(
@@ -592,6 +635,25 @@ func (r *AgentGuardQueryRepository) GetBehavior(
 	return &item, nil
 }
 
+func (r *AgentGuardQueryRepository) GetRuntimeEvent(
+	ctx context.Context,
+	eventID string,
+) (*model.RuntimeEvent, error) {
+	var item model.RuntimeEvent
+	db := r.db.WithContext(ctx).Where("event_id = ?", eventID)
+	if parsed, err := uuid.Parse(eventID); err == nil {
+		db = db.Or("id = ?", parsed)
+	}
+	err := db.First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrAgentGuardBehaviorNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get runtime event: %w", err)
+	}
+	return &item, nil
+}
+
 func (r *AgentGuardQueryRepository) GetRawBehavior(
 	ctx context.Context,
 	eventID string,
@@ -635,6 +697,15 @@ func (r *AgentGuardQueryRepository) ListFindings(
 	}
 	if len(query.InstanceIDs) > 0 {
 		db = db.Where("instance_id IN ?", query.InstanceIDs)
+	}
+	switch query.FindingDomain {
+	case model.AgentSecurityFindingDomainTool:
+		// Tool findings are owned by api-server and use a stable key prefix so
+		// behavior-session analysis cannot include OS escape findings or the
+		// historical DC single-event findings.
+		db = db.Where("finding_key LIKE ?", "tool-command:v1:%")
+	case model.AgentSecurityFindingDomainEscape:
+		db = db.Where("finding_key LIKE ?", "escape:v1:%")
 	}
 	if query.AssetID != "" || query.AgentType != "" || query.ProfileKey != "" {
 		instanceScope := r.db.WithContext(ctx).
@@ -1071,6 +1142,7 @@ func normalizeAgentGuardType(value string) string {
 		markers   []string
 	}{
 		{canonical: "claude-code", markers: []string{"claude-code", "claude_code", "claude"}},
+		{canonical: "zcode", markers: []string{"zcode", "z-code", "z_code"}},
 		{canonical: "gemini-cli", markers: []string{"gemini-cli", "gemini_cli", "gemini"}},
 		{canonical: "opencode", markers: []string{"opencode", "open-code", "open_code"}},
 		{canonical: "openclaw", markers: []string{"openclaw", "open-claw", "open_claw"}},
@@ -1098,6 +1170,7 @@ func builtinAgentGuardProfileKey(agentType string) string {
 		"hermes":      "hermes-linux",
 		"openclaw":    "openclaw-linux",
 		"opencode":    "opencode-linux",
+		"zcode":       "zcode-linux",
 	}[normalizeAgentGuardType(agentType)]
 }
 
@@ -1105,12 +1178,13 @@ func agentGuardCanonicalTypeSQL(expression string) string {
 	value := "LOWER(" + expression + ")"
 	return fmt.Sprintf(`CASE
 		WHEN %s LIKE '%%claude%%' THEN 'claude-code'
+		WHEN %s LIKE '%%zcode%%' OR %s LIKE '%%z-code%%' OR %s LIKE '%%z_code%%' THEN 'zcode'
 		WHEN %s LIKE '%%gemini%%' THEN 'gemini-cli'
 		WHEN %s LIKE '%%opencode%%' OR %s LIKE '%%open-code%%' OR %s LIKE '%%open_code%%' THEN 'opencode'
 		WHEN %s LIKE '%%openclaw%%' OR %s LIKE '%%open-claw%%' OR %s LIKE '%%open_claw%%' THEN 'openclaw'
 		WHEN %s LIKE '%%hermes%%' THEN 'hermes'
 		WHEN %s LIKE '%%codex%%' THEN 'codex'
-		ELSE %s END`, value, value, value, value, value, value, value, value, value, value, value)
+		ELSE %s END`, value, value, value, value, value, value, value, value, value, value, value, value, value, value)
 }
 
 func (r *AgentGuardQueryRepository) selectLogicalAgentAsset(

@@ -57,10 +57,10 @@ func TestQueuePendingLifecyclesIncludesNewExecControllerDependencies(t *testing.
 	manager.statusMu.Lock()
 	events := append([]*pb.RuntimeEvent(nil), manager.pendingStatus...)
 	manager.statusMu.Unlock()
-	if len(events) < 3 {
-		t.Fatalf("expected instance, unit, and session lifecycle events, got %d", len(events))
+	if len(events) != 1 {
+		t.Fatalf("expected only runtime instance lifecycle before a real Hook session, got %d", len(events))
 	}
-	want := []string{"agent_instance_started", "agent_execution_unit_started", "agent_behavior_session_started"}
+	want := []string{"agent_instance_started"}
 	for index, eventType := range want {
 		if events[index].EventType != eventType {
 			t.Fatalf("lifecycle[%d] = %q, want %q", index, events[index].EventType, eventType)
@@ -81,6 +81,17 @@ func TestManagerConsumesExitAfterProcEntryDisappearsAndReportsPIDPPID(t *testing
 	if !ok {
 		t.Fatal("expected controller attribution")
 	}
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller process attribution")
+	}
+	session, unit, changed, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "session-exit-test", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("start trusted session: %v", err)
+	}
+	manager.queueTrustedSessionStarted(session, unit, changed)
 	manager.queuePendingLifecycles()
 
 	if !manager.ObserveEventMap(map[string]any{
@@ -214,6 +225,17 @@ func TestManagerRestoresAttributionEmitsRedactedMonitorOnlyEventsAndBundleStatus
 	if err := manager.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller process attribution")
+	}
+	session, unit, changed, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "session-behavior-test", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("start trusted session: %v", err)
+	}
+	manager.queueTrustedSessionStarted(session, unit, changed)
 
 	if !manager.ObserveRaw(RawBehavior{
 		OccurredAt: time.Now(), Category: CategoryProcess, Operation: "exec",

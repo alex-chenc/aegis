@@ -1,8 +1,10 @@
 # Aegis V6.2 智能体运行防护总体架构设计
 
 **版本**：6.2  
-**日期**：2026-08-03
-**状态**：P0～P4 已实施；P5 会话检测设计完成、待实施
+**日期**：2026-08-06
+**状态**：Agent Guard 工具事件/规则命中和内置策略目录已按当前实现更新；完整 P5 会话正文检测仍待实施
+
+> 当前实现优先级：本文的目标架构受 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md) 约束。尤其是工具命中归属：Agent eBPF 只做 OS 事实和 PID/PPID 关联，DC 只做 Agent Guard 行为投影，API-server 基于可信工具命令事件匹配规则。
 
 ## 1. 背景与问题
 
@@ -27,7 +29,7 @@ V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“
 2. 持续维护 session、控制进程、本地后代进程、namespace worker、容器/cgroup 和远程执行单元的归属关系。
 3. 对已归属 Agent 采集具有安全语义的进程/命令、文件、网络、身份权限、持久化、内核和隔离控制行为。
 4. 将离散行为关联成时间线、进程链和 PID 主干行为全景树，保留行为结果及证据完整性。
-5. 通过本地确定性规则、DC 单事件/序列规则和异步智能分析联合判断攻击性。
+5. 对 Agent Guard 工具命令事件由 API-server 进行规则匹配；Agent eBPF 只提供关联事实，DC 只负责规范化投影；其他通用运行时 Sigma/eBPF 链路保持独立。
 6. 识别真实隔离类型，建立 namespace、cgroup、mount、capability、seccomp 等基线。
 7. 检测隔离逃逸尝试和边界漂移，并在支持 BPF LSM 时本地提前拒绝。
 8. 对有明确证据的高危行为按策略暂停执行单元，并允许服务端人工恢复或终止。
@@ -35,8 +37,8 @@ V6.2 建立一个主机侧、内核优先、服务端可配置并可追溯的“
 10. 对字段截断、事件丢失、不支持阻断、工具语义缺失或远程不可观测的环境诚实降级。
 11. 支持同一主机多种 Agent 并存和同一种 Agent 多运行实例，归属、统计、
     全景展示和处置目标互不串扰。
-12. 提取 Codex、Claude Code、OpenCode 的完整可见会话结构，在授权脱敏边界内
-    做 AI 恶意语义检测，并与真实 OS 行为证据关联和标记。
+12. 当前接入 Codex、Claude Code、OpenClaw、Hermes、Zcode 的真实 session lifecycle
+    Hook 和工具事件；完整会话正文与 AI 语义检测仍按 P5 独立设计实施。
 
 ### 2.2 非目标
 
@@ -132,13 +134,13 @@ Agent 控制进程或执行单元内的具体进程。主机本地以 PID、启�
 
 ### 4.5 BehaviorSession / AgentBehaviorEvent
 
-- `BehaviorSession` 表示一次可关联的 Agent task、run、conversation 或推导活动窗口。
+- `BehaviorSession` 表示 Agent Hook 明确上报的真实 session 生命周期；没有可信 session ID 时只能建立未归属的行为索引，不能把进程活动伪造成某个会话。
 - `AgentBehaviorEvent` 表示一个规范化 OS/工具控制面行为事实，包含 actor、operation、resource、outcome、isolation 和 collection completeness。
-- session 来源不是 Agent 官方 ID 时必须标记 `inferred`。
+- 工具事件使用 `tool_call_started/completed/failed`，并以 `tool_call_id` 将生命周期事件幂等合并。
 
 ### 4.6 AgentGuardPolicy
 
-服务端策略包含：
+服务端仍保留版本化策略和 Bundle 模型，用于兼容历史下发链路；当前前端策略入口不再编辑它，而是展示内置策略目录。服务端策略包含：
 
 - Agent/主机选择器。
 - 行为采集范围、聚合和保留规则。
@@ -147,6 +149,9 @@ Agent 控制进程或执行单元内的具体进程。主机本地以 PID、启�
 - 动作模式。
 - 智能分析启用条件和 AI-only 动作上限。
 - 冻结超时和发布版本。
+
+内置策略目录是五条不可变内置规则的只读产品分组，不是数据库中的 draft/published
+策略版本。Hook 开关通过 `agent_guard_runtime_settings.v1` 即时下发。
 
 ### 4.7 SecurityFinding / AnalysisRun / AgentGuardAction
 
@@ -189,12 +194,13 @@ Host 级 freeze/resume/kill。
 
 ```mermaid
 flowchart TB
-  FE["Frontend<br/>PID 全景树/规则/研判/处置"]
-  API["api-server<br/>策略、Profile、查询、智能分析编排"]
+  FE["Frontend<br/>会话分页/行为全景/规则目录/研判/处置"]
+  API["api-server<br/>策略、Profile、查询、工具规则匹配、智能分析编排"]
   DB[("PostgreSQL")]
   SRV["server<br/>Agent Hub / Config & Command Router"]
   K["Kafka<br/>aegis.security.events"]
-  DC["dc<br/>规范化/关联规则/Finding/WebSocket"]
+  DC["dc<br/>规范化/投影/通用运行时规则/WebSocket"]
+  TMR["api-server Tool Rule Matcher<br/>可信工具事件规则匹配"]
   ANA["Aegis Security Analyst<br/>异步结构化研判"]
 
   subgraph Host["受保护 Linux 主机"]
@@ -206,7 +212,7 @@ flowchart TB
     BPFM["Tracepoint/Kprobe Sensors<br/>兼容监控"]
     BPFL["BPF LSM<br/>提前阻断"]
     FREEZE["Execution Unit Controller<br/>cgroup.freeze / pidfd"]
-    TARGET["Codex / OpenClaw / Hermes"]
+    TARGET["Codex / Claude Code / OpenClaw / Hermes / Zcode"]
     WORKER["shell / python / node / container process"]
 
     TARGET --> WORKER
@@ -231,6 +237,8 @@ flowchart TB
   AG --> SRV
   SRV --> K
   K --> DC
+  K --> TMR
+  TMR --> DB
   DC --> ANA
   ANA --> DB
   DC --> DB
@@ -247,20 +255,25 @@ sequenceDiagram
   participant P as Agent Process
   participant E as eBPF/Adapter
   participant A as Aegis Agent
-  participant D as DC Rule Engine
+  participant D as DC Projection
+  participant M as API-server Tool Rule Matcher
   participant W as Evidence Builder
   participant AI as Security Analyst
   participant DB as PostgreSQL/UI
 
-  P->>E: exec/file/network/identity/isolation/tool operation
+  P->>E: exec/file/network/identity/isolation operation
   E->>A: raw event
   A->>A: 归属、规范化、脱敏、聚合、本地规则
   alt 明确本地 deny
     A-->>P: EPERM
   end
   A->>D: AgentBehaviorEvent
-  D->>D: 资源分类、单事件/序列/聚合规则
-  D->>DB: 原始事实 + finding
+  D->>D: 原始事件规范化与行为投影
+  D->>DB: 原始事实 + OS/通用运行时投影
+  P->>A: trusted tool_call_started/completed/failed
+  A->>M: trusted tool event via server/Kafka
+  M->>M: command extraction + AGB-BUILTIN-004 matching
+  M->>DB: tool finding + direct tool event evidence
   opt 需要智能研判
     D->>W: finding + evidence event IDs
     W->>AI: 有界脱敏证据窗口
@@ -306,11 +319,16 @@ sequenceDiagram
 ```text
 Frontend draft/validate
   -> api-server 规范化采集、规则、例外、分析和动作配置
-  -> 生成不可变 policy version 与主机 bundle digest
+  -> 生成不可变 policy version 与主机 bundle digest（兼容历史策略链路）
   -> Server ConfigSync
   -> Agent 校验并原子应用
   -> config status event
   -> DC/DB delivery applied/failed/stale
+
+当前 Hook 与工具适配器使用 `agent_guard_runtime_settings.v1` 作为即时控制面：
+前端开关保存后由 api-server 立即经 Server ConfigSync 下发，Agent 在线时立即应用并
+注入/清理 Native Hook；Agent 不在线时记录 `pending_reconnect`。策略 Bundle 是
+兼容历史策略和本地逃逸/通用规则链路，不再是前端启停 Hook 的唯一开关。
 ```
 
 “配置已发送”不等于“Agent 已应用”。只有 Agent 上报匹配 version/digest 的 `applied` 才能进入生效状态。
@@ -322,16 +340,20 @@ sequenceDiagram
   participant X as Codex/Claude/OpenCode
   participant A as Aegis Agent agentsession
   participant S as Server/Kafka
-  participant D as DC Session Pipeline
+  participant D as DC Session Projection
+  participant M as API-server Tool Rule Matcher
   participant AI as Session Semantic Analyst
   participant UI as Session Detection UI
 
-  X->>A: Hook/Plugin/API/transcript item
+  X->>A: session_start/session_end + tool_call event
   A->>A: source auth、normalize、redact、order、spool
   A->>S: AgentSessionBatch
   S->>D: aegis.agent.sessions.v1
   D->>D: 幂等投影、gap 检测、tool/OS behavior link
-  D->>AI: 有界脱敏 conversation + evidence IDs
+  S->>M: trusted tool event
+  M->>M: API-server tool rule matching
+  M->>DB: session-scoped tool finding
+  D->>AI: 有界脱敏 conversation + evidence IDs（P5）
   AI->>D: verdict/category/evidence/counter-evidence
   D->>UI: session/marking metadata update
   UI->>D: 懒加载会话、分析和关联行为
@@ -464,7 +486,7 @@ V6.2 首批随版本提供：
 | `AGB-BUILTIN-001` | 操作敏感目录 | Agent 原子匹配 + DC 风险分层 | alert |
 | `AGB-BUILTIN-002` | 外部网络连接 | Agent 网络事实 + DC 地址/上下文分类 | alert |
 | `AGB-BUILTIN-003` | 文件生成 | Agent 文件创建事实 + DC 风险分层 | audit |
-| `AGB-BUILTIN-004` | 敏感命令执行 | Agent exec 事实 + DC executable/argv 规则 | alert |
+| `AGB-BUILTIN-004` | 敏感命令执行 | API-server 可信工具事件命令行匹配；Agent eBPF 仅做 PID/PPID 关联 | alert |
 | `AGB-BUILTIN-005` | 提权行为 | Agent credential/capability 事实 + DC 状态验证 | alert |
 
 规则定义不可删除或原地修改，策略通过 rule key/version 引用并覆盖范围、参数、severity、action 和例外。五个规则可以在同一 session/process chain 中关联成攻击链；单点命中默认不直接 freeze。
@@ -487,7 +509,10 @@ V6.2 首批随版本提供：
 - high/critical finding 引用的原始事件。
 - 配置和动作状态事件。
 
-关联规则由 DC 执行，不直接下发到 BPF；只有可编译的原子规则进入 Agent bundle 的 enforcement 部分。
+Agent Guard 工具命令规则由 api-server 执行，不在 Agent 或 DC 重复命中；Agent eBPF
+只提供进程、命令行、PID/PPID、start_ticks 和 tool-to-process 关联事实。DC 对这类
+事件只做规范化、幂等投影和 WebSocket 数据流，不调用 Agent Guard 工具规则执行器。
+通用运行时 Sigma/eBPF 规则和隔离逃逸本地决策仍可保留原有执行位置。
 
 ## 11. 逃逸规则分类
 
@@ -529,14 +554,16 @@ V6.2 首批随版本提供：
 
 ### 12.1 frontend
 
-- 策略配置、预览和发布。
-- 五个内置规则状态、参数覆盖、例外和灰度预览。
+- 展示只读的内置策略目录和完整规则详情；当前不提供新建、编辑、发布或下发历史策略的入口。
+- 内置目录按“行为监控”和“工具命令”两个视图展示五个稳定规则的中英文名称、版本、描述、严重级别、动作、执行位置、证据要求、允许条件、MITRE 和参数 Schema。
+- 在 AgentGuard 设置中提供工具调用适配器、会话 Hook 和五类智能体 Native Hook 开关；开启即请求 Agent 应用并开始上报，关闭即请求 Agent 清理 Hook 并停止上报。
 - 实例与隔离覆盖展示。
 - 命令、文件、网络、权限、隔离和工具事件查询。
 - 外层按 host + Agent asset 展示基本信息列表，不直接暴露进程树和证据。
-- 点击 Agent 后在详情抽屉中按运行实例分支，以 PID 进程树为主干展示行为
-  全景和分析：process 节点显示 PID/PPID/cmdline，文件节点显示文件名/路径，
-  网络节点显示目的地址。
+- 点击 Agent 后先按真实 Hook 会话 ID 分页选择；行为全景展示该会话的行为事件，
+  进程关联节点显示实际 PID/PPID/cmdline。安全分析严格按选中会话过滤，只展示
+  命中规则的工具、工具输入/输出、命令行和可关联 PID/PPID，不展示全量进程树。
+- 运行实例、会话 ID 和事件列表均支持分页，安全分析页签不再把命中数量拼在标题上。
 - session 时间线和 finding 证据展示。
 - 区分规则结论、智能研判和已经证实的动作结果。
 - freeze/resume/kill 人工操作。
@@ -547,6 +574,10 @@ V6.2 首批随版本提供：
 
 - Profile、采集策略、分析规则和动作策略事实源。
 - 策略校验、版本化、发布、主机范围展开和下发。
+- 消费可信工具事件，匹配 `tool_call_started/completed/failed`，按 `tool_call_id`
+  合并事件并写入会话范围的 `agent_security_findings`；Finding 直接引用工具事件，
+  eBPF 关联信息只作为补充证据。
+- 提供只读内置规则目录和 `agent_guard_runtime_settings.v1` 即时下发。
 - 实例/session/执行单元/事件/finding/analysis/action 查询。
 - 智能分析任务编排、证据窗口读取、结构化输出校验和审计。
 - 人工处置鉴权、审计和 Server 命令调用。
@@ -566,7 +597,9 @@ V6.2 首批随版本提供：
 - 产品 Profile 匹配。
 - 实例和执行单元管理。
 - 进程/命令、文件、网络、身份权限、内核与隔离行为采集。
-- 可选 Adapter tool/control 事件关联。
+- Native Agent Hook 会话边界与工具事件采集；支持 Codex、Claude Code、OpenClaw、Hermes、Zcode。
+- eBPF/`/proc` 只负责 OS 事实、PID/PPID/start_ticks/cmdline 和工具到进程的关联，
+  不创建 Agent Guard 工具命令规则命中。
 - 事件规范化、脱敏、短窗口聚合、BPF maps 更新和本地决策。
 - deny/freeze/resume/kill。
 - last-known-good 策略持久化。
@@ -577,14 +610,16 @@ V6.2 首批随版本提供：
 - 解析和规范化 Agent Behavior/Guard 事件。
 - 原始事件写入 `runtime_events`。
 - 幂等投影到 `agent_behavior_events`、`agent_behavior_sessions`、`agent_runtime_instances`、`agent_execution_units` 和 `agent_guard_actions`。
-- 执行资源分类、单事件规则、序列/聚合规则和 finding 生命周期。
+- 对 Agent Guard 工具事件做规范化、幂等投影、会话/执行单元关联和 WebSocket 推送，
+  不执行 `AGB-BUILTIN-004` 或创建同一工具命中的重复 Finding。
+- 通用 OS/资源/序列规则和历史运行时规则链路仍按各自数据源执行。
 - 为需要研判的 finding 生成有界 evidence window。
 - 高危 finding 生成/更新 alerts，普通行为事件不制造告警风暴。
 - WebSocket 推送实例、事件、finding、analysis 和动作变化。
 
 ### 12.6 PostgreSQL
 
-- 保存 Profile、五个内置规则定义、策略、下发状态、运行实例、session、执行单元、行为事件、finding、analysis run 和动作。
+- 保存 Profile、五个内置规则定义、历史策略/Bundle、运行时设置、下发状态、运行实例、session、执行单元、行为事件、finding、analysis run 和动作；工具 Finding 的直接证据是 Hook 工具事件 ID，并保留 API-server 规则归属和 eBPF 关联状态。
 - 不保存每次 fork 的完整瞬时进程表。
 - 不保存文件内容、网络内容、stdin/stdout/stderr、环境变量值或凭据。
 
@@ -598,7 +633,7 @@ V6.2 首批随版本提供：
 6. Aegis Agent、systemd、containerd 等受保护基础进程不能被普通 Agent Guard 动作终止。
 7. Agent 发现自己处于目标 Agent 的进程树或 cgroup 时必须拒绝错误归属，避免自锁。
 8. AI-only `malicious` 默认只能告警或等待人工确认，不能单独触发 deny/freeze。
-9. DC 序列规则只有在策略显式授权且引用证据完整时才能请求自动 freeze。
+9. DC 通用序列规则只有在策略显式授权且引用证据完整时才能请求自动 freeze；Agent Guard 工具命令命中由 api-server 形成 Finding，不能由 DC 重复命中或直接改变本地执行决策。
 
 ## 14. 性能与可靠性目标
 

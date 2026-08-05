@@ -1,21 +1,22 @@
 # Aegis V6.2 实施状态
 
 **目标版本**：6.2
-**当前阶段**：P0～P4 代码增量已实现；P5“智能体会话检测”方案已完成、待开发
-**状态**：P0～P4 组件测试与非破坏性构建通过；P3 专用宿主机门禁及 P5 实现尚未执行
-**更新时间**：2026-08-03
+**当前阶段**：Agent Guard 工具事件、真实会话边界、运行时 Hook 设置和只读内置规则目录已实现；完整 P5 会话正文仍待开发
+**状态**：当前链路已完成定向测试、构建和 Compose 健康验证；P3 专用宿主机门禁及完整 P5 正文语义仍未执行
+**更新时间**：2026-08-06
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 
 ## 1. 结论边界
 
-仓库已经实现开发提示词中 P0～P4 的代码、数据库、控制面、数据面、前端和
-离线发布结构增量。P5 已完成三类会话采集、专用传输/存储、AI 语义分析、
-风险标记和第三个前端子标签的设计，但尚未新增 migration 030、会话采集代码、
-API 或页面实现。
+仓库已经实现 Agent Guard 的运行时设置、Native Hook 会话开始/结束边界、可信工具
+事件采集、api-server 工具命令规则匹配、会话范围安全分析和只读内置规则目录。
+完整会话正文采集、AI 语义分析、风险标记和第三个完整会话检测页面仍是 P5 后续范围，
+不能与当前已实现的生命周期 Hook/工具事件混为一谈。
 
 当前共享环境也没有执行真实 BPF LSM attach、`EPERM`、freeze、kill 或逃逸操作，
-没有在专用宿主机完成一条 LSM deny + freeze/resume 链。因此本文只报告
-“P0～P4 代码实现和非破坏性验证完成、P5 设计完成”，不报告“V6.2 发布门禁
-全部通过”。
+没有在专用宿主机完成一条 LSM deny + freeze/resume 链。因此本文只报告当前代码链路
+和非破坏性验证结果，不报告“V6.2 发布门禁全部通过”。
 
 ## 2. 分阶段实现事实
 
@@ -25,14 +26,14 @@ API 或页面实现。
   Profile 使用稳定 UUID、version 和 canonical SHA-256 digest 幂等 seed。
 - immutable rule/profile 冲突使用 `DO NOTHING`，由 api-server 启动校验报告
   digest mismatch，不静默覆盖已存在定义。
-- api-server 提供 catalog、policy、runtime、behavior、finding、analysis、
-  action repository/service/API，并执行 scope、权限、状态和脱敏校验。
-- frontend 提供“智能体事件防护”和“智能体逃逸防护”两个子页、详情抽屉、
-  懒加载全景树、Finding/analysis 与策略入口。
+- api-server 提供只读规则 catalog、历史 policy、runtime settings、behavior、finding、
+  analysis、action repository/service/API，并执行 scope、权限、状态和脱敏校验。
+- frontend 提供事件/逃逸子页、详情抽屉、懒加载全景树、会话分页、安全分析和只读
+  内置规则目录；Hook/工具开关在设置对话框即时下发。
 
 ### P1：运行身份、归属和 monitor-only 行为链
 
-- Agent 内置 Codex、OpenClaw、Hermes Profile，使用
+- Agent 内置 Codex、Claude Code、OpenClaw、Hermes、Zcode Profile，使用
   `host + controller_pid + controller_start_ticks` 区分实例；支持 fork 标签、
   PID reuse、cgroup v1/v2、systemd scope、OCI/container 和周期 `/proc` 校准。
 - session、execution unit、进程与行为事件经 Server/Kafka 转发，由 DC 幂等
@@ -40,12 +41,14 @@ API 或页面实现。
 - 统一行为 Schema 覆盖 process/file/network/identity/persistence/isolation/
   kernel/IPC，包含聚合、drop/completeness 和统一脱敏，默认仅监控。
 - ConfigSync bundle 使用版本/digest、last-known-good、applied/rejected 状态；
-  Agent Guard 和行为监控本地开关默认关闭。
+  Native Hook/工具适配器另使用 `agent_guard_runtime_settings.v1` 即时控制，关闭
+  后由 Agent 清理 Hook 并停止上报。
 
 ### P2：确定性规则、Finding、智能分析和逃逸 audit
 
-- DC 实现 `AGB-BUILTIN-001..005` evaluator、attempt/success/inconclusive、
-  资源分类、五分钟跨事件关联、乱序/Kafka replay 幂等和真实 evidence graph。
+- 通用 OS 行为链路保留资源分类、attempt/success/inconclusive、跨事件关联、乱序/Kafka
+  replay 幂等和真实 evidence graph；Agent Guard 工具命中不再由 DC evaluator 创建。
+  `AGB-BUILTIN-004` 由 api-server 消费可信工具事件后匹配并直接写 Finding。
 - Agent 建立 namespace/cgroup/mount/capability/seccomp/no_new_privs 基线，
   逃逸传感器只报告 audit/would_deny；未证明能力时使用 degraded 或
   enforcement_unavailable。
@@ -70,36 +73,40 @@ API 或页面实现。
 
 ### P4：可信工具语义、远端关联和 Profile 扩展
 
-- Agent 提供默认关闭的本地 Unix hook receiver。socket 默认 `0600`；只有
-  manifest 显式配置 `0660 + group_id` 时开放受控组访问。每个 source 固定允许
-  UID/GID，并对 `SO_PEERCRED` 校验；官方/Hook/Aegis wrapper 事件还必须匹配
-  pinned Ed25519 key 和逐事件签名。adapter artifact digest 只能作为附加约束，
-  不能替代事件签名。
+- Agent 提供默认关闭的 Native Agent Hook receiver，并支持 Codex、Claude Code、
+  OpenClaw、Hermes、Zcode。运行时设置由 api-server 保存到 `system_configs`，在线
+  Agent 应用后注入 Hook，关闭后清理 Hook；离线只记录等待重连状态。
+- Hook 事件保留真实 session start/end 和 `tool_call_started/completed/failed`，按
+  `tool_call_id` 幂等合并；普通终端输出或进程名猜测不能作为可信工具事件。
+- api-server 消费可信工具事件，按工具输入/attributes 提取命令并匹配
+  `AGB-BUILTIN-004`，直接写入当前 session 的 Finding；证据直接引用工具事件 ID，
+  规则归属为 api-server。
+- Agent eBPF/`/proc` 只做 PID/PPID/start_ticks/cmdline 和工具到进程的关联；DC 只做
+  规范化、行为投影和 WebSocket 推送，不重复命中工具规则。
 - correlation token 原文不进入事件、日志或数据库，只以
-  `sha256:<64hex>` 作为 join key；tool session 复用已确认 execution unit 的现有
-  session，不拆断 OS 进程/资源证据链。
-- DC 只接受 `agent_official|adapter_hook|aegis_wrapper`，构建真实
-  `tool_call -> process -> resource` 边。tool event 单独不执行规则、不创建
-  Finding、不进入 action。
+  `sha256:<64hex>` 作为 join key；关联失败时保留工具 Finding 并标记 unattributed。
 - 远端关系必须匹配已入库的 remote host/unit/event/hash OS sensor 事实；否则
   保持 `remote_unobservable`。已验证关系写入 Finding evidence graph，但不升级
   execution unit enforcement coverage。
-- Claude Code、OpenCode、Gemini CLI 与原有三种产品一起形成六个 stable
-  Profile；Agent/API/SQL 使用相同 key、字段和 canonical digest 回归。
-- Panorama 只在完整 proof/session/hash 条件满足时展示工具名称；否则显示
-  `tool_semantics_unobservable`。token hash、proof digest、verifier 和 external
-  session ID 不进入 Panorama 响应。
+- Profile 目录和 Native Hook 注入支持五个 stable agent type；完整会话正文的
+  Codex/Claude/OpenCode 等 P5 Adapter 仍未完成。
+- Panorama 展示真实会话和实际进程关联；安全分析只展示命中规则的工具、命令行和
+  可关联 PID/PPID，不展示全量进程树，也不回退为统一 controller PID。
 
-### P5：智能体会话检测（仅设计，未实现）
+### P5：完整智能体会话检测（生命周期 Hook 已实现，正文语义未实现）
 
-- 方案覆盖 Codex、Claude Code、OpenCode 三类正式会话。Codex/Claude Code
+- 当前 P4/P5 交界能力已覆盖五类智能体的真实 session start/end 和工具调用事件，
+  但不包含完整 user/assistant/transcript 正文。
+- 方案覆盖 Codex、Claude Code、OpenCode 三类完整正式会话。Codex/Claude Code
   采用受管 Hook 定位和版本化 transcript 补全；OpenCode 采用 Aegis 插件、
   认证本机 API/SSE 对账和固定版本 `export --sanitize` 回补。
 - 设计了独立 `AgentSessionBatch`、Kafka topic `aegis.agent.sessions.v1`、DC
   会话投影和 7 张新表，不复用 P4 可信工具入口传输完整 prompt/tool output。
 - 设计了会话分段/摘要、固定 AI 输出 Schema、真实 item/tool/event 引用校验、
   planned/attempted/executed 联合判定和人工风险标记；AI-only 不自动阻断。
-- 前端新增第三个子标签“智能体会话检测”，外层为会话列表，点击后在 80%
+- 完整 P5 前端第三个子标签“智能体会话检测”、正文抽屉和风险标记仍未实现；当前
+  事件页已经支持真实 session ID 分页和按 session 的工具安全分析。
+  完整 P5 外层为会话列表，点击后在 80%
   抽屉展示“完整会话”“AI 语义分析”“关联行为”三个 Tab。
 - 详细设计见
   [agent_session_detection_design_v6.2.md](agent_session_detection_design_v6.2.md)
@@ -133,8 +140,9 @@ api-server:
   go build ./...
 
 Frontend:
-  14 个 Agent Guard 文件 / 40 个测试通过
-  npm run build（3154 modules）
+  Agent Guard 定向测试：3 个文件 / 6 个测试通过
+  npm run build 通过
+  frontend Docker 镜像重建、重启，健康检查和 http://localhost:8081/ 返回 200
 
 跨组件和发布:
   scripts/tests/agent_guard_cross_contract_test.sh
@@ -143,7 +151,8 @@ Frontend:
   git diff --check
 ```
 
-发布契约测试以临时目录执行 `GENERATE_ONLY=1`，检查 Compose、环境模板、029
+本次验证还覆盖 Agent Guard api-server runtime settings/tool rule 定向测试、DC
+全量测试、Agent 全量测试和 Server 定向测试。发布契约测试以临时目录执行 `GENERATE_ONLY=1`，检查 Compose、环境模板、029
 migration、init SQL、启动脚本、MinIO build context 和权限。未构建/导出全部
 业务与基础镜像，也未生成可对外宣称完成的离线 ZIP。
 
@@ -164,12 +173,15 @@ migration、init SQL、启动脚本、MinIO build context 和权限。未构建/
 ## 5. Feature Flag、灰度和回滚
 
 - api-server：`AGENT_GUARD_ENABLED`、`POLICY_WRITE`、`ANALYSIS`、`ACTION`、
-  `TOOL_ADAPTER`；工具语义还必须同时满足 Agent 本地开关、签名 manifest 和
-  hook socket 配置。
-- DC：projection、rules、findings、analysis request、alert、action publish。
+  `TOOL_ADAPTER`；Native Hook/工具适配器的运行时开关通过页面设置写入
+  `agent_guard_runtime_settings.v1`，不要求手工编辑配置文件。
+- api-server tool consumer：`aegis-api-server-consumer-agent-guard-tool-rules`，
+  消费可信工具事件并匹配 `AGB-BUILTIN-004`。
+- DC：projection、通用 rules、findings、analysis request、alert、action publish；
+  Agent Guard 工具事件不在 DC 重复命中。
 - Server：action consumer。
-- Agent：enabled、behavior monitor、tool adapter、enforcement、freeze；工具
-  manifest 和 hook socket 默认空。
+- Agent：enabled、behavior monitor、tool adapter、session Hook、enforcement、freeze；
+  Hook 注入由运行时设置控制，manifest/socket 仍负责本地安全边界。
 - P5 api-server：session detection、analysis、reveal、export；DC：session
   projection、behavior link、analysis request、alert；Server：session ingest；
   Agent：session collector、hook ingress、transcript tail、history backfill，全部

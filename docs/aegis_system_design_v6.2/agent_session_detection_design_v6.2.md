@@ -1,9 +1,13 @@
 # Aegis V6.2 智能体会话提取与语义检测完整方案
 
 **版本**：6.2-P5
-**日期**：2026-08-03
-**状态**：设计完成，待实施
-**首批产品**：Codex、Claude Code、OpenCode
+**日期**：2026-08-06
+**状态**：完整会话正文/AI 语义检测仍待实施；Native Hook 真实 session 生命周期和工具事件已在 Agent Guard 运行时链路实现
+**完整 P5 首批产品**：Codex、Claude Code、OpenCode
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
+> 当前事件页已支持 Codex、Claude Code、OpenClaw、Hermes、Zcode 的真实 Hook session
+> start/end 和工具调用事件，但这不等于完整会话正文采集。本文只描述后续完整 P5。
 **页面名称**：智能体会话检测
 
 ## 1. 目标
@@ -34,6 +38,10 @@
 ## 2. 与现有 V6.2 的关系
 
 V6.2 已实施的 P0～P4 继续保持原边界。会话检测作为 P5 独立扩展：
+
+当前已经存在的 Native Hook 生命周期/工具事件不属于本文的完整正文采集范围；
+它们使用可信工具事件契约，规则命中由 api-server 完成，DC 只投影，eBPF 只做
+PID/PPID 关联。
 
 ```text
 P0～P4 Agent Guard

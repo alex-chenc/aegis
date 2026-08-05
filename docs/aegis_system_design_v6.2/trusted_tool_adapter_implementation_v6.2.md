@@ -1,16 +1,22 @@
 # V6.2 可信工具 Adapter 实施契约
 
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
+> 本文保留签名/来源验证的安全约束，但 Hook 启停的当前控制面是
+> `agent_guard_runtime_settings.v1`，不是要求用户手工编辑 Agent TOML。
+
 ## 1. 启用条件
 
-工具语义默认不可观测。只有以下条件同时满足，Agent 才创建本地 Unix hook
-socket：
+工具语义默认不可观测。当前由 api-server 保存运行时设置并通过 ConfigSync 控制；
+只有以下本地安全条件同时满足，Agent 才接受 Native Hook 事件：
 
-1. api-server `AGENT_GUARD_TOOL_ADAPTER_ENABLED=true`；
-2. 已发布 policy 的 `collection.tool_adapter_enabled=true`，且 categories 包含
-   `tool`；
-3. Agent 本地 `AgentGuardToolAdapterEnabled=true`；
-4. `AgentGuardToolSourceManifest` 和 `AgentGuardToolHookSocket` 指向有效配置；
-5. bundle、manifest、peer credential 和逐事件签名全部验证通过。
+1. 运行时设置 `tool_adapter_enabled=true`；
+2. 对应 Native Hook 注入项已开启；
+3. `AgentGuardToolSourceManifest` 和 `AgentGuardToolHookSocket` 指向有效配置；
+4. bundle/manifest、peer credential 和逐事件签名全部验证通过。
+
+历史环境变量、policy collection 和 Agent 本地 TOML 仍可作为部署/兼容门禁，但不再
+是前端开关保存后必须用户手工执行的启用步骤。`session_hook_enabled` 单独控制
+`session_started/session_activated/session_ended`；工具适配器和会话 Hook 仍可分别关闭。
 
 任一条件不满足时保持 `tool_semantics_unobservable`，不得从进程名、命令行或
 普通终端输出推断工具名称。
@@ -67,6 +73,7 @@ socket 使用一行一个 JSON 事件。事件不得包含工具输出、prompt�
   "operation": "tool_call_started",
   "tool_name": "shell",
   "tool_call_id": "UUID",
+  "session_id": "REAL_NATIVE_SESSION_ID",
   "correlation_token": "HIGH_ENTROPY_EPHEMERAL_VALUE",
   "pid": 12345,
   "start_ticks": 99887766,
@@ -94,14 +101,16 @@ Agent 只在内存中使用 correlation token，并上报 `sha256:<64hex>`；原
 `external_session_id`、根 `pid + start_ticks`、时间和 Ed25519 proof，不携带工具名、
 correlation token 或任何会话正文。
 
-- `SessionStart` 产生 `session_started`，首个 Hook helper 的 PPID 固定为会话根。
+- `SessionStart` 产生 `session_started`，首个 Hook helper 的 PPID 固定为会话根；
+  `external_session_id` 映射为页面显示的真实 session ID，不用 PID 代替。
 - `PreToolUse` 产生 `session_activated`，用于共享 Codex app-server 在 fork 工具进程前
   切换当前真实会话，事件本身不产生工具语义。
 - `SessionEnd` 产生 `session_ended`，精确关闭该 external session 的行为 session/unit。
 
-生命周期由独立本地开关 `AgentGuardSessionHookEnabled` 控制，不会因为启用它而把
+生命周期由运行时设置中的 `session_hook_enabled` 控制，不会因为启用它而把
 `collection.tool_adapter_enabled` 或工具语义自动升级为可信。工具事件仍严格遵守本章
-原有三重灰度和 correlation 契约。
+来源、签名和 correlation 契约；没有可信 session ID 时不能伪造官方会话，只能进入
+未归属索引。
 
 ## 4. 远端证据和动作边界
 

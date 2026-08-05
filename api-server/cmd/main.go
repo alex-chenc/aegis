@@ -150,6 +150,7 @@ func main() {
 	agentGuardQueryRepo := repository.NewAgentGuardQueryRepository(db)
 	agentGuardAnalysisRepo := repository.NewAgentGuardAnalysisRepository(db)
 	agentGuardActionRepo := repository.NewAgentGuardActionRepository(db)
+	agentGuardToolFindingRepo := repository.NewAgentGuardToolFindingRepository(db)
 
 	if err := agentGuardCatalogRepo.VerifyBuiltinManifest(context.Background()); err != nil {
 		if cfg.AgentGuard.Enabled {
@@ -260,6 +261,7 @@ func main() {
 	defer cancel()
 
 	var agentGuardWSConsumer *queue.KafkaConsumer
+	var agentGuardToolRuleConsumer *queue.KafkaConsumer
 	if cfg.AgentGuard.Enabled {
 		groupID := strings.TrimSpace(cfg.Kafka.GroupID)
 		if groupID == "" {
@@ -285,6 +287,30 @@ func main() {
 		logger.Info("agent_guard_realtime_consumer_started",
 			zap.String("topic", "aegis.security.events"),
 			zap.String("group_id", groupID+"-agent-guard-ws"),
+		)
+
+		agentGuardToolRuleHandler := service.NewAgentGuardToolRuleHandler(
+			agentGuardToolFindingRepo,
+			agentGuardCatalogRepo,
+			wsService,
+			logger.Get().Named("agent_guard_tool_rules"),
+		)
+		agentGuardToolRuleConsumer = queue.NewKafkaConsumer(
+			kafkaBrokers,
+			"aegis.security.events",
+			groupID+"-agent-guard-tool-rules",
+			agentGuardToolRuleHandler.HandleKafkaMessage,
+			logger.Get().Named("agent_guard_tool_rule_consumer"),
+		)
+		go func() {
+			if err := agentGuardToolRuleConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("agent_guard_tool_rule_consumer_failed", zap.Error(err))
+			}
+		}()
+		logger.Info("agent_guard_tool_rule_consumer_started",
+			zap.String("topic", "aegis.security.events"),
+			zap.String("group_id", groupID+"-agent-guard-tool-rules"),
+			zap.String("rule_owner", "api-server"),
 		)
 	}
 
@@ -387,6 +413,12 @@ func main() {
 		cfg.AgentGuard.ToolAdapterEnabled,
 		logger.Get().Named("agent_guard_bundle"),
 	)
+	agentGuardRuntimeSettingsRepo := repository.NewAgentGuardRuntimeSettingsRepository(systemConfigRepo)
+	agentGuardRuntimeSettingsService := service.NewAgentGuardRuntimeSettingsService(
+		agentGuardRuntimeSettingsRepo,
+		serverClient,
+		logger.Get().Named("agent_guard_runtime_settings"),
+	)
 	agentGuardAnalysisClient := service.NewConfiguredAgentGuardAnalysisClient(
 		configRepo,
 		cfg.LLM.TimeoutSeconds,
@@ -408,6 +440,7 @@ func main() {
 		logger.Get().Named("agent_guard_handler"),
 	)
 	agentGuardHandler.SetBundleService(agentGuardBundleService)
+	agentGuardHandler.SetRuntimeSettingsService(agentGuardRuntimeSettingsService, agentGuardRuntimeSettingsService)
 	agentGuardHandler.SetAnalysisService(agentGuardAnalysisService)
 	agentGuardHandler.SetActionService(agentGuardActionService)
 	logger.Info("Weak password detection module initialized")
@@ -684,6 +717,11 @@ func main() {
 	if agentGuardWSConsumer != nil {
 		if err := agentGuardWSConsumer.Close(); err != nil {
 			logger.Warn("agent_guard_realtime_consumer_close_failed", zap.Error(err))
+		}
+	}
+	if agentGuardToolRuleConsumer != nil {
+		if err := agentGuardToolRuleConsumer.Close(); err != nil {
+			logger.Warn("agent_guard_tool_rule_consumer_close_failed", zap.Error(err))
 		}
 	}
 	time.Sleep(2 * time.Second)

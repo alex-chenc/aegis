@@ -1,0 +1,7 @@
+{
+  "id": "aegis-agent-guard",
+  "name": "Aegis Agent Guard",
+  "description": "Aegis trusted OpenClaw lifecycle and tool telemetry adapter.",
+  "version": "1.0.0",
+  "activation": "startup"
+}

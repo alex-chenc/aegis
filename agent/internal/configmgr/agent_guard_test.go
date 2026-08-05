@@ -40,3 +40,21 @@ func TestApplyConfigSyncAgentGuardBundleRequiresHandlerAndFullSync(t *testing.T)
 		t.Fatalf("handler payload mismatch: %q", got)
 	}
 }
+
+func TestApplyConfigSyncAgentGuardRuntimeSettingsUsesInMemoryHandler(t *testing.T) {
+	mgr := NewConfigManager()
+	var got string
+	mgr.SetAgentGuardRuntimeSettingsHandler(func(payload string) error {
+		got = payload
+		return nil
+	})
+	payload := `{"schema":"aegis.agent_guard.runtime_settings.v1","version":1}`
+	if err := mgr.ApplyConfigSync(&pb.ConfigSync{
+		ConfigType: "agent_guard_runtime_settings", Action: "full_sync", Payload: payload,
+	}); err != nil {
+		t.Fatalf("runtime settings rejected: %v", err)
+	}
+	if got != payload {
+		t.Fatalf("runtime settings payload mismatch: %q", got)
+	}
+}

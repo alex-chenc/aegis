@@ -8,7 +8,16 @@
       <el-button type="primary" plain @click="policyDialogVisible = true">
         {{ t('agentGuard.policy.title') }}
       </el-button>
+      <el-button
+        v-if="canOperate('agent_guard_settings')"
+        type="primary"
+        @click="runtimeSettingsDialogVisible = true"
+      >
+        {{ t('agentGuard.settings.button') }}
+      </el-button>
     </section>
+
+    <AgentEscapePolicyOverview v-if="mode === 'escape'" />
 
     <div class="agent-guard-metric-grid" aria-live="polite">
       <div v-for="metric in metrics" :key="metric.key" class="metric-card">
@@ -185,12 +194,29 @@
       :instances="store.instances"
       :instance-total="store.instanceTotal"
       :selected-instance-id="parsedQuery.detail.instanceId"
+      :sessions="store.sessions"
+      :session-total="store.sessionTotal"
+      :session-page="store.sessionPage"
+      :session-page-size="store.sessionPageSize"
+      :selected-session-id="parsedQuery.detail.sessionId"
+      :selected-session-ids="selectedSessionIds"
+      :can-delete-sessions="canOperate('agent_guard_session_delete')"
       :panorama-nodes="store.panoramaNodes"
+      :panorama-total="store.panoramaTotal"
+      :panorama-page="store.panoramaPage"
+      :panorama-page-size="store.panoramaPageSize"
       :load-panorama-children="store.fetchPanoramaChildren"
       :selected-execution-unit="store.selectedExecutionUnit"
       :builtin-rules="store.builtinRules"
       :findings="store.findings"
+      :selected-finding="store.selectedFinding"
+      :finding-total="store.findingTotal"
+      :finding-page="store.findingPage"
+      :finding-page-size="store.findingPageSize"
       :analyses="store.analyses"
+      :analysis-total="store.analysisTotal"
+      :analysis-page="store.analysisPage"
+      :analysis-page-size="store.analysisPageSize"
       :selected-behavior="store.selectedBehavior"
       :actions="store.actions"
       :can-operate-actions="canOperate('agent_guard_action')"
@@ -202,8 +228,15 @@
       @close="closeDrawer"
       @update:detail-tab="changeDetailTab"
       @select-instance="changeInstance"
+      @select-session="changeSession"
+      @session-page-change="changeSessionPage"
+      @session-selection-change="selectedSessionIds = $event"
+      @delete-sessions="deleteSessions"
       @select-panorama-node="selectPanoramaNode"
+      @panorama-page-change="changePanoramaPage"
       @select-finding="selectFinding"
+      @finding-page-change="changeFindingPage"
+      @analysis-page-change="changeAnalysisPage"
       @analyze-finding="analyzeFinding"
       @open-evidence="openEvidence"
       @execute-action="executeUnitAction"
@@ -211,7 +244,15 @@
     />
     <AgentGuardPolicyDialog
       :visible="policyDialogVisible"
+      :mode="mode"
       @close="policyDialogVisible = false"
+    />
+    <AgentGuardRuntimeSettingsDialog
+      :visible="runtimeSettingsDialogVisible"
+      :hosts="runtimeSettingHosts"
+      :mode="mode"
+      @close="runtimeSettingsDialogVisible = false"
+      @saved="refreshPage"
     />
   </div>
 </template>
@@ -220,7 +261,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/i18n/formatters'
 import { useAgentGuardStore } from '@/store/agentGuard'
 import { useRole } from '@/composables/useRole'
@@ -236,12 +277,16 @@ import type {
 import AgentSummaryTable from './components/AgentSummaryTable.vue'
 import AgentDetailDrawer from './components/AgentDetailDrawer.vue'
 import AgentGuardPolicyDialog from './components/AgentGuardPolicyDialog.vue'
+import AgentGuardRuntimeSettingsDialog from './components/AgentGuardRuntimeSettingsDialog.vue'
+import AgentEscapePolicyOverview from './components/AgentEscapePolicyOverview.vue'
 import { AGENT_GUARD_AGENT_TYPE_FILTERS } from './agentGuardProfiles'
 import {
   DEFAULT_AGENT_GUARD_FILTERS,
-  clearAgentGuardDetailQuery,
-  parseAgentGuardQuery,
-  serializeAgentGuardListQuery,
+	buildAgentGuardDetailInstanceQuery,
+	clearAgentGuardDetailQuery,
+	parseAgentGuardQuery,
+	selectPreferredAgentGuardInstance,
+	serializeAgentGuardListQuery,
   withAgentGuardDetailQuery,
 } from './agentGuardQuery'
 
@@ -254,6 +299,7 @@ const router = useRouter()
 const { t } = useI18n()
 const store = useAgentGuardStore()
 const { canOperate } = useRole()
+const selectedSessionIds = ref<string[]>([])
 
 const agentTypeOptions = AGENT_GUARD_AGENT_TYPE_FILTERS
 const coverageOptions = [
@@ -270,6 +316,7 @@ const parsedQuery = computed(() => parseAgentGuardQuery(route.query))
 const draftFilters = reactive<AgentGuardListFilters>({ ...DEFAULT_AGENT_GUARD_FILTERS })
 const detailScopeLoaded = ref('')
 const policyDialogVisible = ref(false)
+const runtimeSettingsDialogVisible = ref(false)
 const realtimeDisconnected = ref(false)
 let realtimeSocket: WebSocket | null = null
 let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -301,7 +348,7 @@ const metrics = computed(() => props.mode === 'behavior'
 
 const selectedAgent = computed<AgentGuardAgentSummary | null>(() => {
   const assetId = parsedQuery.value.detail.assetId || parsedQuery.value.detail.scopeKey
-  const directContext = store.findings[0] || store.selectedBehavior
+  const directContext = store.selectedFinding || store.findings[0] || store.selectedBehavior
   if (!assetId && !directContext) return null
   const effectiveAssetId = assetId || directContext?.asset_id || directContext?.agent_scope_key || ''
   return store.agents.find(agent =>
@@ -330,6 +377,20 @@ const selectedAgent = computed<AgentGuardAgentSummary | null>(() => {
     high_risk_finding_count: 0,
     escape_finding_count: 0,
   }
+})
+
+const runtimeSettingHosts = computed(() => {
+  const hosts = new Map<string, { id: string; hostname: string; ip: string }>()
+  for (const agent of store.agents) {
+    if (agent.host.id && !hosts.has(agent.host.id)) {
+      hosts.set(agent.host.id, {
+        id: agent.host.id,
+        hostname: agent.host.hostname,
+        ip: agent.host.ip,
+      })
+    }
+  }
+  return [...hosts.values()]
 })
 
 const drawerVisible = computed(() => Boolean(
@@ -402,41 +463,29 @@ watch(listQueryFingerprint, async () => {
 
 watch(detailFingerprint, async () => {
   const detail = parsedQuery.value.detail
-  const scope = detail.assetId || detail.scopeKey || detail.findingId || detail.eventId
+  const scope = detail.assetId || detail.scopeKey || detail.instanceId
+    || detail.findingId || detail.eventId || detail.sessionId
   if (!scope) return
 
   if (detailScopeLoaded.value !== scope) {
     detailScopeLoaded.value = scope
     store.resetDetail()
+    selectedSessionIds.value = []
     if (detail.assetId || detail.scopeKey || detail.instanceId) {
-      await store.fetchInstances(detail.assetId
-        ? {
-          asset_ids: [detail.assetId],
-          status: 'running',
-          page: 1,
-          page_size: 100,
+      await store.fetchInstances(buildAgentGuardDetailInstanceQuery(detail))
+      if (store.instances.length && props.mode === 'behavior') {
+        if (detail.instanceId) {
+          await store.fetchSessions(detail.instanceId)
+        } else {
+          await store.fetchSessionsForInstances(store.instances.map(instance => instance.id))
         }
-        : detail.scopeKey
-          ? {
-              agent_scope_key: detail.scopeKey,
-              status: 'running',
-              page: 1,
-              page_size: 100,
-            }
-          : {
-          instance_ids: detail.instanceId ? [detail.instanceId] : undefined,
-          page: 1,
-          page_size: 100,
-        })
+      }
     }
 
-    if ((detail.assetId || detail.scopeKey) && !detail.instanceId && store.instances.length) {
-      const preferred = [...store.instances].sort((left, right) => {
-        const riskDelta = (right.high_risk_finding_count || 0) - (left.high_risk_finding_count || 0)
-        if (riskDelta !== 0) return riskDelta
-        return String(right.last_seen_at || '').localeCompare(String(left.last_seen_at || ''))
-      })[0]
-      await changeInstance(preferred.id)
+	if (props.mode === 'behavior' && (detail.assetId || detail.scopeKey) && !detail.instanceId && store.instances.length) {
+		const preferred = selectPreferredAgentGuardInstance(store.instances, store.sessions)
+		if (!preferred) return
+		await changeInstance(preferred.id)
       return
     }
   }
@@ -474,16 +523,35 @@ function toAgentQuery(filters: AgentGuardListFilters, page: number, pageSize: nu
 
 async function loadDetailTab(tab: AgentGuardDetailTab) {
   const detail = parsedQuery.value.detail
+	if (props.mode === 'escape') tab = 'analysis'
   if (tab === 'analysis' && detail.findingId) {
-    await Promise.all([
-      store.fetchFinding(detail.findingId),
-      store.fetchBuiltinRules(),
+    const scope = findingScopeParams()
+    const [finding] = await Promise.all([
+      store.fetchFinding(detail.findingId, scope),
+      props.mode === 'escape' ? store.fetchEscapeRules() : store.fetchBuiltinRules(),
     ])
+    if (finding) await loadFindingPage(1, true)
     return
   }
   if (tab === 'analysis' && detail.eventId) {
     await Promise.all([
       store.fetchBehavior(detail.eventId),
+      props.mode === 'escape' ? store.fetchEscapeRules() : store.fetchBuiltinRules(),
+    ])
+    return
+  }
+  // Analysis is a separate tab in behavior mode too. Keep this branch before
+  // the behavior-panorama branch; otherwise the tab change only reloads the
+  // process tree and never requests the scoped finding list.
+  if (tab === 'analysis') {
+    if (props.mode === 'escape') {
+      await loadFindingPage(1)
+      await store.fetchEscapeRules()
+      return
+    }
+    if (!(await ensureCurrentSessionForAnalysis())) return
+    await Promise.all([
+      loadFindingPage(1),
       store.fetchBuiltinRules(),
     ])
     return
@@ -494,30 +562,32 @@ async function loadDetailTab(tab: AgentGuardDetailTab) {
     : selected?.asset_id
       ? { asset_id: selected.asset_id }
       : {}
-
-  if (tab === 'analysis') {
-    if (!scopeParams.asset_id && !scopeParams.agent_scope_key && !detail.instanceId) return
-    await Promise.all([
-      store.fetchFindings({
-        ...scopeParams,
-        instance_id: detail.instanceId || undefined,
-        page: 1,
-        page_size: 20,
-      }),
-      store.fetchBuiltinRules(),
-    ])
+  if (props.mode === 'behavior') {
+    if (!detail.instanceId) return
+    const sessions = store.sessions.filter(session => session.instance_id === detail.instanceId).length
+      ? store.sessions.filter(session => session.instance_id === detail.instanceId)
+      : await store.fetchSessions(detail.instanceId, store.sessionPage)
+    const sessionId = detail.sessionId || sessions[0]?.id
+    if (!sessionId) {
+      store.panoramaNodes = []
+      return
+    }
+    if (sessionId !== detail.sessionId) {
+      await changeSession(sessionId)
+      return
+    }
+    await store.fetchPanorama({
+      ...scopeParams,
+      instance_ids: [detail.instanceId],
+      session_id: sessionId,
+      page: store.panoramaPage,
+      page_size: store.panoramaPageSize,
+    })
     return
   }
 
-  if (!scopeParams.asset_id && !scopeParams.agent_scope_key && !detail.instanceId) return
-  await store.fetchPanorama({
-    ...scopeParams,
-    instance_ids: detail.instanceId ? [detail.instanceId] : undefined,
-  })
-  if (props.mode === 'escape' && detail.instanceId) {
-    const units = await store.fetchExecutionUnits(detail.instanceId)
-    if (units[0]) await store.fetchExecutionUnitTimeline(units[0].id)
-  }
+	// Escape detail intentionally has no sessions or sandbox panorama. Its
+	// only detail surface is the finding evidence chain loaded above.
 }
 
 function applyFilters() {
@@ -584,26 +654,80 @@ function changeDetailTab(tab: AgentGuardDetailTab) {
 
 async function changeInstance(instanceId: string) {
   const detail = parsedQuery.value.detail
+  store.panoramaPage = 1
   await router.replace({
     query: withAgentGuardDetailQuery(route.query, {
       ...detail,
       instanceId,
+      sessionId: undefined,
       tab: detail.tab,
     }),
   })
 }
 
+async function changeSession(sessionId: string) {
+  const detail = parsedQuery.value.detail
+  const session = store.sessions.find(item => item.id === sessionId)
+  store.panoramaPage = 1
+  await router.replace({
+    query: withAgentGuardDetailQuery(route.query, {
+      ...detail,
+      instanceId: session?.instance_id || detail.instanceId,
+      sessionId,
+      tab: detail.tab,
+    }),
+  })
+}
+
+async function deleteSessions(sessionIds: string[]) {
+  const ids = [...new Set(sessionIds.filter(Boolean))]
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      t('agentGuard.drawer.deleteSessionsConfirm', { count: ids.length }),
+      t('agentGuard.drawer.deleteSessionsTitle'),
+      { type: 'warning', confirmButtonText: t('common.actions.confirm'), cancelButtonText: t('common.actions.cancel') },
+    )
+    const current = parsedQuery.value.detail
+    await store.deleteSessions(ids)
+    selectedSessionIds.value = []
+    if (current.sessionId && ids.includes(current.sessionId)) {
+      const replacement = store.sessions[0]
+      if (replacement) {
+        await changeSession(replacement.id)
+        return
+      }
+      await router.replace({
+        query: withAgentGuardDetailQuery(route.query, {
+          ...current,
+          sessionId: undefined,
+        }),
+      })
+      return
+    }
+    if (current.instanceId) {
+      await store.fetchSessions(current.instanceId, Math.min(store.sessionPage, Math.max(1, Math.ceil(store.sessionTotal / store.sessionPageSize))))
+    }
+    await loadDetailTab(current.tab)
+    ElMessage.success(t('agentGuard.drawer.deleteSessionsSuccess', { count: ids.length }))
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error(t('common.messages.requestFailed'))
+  }
+}
+
+async function changeSessionPage(page: number) {
+  store.sessionPage = page
+  const detail = parsedQuery.value.detail
+  if (detail.instanceId) {
+    await store.fetchSessions(detail.instanceId, page)
+    if (detail.tab === 'panorama') await loadDetailTab('panorama')
+  }
+}
+
 function retryDetail(target: 'instances' | 'panorama' | 'analysis') {
   const detail = parsedQuery.value.detail
   if (target === 'instances') {
-    return store.fetchInstances({
-      asset_ids: detail.assetId ? [detail.assetId] : undefined,
-      agent_scope_key: detail.scopeKey || undefined,
-      instance_ids: detail.instanceId ? [detail.instanceId] : undefined,
-      status: detail.instanceId ? undefined : 'running',
-      page: 1,
-      page_size: 100,
-    })
+    return store.fetchInstances(buildAgentGuardDetailInstanceQuery(detail))
   }
   return loadDetailTab(target === 'analysis' ? 'analysis' : 'panorama')
 }
@@ -635,7 +759,82 @@ async function executeUnitAction(
 }
 
 async function selectFinding(id: string) {
-  await store.fetchFinding(id)
+  await store.fetchFinding(id, findingScopeParams())
+}
+
+function findingScopeParams() {
+  const detail = parsedQuery.value.detail
+  const finding = store.selectedFinding
+  const instanceId = detail.instanceId || finding?.instance_id
+  const sessionId = detail.sessionId || finding?.session_id
+  if (sessionId) return { instance_id: instanceId || undefined, session_id: sessionId }
+  if (instanceId) return { instance_id: instanceId }
+  if (finding?.agent_scope_key) return { agent_scope_key: finding.agent_scope_key }
+  if (finding?.asset_id) return { asset_id: finding.asset_id }
+  if (selectedAgent.value?.agent_scope_key && selectedAgent.value.agent_scope_key !== 'unresolved') {
+    return { agent_scope_key: selectedAgent.value.agent_scope_key }
+  }
+  if (selectedAgent.value?.asset_id) return { asset_id: selectedAgent.value.asset_id }
+  return {}
+}
+
+async function loadFindingPage(page: number, preserveSelection = false) {
+  const scope = findingScopeParams()
+  if (props.mode === 'behavior' && !scope.session_id) return
+  if (!scope.instance_id && !scope.session_id && !scope.agent_scope_key && !scope.asset_id) return
+  await store.fetchFindings({
+    ...scope,
+    finding_domain: props.mode === 'behavior' ? 'tool' : 'escape',
+    page,
+    page_size: store.findingPageSize,
+  })
+  if (!preserveSelection && store.findings[0]) {
+    await store.fetchFinding(store.findings[0].id, {
+      instance_id: scope.instance_id,
+      session_id: scope.session_id,
+    })
+  }
+}
+
+async function ensureCurrentSessionForAnalysis(): Promise<boolean> {
+  const detail = parsedQuery.value.detail
+  let instanceId = detail.instanceId
+  if (!instanceId) {
+    const preferred = selectPreferredAgentGuardInstance(store.instances, store.sessions)
+    if (!preferred) return false
+    await changeInstance(preferred.id)
+    return false
+  }
+
+  let sessions = store.sessions.filter(session => session.instance_id === instanceId)
+  if (!sessions.length) {
+    sessions = await store.fetchSessions(instanceId, store.sessionPage)
+  }
+  const sessionId = detail.sessionId || sessions[0]?.id
+  if (!sessionId) return false
+  if (sessionId !== detail.sessionId) {
+    await changeSession(sessionId)
+    return false
+  }
+  return true
+}
+
+async function changeFindingPage(page: number) {
+  await loadFindingPage(page)
+}
+
+async function changePanoramaPage(page: number) {
+  store.panoramaPage = page
+  await loadDetailTab('panorama')
+}
+
+async function changeAnalysisPage(page: number) {
+  const findingId = store.selectedFinding?.id || store.findings[0]?.id
+  if (!findingId) return
+  await store.fetchFindingAnalyses(findingId, {
+    page,
+    page_size: store.analysisPageSize,
+  })
 }
 
 async function analyzeFinding(id: string) {

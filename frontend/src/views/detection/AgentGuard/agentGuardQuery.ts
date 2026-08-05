@@ -1,7 +1,10 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 import type {
-  AgentGuardDetailTab,
-  AgentGuardListFilters,
+	AgentBehaviorSession,
+	AgentGuardDetailTab,
+	AgentGuardInstanceQuery,
+	AgentGuardListFilters,
+	AgentRuntimeInstance,
 } from '@/types/agentGuard'
 
 export const DEFAULT_AGENT_GUARD_FILTERS: AgentGuardListFilters = {
@@ -17,6 +20,7 @@ export interface AgentGuardDetailQuery {
   assetId: string
   scopeKey: string
   instanceId: string
+  sessionId: string
   findingId: string
   eventId: string
   tab: AgentGuardDetailTab
@@ -29,10 +33,42 @@ export interface ParsedAgentGuardQuery {
   detail: AgentGuardDetailQuery
 }
 
+export function buildAgentGuardDetailInstanceQuery(
+  detail: Pick<AgentGuardDetailQuery, 'assetId' | 'scopeKey' | 'instanceId'>,
+): AgentGuardInstanceQuery {
+  return {
+    asset_ids: detail.assetId ? [detail.assetId] : undefined,
+    agent_scope_key: detail.scopeKey || undefined,
+    instance_ids: detail.instanceId ? [detail.instanceId] : undefined,
+    page: 1,
+    page_size: 100,
+  }
+}
+
+// A newly discovered running instance may not have its first session and
+// behavior facts persisted yet. Prefer an instance that already has a session
+// when opening the aggregate agent detail, otherwise the drawer looks empty
+// even though older instances in the same scope contain the data.
+export function selectPreferredAgentGuardInstance(
+	instances: AgentRuntimeInstance[],
+	sessions: AgentBehaviorSession[],
+): AgentRuntimeInstance | undefined {
+	const sessionInstanceIDs = new Set(sessions.map(session => session.instance_id))
+	return [...instances].sort((left, right) => {
+		const rightHasSession = sessionInstanceIDs.has(right.id) ? 1 : 0
+		const leftHasSession = sessionInstanceIDs.has(left.id) ? 1 : 0
+		if (rightHasSession !== leftHasSession) return rightHasSession - leftHasSession
+		const riskDelta = (right.high_risk_finding_count || 0) - (left.high_risk_finding_count || 0)
+		if (riskDelta !== 0) return riskDelta
+		return String(right.last_seen_at || '').localeCompare(String(left.last_seen_at || ''))
+	})[0]
+}
+
 const DETAIL_QUERY_KEYS = [
   'asset_id',
   'agent_scope_key',
   'instance_id',
+  'session_id',
   'finding_id',
   'event_id',
   'detail_tab',
@@ -82,6 +118,7 @@ export function parseAgentGuardQuery(
       assetId: scalar(query.asset_id),
       scopeKey: scalar(query.agent_scope_key),
       instanceId: scalar(query.instance_id),
+      sessionId: scalar(query.session_id),
       findingId,
       eventId,
       tab: tab === 'analysis' || (!tab && (findingId || eventId)) ? 'analysis' : 'panorama',
@@ -116,6 +153,7 @@ export function withAgentGuardDetailQuery(
     asset_id: detail.assetId || undefined,
     agent_scope_key: detail.scopeKey || undefined,
     instance_id: detail.instanceId || undefined,
+    session_id: detail.sessionId || undefined,
     finding_id: detail.findingId || undefined,
     event_id: detail.eventId || undefined,
     detail_tab: detail.tab,

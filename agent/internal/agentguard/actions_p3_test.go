@@ -135,6 +135,15 @@ func newP3ActionManager(t *testing.T, cgroup bool) (*Manager, string, string, *f
 	if len(instances) != 1 {
 		t.Fatalf("expected one instance, got %d", len(instances))
 	}
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller attribution before trusted action session")
+	}
+	if _, _, _, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "p3-action-session", time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("start trusted action session: %v", err)
+	}
 	units := manager.tracker.Units()
 	if len(units) != 1 {
 		t.Fatalf("expected one unit, got %d", len(units))

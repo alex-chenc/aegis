@@ -96,10 +96,21 @@ func TestAgentGuardMigrationSeedsMatchBuiltinManifest(t *testing.T) {
 	var sqlProfiles []model.AgentGuardAdapterProfile
 	decodeMigrationManifest(t, content, profileManifestDelimiter, &sqlProfiles)
 	codeProfiles := model.BuiltinAgentGuardProfileManifest()
-	if len(sqlProfiles) != len(codeProfiles) {
-		t.Fatalf("SQL profile seed count = %d, code manifest count = %d", len(sqlProfiles), len(codeProfiles))
+	baseProfiles := make([]model.AgentGuardAdapterProfile, 0, len(codeProfiles))
+	for _, profile := range codeProfiles {
+		if profile.ProfileKey != model.AgentGuardProfileKeyZcodeLinux {
+			baseProfiles = append(baseProfiles, profile)
+		}
 	}
-	assertProfileManifestMatches(t, sqlProfiles, codeProfiles)
+	if len(sqlProfiles) != len(baseProfiles) {
+		t.Fatalf("SQL profile seed count = %d, base code manifest count = %d", len(sqlProfiles), len(baseProfiles))
+	}
+	assertProfileManifestMatches(t, sqlProfiles, baseProfiles)
+	followUp := readZcodeProfileMigration(t)
+	if !strings.Contains(followUp, `'zcode-linux'`) ||
+		!strings.Contains(followUp, `sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c`) {
+		t.Fatal("Zcode follow-up migration does not contain the immutable profile seed")
+	}
 
 	if err := model.VerifyBuiltinAgentGuardManifest(); err != nil {
 		t.Fatalf("built-in Agent Guard manifest is invalid: %v", err)
@@ -134,6 +145,20 @@ func readAgentGuardMigration(t *testing.T) string {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read Agent Guard migration: %v", err)
+	}
+	return string(content)
+}
+
+func readZcodeProfileMigration(t *testing.T) string {
+	t.Helper()
+	repositoryDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get repository directory: %v", err)
+	}
+	path := filepath.Clean(filepath.Join(repositoryDir, "..", "..", "..", "migrations", "030_v6.2_zcode_agent_guard_profile.sql"))
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read Zcode profile migration: %v", err)
 	}
 	return string(content)
 }

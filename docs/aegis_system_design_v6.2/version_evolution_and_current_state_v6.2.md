@@ -1,8 +1,10 @@
 # Aegis V6.2 版本演进与当前实现基线
 
 **版本**：6.2
-**日期**：2026-08-03
-**状态**：P0～P4 代码实现基线；专用宿主机发布门禁待验证
+**日期**：2026-08-06
+**状态**：Agent Guard 工具事件/真实会话/运行时设置/只读规则目录实现基线；专用宿主机门禁和完整 P5 正文待验证
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 
 ## 1. 文档目的
 
@@ -62,7 +64,7 @@ V6.2 遵守以下 V6.1 规则：
 | 运行时事件 | `RuntimeEvent.event_data_json` | 承载 Agent Behavior/Guard 结构化事件 |
 | Kafka/DC 链路 | server producer、`dc/internal/event_handler` | 入库、投影、告警和 WebSocket |
 | LLM worker/真实证据原则 | `api-server/internal/llm`、`internal/assistant` 及 V6.0/V6.1 设计 | 异步 Security Analyst、结构化输出和证据引用校验 |
-| AI Agent 资产表 | `host_application_assets` | 关联静态资产与运行实例 |
+| AI Agent 资产表 | `host_application_assets` | 关联静态资产与运行实例；Native Hook 支持 Codex/Claude Code/OpenClaw/Hermes/Zcode |
 | 前端 AI Agent 资产路由 | `/hosts/assets/ai-agents` | 从资产详情跳转到运行防护实例 |
 
 ### 4.2 必须补齐的差距
@@ -82,22 +84,22 @@ V6.2 遵守以下 V6.1 规则：
 | 缺少开箱即用 Agent 行为规则 | 现有 Sigma/策略未按 Agent session 和执行单元定义五项基础行为 | 内置敏感目录、外链、文件生成、敏感命令、提权五个版本化规则 |
 | 智能分析无专用安全边界 | 当前 Assistant/LLM 面向其他业务 | 有界脱敏 evidence、固定 JSON Schema、无工具、AI-only 不阻断 |
 | 无隔离覆盖状态 | 页面无法区分无沙箱、监控、阻断和远程不可见 | 新增 capability/coverage 状态 |
-| 服务端链路不适合同步阻断 | Kafka/DC 为异步处理 | 本地策略决策，服务端只接收结果 |
+| 服务端链路不适合同步阻断 | Kafka/DC 为异步处理 | 本地逃逸/通用规则仍负责同步决策；Agent Guard 工具命中由 api-server 异步匹配，服务端保存 Finding |
 
-### 4.3 P0～P4 实施后的当前代码事实
+### 4.3 2026-08-06 实施后的当前代码事实
 
-2026-08-03 已形成以下代码基线：
+2026-08-06 已形成以下代码基线：
 
 | 已实现能力 | 实际位置 | 验证事实 |
 | --- | --- | --- |
 | 11 张表、五规则、六 Profile | `migrations/029_v6.2_agent_guard.sql`、`api-server/internal/model/agent_guard_manifest.go` | SQL/Go/Agent stable key、version、canonical digest 回归；冲突不覆盖 |
 | 运行身份、session、execution unit、PID/cgroup 归属 | `agent/internal/agentguard/` | 多 Agent/多实例、PID reuse、fork、cgroup v1/v2、container 与 ambiguous 回归 |
 | monitor-only 行为与状态链 | `agent/internal/ebpf/`、`server/internal/grpc_server/`、`dc/internal/pipeline/` | bundle/config status 跨服务契约、投影/重放/脱敏测试 |
-| 五规则、Finding、逃逸 audit | `dc/internal/pipeline/agent_*` | attempt/success/inconclusive、乱序/重放、五规则与跨事件 evidence graph |
+| 通用规则、Finding、逃逸 audit | `dc/internal/pipeline/agent_*`、`api-server/internal/service/agent_guard_tool_rule_service.go` | 通用 OS 事实投影；可信工具事件由 api-server 匹配 AGB-004，直接引用工具 event ID，DC 不重复命中 |
 | 有界智能分析 | `api-server/internal/service/agent_guard_analysis_service.go` | 固定 Schema、event ID、提示注入边界、AI-only action ceiling |
 | BPF LSM 与 execution-unit freeze/action | `agent/internal/ebpf/bpf/agent_guard_lsm.bpf.c`、`agent/internal/agentguard/actions.go`、各服务 action 文件 | BPF build/readelf、状态机、protected target、timeout/auto-resume 非破坏性测试 |
-| 可信工具语义和远端关联 | `agent/internal/agentguard/tool_*`、`dc/internal/pipeline/agent_tool_semantics.go` | Ed25519/signed Unix ingress、tool→process→resource、remote sensor/no-sensor、tool-only no-action |
-| Agent Guard API 与前端 | `api-server/internal/api/handler/agent_guard_handler.go`、`frontend/src/views/detection/AgentGuard/` | 细粒度权限、脱敏 Panorama、动作确认/timeline、38 个前端定向测试和 production build |
+| 可信工具语义、真实会话和 Hook 设置 | `agent/internal/agentguard/tool_*`、`agent/internal/agentguard/runtime_settings.go`、`api-server/internal/service/agent_guard_runtime_settings_service.go` | 五类 Native Hook、session start/end、tool call 生命周期、运行时设置即时下发、tool→process PID 关联 |
+| Agent Guard API 与前端 | `api-server/internal/api/handler/agent_guard_handler.go`、`frontend/src/views/detection/AgentGuard/` | 细粒度权限、会话/实例分页、会话范围安全分析、只读内置规则目录、运行时开关、production build |
 | fresh/upgrade 发布结构 | `scripts/build_release_package.sh`、`docker-compose.yml` | release contract、Compose config、generate-only v6.2 通过，默认关闭 |
 
 代码完成不等于发布资格通过。当前未在专用宿主机执行真实 LSM `EPERM` 和

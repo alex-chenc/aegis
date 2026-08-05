@@ -31,6 +31,10 @@ type BundlePolicy map[string]any
 type BundleDefaults struct {
 	Mode                     string `json:"mode"`
 	BehaviorMonitorEnabled   bool   `json:"behavior_monitor_enabled"`
+	BehaviorPolicyEnabled    bool   `json:"behavior_policy_enabled"`
+	EscapePolicyEnabled      bool   `json:"escape_policy_enabled"`
+	BehaviorHookEnabled      bool   `json:"behavior_hook_enabled"`
+	EscapeHookEnabled        bool   `json:"escape_hook_enabled"`
 	ToolAdapterEnabled       bool   `json:"tool_adapter_enabled"`
 	EnforcementEnabled       bool   `json:"enforcement_enabled"`
 	FreezeEnabled            bool   `json:"freeze_enabled"`
@@ -45,6 +49,7 @@ type Bundle struct {
 	HostID        string           `json:"host_id"`
 	Profiles      []AdapterProfile `json:"profiles"`
 	BuiltinRules  []BundleRule     `json:"builtin_rules"`
+	EscapeRules   []BundleRule     `json:"escape_rules,omitempty"`
 	Policies      []BundlePolicy   `json:"policies,omitempty"`
 	Defaults      BundleDefaults   `json:"defaults"`
 	Digest        string           `json:"digest"`
@@ -122,6 +127,30 @@ func (b Bundle) validateStructure(expectedHostID string, options BundleValidatio
 	if err := validateBuiltinRules(b.BuiltinRules, options.EnforcementAllowed && b.Defaults.EnforcementEnabled); err != nil {
 		return err
 	}
+	if err := validateEscapeRules(b.EscapeRules, options.EnforcementAllowed && b.Defaults.EnforcementEnabled); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEscapeRules(rules []BundleRule, allowEnforcement bool) error {
+	for _, rule := range rules {
+		if !strings.HasPrefix(rule.RuleKey, "AGE-BUILTIN-") || rule.RuleVersion != 1 {
+			return fmt.Errorf("agent_guard_bundle_escape_rule_invalid: %s", rule.RuleKey)
+		}
+		if rule.Digest == "" {
+			return fmt.Errorf("agent_guard_bundle_escape_rule_digest_missing: %s", rule.RuleKey)
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "", "audit", "alert", "would_deny":
+		case "deny", "deny_and_freeze", "block":
+			if !allowEnforcement {
+				return fmt.Errorf("agent_guard_bundle_escape_rule_action_forbidden: %s", rule.RuleKey)
+			}
+		default:
+			return fmt.Errorf("agent_guard_bundle_escape_rule_action_forbidden: %s", rule.RuleKey)
+		}
+	}
 	return nil
 }
 
@@ -133,6 +162,7 @@ func validateBundleProfiles(profiles []AdapterProfile) error {
 		"claude-code-linux": "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
 		"opencode-linux":    "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
 		"gemini-cli-linux":  "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
+		"zcode-linux":       "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
 	}
 	found := make(map[string]bool, len(required))
 	for _, profile := range profiles {
@@ -141,7 +171,7 @@ func validateBundleProfiles(profiles []AdapterProfile) error {
 			return fmt.Errorf("agent_guard_bundle_profile_invalid: %s", profile.ProfileKey)
 		}
 		if profile.ProfileKey == "claude-code-linux" || profile.ProfileKey == "opencode-linux" ||
-			profile.ProfileKey == "gemini-cli-linux" {
+			profile.ProfileKey == "gemini-cli-linux" || profile.ProfileKey == "zcode-linux" {
 			calculatedDigest, err := ProfileDefinitionDigest(profile)
 			if err != nil || !constantDigestEqual(calculatedDigest, profile.Digest) {
 				return fmt.Errorf("agent_guard_bundle_profile_definition_mismatch: %s", profile.ProfileKey)

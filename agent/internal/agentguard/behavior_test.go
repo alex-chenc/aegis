@@ -14,6 +14,15 @@ func newAttributedTracker(t *testing.T) (*IdentityTracker, ProcessSnapshot) {
 	if !ok {
 		t.Fatal("controller not observed")
 	}
+	baseSubject, ok := tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("controller attribution missing")
+	}
+	if _, _, _, err := tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "session-1", time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("start trusted test session: %v", err)
+	}
 	child := ProcessSnapshot{
 		Identity: ProcessIdentity{PID: 4110, StartTicks: 110},
 		PPID:     controller.Identity.PID,
@@ -53,10 +62,43 @@ func TestNormalizerRedactsSecretsAndRejectsUnattributed(t *testing.T) {
 	if event.Decision != DecisionAudit || event.Collection.Visibility == "" {
 		t.Fatalf("P1 must emit explicit monitor-only evidence: %#v", event)
 	}
+	spoofed, ok := normalizer.Normalize(RawBehavior{
+		OccurredAt: time.Now(), Category: CategoryProcess, Operation: "exec",
+		Outcome: OutcomeSuccess, SessionID: "11111111-1111-4111-8111-111111111111", Process: child,
+		Resource: Resource{Type: "process", Identity: "/usr/bin/bash"},
+	})
+	if !ok || spoofed.SessionID == "11111111-1111-4111-8111-111111111111" || spoofed.SessionID == "" {
+		t.Fatalf("caller-supplied session UUID escaped subject attribution: %#v", spoofed)
+	}
 
 	raw.Process = ProcessSnapshot{Identity: ProcessIdentity{PID: 9000, StartTicks: 900}, Exe: "/usr/bin/bash"}
 	if _, ok := normalizer.Normalize(raw); ok {
 		t.Fatal("unattributed process entered Agent behavior stream")
+	}
+}
+
+func TestNormalizerRejectsRuntimeProcessBeforeSessionHook(t *testing.T) {
+	tracker := NewIdentityTracker("host-1", NewBuiltinProfileRegistry())
+	controller := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex")
+	if _, ok := tracker.ObserveController(controller); !ok {
+		t.Fatal("controller not observed")
+	}
+	child := ProcessSnapshot{
+		Identity: ProcessIdentity{PID: 4110, StartTicks: 110},
+		PPID:     controller.Identity.PID,
+		Exe:      "/usr/bin/bash",
+		Argv:     []string{"bash"},
+	}
+	if !tracker.OnFork(controller.Identity, child) {
+		t.Fatal("child attribution was not recorded")
+	}
+	normalizer := NewBehaviorNormalizer("host-1", "boot-1", tracker)
+	if _, ok := normalizer.Normalize(RawBehavior{
+		OccurredAt: time.Now(), Category: CategoryProcess, Operation: "exec",
+		Outcome: OutcomeSuccess, Process: child,
+		Resource: Resource{Type: "process", Identity: "/usr/bin/bash"},
+	}); ok {
+		t.Fatal("process event was emitted before a trusted Codex session hook")
 	}
 }
 

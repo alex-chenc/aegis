@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type agentGuardQueryReader interface {
 	ListBehaviors(context.Context, model.AgentBehaviorEventQuery) ([]model.AgentBehaviorEvent, int64, error)
 	ListProcessFacts(context.Context, model.AgentBehaviorEventQuery, int) ([]model.AgentBehaviorEvent, int64, error)
 	GetBehavior(context.Context, string) (*model.AgentBehaviorEvent, error)
+	GetRuntimeEvent(context.Context, string) (*model.RuntimeEvent, error)
 	GetRawBehavior(context.Context, string) (*model.RuntimeEvent, error)
 	ListFindings(context.Context, model.AgentSecurityFindingQuery) ([]model.AgentSecurityFinding, int64, error)
 	GetFinding(context.Context, uuid.UUID) (*model.AgentSecurityFinding, error)
@@ -60,6 +62,10 @@ type agentGuardQueryReader interface {
 	GetAnalysis(context.Context, uuid.UUID) (*model.AgentSecurityAnalysisRun, error)
 	ListActions(context.Context, model.AgentGuardActionQuery) ([]model.AgentGuardAction, int64, error)
 	GetAction(context.Context, uuid.UUID) (*model.AgentGuardAction, error)
+}
+
+type agentGuardSessionDeleter interface {
+	DeleteSessions(context.Context, []uuid.UUID) error
 }
 
 type agentGuardAnalysisRequester interface {
@@ -71,25 +77,63 @@ type agentGuardActionRequester interface {
 	RequestInstanceKill(context.Context, uuid.UUID, service.AgentGuardManualActionRequest, string) (*model.AgentGuardAction, error)
 }
 
+type agentGuardRuntimeSettingsReader interface {
+	Get(context.Context, uuid.UUID) (*model.AgentGuardRuntimeSettings, error)
+}
+
+type agentGuardRuntimeSettingsWriter interface {
+	Update(context.Context, model.AgentGuardRuntimeSettings, string) (*model.AgentGuardRuntimeSettings, error)
+}
+
 type agentGuardFindingDetail struct {
 	model.AgentSecurityFinding
-	EvidenceCompleteness map[string]any `json:"evidence_completeness"`
-	CounterEvidence      []string       `json:"counter_evidence"`
-	Uncertainties        []string       `json:"uncertainties"`
+	EvidenceCompleteness map[string]any                 `json:"evidence_completeness"`
+	CounterEvidence      []string                       `json:"counter_evidence"`
+	Uncertainties        []string                       `json:"uncertainties"`
+	MatchedRules         []agentGuardFindingRuleDetail  `json:"matched_rules"`
+	EscapeChain          *agentGuardEscapeEvidenceChain `json:"escape_chain,omitempty"`
+}
+
+type agentGuardEscapeEvidenceChain struct {
+	HookEventIDs       []string                    `json:"hook_event_ids"`
+	HookEvents         []agentGuardEscapeHookEvent `json:"hook_events,omitempty"`
+	ProcessEvidence    []map[string]any            `json:"process_evidence"`
+	ProcCgroupEvidence []map[string]any            `json:"proc_cgroup_evidence"`
+	Reverification     string                      `json:"reverification"`
+	Gaps               []string                    `json:"gaps,omitempty"`
+}
+
+type agentGuardEscapeHookEvent struct {
+	EventID           string `json:"event_id"`
+	EventType         string `json:"event_type,omitempty"`
+	ToolName          string `json:"tool_name,omitempty"`
+	Command           string `json:"command,omitempty"`
+	CommandLine       string `json:"command_line,omitempty"`
+	PID               int    `json:"pid,omitempty"`
+	PPID              int    `json:"ppid,omitempty"`
+	ProcessStartTicks string `json:"process_start_ticks,omitempty"`
+	ProcessName       string `json:"process_name,omitempty"`
+	ProcessExe        string `json:"process_exe,omitempty"`
+	CWD               string `json:"cwd,omitempty"`
+	Outcome           string `json:"outcome,omitempty"`
+	Decision          string `json:"decision,omitempty"`
+	Target            string `json:"target,omitempty"`
 }
 
 // AgentGuardHandler exposes the Agent Guard control plane. Analysis and manual
 // actions use separate services so AI output cannot reach an action executor.
 type AgentGuardHandler struct {
-	catalog       agentGuardCatalogReader
-	policies      agentGuardPolicyReader
-	query         agentGuardQueryReader
-	policyService *service.AgentGuardPolicyService
-	bundleService *service.AgentGuardBundleService
-	analysis      agentGuardAnalysisRequester
-	actions       agentGuardActionRequester
-	scopeSigner   *service.AgentGuardScopeSigner
-	logger        *zap.Logger
+	catalog               agentGuardCatalogReader
+	policies              agentGuardPolicyReader
+	query                 agentGuardQueryReader
+	policyService         *service.AgentGuardPolicyService
+	bundleService         *service.AgentGuardBundleService
+	analysis              agentGuardAnalysisRequester
+	actions               agentGuardActionRequester
+	runtimeSettingsReader agentGuardRuntimeSettingsReader
+	runtimeSettingsWriter agentGuardRuntimeSettingsWriter
+	scopeSigner           *service.AgentGuardScopeSigner
+	logger                *zap.Logger
 }
 
 func NewAgentGuardHandler(
@@ -125,6 +169,11 @@ func (h *AgentGuardHandler) SetActionService(actions agentGuardActionRequester) 
 	h.actions = actions
 }
 
+func (h *AgentGuardHandler) SetRuntimeSettingsService(settings agentGuardRuntimeSettingsReader, writer agentGuardRuntimeSettingsWriter) {
+	h.runtimeSettingsReader = settings
+	h.runtimeSettingsWriter = writer
+}
+
 // RegisterRoutes keeps the permission boundary visible next to every route.
 // The caller supplies the existing role middleware so tests can assert that
 // policy publish cannot inherit the less privileged draft-write permission.
@@ -136,11 +185,17 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	analysisRun gin.HandlerFunc,
 	policyWrite gin.HandlerFunc,
 	policyPublish gin.HandlerFunc,
+	sessionDelete gin.HandlerFunc,
 	actionFreeze gin.HandlerFunc,
 	actionResume gin.HandlerFunc,
 	actionKill gin.HandlerFunc,
+	settingsWrite ...gin.HandlerFunc,
 ) {
 	guard := api.Group("/agent-guard")
+	settingsPermission := policyWrite
+	if len(settingsWrite) > 0 && settingsWrite[0] != nil {
+		settingsPermission = settingsWrite[0]
+	}
 
 	guard.GET("/overview", read, h.GetOverview)
 	guard.GET("/coverage", read, h.GetCoverage)
@@ -149,7 +204,10 @@ func (h *AgentGuardHandler) RegisterRoutes(
 
 	guard.GET("/profiles", read, h.ListProfiles)
 	guard.GET("/profiles/:id", read, h.GetProfile)
+	guard.GET("/runtime-settings", read, h.GetRuntimeSettings)
+	guard.PUT("/runtime-settings", settingsPermission, h.UpdateRuntimeSettings)
 	guard.GET("/rules", read, h.ListRules)
+	guard.GET("/escape-rules", read, h.ListEscapeRules)
 	guard.GET("/rules/:rule_key", read, h.GetRule)
 	guard.GET("/rules/:rule_key/versions", read, h.ListRuleVersions)
 
@@ -165,6 +223,7 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	guard.GET("/instances/:id", read, h.GetInstance)
 	guard.POST("/instances/:id/kill", actionKill, h.KillInstance)
 	guard.GET("/instances/:id/sessions", read, h.ListInstanceSessions)
+	guard.DELETE("/sessions", sessionDelete, h.DeleteSessions)
 	guard.GET("/sessions/:id", read, h.GetSession)
 	guard.GET("/execution-units", read, h.ListExecutionUnits)
 	guard.GET("/execution-units/:id", evidenceRead, h.GetExecutionUnit)
@@ -180,12 +239,81 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	guard.GET("/behaviors/:event_id", evidenceRead, h.GetBehavior)
 	guard.GET("/behaviors/:event_id/raw", evidenceRead, h.GetRawBehavior)
 	guard.GET("/findings", read, h.ListFindings)
-	guard.GET("/findings/:finding_id", evidenceRead, h.GetFinding)
+	guard.GET("/findings/:finding_id", analysisRead, h.GetFinding)
 	guard.GET("/findings/:finding_id/analyses", analysisRead, h.ListFindingAnalyses)
 	guard.POST("/findings/:finding_id/analyze", analysisRun, h.AnalyzeFinding)
 	guard.GET("/analyses/:analysis_id", analysisRead, h.GetAnalysis)
 	guard.GET("/actions", read, h.ListActions)
 	guard.GET("/actions/:id", read, h.GetAction)
+}
+
+// ListEscapeRules serves the immutable isolation-boundary catalog. It is a
+// separate endpoint from /rules so behavior policy changes cannot accidentally
+// provision or remove escape Hooks.
+func (h *AgentGuardHandler) ListEscapeRules(c *gin.Context) {
+	rules := model.BuiltinAgentEscapeRuleManifest()
+	keyword := strings.ToLower(strings.TrimSpace(c.Query("keyword")))
+	filtered := make([]model.AgentEscapeRuleDefinition, 0, len(rules))
+	for _, rule := range rules {
+		if keyword != "" && !strings.Contains(strings.ToLower(rule.RuleKey+" "+rule.Name+" "+rule.Description), keyword) {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	page, pageSize, valid := agentGuardPageParamsFromContext(c)
+	if !valid {
+		return
+	}
+	start := (page - 1) * pageSize
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	items := filtered[start:end]
+	agentGuardSuccess(c, gin.H{"items": items, "total": len(filtered)})
+}
+
+func (h *AgentGuardHandler) GetRuntimeSettings(c *gin.Context) {
+	if h.runtimeSettingsReader == nil {
+		h.failWith(c, http.StatusServiceUnavailable, "agent_guard_runtime_settings_unavailable", "Agent Guard runtime settings are unavailable")
+		return
+	}
+	hostID, err := uuid.Parse(strings.TrimSpace(c.Query("host_id")))
+	if err != nil {
+		agentGuardError(c, http.StatusBadRequest, "agent_guard_runtime_settings_invalid", "host_id must be a UUID", nil)
+		return
+	}
+	settings, err := h.runtimeSettingsReader.Get(c.Request.Context(), hostID)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	agentGuardSuccess(c, settings)
+}
+
+func (h *AgentGuardHandler) UpdateRuntimeSettings(c *gin.Context) {
+	if h.runtimeSettingsWriter == nil {
+		h.failWith(c, http.StatusServiceUnavailable, "agent_guard_runtime_settings_unavailable", "Agent Guard runtime settings are unavailable")
+		return
+	}
+	var request model.AgentGuardRuntimeSettings
+	if !agentGuardBindJSON(c, &request) {
+		return
+	}
+	settings, err := h.runtimeSettingsWriter.Update(c.Request.Context(), request, agentGuardUsername(c))
+	if err != nil {
+		if settings != nil && settings.DispatchStatus != "" {
+			status, code, message := agentGuardErrorMapping(err)
+			agentGuardError(c, status, code, message, settings)
+			return
+		}
+		h.fail(c, err)
+		return
+	}
+	agentGuardSuccess(c, settings)
 }
 
 func (h *AgentGuardHandler) GetOverview(c *gin.Context) {
@@ -536,6 +664,7 @@ func (h *AgentGuardHandler) ListInstanceSessions(c *gin.Context) {
 		InstanceID:          instanceID.String(),
 		Status:              c.Query("status"),
 		Source:              c.Query("source"),
+		TrustedOnly:         true,
 	}
 	items, total, err := h.query.ListSessions(c.Request.Context(), query)
 	if err != nil {
@@ -556,6 +685,47 @@ func (h *AgentGuardHandler) GetSession(c *gin.Context) {
 		return
 	}
 	agentGuardSuccess(c, redactAgentGuardSession(*item))
+}
+
+func (h *AgentGuardHandler) DeleteSessions(c *gin.Context) {
+	deleter, ok := h.query.(agentGuardSessionDeleter)
+	if !ok {
+		h.failWith(c, http.StatusServiceUnavailable, "agent_guard_session_delete_unavailable", "Session deletion is unavailable")
+		return
+	}
+	var request struct {
+		SessionIDs []string `json:"session_ids"`
+	}
+	if !agentGuardBindJSON(c, &request) {
+		return
+	}
+	if len(request.SessionIDs) == 0 || len(request.SessionIDs) > agentGuardMaxPageSize {
+		h.failWith(c, http.StatusBadRequest, "agent_guard_request_invalid", "session_ids must contain between 1 and 100 IDs")
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(request.SessionIDs))
+	seen := make(map[uuid.UUID]struct{}, len(request.SessionIDs))
+	for _, raw := range request.SessionIDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil || id == uuid.Nil {
+			h.failWith(c, http.StatusBadRequest, "agent_guard_request_invalid", "session_ids contains an invalid UUID")
+			return
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if err := deleter.DeleteSessions(c.Request.Context(), ids); err != nil {
+		h.fail(c, err)
+		return
+	}
+	h.logger.Info("agent_guard_sessions_deleted",
+		zap.String("username", agentGuardUsername(c)),
+		zap.Int("session_count", len(ids)),
+	)
+	agentGuardSuccess(c, gin.H{"deleted": len(ids)})
 }
 
 func (h *AgentGuardHandler) ListExecutionUnits(c *gin.Context) {
@@ -628,6 +798,19 @@ func (h *AgentGuardHandler) ListFindings(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if query.FindingDomain != "" &&
+		query.FindingDomain != model.AgentSecurityFindingDomainTool &&
+		query.FindingDomain != model.AgentSecurityFindingDomainEscape {
+		agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "finding_domain is invalid", nil)
+		return
+	}
+	// Tool findings are session-scoped because they represent a tool-call
+	// conversation. Escape findings deliberately are not: escape analysis is
+	// keyed by host/asset/Agent scope and must remain usable without sessions.
+	if query.FindingDomain == model.AgentSecurityFindingDomainTool && query.SessionID == "" {
+		agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "session_id is required with finding_domain", nil)
+		return
+	}
 	if !h.applyFindingScope(c, &query) {
 		return
 	}
@@ -648,6 +831,20 @@ func (h *AgentGuardHandler) GetFinding(c *gin.Context) {
 	if err != nil {
 		h.fail(c, err)
 		return
+	}
+	if sessionID := strings.TrimSpace(c.Query("session_id")); sessionID != "" {
+		parsedSessionID, parseErr := uuid.Parse(sessionID)
+		if parseErr != nil || item.SessionID == nil || *item.SessionID != parsedSessionID {
+			h.fail(c, repository.ErrAgentGuardFindingNotFound)
+			return
+		}
+	}
+	if instanceID := strings.TrimSpace(c.Query("instance_id")); instanceID != "" {
+		parsedInstanceID, parseErr := uuid.Parse(instanceID)
+		if parseErr != nil || item.InstanceID == nil || *item.InstanceID != parsedInstanceID {
+			h.fail(c, repository.ErrAgentGuardFindingNotFound)
+			return
+		}
 	}
 	detail := agentGuardFindingDetail{
 		AgentSecurityFinding: *item,
@@ -686,7 +883,201 @@ func (h *AgentGuardHandler) GetFinding(c *gin.Context) {
 			}
 		}
 	}
+	if matchedRules, rulesErr := h.buildFindingRuleDetails(c.Request.Context(), item); rulesErr != nil {
+		h.logger.Warn("agent guard finding process tree unavailable",
+			zap.String("finding_id", item.ID.String()), zap.Error(rulesErr))
+		detail.MatchedRules = []agentGuardFindingRuleDetail{}
+	} else {
+		detail.MatchedRules = matchedRules
+	}
+	if isEscapeFinding(item) {
+		detail.EscapeChain = h.buildEscapeEvidenceChain(c.Request.Context(), item, detail.MatchedRules)
+	}
 	agentGuardSuccess(c, detail)
+}
+
+func isEscapeFinding(item *model.AgentSecurityFinding) bool {
+	if item == nil {
+		return false
+	}
+	var hits []map[string]any
+	if json.Unmarshal(item.RuleHits, &hits) == nil {
+		for _, hit := range hits {
+			if key, _ := hit["rule_key"].(string); isEscapeRuleKey(key) {
+				return true
+			}
+		}
+	}
+	return strings.Contains(strings.ToLower(item.Title), "escape") || strings.Contains(strings.ToLower(item.Title), "sandbox") || strings.Contains(strings.ToLower(item.Title), "逃逸")
+}
+
+func isEscapeRuleKey(key string) bool {
+	key = strings.TrimSpace(strings.ToLower(key))
+	if strings.HasPrefix(key, "age-") || strings.Contains(key, "escape") {
+		return true
+	}
+	switch key {
+	case "access_container_runtime_socket", "join_external_namespace", "mount_host_path", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift", "leave_expected_cgroup":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *model.AgentSecurityFinding, rules []agentGuardFindingRuleDetail) *agentGuardEscapeEvidenceChain {
+	chain := &agentGuardEscapeEvidenceChain{HookEventIDs: uniqueStrings(decodeAgentGuardJSONStrings(item.EvidenceEventIDs)), HookEvents: []agentGuardEscapeHookEvent{}, ProcessEvidence: []map[string]any{}, ProcCgroupEvidence: []map[string]any{}, Reverification: "inconclusive", Gaps: []string{}}
+	for _, rule := range rules {
+		for _, process := range rule.ProcessTree {
+			chain.ProcessEvidence = append(chain.ProcessEvidence, map[string]any{"pid": process.PID, "ppid": process.PPID, "start_ticks": process.ProcessStartTicks, "name": process.ProcessName, "exe": process.ProcessExe, "status": process.ProcessStatus})
+		}
+	}
+	for _, eventID := range chain.HookEventIDs {
+		if h == nil || h.query == nil {
+			break
+		}
+		raw, err := h.query.GetRuntimeEvent(ctx, eventID)
+		if err != nil || raw == nil || raw.HostID != item.HostID {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw.EventData), &payload); err != nil {
+			continue
+		}
+		actor := escapeEvidenceMap(payload["actor"])
+		argv := escapeEvidenceStrings(actor["argv"])
+		commandLine := strings.TrimSpace(raw.CommandLine)
+		if commandLine == "" {
+			commandLine = strings.Join(argv, " ")
+		}
+		processName := escapeEvidenceString(actor["process_name"])
+		if processName == "" {
+			if exe := escapeEvidenceString(actor["exe"]); exe != "" {
+				processName = filepath.Base(exe)
+			}
+		}
+		processName = firstNonEmpty(processName, escapeRuntimeCommandName(raw.CommandLine), raw.EventType)
+		processExe := escapeEvidenceString(actor["exe"])
+		pid := escapeEvidenceInt(actor["pid"])
+		if pid == 0 {
+			pid = raw.PID
+		}
+		hook := agentGuardEscapeHookEvent{
+			EventID: eventID, EventType: raw.EventType, ToolName: processName,
+			Command: commandLine, CommandLine: commandLine, PID: pid,
+			PPID: escapeEvidenceInt(actor["ppid"]), ProcessStartTicks: escapeEvidenceString(actor["start_ticks"]),
+			ProcessName: processName, ProcessExe: processExe, CWD: escapeEvidenceString(actor["cwd"]),
+			Outcome:  firstNonEmpty(escapeEvidenceString(payload["outcome"]), "unknown"),
+			Decision: escapeEvidenceString(payload["decision"]),
+			Target:   escapeEvidenceString(escapeEvidenceMap(payload["evidence"])["target"]),
+		}
+		chain.HookEvents = append(chain.HookEvents, hook)
+		if hook.PID > 0 || hook.PPID > 0 || hook.ProcessName != "" || hook.Command != "" {
+			chain.ProcessEvidence = append(chain.ProcessEvidence, map[string]any{
+				"pid": hook.PID, "ppid": hook.PPID, "start_ticks": hook.ProcessStartTicks,
+				"name": hook.ProcessName, "exe": hook.ProcessExe, "cmdline": hook.CommandLine,
+				"cwd": hook.CWD, "status": firstNonEmpty(escapeEvidenceString(payload["process_status"]), "unknown"),
+			})
+		}
+		evidence := escapeEvidenceMap(payload["evidence"])
+		procEvidence := map[string]any{"event_id": eventID, "event_type": raw.EventType, "decision": hook.Decision, "outcome": hook.Outcome}
+		for _, key := range []string{"actual", "baseline", "diff", "unavailable"} {
+			if value, ok := evidence[key]; ok && value != nil {
+				procEvidence[key] = value
+			}
+		}
+		if len(procEvidence) > 4 {
+			chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, procEvidence)
+		}
+	}
+	var graph map[string]any
+	if json.Unmarshal(item.EvidenceGraph, &graph) == nil {
+		if nodes, ok := graph["nodes"].([]any); ok {
+			for _, raw := range nodes {
+				if node, ok := raw.(map[string]any); ok && hasProcCgroupEvidence(node) {
+					chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, node)
+				}
+			}
+		}
+		for _, key := range []string{"proc", "procfs", "cgroup", "reverification", "proc_cgroup"} {
+			if value, ok := graph[key].(map[string]any); ok {
+				chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, value)
+			}
+		}
+	}
+	if len(chain.HookEventIDs) == 0 {
+		chain.Gaps = append(chain.Gaps, "hook_event_missing")
+	}
+	if len(chain.ProcessEvidence) == 0 {
+		chain.Gaps = append(chain.Gaps, "process_identity_missing")
+	}
+	if len(chain.ProcCgroupEvidence) == 0 {
+		chain.Gaps = append(chain.Gaps, "proc_cgroup_reverification_missing")
+	}
+	if len(chain.Gaps) == 0 {
+		chain.Reverification = "complete"
+	} else if len(chain.HookEventIDs) > 0 && len(chain.ProcessEvidence) > 0 {
+		chain.Reverification = "partial"
+	}
+	return chain
+}
+
+func escapeEvidenceMap(value any) map[string]any {
+	if result, ok := value.(map[string]any); ok {
+		return result
+	}
+	return map[string]any{}
+}
+
+func escapeEvidenceString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatInt(int64(typed), 10)
+	default:
+		return ""
+	}
+}
+
+func escapeEvidenceStrings(value any) []string {
+	values, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, item := range values {
+		if value := escapeEvidenceString(item); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func escapeEvidenceInt(value any) int {
+	parsed, err := strconv.Atoi(escapeEvidenceString(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func escapeRuntimeCommandName(commandLine string) string {
+	fields := strings.Fields(strings.TrimSpace(commandLine))
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
+}
+
+func hasProcCgroupEvidence(node map[string]any) bool {
+	for key := range node {
+		if strings.Contains(strings.ToLower(key), "proc") || strings.Contains(strings.ToLower(key), "cgroup") || strings.Contains(strings.ToLower(key), "namespace") {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *AgentGuardHandler) AnalyzeFinding(c *gin.Context) {
@@ -977,6 +1368,14 @@ type agentGuardPanoramaNode struct {
 	ExternalSessionID string                                `json:"external_session_id,omitempty"`
 	SessionSource     string                                `json:"session_source,omitempty"`
 	SessionConfidence string                                `json:"session_confidence,omitempty"`
+	ToolName          string                                `json:"tool_name,omitempty"`
+	ToolCallID        string                                `json:"tool_call_id,omitempty"`
+	TurnID            string                                `json:"turn_id,omitempty"`
+	Command           string                                `json:"command,omitempty"`
+	ToolInput         any                                   `json:"tool_input,omitempty"`
+	ToolResponse      any                                   `json:"tool_response,omitempty"`
+	CorrelationStatus string                                `json:"correlation_status,omitempty"`
+	CorrelationMethod string                                `json:"correlation_method,omitempty"`
 	Trust             *service.AgentGuardPanoramaTrust      `json:"trust,omitempty"`
 	Collection        *service.AgentGuardPanoramaCollection `json:"collection,omitempty"`
 }
@@ -990,6 +1389,9 @@ func (h *AgentGuardHandler) GetPanorama(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// The session-scoped process tree is paginated at its root level, while the
+	// instance lookup itself must always cover the selected scope.
+	panoramaPage, panoramaPageSize := query.Page, query.PageSize
 	query.Page, query.PageSize = 1, agentGuardMaxPageSize
 	if !h.applyAgentScope(c, &query) {
 		return
@@ -1008,6 +1410,71 @@ func (h *AgentGuardHandler) GetPanorama(c *gin.Context) {
 	}
 	if len(items) == 0 {
 		agentGuardSuccess(c, gin.H{"root": nil, "items": []agentGuardPanoramaNode{}, "total": 0})
+		return
+	}
+	if query.SessionID != "" {
+		sessionID, parseErr := uuid.Parse(query.SessionID)
+		if parseErr != nil {
+			agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "session_id must be a UUID", nil)
+			return
+		}
+		session, sessionErr := h.query.GetSession(c.Request.Context(), sessionID)
+		if sessionErr != nil {
+			h.fail(c, sessionErr)
+			return
+		}
+		var selectedInstance *model.AgentRuntimeInstance
+		for index := range items {
+			if items[index].ID == session.InstanceID {
+				selectedInstance = &items[index]
+				break
+			}
+		}
+		if selectedInstance == nil {
+			h.failWith(c, http.StatusForbidden, "agent_guard_panorama_node_invalid", "Panorama session is outside the selected Agent scope")
+			return
+		}
+		if session.ExecutionUnitID == nil {
+			agentGuardSuccess(c, agentGuardPanoramaPage([]agentGuardPanoramaNode{}, 0, 1, 1))
+			return
+		}
+		unit, unitErr := h.query.GetExecutionUnit(c.Request.Context(), *session.ExecutionUnitID)
+		if unitErr != nil || unit.HostID != selectedInstance.HostID || unit.InstanceID != selectedInstance.ID {
+			h.failWith(c, http.StatusForbidden, "agent_guard_panorama_node_invalid", "Panorama execution unit is outside the selected session")
+			return
+		}
+		ref := service.AgentGuardPanoramaNodeRef{
+			HostID: selectedInstance.HostID.String(), InstanceID: selectedInstance.ID.String(),
+			SessionID: session.ID.String(), ExecutionUnitID: unit.ID.String(),
+		}
+		behaviors, toolTotal, behaviorErr := h.query.ListBehaviors(c.Request.Context(), model.AgentBehaviorEventQuery{
+			AgentGuardPageQuery: model.AgentGuardPageQuery{Page: panoramaPage, PageSize: panoramaPageSize},
+			HostID:              selectedInstance.HostID.String(), InstanceID: selectedInstance.ID.String(),
+			SessionID: session.ID.String(), ExecutionUnitID: unit.ID.String(), Category: "tool",
+		})
+		if behaviorErr != nil {
+			h.fail(c, behaviorErr)
+			return
+		}
+		toolBehaviors := make([]model.AgentBehaviorEvent, 0, len(behaviors))
+		for _, behavior := range behaviors {
+			if behavior.Category == "tool" {
+				toolBehaviors = append(toolBehaviors, behavior)
+			}
+		}
+		if len(toolBehaviors) != len(behaviors) {
+			toolTotal = int64(len(toolBehaviors))
+		}
+		nodes := make([]agentGuardPanoramaNode, 0, len(behaviors))
+		for _, behavior := range toolBehaviors {
+			node, nodeErr := h.panoramaBehaviorNode(ref, behavior, session)
+			if nodeErr != nil {
+				h.fail(c, nodeErr)
+				return
+			}
+			nodes = append(nodes, node)
+		}
+		agentGuardSuccess(c, agentGuardPanoramaPage(nodes, toolTotal, panoramaPage, panoramaPageSize))
 		return
 	}
 	hostID := items[0].HostID.String()
@@ -1153,6 +1620,7 @@ func (h *AgentGuardHandler) panoramaInstanceChildren(
 		AgentGuardPageQuery: model.AgentGuardPageQuery{Page: page, PageSize: pageSize},
 		InstanceID:          ref.ObjectID,
 		PreferTrusted:       true,
+		TrustedOnly:         true,
 	})
 	if err != nil {
 		h.fail(c, err)
@@ -1582,9 +2050,12 @@ func bindAgentRuntimeInstanceQuery(c *gin.Context) (model.AgentRuntimeInstanceQu
 	query.AssetIDs = uniqueStrings(query.AssetIDs)
 	query.AgentTypes = agentGuardQueryValues(c, "agent_types")
 	query.InstanceIDs = agentGuardQueryValues(c, "instance_ids")
+	query.SessionID = strings.TrimSpace(c.Query("session_id"))
 	if !agentGuardValidateUUIDs(c, "asset_ids", query.AssetIDs) ||
 		!agentGuardValidateUUIDs(c, "instance_ids", query.InstanceIDs) ||
-		!agentGuardValidateOptionalUUIDFields(c, map[string]string{"host_id": query.HostID}) ||
+		!agentGuardValidateOptionalUUIDFields(c, map[string]string{
+			"host_id": query.HostID, "session_id": query.SessionID,
+		}) ||
 		!agentGuardBindTimeRange(c, &query.StartTime, &query.EndTime) {
 		return query, false
 	}
@@ -1686,6 +2157,8 @@ func (h *AgentGuardHandler) logPolicyResult(
 
 func agentGuardErrorMapping(err error) (int, string, string) {
 	switch {
+	case errors.Is(err, service.ErrAgentGuardRuntimeSettingsInvalid):
+		return http.StatusBadRequest, "agent_guard_runtime_settings_invalid", "Agent Guard runtime settings are invalid"
 	case errors.Is(err, repository.ErrAgentGuardProfileNotFound):
 		return http.StatusNotFound, "agent_guard_profile_not_found", "Agent Guard profile was not found"
 	case errors.Is(err, repository.ErrAgentGuardRuleNotFound):
@@ -2024,7 +2497,6 @@ func redactAgentGuardSessions(items []model.AgentBehaviorSession) []model.AgentB
 }
 
 func redactAgentGuardSession(item model.AgentBehaviorSession) model.AgentBehaviorSession {
-	item.ExternalSessionID = ""
 	item.CorrelationTokenHash = ""
 	return item
 }

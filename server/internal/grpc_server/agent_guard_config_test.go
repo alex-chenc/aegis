@@ -334,6 +334,24 @@ func TestConcurrentAgentGuardBundleCacheNeverRegressesVersion(t *testing.T) {
 	}
 }
 
+func TestAgentGuardRuntimeSettingsPayloadDropsPersistedDispatchMetadata(t *testing.T) {
+	hostID := uuid.New()
+	payload := fmt.Sprintf(
+		`{"schema":"aegis.agent_guard.runtime_settings.v1","version":3,"host_id":%q,"tool_adapter_enabled":true,"session_hook_enabled":true,"injections":[{"agent_type":"codex","enabled":true,"status":"pending","error_code":""}],"dispatch_status":"dispatched","updated_at":"2026-08-05T00:00:00Z"}`,
+		hostID.String(),
+	)
+	normalized, err := normalizeAgentGuardRuntimeSettingsPayload(payload, hostID)
+	if err != nil {
+		t.Fatalf("normalize runtime settings: %v", err)
+	}
+	if strings.Contains(normalized, "dispatch_status") || strings.Contains(normalized, "updated_at") || strings.Contains(normalized, `"status"`) {
+		t.Fatalf("persisted metadata leaked into agent payload: %s", normalized)
+	}
+	if !strings.Contains(normalized, `"agent_type":"codex"`) {
+		t.Fatalf("hook injection missing from normalized payload: %s", normalized)
+	}
+}
+
 func agentGuardBundlePayload(hostID uuid.UUID, version int64, digest string) string {
 	return fmt.Sprintf(
 		`{"schema":"aegis.agent_guard.bundle.v1","bundle_version":%d,"host_id":%q,"digest":%q,"profiles":[],"policies":[]}`,

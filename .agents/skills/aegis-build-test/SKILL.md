@@ -15,7 +15,7 @@ description: 构建、测试和验证 Aegis 的 api-server、server、dc、agent
 | `server/` | 在该模块运行相关包测试；需要扩大覆盖时运行 `go test ./...` | `make build` |
 | `dc/` | 在该模块运行相关包测试；需要扩大覆盖时运行 `go test ./...` | `make build` |
 | `agent/` Go 代码 | 运行相关包测试 | `make build` |
-| `agent/` eBPF 或打包链路 | 运行相关包测试 | 在 `aegis-agent-builder-ubi8:5.8.0` 内构建（见下），或 `cd agent && make docker-build` |
+| `agent/` eBPF 或打包链路 | 运行相关包测试 | 在 `aegis-agent-builder-ubi8:5.8.0` 内 `docker run` 编译打包（见下，不生成镜像） |
 | `builder/` | 运行相关包测试 | 在 `aegis-agent-builder-ubi8:5.8.0` 内构建（见下） |
 | `frontend/` | `npm run test -- <file>`，按需补充 `npm run type-check` 和 `npm run lint` | `npm run build` |
 | Compose、协议或跨服务链路 | 先验证各受影响组件，再做 Compose 冒烟或数据流验证 | 仅重建受影响服务 |
@@ -44,26 +44,23 @@ docker image inspect aegis-agent-builder-ubi8:5.8.0 >/dev/null 2>&1 \
 # 等价：cd agent && make docker-base-image
 ```
 
-### Agent 制品（镜像内构建）
+### Agent 制品（在 builder 镜像内编译，不生成 Docker 镜像）
 
-`agent/Dockerfile` 以 builder 镜像为构建阶段，执行 `make BPF_TARGET_ARCH=x86 BPF_TRANSPORT=all all`（eBPF + Go 交叉编译 + 打包），再把 `dist/` 拷到运行阶段 `/out/`：
+Agent 的 eBPF 程序必须在 `aegis-agent-builder-ubi8:5.8.0` 内编译，但**打包发布只产出 `aegis-agent.tar.gz`，不要构建 Docker 镜像**。用 `docker run` 把源码挂进 builder 镜像执行 `make all`（= `bpf` + `build` + `package`），产物经 bind mount 直接落到宿主机 `agent/dist/`，不留下任何镜像：
 
 ```bash
 cd agent
-make docker-build          # 先重建 builder 镜像，再构建 agent 制品镜像 aegis-agent-artifacts:local
-# 或不重建基础镜像、直接构建：
-docker build -f agent/Dockerfile \
-  --build-arg EBPF_BASE_IMAGE=aegis-agent-builder-ubi8:5.8.0 \
-  -t aegis-agent-artifacts:local agent/
+docker run --rm \
+  -v "$(pwd):/src/agent" \
+  -w /src/agent \
+  aegis-agent-builder-ubi8:5.8.0 \
+  make BPF_TARGET_ARCH=x86 BPF_TRANSPORT=all all
+# 产物：dist/aegis-agent-linux-amd64、dist/aegis-agent-linux-arm64、dist/aegis-agent.tar.gz、dist/bpf/*.bpf.o
 ```
 
-ARM64 产物用 `--build-arg BPF_TARGET_ARCH=arm`。需要本机 `dist/` 制品（如上传 MinIO）时从镜像拷出，不要在宿主机重跑 `make bpf`：
+`make all` 中的 `build` 会交叉编译 amd64 与 arm64 两个 Go 二进制；`BPF_TARGET_ARCH` 只决定 eBPF 编译时的架构宏（`x86`/`arm`），`package` 默认把 amd64 二进制与 eBPF 对象打成 `dist/aegis-agent.tar.gz`。
 
-```bash
-cid=$(docker create aegis-agent-artifacts:local)
-mkdir -p agent/dist && docker cp "$cid:/out/aegis-agent.tar.gz" agent/dist/aegis-agent.tar.gz
-docker rm "$cid" >/dev/null
-```
+不要用 `make docker-build` 或 `docker build -f agent/Dockerfile` 产出发布制品——它们会构建并留下 Docker 镜像 `aegis-agent-artifacts:local`，仅在确实需要容器镜像（而非上传 MinIO 的 tarball）时才用。宿主机不具备 eBPF 工具链时也不要直接在宿主机跑 `make bpf`。
 
 ### Builder 服务（镜像内构建）
 
@@ -109,9 +106,25 @@ api-server -> Server:19094 -> Agent stream
 
 ## Agent 制品与 MinIO
 
-需要上传 Agent 时，先用上一节的方法在 `aegis-agent-builder-ubi8:5.8.0` 内构建并把 `aegis-agent.tar.gz` 拷到 `agent/dist/`，再在 `agent/` 中运行 `make upload`。从环境或用户批准的密钥来源读取 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`；不得把凭证写入 skill、源码、命令输出或文档。上传后验证 `agent-artifacts/aegis-agent.tar.gz` 可读取且非空。
+需要发布 Agent 时，先用上一节 `docker run` 方法在 `aegis-agent-builder-ubi8:5.8.0` 内编译打包，确认 `agent/dist/aegis-agent.tar.gz` 为最新且非空，再上传到 MinIO 的 `agent-artifacts` 桶。
 
-卸载目标机 Agent、覆盖远程制品、停止服务或执行 `docker compose down -v` 会改变外部状态或删除数据，执行前必须获得用户确认。
+从环境或用户批准的密钥来源读取 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`（例如运行中的 MinIO 容器环境 `docker compose exec -T minio printenv MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`，或 `.env` / `.env.example`），不要硬编码或写入文件。注意 `make upload` 的 recipe 会回显 `mc alias set ... <密钥>` 命令行，导致凭证进入输出，因此用静默模式执行：
+
+```bash
+cd agent
+export MINIO_ENDPOINT="http://localhost:9000"
+export MINIO_ACCESS_KEY="$(docker compose exec -T minio printenv MINIO_ROOT_USER)"
+export MINIO_SECRET_KEY="$(docker compose exec -T minio printenv MINIO_ROOT_PASSWORD)"
+make -s upload     # -s 抑制 recipe 回显，避免凭证出现在命令输出
+```
+
+上传后验证对象可读且非空（`local` 别名已由 `make upload` 建立）：
+
+```bash
+mc ls local/agent-artifacts/aegis-agent.tar.gz
+```
+
+覆盖远程制品会改变外部状态（目标机会拉取到新版本），卸载目标机 Agent、停止服务或执行 `docker compose down -v` 同样会改变外部状态或删除数据，执行前必须获得用户确认。
 
 ## 完成条件
 

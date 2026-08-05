@@ -1,8 +1,10 @@
 # Aegis V6.2 后端、API 与通信协议设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：Agent Guard 工具事件、真实会话、运行时设置和只读规则目录已按当前实现更新；完整 P5 会话正文协议仍待实施
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 
 ## 1. 组件边界
 
@@ -10,10 +12,10 @@ V6.2 沿用当前 Aegis 服务职责：
 
 | 组件 | V6.2 职责 |
 | --- | --- |
-| `api-server` | 策略/Profile/分析配置、查询、智能研判编排、人工处置、鉴权和审计 |
+| `api-server` | 策略/Profile/规则目录、可信工具事件消费与规则匹配、查询、智能研判编排、人工处置、鉴权和审计 |
 | `server` | Agent 在线连接、配置/命令转发、事件写 Kafka |
 | `agent` | 本机识别、全行为采集、原子规则决策、拒绝、冻结和事件上报 |
-| `dc` | Kafka 消费、规范化、资源分类、序列关联、Finding、告警和 WebSocket |
+| `dc` | Kafka 消费、规范化、Agent Guard 行为投影、通用资源/序列关联、告警和 WebSocket；不重复匹配工具命令规则 |
 | `PostgreSQL` | 内置规则定义、策略、状态、实例、session、行为事件、Finding、分析和动作事实 |
 | `Redis` | 可选的短期查询缓存/发布锁，不作为 Agent Guard 事实源 |
 | `Kafka` | 复用 `aegis.security.events` 传递运行时事件 |
@@ -35,6 +37,8 @@ api-server/internal/
 │   ├── agent_guard_policy_repo.go
 │   ├── agent_behavior_rule_repo.go
 │   ├── agent_guard_runtime_repo.go
+│   ├── agent_guard_runtime_settings_repo.go
+│   └── agent_guard_tool_finding_repo.go
 │   ├── agent_behavior_event_repo.go
 │   ├── agent_security_finding_repo.go
 │   ├── agent_analysis_run_repo.go
@@ -43,6 +47,8 @@ api-server/internal/
     ├── agent_guard_policy_service.go
     ├── agent_guard_bundle_service.go
     ├── agent_guard_query_service.go
+    ├── agent_guard_runtime_settings_service.go
+    ├── agent_guard_tool_rule_service.go
     ├── agent_panorama_query_service.go
     ├── agent_security_analysis_service.go
     └── agent_guard_action_service.go
@@ -59,6 +65,9 @@ api-server/internal/
 - 发布前生成规范化 compiled preview。
 - 创建审计日志。
 
+内置规则目录通过 `/rules` 只读提供给前端；当前页面不再通过该服务创建或发布新的
+内置策略覆盖。历史 Policy/Bundle API 继续服务旧版本兼容和审计。
+
 #### AgentGuardBundleService
 
 - 查询所有 published policy 和 enabled profile。
@@ -68,6 +77,17 @@ api-server/internal/
 - 通过现有 Server gRPC `SyncAgentConfig` 下发。
 - 跟踪 pending/applied/failed/stale。
 - Agent 重连时返回当前主机最新 bundle。
+
+#### AgentGuardRuntimeSettingsService / AgentGuardToolRuleService
+
+- `AgentGuardRuntimeSettingsService` 保存 `agent_guard_runtime_settings.v1` 到
+  `system_config`，并通过 `agent_guard_runtime_settings` ConfigSync 立即下发。
+- 设置字段包括 `tool_adapter_enabled`、`session_hook_enabled`、五类智能体
+  `injections[]`、version、dispatch status/error；在线 Agent 应用后立即开始上报，
+  关闭后清理 Hook 并停止上报，离线时记录 `pending_reconnect`。
+- `AgentGuardToolRuleService` 消费可信 `tool_call_started/completed/failed`，按
+  `tool_call_id` 合并调用，从工具输入/attributes 提取命令，匹配 `AGB-BUILTIN-004`
+  并直接写入会话范围 Finding。PID/PPID 只是 eBPF 关联补充，不是规则命中来源。
 
 #### AgentGuardQueryService
 
@@ -177,8 +197,8 @@ api-server/internal/
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/rules` | 查询五个内置规则及当前策略覆盖、hit/finding 统计 |
-| GET | `/rules/:rule_key` | 规则当前版本、参数 Schema、默认值和支持能力 |
+| GET | `/rules` | 查询五个内置规则的只读目录及完整展示元数据 |
+| GET | `/rules/:rule_key` | 规则当前版本、中文/英文名称、描述、Schema、证据、执行位置和支持能力 |
 | GET | `/rules/:rule_key/versions` | 历史版本 |
 | POST | `/rules/:rule_key/preview` | 根据目标主机和覆盖参数预估命中、降级和影响 |
 
@@ -192,12 +212,23 @@ AGB-BUILTIN-004  敏感命令执行
 AGB-BUILTIN-005  提权行为
 ```
 
-内置规则 API 不提供 DELETE，也不允许 PUT 修改定义。启停、参数、severity、action 和 exception 通过 policy draft 中的 `builtin_rule_overrides` 保存并发布。
+内置规则 API 不提供 DELETE，也不允许 PUT 修改定义。当前 UI 不提供启停、参数、severity、
+action、exception 或 policy publish 编辑；历史 `builtin_rule_overrides` 仅为兼容旧策略
+数据保留。规则详情必须至少返回：
+
+```text
+rule_key/rule_version/name/name_en/description/categories
+severity/default_action/recommended_action/execution_location
+required_evidence/allow_conditions/mitre/default_parameters/parameters_schema/digest
+```
 
 规则完整契约见
 [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md)。
 
 ### 3.4 策略
+
+Policy/Bundle 仍是通用 OS 原子规则、隔离逃逸和旧版本下发链路的兼容模型，不是当前
+Agent Guard Native Hook 启停的唯一开关。Hook 和工具适配器通过运行时设置 API 即时控制。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -210,7 +241,7 @@ AGB-BUILTIN-005  提权行为
 | POST | `/policies/:id/disable` | 停用并生成新 bundle |
 | GET | `/policies/:id/deliveries` | 主机应用状态 |
 
-创建策略请求：
+创建策略请求（历史兼容接口示例）：
 
 ```json
 {
@@ -220,7 +251,7 @@ AGB-BUILTIN-005  提权行为
   "targets": {
     "host_ids": [],
     "host_group_ids": ["uuid"],
-    "agent_types": ["codex", "openclaw", "hermes"]
+      "agent_types": ["codex", "claude-code", "openclaw", "hermes", "zcode"]
   },
   "collection": {
     "categories": [
@@ -324,6 +355,33 @@ AGB-BUILTIN-005  提权行为
 - 同一策略规则 ID 唯一。
 - 同优先级冲突规则给出确定性预览。
 
+运行时设置接口（当前 Hook/工具适配器控制面）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/agent-guard/runtime-settings?host_id=<host_id>` | 查询主机当前运行时开关和注入状态 |
+| PUT | `/agent-guard/runtime-settings` | 按请求体 `host_id` 保存并立即经 Server ConfigSync 下发 |
+
+请求结构：
+
+```json
+{
+  "tool_adapter_enabled": true,
+  "session_hook_enabled": true,
+  "injections": [
+    {"agent_type": "codex", "enabled": true},
+    {"agent_type": "claude-code", "enabled": true},
+    {"agent_type": "openclaw", "enabled": true},
+    {"agent_type": "hermes", "enabled": false},
+    {"agent_type": "zcode", "enabled": true}
+  ]
+}
+```
+
+响应中的 `dispatch_status` 只表示控制面下发状态：`applied` 表示在线 Agent 已应用，
+`pending_reconnect` 表示目标 Agent 离线等待重连，`failed` 表示应用失败。前端开关不再
+展示“待下发/等待 Agent 应用”等旧的策略状态文案；用户操作结果以开关和错误提示表达。
+
 ### 3.5 运行实例、Session 和执行单元
 
 | 方法 | 路径 | 说明 |
@@ -332,7 +390,7 @@ AGB-BUILTIN-005  提权行为
 | GET | `/instances` | Agent 实例列表 |
 | GET | `/instances/:id` | 实例、控制进程、session、执行单元、覆盖和近期 finding |
 | GET | `/instances/:id/process-tree` | 当前进程树快照 |
-| GET | `/instances/:id/sessions` | 官方或推导的行为 session |
+| GET | `/instances/:id/sessions` | Native Hook 真实行为 session；无可信 ID 的事件进入未归属索引 |
 | GET | `/sessions/:id` | session 摘要、来源和证据完整性 |
 | GET | `/sessions/:id/timeline` | 跨行为域操作时间线 |
 | GET | `/panorama` | 按 Agent asset/实例/session 查询详情抽屉的行为全景树根 |
@@ -419,7 +477,8 @@ session_id=<可选>
 ```
 
 层级固定为 agent_asset/type → instance → session → execution unit →
-process。主机信息作为 Agent 根节点数据返回，不单独渲染 Host 树节点。
+process。主机信息作为 Agent 根节点数据返回，不单独渲染 Host 树节点。Session ID
+服务端分页；不能把时间窗口或 controller PID 推导成官方 session ID。
 command/file/network/privilege/isolation/rule/finding 节点挂在真实发起进程下。
 
 Process 节点必须返回 PID、PPID、cmdline；File 节点必须返回 operation、file name、resolved path；Network 节点必须返回 destination IP/domain/port/protocol。命令和路径仍受 evidence 权限控制。
@@ -442,6 +501,31 @@ cursor、每节点分页和 `has_children/child_count`，不能一次返回主�
 | GET | `/findings/:finding_id/analyses` | 历史 analysis run |
 | GET | `/analyses/:analysis_id` | 模型、提示词版本、摘要、输出和失败信息 |
 
+工具事件安全分析使用独立的会话范围语义：
+
+```json
+{
+  "operation": "tool_call_completed",
+  "tool_name": "Bash",
+  "tool_call_id": "exec-uuid",
+  "session_id": "native-session-uuid",
+  "tool_input": {"command": "curl ..."},
+  "command": "curl ...",
+  "raw_event_id": "event-uuid",
+  "pid_correlation": {
+    "pid": 4121,
+    "ppid": 4120,
+    "cmdline": "curl ...",
+    "status": "pid_resolved"
+  }
+}
+```
+
+`AGB-BUILTIN-004` 只由 api-server 对上述可信工具事件匹配；Finding 的规则归属为
+`api-server`，直接证据为 `raw_event_id`。DC/eBPF 不再各自产生一条同命中的 Finding。
+工具命中查询必须带 `session_id`，安全分析页面只返回当前选中会话的工具名、工具输入/结果、
+命中规则、命令行和可关联 PID/PPID，不返回全量进程树。
+
 筛选：
 
 ```text
@@ -449,6 +533,7 @@ host_id
 agent_type
 instance_id
 session_id
+finding_domain=tool|escape
 execution_unit_id
 category
 operation
@@ -462,11 +547,18 @@ confidence_min
 rule_id
 policy_id
 resource_keyword
-analysis_status
-start_time/end_time
+  analysis_status
+tool_name
+tool_call_id
+evidence_source
+  start_time/end_time
 handled
 page/page_size
 ```
+
+行为模式安全分析必须同时携带 `session_id` 和 `finding_domain=tool`；逃逸模式使用
+`session_id` 和 `finding_domain=escape`。服务端按 Finding 域过滤，不能仅依赖前端
+隐藏列表项；历史 `single:v1` Finding 不得进入当前工具命中列表。
 
 行为 API 永不提供文件内容、网络内容、stdin/stdout/stderr 或原始环境变量。命令和路径详情需要 `agent_guard:evidence:read` 权限。
 
@@ -777,8 +869,13 @@ if strings.HasPrefix(eventType, "agent_") &&
     persistRawRuntimeEvent()
     projectAgentBehaviorOrGuardEvent()
     updateRuntimeState()
-    evaluateAtomicAndSequenceRules()
-    updateSecurityFinding()
+    if isAgentGuardToolEvent(eventType) {
+        // 工具命令规则由 api-server 消费 Kafka 后匹配；DC 只投影和关联。
+        projectToolEventOnly()
+    } else {
+        evaluateGenericRuntimeRules()
+        updateSecurityFinding()
+    }
     maybeRequestAnalysis()
     maybeGenerateAlert()
     broadcastTypedUpdate()
@@ -793,7 +890,8 @@ if strings.HasPrefix(eventType, "agent_") &&
 - `agent_security_analysis_runs` 保存每次异步分析的版本、输入摘要、输出和失败事实。
 - 两者使用同一个 `event_id` 幂等关联。
 - 行为事件和 finding 通过 evidence relation 关联，finding 不覆盖原始事件。
-- DC Kafka 重放时使用 upsert/do nothing 和规则幂等键防重复。
+- DC Kafka 重放时使用 upsert/do nothing 和投影幂等键防重复。Agent Guard 工具事件
+  不在 DC 创建 `AGB-BUILTIN-004` Finding，避免与 api-server 消费者重复。
 
 ### 8.4 告警生成
 
@@ -820,17 +918,19 @@ host_id + instance_id + session_id + execution_unit_id + rule_id + correlation_b
 
 时间窗口由 Agent Guard 配置控制，默认建议 5 分钟。
 
-DC 首批必须注册五个内置 evaluator：
+DC 不再注册 Agent Guard 工具命令 evaluator。通用 OS 事件的资源/状态分类仍可由
+已有投影或通用运行时规则链路处理；工具事件的规则职责如下：
 
 | Rule ID | DC 职责 |
 | --- | --- |
-| `AGB-BUILTIN-001` | 根据 resolved path/resource classification 和 operation/outcome 分层 |
-| `AGB-BUILTIN-002` | 根据 IP/CIDR、可信 DNS 证据、trusted list 和代理限制判定 externality |
-| `AGB-BUILTIN-003` | 区分 create attempt/success，并按路径、mode、executable/hidden 属性分层 |
-| `AGB-BUILTIN-004` | 按 resolved executable 和 argv token 边界分类敏感命令 |
-| `AGB-BUILTIN-005` | 根据 credential/capability/namespace before/after 区分 attempted/succeeded/inconclusive |
+| `AGB-BUILTIN-001` | 通用文件事实投影/分类；不改变工具命中归属 |
+| `AGB-BUILTIN-002` | 通用网络事实投影/地址分类；不改变工具命中归属 |
+| `AGB-BUILTIN-003` | 通用文件创建事实投影；不改变工具命中归属 |
+| `AGB-BUILTIN-004` | **api-server** 从可信工具输入匹配命令；DC 不执行 |
+| `AGB-BUILTIN-005` | 通用身份/capability 事实投影和状态分类 |
 
-DC 还要在同一 instance/session/process chain 的 5 分钟默认窗口中关联五项 rule hit。任何单点 hit 和联合 finding 都保留各自 rule version 与 evidence event IDs。
+跨事件关联只使用真实 instance/session/process/correlation 证据。api-server 的工具
+命中可以和 DC 投影的 OS 事实建立 evidence relation，但不会因关联再次生成一条工具命中。
 
 ### 8.5 智能分析
 

@@ -1,73 +1,69 @@
 <template>
   <div class="security-analysis">
-    <section class="builtin-rules">
-      <header>
-        <h3>{{ t('agentGuard.analysis.builtinRules') }}</h3>
-        <span>{{ t('agentGuard.analysis.ruleCount', { count: rules.length }) }}</span>
-      </header>
-      <div class="rule-grid">
-        <article v-for="rule in rules" :key="`${rule.rule_key}:${rule.rule_version}`">
-          <div>
-            <strong>{{ rule.rule_key }}@{{ rule.rule_version }}</strong>
-            <el-tag size="small" effect="plain">
-              {{ rule.enabled ?? rule.default_enabled ? t('agentGuard.analysis.enabled') : t('agentGuard.analysis.disabled') }}
-            </el-tag>
-          </div>
-          <span>{{ rule.name }}</span>
-          <small>
-            {{ rule.severity || rule.default_severity || 'info' }}
-            · {{ rule.action || rule.default_action || 'audit' }}
-          </small>
-        </article>
-      </div>
-    </section>
-
     <div class="analysis-workspace">
-      <section class="finding-list">
-        <el-empty v-if="findings.length === 0" :description="t('agentGuard.states.analysisNotAvailable')" />
+      <section class="finding-list matched-rule-list">
+        <header class="panel-header">
+          <div>
+            <h3>{{ t('agentGuard.analysis.matchedRules') }}</h3>
+            <p>{{ t('agentGuard.analysis.matchedRulesHint') }}</p>
+          </div>
+          <el-tag size="small" effect="plain">{{ ruleRows.length }}</el-tag>
+        </header>
+
+        <el-empty
+          v-if="ruleRows.length === 0"
+          :description="t('agentGuard.analysis.noMatchedRules')"
+        />
         <button
-          v-for="finding in findings"
+          v-for="row in ruleRows"
           v-else
-          :key="finding.id"
+          :key="row.id"
+          class="finding-row"
           type="button"
-          :class="{ selected: activeFinding?.id === finding.id }"
-          @click="selectFinding(finding)"
+          :class="{ selected: activeRule?.id === row.id }"
+          @click="selectRule(row)"
         >
           <span>
-            <strong>{{ finding.title }}</strong>
-            <small>{{ finding.id }}</small>
+            <strong>{{ row.name }}</strong>
+            <small>{{ row.ruleKey || t('agentGuard.analysis.unclassifiedRule') }}</small>
           </span>
           <span class="finding-risk">
-            <el-tag size="small" :type="severityType(finding.severity)" effect="plain">
-              {{ finding.severity }}
+            <el-tag size="small" :type="severityType(row.severity)" effect="plain">
+              {{ row.severity || 'info' }}
             </el-tag>
-            <small>{{ finding.verdict || 'inconclusive' }}</small>
+            <small>{{ t('agentGuard.analysis.eventCount', { count: row.eventCount }) }}</small>
           </span>
         </button>
+        <el-pagination
+          v-if="findingTotal > findingPageSize"
+          class="finding-pagination"
+          background
+          small
+          layout="total, prev, pager, next"
+          :current-page="findingPage"
+          :page-size="findingPageSize"
+          :total="findingTotal"
+          @current-change="emit('finding-page-change', $event)"
+        />
       </section>
 
-      <section class="finding-detail">
-        <el-empty v-if="!activeFinding" :description="t('agentGuard.analysis.selectFinding')" />
+      <section class="finding-detail rule-tool-detail">
+        <el-empty
+          v-if="!activeRule"
+          :description="t('agentGuard.analysis.selectMatchedRule')"
+        />
         <template v-else>
-          <el-alert
-            v-if="isAIOnly(activeFinding)"
-            class="ai-only-notice"
-            type="info"
-            :closable="false"
-            :title="t('agentGuard.findings.aiOnlyNotice')"
-            show-icon
-          />
           <header>
             <div>
-              <h3>{{ activeFinding.title }}</h3>
+              <h3>{{ activeRule.name }}</h3>
               <p>
-                {{ activeFinding.verdict || 'inconclusive' }}
-                · {{ t('agentGuard.findings.confidence') }}
-                {{ percent(activeFinding.confidence) }}
+                {{ activeRule.ruleKey || t('agentGuard.analysis.unclassifiedRule') }}
+                <span v-if="activeRule.ruleVersion">@{{ activeRule.ruleVersion }}</span>
+                · {{ t('agentGuard.analysis.eventCount', { count: activeRule.eventCount }) }}
               </p>
             </div>
             <el-button
-              v-if="!isAIOnly(activeFinding)"
+              v-if="activeFinding && !isAIOnly(activeFinding)"
               size="small"
               :loading="analysisPending"
               @click="emit('analyze', activeFinding.id)"
@@ -76,58 +72,60 @@
             </el-button>
           </header>
 
-          <div class="finding-section">
-            <h4>{{ t('agentGuard.analysis.attackChain') }}</h4>
-            <ol v-if="activeFinding.attack_stages?.length">
-              <li v-for="(stage, index) in activeFinding.attack_stages" :key="index">
-                {{ formatValue(stage) }}
-              </li>
-            </ol>
-            <p v-else>{{ t('agentGuard.analysis.noAttackChain') }}</p>
-          </div>
-
-          <div class="finding-section">
-            <h4>{{ t('agentGuard.analysis.evidence') }}</h4>
-            <div class="event-ids">
-              <button
-                v-for="eventId in evidenceIDs(activeFinding)"
-                :key="eventId"
-                type="button"
-                @click="emit('open-evidence', eventId)"
-              >
-                {{ eventId }}
-              </button>
-              <span v-if="evidenceIDs(activeFinding).length === 0">-</span>
+          <div class="finding-section tool-call-section">
+            <div class="section-title-row">
+              <div>
+                <h4>{{ t('agentGuard.analysis.matchedToolCalls') }}</h4>
+                <p>{{ t('agentGuard.analysis.matchedToolCallsHint') }}</p>
+              </div>
+              <el-tag size="small" type="danger" effect="plain">
+                {{ t('agentGuard.analysis.matchedEventCount', { count: activeRule.eventCount }) }}
+              </el-tag>
             </div>
-          </div>
-
-          <div class="finding-section completeness">
-            <h4>{{ t('agentGuard.analysis.completeness') }}</h4>
-            <strong>{{ activeFinding.evidence_completeness?.visibility || 'unknown' }}</strong>
-            <span>{{ activeFinding.evidence_completeness?.reasons?.join(' · ') || '-' }}</span>
-          </div>
-
-          <div v-if="counterEvidence(activeFinding).length" class="finding-section">
-            <h4>{{ t('agentGuard.analysis.counterEvidence') }}</h4>
-            <ul>
-              <li v-for="item in counterEvidence(activeFinding)" :key="item">{{ item }}</li>
-            </ul>
-          </div>
-
-          <div v-if="uncertainties(activeFinding).length" class="finding-section">
-            <h4>{{ t('agentGuard.analysis.uncertainties') }}</h4>
-            <ul>
-              <li v-for="item in uncertainties(activeFinding)" :key="item">{{ item }}</li>
-            </ul>
-          </div>
-
-          <div v-if="latestAnalysis" class="finding-section">
-            <h4>{{ t('agentGuard.analysis.history') }}</h4>
-            <p>
-              {{ latestAnalysis.status }} · {{ latestAnalysis.provider || '-' }}
-              / {{ latestAnalysis.model || '-' }} · {{ latestAnalysis.prompt_version }}
-            </p>
-            <small>{{ latestAnalysis.input_digest }}</small>
+            <div v-if="activeRule.detail?.tool_calls?.length" class="tool-call-list">
+              <article
+                v-for="call in activeRule.detail.tool_calls"
+                :key="call.event_id"
+                class="tool-call-card"
+              >
+                <header>
+                  <strong>{{ call.tool_name }}</strong>
+                  <el-tag size="small" :type="call.outcome === 'failed' ? 'danger' : 'success'" effect="plain">
+                    {{ call.outcome || 'unknown' }}
+                  </el-tag>
+                </header>
+                <p class="tool-call-meta">
+                  {{ call.occurred_at || '-' }}
+                  <span v-if="call.pid"> · PID {{ call.pid }}</span>
+                  <span v-if="call.ppid !== undefined"> · PPID {{ call.ppid }}</span>
+                  <span v-if="call.correlation_status === 'unmatched'"> · {{ t('agentGuard.analysis.pidUnmatched') }}</span>
+                  <span v-else-if="call.correlation_status"> · {{ call.correlation_status }}</span>
+                </p>
+                <div v-if="call.command" class="tool-command-row">
+                  <span>{{ t('agentGuard.analysis.toolCommand') }}</span>
+                  <code class="tool-command">{{ call.command }}</code>
+                </div>
+                <dl>
+                  <div v-if="call.tool_input !== undefined">
+                    <dt>{{ t('agentGuard.analysis.toolInput') }}</dt>
+                    <dd>{{ formatToolPayload(call.tool_input) }}</dd>
+                  </div>
+                  <div v-if="call.tool_response !== undefined">
+                    <dt>{{ t('agentGuard.analysis.toolResponse') }}</dt>
+                    <dd>{{ formatToolPayload(call.tool_response) }}</dd>
+                  </div>
+                  <div v-if="call.command_line">
+                    <dt>{{ t('agentGuard.analysis.correlatedCommandLine') }}</dt>
+                    <dd>{{ call.command_line }}</dd>
+                  </div>
+                </dl>
+              </article>
+            </div>
+            <el-empty
+              v-else
+              :description="t('agentGuard.analysis.noToolCalls')"
+              :image-size="56"
+            />
           </div>
         </template>
       </section>
@@ -139,90 +137,160 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
-  AgentSecurityAnalysisRun,
+  AgentSecurityFindingRuleDetail,
   AgentSecurityFindingSummary,
   BuiltinAgentBehaviorRuleSummary,
 } from '@/types/agentGuard'
 
+interface MatchedRuleRow {
+  id: string
+  findingId: string
+  name: string
+  ruleKey: string
+  ruleVersion?: number
+  severity?: string
+  eventCount: number
+  detail?: AgentSecurityFindingRuleDetail
+}
+
 const props = withDefaults(defineProps<{
   rules: BuiltinAgentBehaviorRuleSummary[]
   findings: AgentSecurityFindingSummary[]
-  analyses?: AgentSecurityAnalysisRun[]
+  selectedFinding?: AgentSecurityFindingSummary | null
+  findingTotal?: number
+  findingPage?: number
+  findingPageSize?: number
   selectedFindingId: string
   analysisPending?: boolean
 }>(), {
-  analyses: () => [],
+  selectedFinding: null,
+  findingTotal: 0,
+  findingPage: 1,
+  findingPageSize: 20,
   analysisPending: false,
 })
 
 const emit = defineEmits<{
   (event: 'select-finding', id: string): void
-  (event: 'open-evidence', id: string): void
   (event: 'analyze', id: string): void
+  (event: 'finding-page-change', page: number): void
 }>()
 
-const { t } = useI18n()
-const localFindingId = ref(props.selectedFindingId)
+const { t, te } = useI18n()
+const localRuleId = ref('')
+const ruleNameKeys: Record<string, string> = {
+  'AGB-BUILTIN-001': 'AGB-BUILTIN-001',
+  'AGB-BUILTIN-002': 'AGB-BUILTIN-002',
+  'AGB-BUILTIN-003': 'AGB-BUILTIN-003',
+  'AGB-BUILTIN-004': 'AGB-BUILTIN-004',
+  'AGB-BUILTIN-005': 'AGB-BUILTIN-005',
+  access_container_runtime_socket: 'access_container_runtime_socket',
+  join_external_namespace: 'join_external_namespace',
+  mount_host_path: 'mount_host_path',
+  write_cgroupfs: 'write_cgroupfs',
+  credential_or_capability_gain: 'credential_or_capability_gain',
+  isolation_baseline_drift: 'isolation_baseline_drift',
+  leave_expected_cgroup: 'leave_expected_cgroup',
+}
 
-watch(() => props.selectedFindingId, value => {
-  localFindingId.value = value
-})
+const ruleRows = computed<MatchedRuleRow[]>(() => props.findings.flatMap(finding => {
+  const details = finding.matched_rules || []
+  const hits = finding.rule_hits || []
+  if (details.length) {
+    return details.map(detail => ({
+      id: `${finding.id}:${detail.rule_key}:${detail.rule_version || 0}`,
+      findingId: finding.id,
+      name: displayRuleName(detail.rule_key, detail.name),
+      ruleKey: detail.rule_key,
+      ruleVersion: detail.rule_version,
+      severity: detail.severity || finding.severity,
+      eventCount: detail.event_ids?.length || 0,
+      detail,
+    }))
+  }
+  if (hits.length) {
+    return hits.map((hit, index) => {
+      const rule = props.rules.find(item => item.rule_key === hit.rule_key &&
+        (!hit.rule_version || item.rule_version === hit.rule_version))
+      const eventIds = uniqueStrings([
+        hit.event_id || '',
+        ...(hit.event_ids || []),
+        ...(hit.evidence_event_ids || []),
+      ])
+      return {
+        id: `${finding.id}:${hit.rule_key || 'rule'}:${hit.rule_version || index}`,
+        findingId: finding.id,
+        name: displayRuleName(hit.rule_key || '', hit.rule_name || rule?.name || finding.title),
+        ruleKey: hit.rule_key || '',
+        ruleVersion: hit.rule_version,
+        severity: hit.severity || finding.severity,
+        eventCount: eventIds.length,
+      }
+    })
+  }
+  return [{
+    id: `${finding.id}:unclassified`,
+    findingId: finding.id,
+    name: displayRuleName('', finding.title),
+    ruleKey: '',
+    ruleVersion: undefined,
+    severity: finding.severity,
+    eventCount: finding.evidence_event_ids?.length || 0,
+  }]
+}))
 
-watch(() => props.findings, findings => {
-  if (!localFindingId.value && findings.length) localFindingId.value = findings[0].id
-}, { immediate: true })
-
-const activeFinding = computed(() =>
-  props.findings.find(item => item.id === localFindingId.value) || props.findings[0] || null,
+const activeRule = computed(() =>
+  ruleRows.value.find(row => row.id === localRuleId.value) || ruleRows.value[0] || null,
 )
 
-const latestAnalysis = computed(() => {
-  if (!activeFinding.value) return null
-  return props.analyses
-    .filter(item => item.finding_id === activeFinding.value?.id)
-    .sort((left, right) => right.attempt - left.attempt)[0] || null
+const activeFinding = computed(() => {
+  const row = activeRule.value
+  if (!row) return null
+  if (props.selectedFinding?.id === row.findingId) return props.selectedFinding
+  return props.findings.find(item => item.id === row.findingId) || null
 })
 
-function selectFinding(finding: AgentSecurityFindingSummary) {
-  localFindingId.value = finding.id
-  emit('select-finding', finding.id)
+watch([ruleRows, () => props.selectedFindingId], ([rows, selectedFindingId]) => {
+  const selectedRow = rows.find(row => row.findingId === selectedFindingId)
+  if (!rows.some(row => row.id === localRuleId.value)) {
+    localRuleId.value = selectedRow?.id || rows[0]?.id || ''
+  }
+}, { immediate: true })
+
+function selectRule(row: MatchedRuleRow) {
+  localRuleId.value = row.id
+  if (row.findingId !== props.selectedFindingId) emit('select-finding', row.findingId)
 }
 
 function isAIOnly(finding: AgentSecurityFindingSummary) {
   return finding.decision_sources?.length === 1 && finding.decision_sources[0] === 'ai'
 }
 
-function evidenceIDs(finding: AgentSecurityFindingSummary) {
-  const ids = new Set(finding.evidence_event_ids || [])
-  for (const hit of finding.rule_hits || []) {
-    for (const id of hit.evidence_event_ids || hit.event_ids || []) ids.add(id)
-  }
-  return [...ids]
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
 }
 
-function counterEvidence(finding: AgentSecurityFindingSummary) {
-  return finding.counter_evidence || latestAnalysis.value?.output?.counter_evidence || []
-}
-
-function uncertainties(finding: AgentSecurityFindingSummary) {
-  return finding.uncertainties || latestAnalysis.value?.output?.uncertainties || []
-}
-
-function percent(value?: number) {
-  if (value == null) return '-'
-  return `${Math.round(value * 100)}%`
-}
-
-function formatValue(value: unknown) {
-  if (typeof value === 'string') return value
-  return JSON.stringify(value)
-}
-
-function severityType(severity: string) {
+function severityType(severity?: string) {
   if (severity === 'critical' || severity === 'high') return 'danger'
   if (severity === 'medium') return 'warning'
   if (severity === 'low') return 'success'
   return 'info'
+}
+
+function formatToolPayload(payload: unknown) {
+  if (typeof payload === 'string') return payload
+  try {
+    return JSON.stringify(payload)
+  } catch {
+    return String(payload)
+  }
+}
+
+function displayRuleName(ruleKey: string, fallback?: string) {
+  const key = ruleNameKeys[ruleKey]
+  const messageKey = key ? `agentGuard.analysis.ruleNames.${key}` : ''
+  if (messageKey && te(messageKey)) return t(messageKey)
+  return fallback || ruleKey || t('agentGuard.analysis.unclassifiedRule')
 }
 </script>
 
@@ -233,75 +301,51 @@ function severityType(severity: string) {
   gap: 14px;
 }
 
-.builtin-rules,
+.analysis-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) minmax(520px, 5fr);
+  gap: 14px;
+}
+
 .finding-list,
 .finding-detail {
+  min-width: 0;
   padding: 12px;
   border: 1px solid var(--aegis-border);
   border-radius: 14px;
   background: #fff;
 }
 
-.builtin-rules > header,
-.finding-detail > header {
+.panel-header,
+.finding-detail > header,
+.section-title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.builtin-rules h3,
-.finding-detail h3 {
+.panel-header h3,
+.finding-detail h3,
+.finding-section h4 {
   margin: 0;
 }
 
-.rule-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.rule-grid article {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-  padding: 10px;
-  border: 1px solid var(--aegis-border);
-  border-radius: 10px;
-}
-
-.rule-grid article > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.rule-grid strong,
-.rule-grid span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rule-grid small,
-.finding-detail p,
-.finding-detail small {
+.panel-header p,
+.finding-detail p {
+  margin: 5px 0 0;
   color: var(--aegis-text-muted);
-}
-
-.analysis-workspace {
-  display: grid;
-  grid-template-columns: minmax(280px, 2fr) minmax(420px, 3fr);
-  gap: 14px;
 }
 
 .finding-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.finding-pagination {
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 .finding-list > button {
@@ -329,59 +373,98 @@ function severityType(severity: string) {
   gap: 4px;
 }
 
+.finding-list strong,
 .finding-list small {
+  overflow-wrap: anywhere;
+}
+
+.finding-list small,
+.finding-detail small {
   color: var(--aegis-text-muted);
 }
 
 .finding-risk {
   align-items: flex-end;
+  white-space: nowrap;
 }
 
 .finding-section {
-  padding: 12px 0;
+  padding: 14px 0 0;
   border-top: 1px solid var(--aegis-border);
 }
 
-.finding-section h4 {
-  margin: 0 0 7px;
+.tool-call-section {
+  margin-top: 16px;
 }
 
-.finding-section ul,
-.finding-section ol {
-  margin: 0;
-  padding-left: 20px;
+.section-title-row p {
+  margin-bottom: 0;
 }
 
-.event-ids {
+.tool-call-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 62vh;
+  margin-top: 12px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
-.event-ids button {
-  padding: 3px 7px;
+.tool-call-card {
+  padding: 12px;
   border: 1px solid var(--aegis-border);
-  border-radius: 7px;
-  background: #f8fafc;
-  color: var(--el-color-primary);
-  cursor: pointer;
+  border-radius: 10px;
+  background: var(--aegis-surface, #fff);
 }
 
-.completeness {
+.tool-call-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-call-meta {
+  margin: 6px 0;
+  color: var(--aegis-text-muted);
+  font-size: 12px;
+}
+
+.tool-command,
+.tool-call-card dd {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.tool-command {
+  margin: 8px 0;
+  color: var(--aegis-text);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tool-call-card dl {
+  margin: 0;
+}
+
+.tool-call-card dl > div {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 5px 12px;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--aegis-border);
 }
 
-.completeness h4 {
-  grid-column: 1 / -1;
+.tool-call-card dt {
+  color: var(--aegis-text-muted);
+}
+
+.tool-call-card dd {
+  margin: 0;
 }
 
 @media (max-width: 1200px) {
-  .rule-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .analysis-workspace {
     grid-template-columns: 1fr;
   }

@@ -356,7 +356,7 @@ func TestAgentGuardActionStatusProjectsRealTerminalResult(t *testing.T) {
 	}
 }
 
-func TestAgentGuardRuleFlagsAreLayeredAndReplayBackfillsFinding(t *testing.T) {
+func TestAgentGuardBehaviorRulesAreDelegatedToAPIServer(t *testing.T) {
 	logger.Logger = zap.NewNop()
 	logger.Sugar = logger.Logger.Sugar()
 	hostID := uuid.New()
@@ -391,15 +391,10 @@ func TestAgentGuardRuleFlagsAreLayeredAndReplayBackfillsFinding(t *testing.T) {
 	if err := handler.Handle(input); err != nil {
 		t.Fatalf("replay Handle: %v", err)
 	}
-	if rules.behaviorCalls != 2 {
-		t.Fatalf("rule calls=%d, replay must backfill idempotently", rules.behaviorCalls)
+	if rules.behaviorCalls != 0 {
+		t.Fatalf("DC evaluated behavior rules %d times; rule ownership belongs to api-server", rules.behaviorCalls)
 	}
-	for _, options := range rules.options {
-		if !options.RulesEnabled || options.FindingsEnabled || options.AlertsEnabled {
-			t.Fatalf("flags were not layered: %#v", options)
-		}
-	}
-	if len(notifier.updates) != 1 || len(notifier.findings) != 1 {
+	if len(notifier.updates) != 1 || len(notifier.findings) != 0 {
 		t.Fatalf("behavior updates=%d finding updates=%d", len(notifier.updates), len(notifier.findings))
 	}
 }

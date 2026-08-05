@@ -1,8 +1,13 @@
 # Aegis V6.2 智能体行为采集与安全分析设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：行为事实与 Agent Guard 工具事件链路已实现；完整会话正文/AI 语义检测仍为 P5 设计范围
+
+> 当前实现以 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)
+> 为准。本文同时描述通用 OS 行为分析目标和已实现的 Agent Guard 工具事件链路：
+> 工具命令规则由 api-server 匹配，Agent eBPF 只做 OS 事实和 PID/PPID 关联，DC 对
+> Agent Guard 工具事件只做规范化投影，不重复命中规则。
 
 ## 1. 能力定位
 
@@ -24,8 +29,8 @@ V6.2 同时维持两类结果：
 1. 对本机可观测 Agent，能够从控制进程追溯到 shell、Python、Node、编译器、容器进程等实际执行进程。
 2. 统一采集进程/命令、文件、网络、身份权限、持久化、隔离控制和安全工具规避等行为域。
 3. 将同一次用户请求或 Agent 执行阶段的行为关联成 session、execution unit、process chain 和 operation graph。
-4. 前端能按以 PID 为主干的行为全景树和时间线展示“谁在什么时候对什么执行了什么操作，结果如何”。
-5. 单事件规则和跨事件规则可以独立产生 finding，并引用原始 `event_id`。
+4. 前端能按真实会话 ID 分页选择，并以 PID/PPID/cmdline 为主干展示该会话的行为全景和时间线。
+5. Agent Guard 工具单事件规则由 api-server 独立产生 finding，并引用原始工具 `event_id`；通用 OS 单事件和跨事件规则继续按各自链路执行。
 6. Aegis 智能分析器只能基于真实、脱敏、带来源的证据输出结构化结论，不能虚构未观测行为。
 7. 自动阻断必须来自本地确定性规则，或“高置信关联规则 + 明确策略授权”；智能分析器单独判定默认只告警或等待人工确认。
 8. 事件丢失、字段截断、远程不可观测和工具语义缺失必须显示在证据完整性中。
@@ -44,7 +49,7 @@ V6.2 同时维持两类结果：
 | `isolation` | unshare/setns、mount、pivot_root、chroot、cgroup 变更 | syscall、目标、namespace/cgroup/mount 基线差异 | 全量采集并进入逃逸专项规则 |
 | `kernel` | bpf、perf_event_open、module load、设备访问 | syscall、参数摘要、capability、结果 | Agent 范围内全量采集 |
 | `ipc` | Unix socket、关键管道、共享内存 | endpoint/inode、对端进程、结果 | 关键端点全量，其余按策略 |
-| `tool` | shell、编辑器、浏览器、MCP/插件工具调用 | tool name、call ID、参数摘要、结果摘要 | 仅 Adapter 可提供可信 Hook 时采集 |
+| `tool` | shell、编辑器、浏览器、MCP/插件工具调用 | tool name、call ID、输入/结果摘要、session ID | 仅 Native Hook/Adapter 可提供可信事件时采集 |
 | `control` | 启动容器/远程 sandbox、切换 backend | backend、container/session ID、配置来源 | Adapter 控制面采集 |
 
 ### 3.2 命令采集
@@ -142,17 +147,33 @@ tool_call_completed
 tool_call_failed
 ```
 
-可信来源包括：
+当前 Native Hook 的可信生命周期来源包括：
 
 - Agent 官方审计日志或事件流。
 - 可验证的本地 plugin/hook API。
 - Aegis 启动包装器生成的 correlation token。
 
+支持的 Native Hook 智能体为 Codex、Claude Code、OpenClaw、Hermes、Zcode。
 仅解析普通终端输出或猜测进程名不能作为可信 tool call。没有 Hook 时前端显示：
 
 ```text
 工具语义不可观测；操作系统行为采集正常
 ```
+
+工具事件必须保留以下语义字段，并以 `tool_call_id` 将开始和终态合并为一个逻辑调用：
+
+```text
+operation: tool_call_started | tool_call_completed | tool_call_failed
+tool_name
+tool_call_id
+tool_input / tool_output_summary
+session_id（Native Hook 真实会话 ID）
+command（从工具输入/attributes 提取的可匹配命令行）
+```
+
+工具调用由 api-server 消费并执行 `AGB-BUILTIN-004` 命令匹配。Agent 不在本地
+创建工具规则 Finding，DC 也不再调用 Agent Guard 工具命中器；PID、PPID、cmdline、
+start_ticks 等 eBPF/`/proc` 信息仅补充工具事件的进程关联。
 
 ## 4. 统一事件模型
 
@@ -237,12 +258,12 @@ AgentAsset
 
 `BehaviorSession` 表示一次可关联的工作阶段。来源优先级：
 
-1. 产品 Adapter 提供的 conversation/run/task ID。
-2. Aegis 包装器注入的 correlation token。
-3. execution unit 生命周期。
-4. 控制进程活动窗口推导的 `inferred session`。
+1. Native Hook 提供的真实 session ID。
+2. 产品 Adapter 提供的 conversation/run/task ID（仅在能验证来源时）。
+3. Aegis 包装器注入的 correlation token。
 
-推导 session 必须带 `session_confidence=inferred`，不能伪装成 Agent 官方会话。
+没有可信 session ID 时不能把控制进程活动窗口或 execution unit 伪造成会话；
+此时事件只能进入未归属索引，并在前端显示“无可信会话归属”。
 
 ### 5.2 关联键
 
@@ -293,8 +314,8 @@ related
 数据库不必预存全部图边。稳定关联字段保存在事件中；高危 finding 的证据子图可以保存为快照，保证后续可复核。
 
 外层页面只展示 Agent 基本信息。用户点击一个 Agent 后，详情抽屉中的
-“行为全景”必须呈现为树，而不是自由布局图；逻辑层级包含 host/asset，
-抽屉从已选 Agent 子树开始展示：
+“行为全景”必须呈现为树，而不是自由布局图；先对真实 session ID 分页，再展示
+所选会话的行为事实。逻辑层级包含 host/asset，抽屉从已选 Agent 子树开始展示：
 
 ```text
 selected agent asset/type
@@ -314,6 +335,10 @@ selected agent asset/type
 PID/start_ticks 分开。一个行为事实只能有一个主 instance/unit 归属；归属
 不确定时标记 ambiguous/unattributed，不能复制到多个 Agent 或自动 freeze。
 
+安全分析不是全量 OS 进程树。它只显示当前会话中命中规则的工具调用、工具名、
+工具输入/结果、匹配命令行以及能够关联到的 PID/PPID/cmdline；没有关联 PID 时
+明确显示 `unattributed`，不能拿 Agent 自身 PID 代替。
+
 ## 6. 采集与分析流水线
 
 ```mermaid
@@ -323,8 +348,9 @@ flowchart LR
   L["Local Deterministic Policy<br/>允许/拒绝/暂停"]
   Q["Local Spool"]
   K["Server + Kafka"]
-  D["DC Normalize & Enrich"]
-  R["Rule Engine<br/>单事件/序列/聚合"]
+  D["DC Normalize & Project"]
+  R["Generic Runtime Rule Engine<br/>OS 单事件/序列/聚合"]
+  T["API-server Tool Rule Matcher<br/>AGB-004"]
   W["Evidence Window Builder"]
   A["Aegis Security Analyst<br/>异步结构化研判"]
   F["Security Finding"]
@@ -339,6 +365,8 @@ flowchart LR
   D --> DB
   D --> R
   R --> F
+  K --> T
+  T --> F
   R --> W
   W --> A
   A --> F
@@ -349,7 +377,8 @@ flowchart LR
 本地决策与服务端分析分离：
 
 - Agent 本地只执行预编译确定性策略，不能等待网络或模型响应。
-- DC 完成规范化、资源分类、序列关联和 finding 管理。
+- DC 完成通用事件规范化、资源分类、序列关联和投影；对 Agent Guard 工具事件只做幂等投影，不执行 `AGB-BUILTIN-004`。
+- api-server 消费可信工具事件，按工具输入/attributes 提取命令并匹配 `AGB-BUILTIN-004`，Finding 直接引用工具事件。
 - 智能分析器异步读取有界证据窗口，超时或失败不影响原始事件入库。
 
 ## 7. 规则分析
@@ -360,9 +389,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | L0 内核原子规则 | Agent/BPF LSM | 访问 runtime socket、外部 namespace、明确禁止路径 | allow/deny |
 | L1 主机确定性规则 | Agent 用户态 | 命令 + 资源分类、隔离状态漂移 | audit/alert/freeze |
-| L2 单事件规则 | DC | `curl` 连接公网、chmod setuid | finding/alert |
-| L3 序列/聚合规则 | DC | 下载 → 写文件 → chmod → execute | finding/alert/策略授权的 freeze |
-| L4 智能研判 | api-server/DC worker | 根据证据窗口解释攻击意图和链路 | 补充 finding，默认不直接阻断 |
+| L2 单事件规则 | DC（通用 OS）/api-server（Agent Guard 工具） | `curl` 连接公网、chmod setuid、工具命令 | finding/alert |
+| L3 序列/聚合规则 | DC（通用 OS） | 下载 → 写文件 → chmod → execute | finding/alert/策略授权的 freeze |
+| L4 智能研判 | api-server/DC worker（P5） | 根据证据窗口解释攻击意图和链路 | 补充 finding，默认不直接阻断 |
 
 ### 7.2 首批行为规则
 
@@ -373,10 +402,12 @@ flowchart LR
 | `AGB-BUILTIN-001` | 操作敏感目录 | file operation + filename/path + resource classification |
 | `AGB-BUILTIN-002` | 外部网络连接 | connect + destination address/domain/port + externality |
 | `AGB-BUILTIN-003` | 文件生成 | create success + filename/path + inode/metadata |
-| `AGB-BUILTIN-004` | 敏感命令执行 | exec + PID/cmdline + command category |
+| `AGB-BUILTIN-004` | 敏感命令执行 | trusted tool event + tool name/input + command category；PID/cmdline 为关联补充 |
 | `AGB-BUILTIN-005` | 提权行为 | credential/capability before/after + outcome |
 
-五个规则的路径、地址分类、命令匹配、提权状态、例外和动作边界以
+其中 AGB-BUILTIN-004 只对可信 Native Hook 工具事件执行命令匹配，由 api-server
+创建会话范围 Finding；eBPF exec 事件只用于补充实际 PID/PPID/cmdline，不能单独
+生成该工具命中。五个规则的路径、地址分类、命令匹配、提权状态、例外和动作边界以
 [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md)
 为实现契约。
 
@@ -420,6 +451,11 @@ evidence fields
   "status": "open",
   "rule_hits": ["AGB-DOWNLOAD-EXEC-001"],
   "evidence_event_ids": ["e1", "e2", "e3", "e4"],
+  "evidence_graph": {
+    "rule_owner": "api-server",
+    "source": "agent_hook_tool_event",
+    "correlation_status": "pid_resolved"
+  },
   "attack_stage": ["command_and_control", "execution"],
   "recommended_action": "freeze_execution_unit"
 }
@@ -562,10 +598,10 @@ actual action result
 前端提供三个互补视图：
 
 1. **时间线**：按真实时间展示命令、文件、网络、权限、隔离、规则、分析和动作。
-2. **Agent 行为全景树**：外层选择 Agent 后，抽屉按 agent asset/type →
-   instance → session → unit → process 展示，以 PID 进程父子关系为主干，
-   将命令、文件、网络、权限、隔离和规则节点挂在发起进程下；同 Agent
-   多实例保持独立。
+2. **Agent 行为全景树**：外层选择 Agent 后，先分页选择真实 session ID，
+   再按 agent asset/type → instance → session → unit → process 展示，以 PID
+   进程父子关系为主干，将命令、文件、网络、权限、隔离和规则节点挂在发起进程下；
+   同 Agent 多实例保持独立。
 3. **Finding 证据图**：只在安全结论详情中展示被规则/分析引用的有界证据关系，不替代全景树。
 
 每个安全结论必须可以展开：
@@ -575,7 +611,8 @@ actual action result
   -> 命中的规则及版本
   -> 智能分析器结论及模型/提示词版本
   -> 引用的原始事件
-  -> 进程链和资源关系
+  -> 命中的工具名称、工具输入/结果和匹配命令行
+  -> 可关联的 PID/PPID/cmdline（不是全量进程树）
   -> 证据完整性和不可观测范围
   -> 自动/人工动作及真实结果
 ```
@@ -586,6 +623,8 @@ UI 禁止：
 - 把 `accepted`、`requested` 显示成阻断成功。
 - 把没有采集到事件显示成“Agent 无风险”。
 - 把推导 session 显示为 Agent 官方会话。
+- 把全量 OS Finding 或其他 session 的工具事件显示在当前 session 的安全分析中。
+- 把未命中的进程事件伪装成工具规则命中。
 
 ## 13. 测试设计
 
@@ -607,6 +646,9 @@ UI 禁止：
 - 容器进程使用 cgroup 关联，不依赖 PPID。
 - 乱序、重放和迟到事件幂等更新 finding。
 - allowlist 只抑制对应规则，不删除原始事件。
+- Native Hook 的 `tool_call_started/completed/failed` 按真实 `session_id` 隔离；同一
+  `tool_call_id` 不得产生重复 Finding。
+- AGB-BUILTIN-004 只由 api-server 命令匹配器命中；DC 只投影，Agent 只关联 PID/PPID。
 
 ### 13.3 智能分析
 
@@ -625,3 +667,5 @@ UI 禁止：
 - 证据缺失、截断、远程不可观测有明显标识。
 - finding 可以逐级展开到原始事件和动作结果。
 - 万级事件窗口采用服务端分页/聚合，浏览器不一次加载全量图。
+- 会话 ID、运行实例和行为事件均支持服务端分页；安全分析严格按会话过滤，
+  不显示安全分析数量后缀。

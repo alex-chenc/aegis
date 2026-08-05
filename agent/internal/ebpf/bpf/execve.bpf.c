@@ -69,8 +69,12 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
     struct exec_event *e = bpf_map_lookup_elem(&exec_scratch, &key);
     if (!e)
         return 0;
-    __builtin_memset(e, 0, sizeof(*e));
 #endif
+
+    // Ring-buffer reservations are not guaranteed to be zeroed. Clear the
+    // complete event before writing argv into fixed-size slots, otherwise a
+    // short command can inherit trailing arguments from an older event.
+    __builtin_memset(e, 0, sizeof(*e));
 
     pid_tgid = bpf_get_current_pid_tgid();
     e->pid = pid_tgid >> 32;

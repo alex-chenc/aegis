@@ -51,6 +51,10 @@ type agentGuardBundleDispatcher interface {
 type AgentGuardBundleDefaults struct {
 	Mode                     string `json:"mode"`
 	BehaviorMonitorEnabled   bool   `json:"behavior_monitor_enabled"`
+	BehaviorPolicyEnabled    bool   `json:"behavior_policy_enabled"`
+	EscapePolicyEnabled      bool   `json:"escape_policy_enabled"`
+	BehaviorHookEnabled      bool   `json:"behavior_hook_enabled"`
+	EscapeHookEnabled        bool   `json:"escape_hook_enabled"`
 	ToolAdapterEnabled       bool   `json:"tool_adapter_enabled"`
 	EnforcementEnabled       bool   `json:"enforcement_enabled"`
 	FreezeEnabled            bool   `json:"freeze_enabled"`
@@ -104,6 +108,7 @@ type AgentGuardBundle struct {
 	HostID        string                    `json:"host_id"`
 	Profiles      []AgentGuardBundleProfile `json:"profiles"`
 	BuiltinRules  []AgentGuardBundleRule    `json:"builtin_rules"`
+	EscapeRules   []AgentGuardBundleRule    `json:"escape_rules"`
 	Policies      []AgentGuardBundlePolicy  `json:"policies"`
 	Defaults      AgentGuardBundleDefaults  `json:"defaults"`
 	Digest        string                    `json:"digest"`
@@ -333,13 +338,25 @@ func buildAgentGuardBundle(
 		HostID:        hostID.String(),
 		Profiles:      make([]AgentGuardBundleProfile, 0, len(profiles)),
 		BuiltinRules:  make([]AgentGuardBundleRule, 0, len(rules)),
+		EscapeRules:   make([]AgentGuardBundleRule, 0, len(model.BuiltinAgentEscapeRuleManifest())),
 		Policies:      make([]AgentGuardBundlePolicy, 0, len(policies)),
 		Defaults: AgentGuardBundleDefaults{
 			Mode: "monitor_only", BehaviorMonitorEnabled: true,
-			ToolAdapterEnabled: toolAdapterRolloutEnabled && toolAdapterRequested,
-			EnforcementEnabled: false, FreezeEnabled: false,
+			BehaviorPolicyEnabled: true, EscapePolicyEnabled: true,
+			BehaviorHookEnabled: toolAdapterRolloutEnabled && toolAdapterRequested,
+			EscapeHookEnabled:   true,
+			ToolAdapterEnabled:  toolAdapterRolloutEnabled && toolAdapterRequested,
+			EnforcementEnabled:  false, FreezeEnabled: false,
 			FreezeTimeoutSeconds: 300, ReconcileIntervalSeconds: 30,
 		},
+	}
+	for _, rule := range model.BuiltinAgentEscapeRuleManifest() {
+		bundle.EscapeRules = append(bundle.EscapeRules, AgentGuardBundleRule{
+			RuleKey: rule.RuleKey, RuleVersion: rule.RuleVersion,
+			Enabled: rule.DefaultEnabled, Severity: rule.DefaultSeverity,
+			Action: rule.DefaultAction, CompiledParameters: datatypes.JSON([]byte(`{}`)),
+			Digest: rule.Digest,
+		})
 	}
 	for _, profile := range profiles {
 		if !profile.Enabled {

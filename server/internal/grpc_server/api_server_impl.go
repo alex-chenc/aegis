@@ -683,6 +683,43 @@ func (s *APIServerToServerImpl) SyncAgentConfig(ctx context.Context, req *pb.Syn
 		if cfg == nil {
 			continue
 		}
+		if cfg.ConfigType == agentGuardRuntimeSettingsConfigType {
+			if req.HostId == "" {
+				return &pb.SyncAgentConfigResponse{
+					Success: false,
+					Message: "agent_guard_runtime_settings requires an explicit host_id",
+				}, nil
+			}
+			config := &pb.ConfigSync{ConfigType: cfg.ConfigType, Action: "full_sync", Payload: cfg.ConfigJson}
+			if err := s.grpcServer.cacheAgentGuardRuntimeSettings(targetHostID, config); err != nil {
+				logger.Warn("agent_guard_runtime_settings_cache_rejected",
+					zap.String("host_id", targetHostID.String()),
+					zap.String("error_code", "agent_guard_runtime_settings_invalid"))
+				return &pb.SyncAgentConfigResponse{Success: false, Message: err.Error()}, nil
+			}
+			value, connected := s.grpcServer.agentConnections.Load(targetHostID)
+			if !connected {
+				pendingReconnect = true
+				logger.Info("agent_guard_runtime_settings_cached_for_reconnect",
+					zap.String("host_id", targetHostID.String()))
+				continue
+			}
+			connection, ok := value.(*AgentConnection)
+			if !ok {
+				return &pb.SyncAgentConfigResponse{Success: false, Message: "invalid agent connection state"}, nil
+			}
+			if err := s.grpcServer.dispatchAgentConfig(ctx, connection, config); err != nil {
+				logger.Warn("agent_guard_runtime_settings_dispatch_failed",
+					zap.String("host_id", targetHostID.String()),
+					zap.String("error_code", "agent_config_dispatch_failed"), zap.Error(err))
+				return &pb.SyncAgentConfigResponse{Success: false, Message: err.Error()}, nil
+			}
+			affected++
+			logger.Info("agent_guard_runtime_settings_dispatched",
+				zap.String("host_id", targetHostID.String()),
+				zap.String("channel", agentConfigChannel(connection)))
+			continue
+		}
 		if cfg.ConfigType == agentGuardBundleConfigType {
 			config := &pb.ConfigSync{
 				ConfigType: cfg.ConfigType,

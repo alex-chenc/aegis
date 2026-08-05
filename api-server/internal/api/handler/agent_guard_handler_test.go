@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,6 +55,7 @@ type fakeAgentGuardQuery struct {
 	sessions        []model.AgentBehaviorSession
 	units           []model.AgentExecutionUnit
 	behaviors       []model.AgentBehaviorEvent
+	runtimeEvents   []model.RuntimeEvent
 	findings        []model.AgentSecurityFinding
 	analyses        []model.AgentSecurityAnalysisRun
 	actions         []model.AgentGuardAction
@@ -123,8 +125,31 @@ func (f *fakeAgentGuardQuery) GetExecutionUnit(_ context.Context, id uuid.UUID) 
 	}
 	return nil, repository.ErrAgentGuardExecutionUnitNotFound
 }
-func (f *fakeAgentGuardQuery) ListBehaviors(context.Context, model.AgentBehaviorEventQuery) ([]model.AgentBehaviorEvent, int64, error) {
-	return f.behaviors, int64(len(f.behaviors)), nil
+func (f *fakeAgentGuardQuery) ListBehaviors(_ context.Context, query model.AgentBehaviorEventQuery) ([]model.AgentBehaviorEvent, int64, error) {
+	items := make([]model.AgentBehaviorEvent, 0, len(f.behaviors))
+	for _, behavior := range f.behaviors {
+		if query.Category != "" && behavior.Category != query.Category {
+			continue
+		}
+		items = append(items, behavior)
+	}
+	total := int64(len(items))
+	page, pageSize := query.Page, query.PageSize
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = len(items)
+	}
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		return []model.AgentBehaviorEvent{}, total, nil
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end], total, nil
 }
 func (f *fakeAgentGuardQuery) ListProcessFacts(_ context.Context, query model.AgentBehaviorEventQuery, limit int) ([]model.AgentBehaviorEvent, int64, error) {
 	items := make([]model.AgentBehaviorEvent, 0, len(f.behaviors))
@@ -146,6 +171,15 @@ func (f *fakeAgentGuardQuery) GetBehavior(_ context.Context, rawEventID string) 
 	for index := range f.behaviors {
 		if f.behaviors[index].RawEventID == rawEventID {
 			item := f.behaviors[index]
+			return &item, nil
+		}
+	}
+	return nil, repository.ErrAgentGuardBehaviorNotFound
+}
+func (f *fakeAgentGuardQuery) GetRuntimeEvent(_ context.Context, eventID string) (*model.RuntimeEvent, error) {
+	for index := range f.runtimeEvents {
+		if f.runtimeEvents[index].EventID == eventID || f.runtimeEvents[index].ID.String() == eventID {
+			item := f.runtimeEvents[index]
 			return &item, nil
 		}
 	}
@@ -412,6 +446,7 @@ func TestAgentGuardFindingScopeUsesResolvedInstanceIDsAndRedactsEvidence(t *test
 	hostID := uuid.New()
 	assetID := uuid.New()
 	instanceID := uuid.New()
+	sessionID := uuid.New()
 	query := &fakeAgentGuardQuery{
 		instances: []model.AgentRuntimeInstance{{ID: instanceID, HostID: hostID, AssetID: &assetID}},
 		findings: []model.AgentSecurityFinding{{
@@ -425,13 +460,16 @@ func TestAgentGuardFindingScopeUsesResolvedInstanceIDsAndRedactsEvidence(t *test
 	response := serveAgentGuardRequest(
 		engine,
 		http.MethodGet,
-		"/api/v1/agent-guard/findings?asset_id="+assetID.String()+"&page=1&page_size=20",
+		"/api/v1/agent-guard/findings?asset_id="+assetID.String()+"&session_id="+sessionID.String()+"&finding_domain=tool&page=1&page_size=20",
 		nil,
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if query.lastFinding.AssetID != assetID.String() || len(query.lastFinding.InstanceIDs) != 0 {
+	if query.lastFinding.AssetID != assetID.String() ||
+		query.lastFinding.SessionID != sessionID.String() ||
+		query.lastFinding.FindingDomain != model.AgentSecurityFindingDomainTool ||
+		len(query.lastFinding.InstanceIDs) != 0 {
 		t.Fatalf("finding query did not preserve direct asset scope: %#v", query.lastFinding)
 	}
 	for _, secret := range []string{"secret-event", "/secret", "secret summary"} {
@@ -556,6 +594,7 @@ func TestAgentGuardP3RouteAndPermissionContract(t *testing.T) {
 		marker("analysis-run"),
 		marker("policy"),
 		marker("publish"),
+		marker("session-delete"),
 		marker("freeze"),
 		marker("resume"),
 		marker("kill"),
@@ -570,10 +609,12 @@ func TestAgentGuardP3RouteAndPermissionContract(t *testing.T) {
 		{http.MethodGet, "/api/v1/agent-guard/agents", "read", nil},
 		{http.MethodGet, "/api/v1/agent-guard/execution-units/" + uuid.NewString() + "/timeline", "read", nil},
 		{http.MethodGet, "/api/v1/agent-guard/behaviors/event-1/raw", "evidence", nil},
+		{http.MethodGet, "/api/v1/agent-guard/findings/" + uuid.NewString(), "analysis", nil},
 		{http.MethodGet, "/api/v1/agent-guard/findings/" + uuid.NewString() + "/analyses", "analysis", nil},
 		{http.MethodPost, "/api/v1/agent-guard/findings/" + uuid.NewString() + "/analyze", "analysis-run", []byte(`{}`)},
 		{http.MethodPost, "/api/v1/agent-guard/policies", "policy", []byte(`{} {}`)},
 		{http.MethodPost, "/api/v1/agent-guard/policies/" + uuid.NewString() + "/publish", "publish", []byte(`{}`)},
+		{http.MethodDelete, "/api/v1/agent-guard/sessions", "session-delete", []byte(`{"session_ids":["` + uuid.NewString() + `"]}`)},
 		{http.MethodPost, "/api/v1/agent-guard/execution-units/" + uuid.NewString() + "/freeze", "freeze", []byte(`{"reason":"manual containment"}`)},
 		{http.MethodPost, "/api/v1/agent-guard/execution-units/" + uuid.NewString() + "/resume", "resume", []byte(`{"reason":"manual recovery"}`)},
 		{http.MethodPost, "/api/v1/agent-guard/execution-units/" + uuid.NewString() + "/kill", "kill", []byte(`{"reason":"manual termination"}`)},
@@ -620,7 +661,7 @@ func TestAgentGuardAnalyzeFindingQueuesReadOnlyAnalysis(t *testing.T) {
 		c.Next()
 	})
 	pass := func(c *gin.Context) { c.Next() }
-	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass)
+	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass, pass)
 
 	response := serveAgentGuardRequest(
 		engine,
@@ -650,7 +691,7 @@ func TestAgentGuardManualActionStrictBodyAndAuthenticatedOperator(t *testing.T) 
 		c.Next()
 	})
 	pass := func(c *gin.Context) { c.Next() }
-	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass)
+	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass, pass)
 
 	response := serveAgentGuardRequest(
 		engine,
@@ -766,7 +807,219 @@ func TestAgentGuardFindingDetailExposesEvidenceAssessmentFields(t *testing.T) {
 	}
 }
 
-func TestAgentGuardSessionReadRedactsExternalCorrelationIdentity(t *testing.T) {
+func TestAgentGuardFindingDetailDoesNotExposeMatchedProcessTree(t *testing.T) {
+	hostID := uuid.New()
+	instanceID := uuid.New()
+	sessionID := uuid.New()
+	unitID := uuid.New()
+	rootPID, rootPPID := 100, 1
+	childPID, childPPID := 200, 100
+	root := processBehavior("process-root", hostID, instanceID, sessionID, unitID,
+		rootPID, rootPPID, "100", "exec", "agent", time.Unix(100, 0).UTC())
+	root.CommandArgv = []byte(`["/usr/bin/agent","--run"]`)
+	child := processBehavior("process-child", hostID, instanceID, sessionID, unitID,
+		childPID, childPPID, "200", "exec", "shell", time.Unix(101, 0).UTC())
+	child.CommandArgv = []byte(`["/bin/sh","-c","touch /etc/passwd"]`)
+	unrelatedEvidence := processBehavior("process-evidence-only", hostID, instanceID, sessionID, unitID,
+		300, 1, "300", "exec", "unrelated", time.Unix(103, 0).UTC())
+	hit := model.AgentBehaviorEvent{
+		RawEventID: "event-hit", HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
+		ExecutionUnitID: &unitID, Category: "file", Operation: "write", Outcome: "success",
+		PID: &childPID, PPID: &childPPID, ProcessStartTicks: "200", ProcessName: "shell",
+		CommandArgv: []byte(`["/bin/sh","-c","touch /etc/passwd"]`), Severity: "high",
+		OccurredAt: time.Unix(102, 0).UTC(),
+	}
+	tool := model.AgentBehaviorEvent{
+		RawEventID: "tool-call", HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
+		ExecutionUnitID: &unitID, Category: "tool", Operation: "tool_call_completed", Outcome: "success",
+		ResourceIdentity: "Bash", CorrelationID: "sha256:tool-correlation",
+		Resource:    []byte(`{"attributes":{"tool_call_id":"call-1","command":"touch /etc/passwd","process_event_id":"event-hit","correlation_status":"matched","correlation_method":"ebpf_command_match"}}`),
+		CommandArgv: []byte(`["/bin/bash","-lc","touch /etc/passwd"]`),
+		PID:         &childPID, PPID: &childPPID, OccurredAt: time.Unix(102, 0).UTC(),
+	}
+	findingID := uuid.New()
+	query := &fakeAgentGuardQuery{
+		behaviors: []model.AgentBehaviorEvent{root, child, unrelatedEvidence, hit, tool},
+		findings: []model.AgentSecurityFinding{{
+			ID: findingID, HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
+			ExecutionUnitID: &unitID, RuleHits: []byte(`[{"rule_key":"AGB-BUILTIN-004","rule_version":1,"rule_name":"敏感命令","event_id":"event-hit","evidence_event_ids":["process-evidence-only"],"severity":"high"}]`),
+			EvidenceEventIDs: []byte(`["event-hit"]`),
+		}},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, testAgentGuardSigner(t))
+	response := serveAgentGuardRequest(engine, http.MethodGet,
+		"/api/v1/agent-guard/findings/"+findingID.String(), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			MatchedRules []struct {
+				Name      string `json:"name"`
+				ToolCalls []struct {
+					ToolName string `json:"tool_name"`
+					Command  string `json:"command"`
+				} `json:"tool_calls"`
+				ProcessTree []struct {
+					PID      int    `json:"pid"`
+					PPID     int    `json:"ppid"`
+					Cmdline  string `json:"cmdline"`
+					Matched  bool   `json:"matched"`
+					Children []struct {
+						PID     int    `json:"pid"`
+						Cmdline string `json:"cmdline"`
+						Matched bool   `json:"matched"`
+					} `json:"children"`
+				} `json:"process_tree"`
+			} `json:"matched_rules"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.MatchedRules) != 1 || body.Data.MatchedRules[0].Name != "敏感命令" ||
+		len(body.Data.MatchedRules[0].ProcessTree) != 0 || len(body.Data.MatchedRules[0].ToolCalls) != 1 ||
+		body.Data.MatchedRules[0].ToolCalls[0].ToolName != "Bash" ||
+		body.Data.MatchedRules[0].ToolCalls[0].Command != "touch /etc/passwd" {
+		t.Fatalf("unexpected matched rule detail: %s", response.Body.String())
+	}
+}
+
+func TestAgentGuardUnmatchedToolDoesNotExposeHookPIDAsExecutor(t *testing.T) {
+	pid, ppid := 6006, 1
+	call := projectAgentGuardFindingToolCall(model.AgentBehaviorEvent{
+		RawEventID: "tool-unmatched", Category: "tool", ResourceIdentity: "Bash",
+		Resource:    []byte(`{"attributes":{"command":"true","correlation_status":"unmatched"}}`),
+		CommandArgv: []byte(`["codex","--worker"]`), PID: &pid, PPID: &ppid,
+	})
+	if call.PID != 0 || call.PPID != 0 || call.CommandLine != "" || call.ProcessStartTicks != "" {
+		t.Fatalf("hook PID leaked as executor: %#v", call)
+	}
+}
+
+func TestAgentGuardFindingDetailDoesNotExposeRuntimeProcessTree(t *testing.T) {
+	hostID, instanceID, sessionID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	base := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	root := processBehavior("process-root", hostID, instanceID, sessionID, unitID,
+		100, 1, "100", "exec", "agent", base)
+	root.CommandArgv = []byte(`["/usr/bin/agent","--run"]`)
+	child := processBehavior("process-child", hostID, instanceID, sessionID, unitID,
+		200, 100, "200", "exec", "sh", base.Add(time.Second))
+	child.CommandArgv = []byte(`["/bin/sh","-c","touch /var/run/docker.sock"]`)
+	findingID := uuid.New()
+	runtimeEvent := model.RuntimeEvent{
+		ID:        uuid.New(),
+		EventID:   "runtime-hit",
+		HostID:    hostID,
+		EventType: "agent_sandbox_violation",
+		EventData: fmt.Sprintf(`{
+			"category":"isolation","operation":"connect_unix_violation","outcome":"success",
+			"decision":"would_deny","severity":"critical","instance_id":"%s","session_id":"%s",
+			"execution_unit_id":"%s","occurred_at":"2026-08-05T10:00:02Z",
+			"actor":{"pid":200,"ppid":100,"start_ticks":"200","exe":"/bin/sh","cwd":"/tmp",
+			"argv":["/bin/sh","-c","touch /var/run/docker.sock"]},
+			"collection":{"visibility":"complete"}}`, instanceID, sessionID, unitID),
+		PID:         200,
+		CommandLine: "/bin/sh -c touch /var/run/docker.sock",
+		Severity:    "critical",
+		CreatedAt:   base.Add(2 * time.Second),
+	}
+	query := &fakeAgentGuardQuery{
+		behaviors:     []model.AgentBehaviorEvent{root, child},
+		runtimeEvents: []model.RuntimeEvent{runtimeEvent},
+		findings: []model.AgentSecurityFinding{{
+			ID: findingID, HostID: hostID, InstanceID: &instanceID, SessionID: &sessionID,
+			ExecutionUnitID: &unitID,
+			RuleHits: []byte(`[{
+				"rule_key":"access_container_runtime_socket","rule_name":"访问容器运行时套接字",
+				"event_id":"runtime-hit","severity":"critical"}]`),
+			EvidenceEventIDs: []byte(`["runtime-hit"]`),
+		}},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, testAgentGuardSigner(t))
+	response := serveAgentGuardRequest(engine, http.MethodGet,
+		"/api/v1/agent-guard/findings/"+findingID.String(), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			MatchedRules []struct {
+				Name        string `json:"name"`
+				ProcessTree []struct {
+					PID      int    `json:"pid"`
+					Cmdline  string `json:"cmdline"`
+					Matched  bool   `json:"matched"`
+					Children []struct {
+						PID     int    `json:"pid"`
+						Cmdline string `json:"cmdline"`
+						Matched bool   `json:"matched"`
+					} `json:"children"`
+				} `json:"process_tree"`
+			} `json:"matched_rules"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.MatchedRules) != 1 || body.Data.MatchedRules[0].Name != "访问容器运行时套接字" ||
+		len(body.Data.MatchedRules[0].ProcessTree) != 0 {
+		t.Fatalf("runtime event exposed a process tree: %s", response.Body.String())
+	}
+}
+
+func TestAgentGuardEscapeFindingDetailBuildsHookAndProcEvidenceChain(t *testing.T) {
+	hostID, instanceID := uuid.New(), uuid.New()
+	findingID := uuid.New()
+	runtimeEvent := model.RuntimeEvent{
+		ID: uuid.New(), EventID: "escape-runtime-hit", HostID: hostID,
+		EventType: "agent_sandbox_violation",
+		EventData: fmt.Sprintf(`{
+			"category":"isolation","operation":"connect_unix","outcome":"success",
+			"decision":"would_deny","instance_id":"%s",
+			"actor":{"pid":200,"ppid":100,"start_ticks":"200","exe":"/bin/sh","argv":["/bin/sh","-c","touch /var/run/docker.sock"]},
+			"evidence":{"actual":{"cgroup_path":"/agent.slice","cgroup_version":2},"baseline":{"cgroup_path":"/agent.slice","cgroup_version":2},"diff":{"state_changed":false}}}`, instanceID),
+		PID: 200, CommandLine: "/bin/sh -c touch /var/run/docker.sock", CreatedAt: time.Now().UTC(),
+	}
+	query := &fakeAgentGuardQuery{
+		runtimeEvents: []model.RuntimeEvent{runtimeEvent},
+		findings: []model.AgentSecurityFinding{{
+			ID: findingID, HostID: hostID, InstanceID: &instanceID,
+			Title:            "Agent sandbox violation: access_container_runtime_socket",
+			RuleHits:         []byte(`[{"rule_key":"access_container_runtime_socket","event_id":"escape-runtime-hit"}]`),
+			EvidenceEventIDs: []byte(`["escape-runtime-hit"]`),
+		}},
+	}
+	engine := newAgentGuardHandlerTestEngine(t, query, testAgentGuardSigner(t))
+	response := serveAgentGuardRequest(engine, http.MethodGet, "/api/v1/agent-guard/findings/"+findingID.String(), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			EscapeChain struct {
+				HookEvents []struct {
+					ToolName string `json:"tool_name"`
+					Command  string `json:"command"`
+					PID      int    `json:"pid"`
+				} `json:"hook_events"`
+				ProcessEvidence    []map[string]any `json:"process_evidence"`
+				ProcCgroupEvidence []map[string]any `json:"proc_cgroup_evidence"`
+			} `json:"escape_chain"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	chain := body.Data.EscapeChain
+	if len(chain.HookEvents) != 1 || chain.HookEvents[0].ToolName != "sh" ||
+		chain.HookEvents[0].Command != "/bin/sh -c touch /var/run/docker.sock" || chain.HookEvents[0].PID != 200 ||
+		len(chain.ProcessEvidence) == 0 || len(chain.ProcCgroupEvidence) != 1 {
+		t.Fatalf("unexpected escape evidence chain: %s", response.Body.String())
+	}
+}
+
+func TestAgentGuardSessionReadReturnsExternalSessionIDWithoutCorrelationHash(t *testing.T) {
 	instanceID := uuid.New()
 	sessionID := uuid.New()
 	query := &fakeAgentGuardQuery{sessions: []model.AgentBehaviorSession{{
@@ -785,7 +1038,10 @@ func TestAgentGuardSessionReadRedactsExternalCorrelationIdentity(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status=%d body=%s", path, response.Code, response.Body.String())
 		}
-		for _, secret := range []string{"upstream-session-secret", "correlation_token_hash", "sha256:aaaaaaaa"} {
+		if !strings.Contains(response.Body.String(), "upstream-session-secret") {
+			t.Fatalf("GET %s did not return the real external session ID: %s", path, response.Body.String())
+		}
+		for _, secret := range []string{"correlation_token_hash", "sha256:aaaaaaaa"} {
 			if strings.Contains(response.Body.String(), secret) {
 				t.Fatalf("GET %s leaked %q: %s", path, secret, response.Body.String())
 			}
@@ -998,7 +1254,7 @@ func newAgentGuardHandlerTestEngine(
 	)
 	engine := gin.New()
 	pass := func(c *gin.Context) { c.Next() }
-	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass)
+	handler.RegisterRoutes(engine.Group("/api/v1"), pass, pass, pass, pass, pass, pass, pass, pass, pass, pass)
 	return engine
 }
 

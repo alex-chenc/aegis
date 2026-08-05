@@ -146,6 +146,25 @@ func NewBuiltinProfileRegistry() *ProfileRegistry {
 			DefaultEscapeRules: []string{"access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"},
 			Digest:             "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
 		},
+		{
+			ProfileKey: "zcode-linux", ProfileVersion: 1, AgentType: "zcode", DisplayName: "Zcode",
+			SandboxFamily: IsolationLocalProcessTree,
+			ControllerMatch: []ProcessMatchRule{
+				{ExeBasenames: []string{"zcode", "zcode-cli"}, CmdlineTokens: []string{"zcode"}, EvidenceWeight: 60},
+				{ConfigPaths: []string{".zcode/cli/config.json"}, EvidenceWeight: 40},
+			},
+			WorkerMatch: []ProcessMatchRule{{AncestorBasenames: []string{"zcode", "zcode-cli"}, ForkDescendant: true}},
+			BackendDetectors: []BackendDetector{
+				{Backend: "local", Signals: []string{"terminal_local"}},
+				{Backend: "ssh", Signals: []string{"ssh_backend", "remote_execution_id"}},
+			},
+			IsolationExpectation: map[string]any{
+				"local": map[string]any{"coverage": "no_isolation"},
+				"ssh":   map[string]any{"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"},
+			},
+			DefaultEscapeRules: []string{"access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"},
+			Digest:             "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
+		},
 	}}
 }
 

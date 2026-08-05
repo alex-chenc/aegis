@@ -37,6 +37,18 @@ func TestManagerCreatesNamespaceUnitBaselineAndReportsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop()
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller attribution before namespace session")
+	}
+	if _, _, _, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "namespace-session", time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("start trusted namespace session: %v", err)
+	}
+	if err := manager.reconcileOnce(); err != nil {
+		t.Fatal(err)
+	}
 	manager.flush()
 
 	var namespaceUnitID string
@@ -114,6 +126,18 @@ func TestManagerMapsIdentityKernelIsolationAttemptsAndEscapeEvidence(t *testing.
 		t.Fatal(err)
 	}
 	defer manager.Stop()
+	baseSubject, ok := manager.tracker.LookupProcess(controller.Identity)
+	if !ok {
+		t.Fatal("expected controller attribution before isolation session")
+	}
+	if _, _, _, err := manager.tracker.StartTrustedSession(
+		controller, baseSubject, ToolSourceAdapterHook, "isolation-session", time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("start trusted isolation session: %v", err)
+	}
+	if err := manager.reconcileOnce(); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, eventMap := range []map[string]any{
 		{

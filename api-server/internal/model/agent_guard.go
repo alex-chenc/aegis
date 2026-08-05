@@ -29,6 +29,7 @@ const (
 	AgentGuardProfileKeyClaudeCodeLinux = "claude-code-linux"
 	AgentGuardProfileKeyOpenCodeLinux   = "opencode-linux"
 	AgentGuardProfileKeyGeminiCLILinux  = "gemini-cli-linux"
+	AgentGuardProfileKeyZcodeLinux      = "zcode-linux"
 
 	AgentGuardSessionSourceAgentOfficial = "agent_official"
 	AgentGuardSessionSourceAdapterHook   = "adapter_hook"
@@ -54,6 +55,9 @@ const (
 	AgentGuardAnalysisStatusInvalidOutput = "invalid_output"
 	AgentGuardAnalysisStatusInconclusive  = "inconclusive"
 	AgentGuardAnalysisStatusCancelled     = "cancelled"
+
+	AgentSecurityFindingDomainTool   = "tool"
+	AgentSecurityFindingDomainEscape = "escape"
 )
 
 // AgentGuardAdapterProfile is a versioned, immutable product recognition and
@@ -566,6 +570,7 @@ type AgentRuntimeInstanceQuery struct {
 	AssetIDs      []string `form:"asset_ids" json:"asset_ids"`
 	AgentTypes    []string `form:"agent_types" json:"agent_types"`
 	InstanceIDs   []string `form:"instance_ids" json:"instance_ids"`
+	SessionID     string   `form:"session_id" json:"session_id"`
 	ProfileKey    string   `form:"profile_key" json:"profile_key"`
 	Status        string   `form:"status" json:"status"`
 	Coverage      string   `form:"coverage" json:"coverage"`
@@ -582,6 +587,7 @@ type AgentBehaviorSessionQuery struct {
 	Status          string `form:"status" json:"status"`
 	Source          string `form:"source" json:"source"`
 	PreferTrusted   bool   `form:"prefer_trusted" json:"prefer_trusted"`
+	TrustedOnly     bool   `form:"trusted_only" json:"trusted_only"`
 }
 
 type AgentExecutionUnitQuery struct {
@@ -619,6 +625,7 @@ type AgentBehaviorEventQuery struct {
 
 type AgentSecurityFindingQuery struct {
 	AgentGuardPageQuery
+	FindingDomain   string   `form:"finding_domain" json:"finding_domain"`
 	AgentScopeKey   string   `form:"agent_scope_key" json:"agent_scope_key"`
 	AssetID         string   `form:"asset_id" json:"asset_id"`
 	HostID          string   `form:"host_id" json:"host_id"`

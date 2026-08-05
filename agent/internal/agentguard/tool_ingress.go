@@ -94,8 +94,14 @@ func (r *ToolHookReceiver) run() {
 			}
 			return
 		}
+		// Codex sends each lifecycle/tool callback over a short-lived Unix
+		// connection. Processing these connections concurrently can reorder
+		// SessionStart, Pre/PostToolUse, and SessionEnd at the manager even
+		// though Codex emitted them in order. Keep ingress serialization here so
+		// a late PostToolUse cannot be rejected merely because SessionEnd won a
+		// scheduling race.
 		r.wg.Add(1)
-		go r.handle(connection)
+		r.handle(connection)
 	}
 }
 

@@ -31,6 +31,11 @@ type ManagerConfig struct {
 	SessionHookEnabled     bool
 	ToolSourceManifest     string
 	ToolHookSocket         string
+	HookBinary             string
+	HookProvisioner        HookProvisioner
+	HookRemover            HookRemover
+	ScopedHookProvisioner  ScopedHookProvisioner
+	ScopedHookRemover      ScopedHookProvisioner
 	ToolAdapter            *TrustedToolAdapter
 	EnforcementEnabled     bool
 	FreezeEnabled          bool
@@ -65,6 +70,7 @@ type Manager struct {
 	bundles        *BundleStore
 	monitorAllowed bool
 	monitorEnabled atomic.Bool
+	escapeEnabled  atomic.Bool
 	toolEnabled    atomic.Bool
 	sessionEnabled atomic.Bool
 	reconcileReset chan time.Duration
@@ -72,23 +78,35 @@ type Manager struct {
 	capabilities   GuardCapabilities
 	actions        *ActionExecutor
 	toolAdapter    *TrustedToolAdapter
+	toolAdapterMu  sync.RWMutex
 	toolIngress    *ToolHookReceiver
 	toolIngressMu  sync.Mutex
 	kernelPolicyMu sync.RWMutex
 	kernelPolicy   CompiledKernelPolicy
 	kernelApply    func(CompiledKernelPolicy, []KernelSubject) error
 
-	statusMu        sync.Mutex
-	lifecycleMu     sync.Mutex
-	isolationMu     sync.Mutex
-	pendingStatus   []*pb.RuntimeEvent
-	started         map[string]bool
-	startedUnits    map[string]bool
-	startedSessions map[string]bool
-	lastHeartbeat   map[string]time.Time
-	lastDrift       map[string]string
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
+	statusMu                  sync.Mutex
+	lifecycleMu               sync.Mutex
+	isolationMu               sync.Mutex
+	pendingStatus             []*pb.RuntimeEvent
+	started                   map[string]bool
+	startedUnits              map[string]bool
+	startedSessions           map[string]bool
+	lastHeartbeat             map[string]time.Time
+	lastDrift                 map[string]string
+	runtimeSettingsSet        atomic.Bool
+	runtimeToolAdapterEnabled atomic.Bool
+	runtimeSessionHookEnabled atomic.Bool
+	runtimeSettingsVersion    atomic.Int64
+	bundleToolAdapterEnabled  atomic.Bool
+	hookProvisioner           HookProvisioner
+	hookRemover               HookRemover
+	scopedHookProvisioner     ScopedHookProvisioner
+	scopedHookRemover         ScopedHookProvisioner
+	hookStateMu               sync.Mutex
+	hookStates                map[string]bool
+	cancel                    context.CancelFunc
+	wg                        sync.WaitGroup
 }
 
 func NewManager(cfg ManagerConfig, scanner ProcessScanner, reporter RuntimeReporter) *Manager {
@@ -124,23 +142,291 @@ func NewManager(cfg ManagerConfig, scanner ProcessScanner, reporter RuntimeRepor
 			FreezeAllowed:      cfg.FreezeEnabled,
 			ToolAdapterAllowed: cfg.ToolAdapterEnabled,
 		}),
-		monitorAllowed:  cfg.BehaviorMonitorEnabled,
-		started:         make(map[string]bool),
-		startedUnits:    make(map[string]bool),
-		startedSessions: make(map[string]bool),
-		lastHeartbeat:   make(map[string]time.Time),
-		reconcileReset:  make(chan time.Duration, 1),
-		capabilities:    capabilities,
-		lastDrift:       make(map[string]string),
-		toolAdapter:     cfg.ToolAdapter,
+		monitorAllowed:        cfg.BehaviorMonitorEnabled,
+		started:               make(map[string]bool),
+		startedUnits:          make(map[string]bool),
+		startedSessions:       make(map[string]bool),
+		lastHeartbeat:         make(map[string]time.Time),
+		reconcileReset:        make(chan time.Duration, 1),
+		capabilities:          capabilities,
+		lastDrift:             make(map[string]string),
+		toolAdapter:           cfg.ToolAdapter,
+		hookProvisioner:       cfg.HookProvisioner,
+		hookRemover:           cfg.HookRemover,
+		hookStates:            make(map[string]bool),
+		scopedHookProvisioner: cfg.ScopedHookProvisioner,
+		scopedHookRemover:     cfg.ScopedHookRemover,
+	}
+	hookBinary := cfg.HookBinary
+	if hookBinary == "" {
+		hookBinary = "/opt/aegis-agent/aegis-codex-hook"
+	}
+	legacyProvisionerProvided := cfg.HookProvisioner != nil
+	legacyRemoverProvided := cfg.HookRemover != nil
+	if manager.hookProvisioner == nil {
+		manager.hookProvisioner = DefaultHookProvisioner(hookBinary)
+	}
+	if manager.hookRemover == nil {
+		manager.hookRemover = DefaultHookRemover(hookBinary)
+	}
+	if manager.scopedHookProvisioner == nil && !legacyProvisionerProvided {
+		manager.scopedHookProvisioner = DefaultScopedHookProvisioner(hookBinary)
+	}
+	if manager.scopedHookRemover == nil && !legacyRemoverProvided {
+		manager.scopedHookRemover = DefaultScopedHookRemover(hookBinary)
 	}
 	manager.isolationScan, _ = scanner.(isolationStateScanner)
 	manager.actions = newActionExecutor(cfg, tracker, scanner, capabilities)
 	manager.actions.report = manager.reportActionResult
 	manager.monitorEnabled.Store(cfg.BehaviorMonitorEnabled)
+	manager.escapeEnabled.Store(true)
 	manager.toolEnabled.Store(false)
 	manager.sessionEnabled.Store(false)
 	return manager
+}
+
+func (m *Manager) currentToolAdapter() *TrustedToolAdapter {
+	m.toolAdapterMu.RLock()
+	defer m.toolAdapterMu.RUnlock()
+	return m.toolAdapter
+}
+
+func (m *Manager) replaceToolAdapter(adapter *TrustedToolAdapter) {
+	m.toolAdapterMu.Lock()
+	m.toolAdapter = adapter
+	m.toolAdapterMu.Unlock()
+}
+
+func (m *Manager) effectiveToolAdapterEnabled() bool {
+	if m.runtimeSettingsSet.Load() {
+		return m.runtimeToolAdapterEnabled.Load()
+	}
+	return m.cfg.ToolAdapterEnabled
+}
+
+func (m *Manager) effectiveSessionHookEnabled() bool {
+	if m.runtimeSettingsSet.Load() {
+		return m.runtimeSessionHookEnabled.Load()
+	}
+	return m.cfg.SessionHookEnabled
+}
+
+// ApplyRuntimeSettings applies the control-plane settings in memory and
+// provisions only the explicitly selected native Hook integrations. The local
+// Agent TOML is intentionally not changed.
+func (m *Manager) ApplyRuntimeSettings(payload string) error {
+	if !m.cfg.Enabled {
+		return errors.New("agent_guard_disabled")
+	}
+	settings, err := decodeRuntimeSettings(payload)
+	if err != nil {
+		m.queueRuntimeSettingsStatus("rejected", settings.Version, errorCode(err), nil)
+		return err
+	}
+	if settings.HostID != m.cfg.HostID {
+		m.queueRuntimeSettingsStatus("rejected", settings.Version, "agent_guard_runtime_settings_host_mismatch", nil)
+		return errors.New("agent_guard_runtime_settings_host_mismatch")
+	}
+	if !settings.BehaviorPolicyEnabled && !settings.EscapePolicyEnabled {
+		// Compatibility for v1 senders that predate policy scopes.
+		settings.BehaviorPolicyEnabled = settings.ToolAdapterEnabled || settings.SessionHookEnabled
+		for _, injection := range settings.Injections {
+			settings.BehaviorPolicyEnabled = settings.BehaviorPolicyEnabled || injection.BehaviorEnabled
+		}
+		hasEscapeScope := false
+		for _, injection := range settings.Injections {
+			hasEscapeScope = hasEscapeScope || injection.EscapeEnabled
+		}
+		settings.EscapePolicyEnabled = hasEscapeScope || !hasScopedPolicyFields(settings)
+	}
+	currentVersion := m.runtimeSettingsVersion.Load()
+	if m.runtimeSettingsSet.Load() && settings.Version < currentVersion {
+		m.queueRuntimeSettingsStatus("rejected", settings.Version, "agent_guard_runtime_settings_stale", nil)
+		return errors.New("agent_guard_runtime_settings_stale")
+	}
+
+	enabledInjections, hookErr := m.applyHookInjections(settings)
+	if hookErr != nil {
+		m.queueRuntimeSettingsStatus("failed", settings.Version, errorCode(hookErr), enabledInjections)
+		return hookErr
+	}
+
+	if m.cfg.ToolSourceManifest != "" {
+		adapter, loadErr := LoadTrustedToolAdapter(m.cfg.ToolSourceManifest)
+		if loadErr == nil {
+			m.replaceToolAdapter(adapter)
+		} else if len(enabledInjections) > 0 && (settings.ToolAdapterEnabled || settings.SessionHookEnabled) {
+			m.queueRuntimeSettingsStatus("failed", settings.Version, "agent_guard_tool_manifest_reload_failed", enabledInjections)
+			return loadErr
+		} else if len(enabledInjections) == 0 {
+			m.replaceToolAdapter(nil)
+		}
+	}
+	if len(enabledInjections) > 0 && (settings.ToolAdapterEnabled || settings.SessionHookEnabled) && m.currentToolAdapter() == nil {
+		m.queueRuntimeSettingsStatus("failed", settings.Version, "agent_guard_tool_adapter_unavailable", enabledInjections)
+		return errors.New("agent_guard_tool_adapter_unavailable")
+	}
+
+	m.runtimeToolAdapterEnabled.Store(settings.ToolAdapterEnabled)
+	m.runtimeSessionHookEnabled.Store(settings.SessionHookEnabled)
+	m.escapeEnabled.Store(settings.EscapePolicyEnabled)
+	m.runtimeSettingsVersion.Store(settings.Version)
+	m.runtimeSettingsSet.Store(true)
+	if err := m.persistRuntimeSettings(settings); err != nil {
+		m.queueRuntimeSettingsStatus("failed", settings.Version, "agent_guard_runtime_settings_persist_failed", enabledInjections)
+		return err
+	}
+	adapter := m.currentToolAdapter()
+	// Runtime settings are the control-plane switch for the Hook adapter. The
+	// bundle default is a provisioning hint and must not disable an explicitly
+	// enabled runtime adapter.
+	m.toolEnabled.Store(m.effectiveToolAdapterEnabled() && adapter != nil && m.cfg.ToolHookSocket != "")
+	m.sessionEnabled.Store(m.effectiveSessionHookEnabled() && adapter != nil && m.cfg.ToolHookSocket != "")
+	if err := m.setToolIngressDesired(m.toolEnabled.Load() || m.sessionEnabled.Load()); err != nil {
+		m.queueRuntimeSettingsStatus("failed", settings.Version, errorCode(err), enabledInjections)
+		return err
+	}
+	m.queueRuntimeSettingsStatus("applied", settings.Version, "", enabledInjections)
+	logger.Info("agent_guard_runtime_settings_applied",
+		zap.String("host_id", m.cfg.HostID), zap.Int64("settings_version", settings.Version),
+		zap.Bool("tool_adapter_enabled", settings.ToolAdapterEnabled),
+		zap.Bool("session_hook_enabled", settings.SessionHookEnabled),
+		zap.Bool("behavior_policy_enabled", settings.BehaviorPolicyEnabled),
+		zap.Bool("escape_policy_enabled", settings.EscapePolicyEnabled),
+		zap.Int("injection_count", len(enabledInjections)))
+	return nil
+}
+
+func hasScopedPolicyFields(settings RuntimeSettings) bool {
+	for _, injection := range settings.Injections {
+		if injection.BehaviorEnabled || injection.EscapeEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+var runtimeHookAgentTypes = []string{"codex", "claude-code", "openclaw", "hermes", "zcode"}
+
+func (m *Manager) applyHookInjections(settings RuntimeSettings) ([]string, error) {
+	desired := make(map[string]bool, len(settings.Injections)*2)
+	for _, injection := range settings.Injections {
+		behavior := injection.BehaviorEnabled
+		escape := injection.EscapeEnabled
+		if injection.Enabled && !behavior && !escape {
+			behavior = true
+		}
+		desired[injection.AgentType+"\x00behavior"] = settings.BehaviorPolicyEnabled && behavior
+		desired[injection.AgentType+"\x00escape"] = settings.EscapePolicyEnabled && escape
+	}
+
+	m.hookStateMu.Lock()
+	defer m.hookStateMu.Unlock()
+
+	enabled := make([]string, 0, len(runtimeHookAgentTypes))
+	for _, agentType := range runtimeHookAgentTypes {
+		for _, scope := range []string{"behavior", "escape"} {
+			key := agentType + "\x00" + scope
+			if !desired[key] {
+				continue
+			}
+			if !m.hookStates[key] {
+				if m.scopedHookProvisioner != nil {
+					if err := m.scopedHookProvisioner(agentType, scope); err != nil {
+						logger.Warn("agent_guard_hook_provision_failed", zap.String("host_id", m.cfg.HostID), zap.String("agent_type", agentType), zap.String("scope", scope), zap.String("error_code", errorCode(err)))
+						return enabled, err
+					}
+				} else if scope == "behavior" && m.hookProvisioner != nil {
+					if err := m.hookProvisioner(agentType); err != nil {
+						return enabled, err
+					}
+				} else {
+					return enabled, errors.New("agent_guard_hook_provisioner_unavailable")
+				}
+				m.hookStates[key] = true
+			}
+			if scope == "behavior" {
+				enabled = append(enabled, agentType)
+			} else {
+				enabled = append(enabled, agentType+":escape")
+			}
+		}
+	}
+
+	for _, agentType := range runtimeHookAgentTypes {
+		for _, scope := range []string{"behavior", "escape"} {
+			key := agentType + "\x00" + scope
+			if desired[key] || !m.hookStates[key] {
+				continue
+			}
+			if m.scopedHookRemover != nil {
+				if err := m.scopedHookRemover(agentType, scope); err != nil {
+					logger.Warn("agent_guard_hook_remove_failed", zap.String("host_id", m.cfg.HostID), zap.String("agent_type", agentType), zap.String("scope", scope), zap.String("error_code", errorCode(err)))
+					return enabled, err
+				}
+			} else if scope == "behavior" && m.hookRemover != nil {
+				if err := m.hookRemover(agentType); err != nil {
+					return enabled, err
+				}
+			} else {
+				return enabled, errors.New("agent_guard_hook_remover_unavailable")
+			}
+			delete(m.hookStates, key)
+		}
+	}
+	return enabled, nil
+}
+
+func (m *Manager) loadPersistedRuntimeSettings() error {
+	data, err := os.ReadFile(filepath.Join(m.cfg.StateDir, "runtime-settings.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("agent_guard_runtime_settings_read_failed")
+	}
+	settings, err := decodeRuntimeSettings(string(data))
+	if err != nil || settings.HostID != m.cfg.HostID {
+		return errors.New("agent_guard_runtime_settings_persisted_invalid")
+	}
+	if !settings.BehaviorPolicyEnabled && !settings.EscapePolicyEnabled {
+		settings.BehaviorPolicyEnabled = settings.ToolAdapterEnabled || settings.SessionHookEnabled
+		for _, injection := range settings.Injections {
+			settings.BehaviorPolicyEnabled = settings.BehaviorPolicyEnabled || injection.Enabled || injection.BehaviorEnabled
+		}
+		settings.EscapePolicyEnabled = true
+	}
+	m.runtimeToolAdapterEnabled.Store(settings.ToolAdapterEnabled)
+	m.runtimeSessionHookEnabled.Store(settings.SessionHookEnabled)
+	m.runtimeSettingsVersion.Store(settings.Version)
+	m.runtimeSettingsSet.Store(true)
+	m.hookStateMu.Lock()
+	for _, injection := range settings.Injections {
+		behavior := injection.BehaviorEnabled || (injection.Enabled && !injection.EscapeEnabled)
+		if settings.BehaviorPolicyEnabled && behavior {
+			m.hookStates[injection.AgentType+"\x00behavior"] = true
+		} else {
+			delete(m.hookStates, injection.AgentType+"\x00behavior")
+		}
+		if settings.EscapePolicyEnabled && injection.EscapeEnabled {
+			m.hookStates[injection.AgentType+"\x00escape"] = true
+		} else {
+			delete(m.hookStates, injection.AgentType+"\x00escape")
+		}
+	}
+	m.hookStateMu.Unlock()
+	return nil
+}
+
+func (m *Manager) persistRuntimeSettings(settings RuntimeSettings) error {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return errors.New("agent_guard_runtime_settings_encode_failed")
+	}
+	if err := atomicWrite(filepath.Join(m.cfg.StateDir, "runtime-settings.json"), append(data, '\n'), 0o600); err != nil {
+		return errors.New("agent_guard_runtime_settings_write_failed")
+	}
+	return nil
 }
 
 // RebindHostID applies the canonical identity returned by the server before
@@ -181,20 +467,28 @@ func (m *Manager) Start(ctx context.Context) error {
 		logger.Info("agent_guard_disabled", zap.String("host_id", m.cfg.HostID))
 		return nil
 	}
-	if (m.cfg.ToolAdapterEnabled || m.cfg.SessionHookEnabled) && m.toolAdapter == nil && m.cfg.ToolSourceManifest != "" {
+	if err := m.loadPersistedRuntimeSettings(); err != nil {
+		logger.Warn("agent_guard_runtime_settings_restore_failed",
+			zap.String("host_id", m.cfg.HostID), zap.String("error_code", errorCode(err)))
+	}
+	if (m.effectiveToolAdapterEnabled() || m.effectiveSessionHookEnabled()) && m.currentToolAdapter() == nil && m.cfg.ToolSourceManifest != "" {
 		adapter, err := LoadTrustedToolAdapter(m.cfg.ToolSourceManifest)
 		if err != nil {
 			return err
 		}
-		m.toolAdapter = adapter
+		m.replaceToolAdapter(adapter)
 	}
 	var loadedBundle *Bundle
 	if bundle, err := m.bundles.Load(); err == nil {
 		loadedBundle = &bundle
 		m.cfg.ReconcileInterval = time.Duration(bundle.Defaults.ReconcileIntervalSeconds) * time.Second
 		m.monitorEnabled.Store(m.monitorAllowed && bundle.Defaults.BehaviorMonitorEnabled)
-		m.toolEnabled.Store(m.cfg.ToolAdapterEnabled && bundle.Defaults.ToolAdapterEnabled &&
-			m.toolAdapter != nil && m.cfg.ToolHookSocket != "")
+		if !m.runtimeSettingsSet.Load() {
+			m.escapeEnabled.Store(bundle.Defaults.EscapePolicyEnabled || len(bundle.EscapeRules) > 0)
+		}
+		m.bundleToolAdapterEnabled.Store(bundle.Defaults.ToolAdapterEnabled)
+		m.toolEnabled.Store(m.effectiveToolAdapterEnabled() && bundle.Defaults.ToolAdapterEnabled &&
+			m.currentToolAdapter() != nil && m.cfg.ToolHookSocket != "")
 		logger.Info("agent_guard_last_known_good_loaded",
 			zap.String("host_id", m.cfg.HostID),
 			zap.Int64("bundle_version", bundle.BundleVersion),
@@ -204,7 +498,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			zap.String("host_id", m.cfg.HostID),
 			zap.String("error_code", errorCode(err)))
 	}
-	m.sessionEnabled.Store(m.cfg.SessionHookEnabled && m.toolAdapter != nil && m.cfg.ToolHookSocket != "")
+	m.sessionEnabled.Store(m.effectiveSessionHookEnabled() && m.currentToolAdapter() != nil && m.cfg.ToolHookSocket != "")
 	if err := m.reconcileOnce(); err != nil {
 		return err
 	}
@@ -253,6 +547,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 func (m *Manager) Stop() {
 	m.monitorEnabled.Store(false)
+	m.escapeEnabled.Store(false)
 	m.toolEnabled.Store(false)
 	_ = m.setToolIngressDesired(false)
 	if m.cancel != nil {
@@ -325,8 +620,11 @@ func (m *Manager) ApplyBundle(payload string) error {
 		return err
 	}
 	previousToolEnabled := m.toolEnabled.Load()
-	desiredToolEnabled := m.cfg.ToolAdapterEnabled && bundle.Defaults.ToolAdapterEnabled &&
-		m.toolAdapter != nil && m.cfg.ToolHookSocket != ""
+	// Tool rule matching is performed by api-server. A newly applied policy
+	// bundle may still explicitly disable the adapter and must clean up its
+	// ingress; the runtime settings path above is the immediate UI switch.
+	desiredToolEnabled := m.effectiveToolAdapterEnabled() && bundle.Defaults.ToolAdapterEnabled &&
+		m.currentToolAdapter() != nil && m.cfg.ToolHookSocket != ""
 	if desiredToolEnabled || m.sessionEnabled.Load() {
 		if err := m.setToolIngressDesired(true); err != nil {
 			if previousErr == nil {
@@ -349,6 +647,7 @@ func (m *Manager) ApplyBundle(payload string) error {
 		m.queueConfigStatus("rejected", candidateVersion, candidateDigest, code)
 		return err
 	}
+	m.bundleToolAdapterEnabled.Store(bundle.Defaults.ToolAdapterEnabled)
 	if bundle.Defaults.ReconcileIntervalSeconds > 0 {
 		interval := time.Duration(bundle.Defaults.ReconcileIntervalSeconds) * time.Second
 		select {
@@ -362,7 +661,11 @@ func (m *Manager) ApplyBundle(payload string) error {
 		}
 	}
 	m.monitorEnabled.Store(m.monitorAllowed && bundle.Defaults.BehaviorMonitorEnabled)
+	if !m.runtimeSettingsSet.Load() {
+		m.escapeEnabled.Store(bundle.Defaults.EscapePolicyEnabled || len(bundle.EscapeRules) > 0)
+	}
 	m.toolEnabled.Store(desiredToolEnabled)
+	m.sessionEnabled.Store(m.effectiveSessionHookEnabled() && m.currentToolAdapter() != nil && m.cfg.ToolHookSocket != "")
 	if err := m.setToolIngressDesired(desiredToolEnabled || m.sessionEnabled.Load()); err != nil {
 		return err
 	}
@@ -373,7 +676,9 @@ func (m *Manager) ApplyBundle(payload string) error {
 		zap.Int64("bundle_version", bundle.BundleVersion),
 		zap.String("bundle_digest", bundle.Digest),
 		zap.Int("profile_count", len(bundle.Profiles)),
-		zap.Int("policy_count", len(bundle.Policies)))
+		zap.Int("policy_count", len(bundle.Policies)),
+		zap.Int("escape_rule_count", len(bundle.EscapeRules)),
+		zap.Bool("escape_policy_enabled", m.escapeEnabled.Load()))
 	return nil
 }
 
@@ -466,7 +771,8 @@ func (m *Manager) Capabilities() GuardCapabilities {
 }
 
 func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, error) {
-	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.toolEnabled.Load() || m.toolAdapter == nil {
+	adapter := m.currentToolAdapter()
+	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.toolEnabled.Load() || adapter == nil {
 		return BehaviorEvent{}, errors.New("tool_semantics_unobservable")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(payload)))
@@ -479,7 +785,7 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return BehaviorEvent{}, errors.New("agent_guard_tool_event_json_invalid")
 	}
-	verified, err := m.toolAdapter.Verify(input)
+	verified, err := adapter.Verify(input)
 	if err != nil {
 		return BehaviorEvent{}, err
 	}
@@ -495,20 +801,99 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 		subject, verified.Source.SourceType, verified.CorrelationHash, input.ExternalSessionID,
 	)
 	if session.SessionID == "" {
+		if input.Operation == ToolEventStarted {
+			recoveredSession, recoveredUnit, recovered, startErr := m.tracker.StartTrustedSession(
+				process, subject, verified.Source.SourceType, input.ExternalSessionID, input.OccurredAt,
+			)
+			if startErr == nil {
+				session = recoveredSession
+				sessionChanged = recovered
+				m.queueTrustedSessionStarted(recoveredSession, recoveredUnit, recovered)
+				m.syncKernelSubjects()
+				logger.Info("agent_guard_trusted_session_recovered_from_tool",
+					zap.String("host_id", m.cfg.HostID),
+					zap.String("instance_id", recoveredSession.InstanceID),
+					zap.String("session_id", recoveredSession.SessionID),
+					zap.String("execution_unit_id", recoveredUnit.UnitID),
+					zap.String("external_session_ref", stableID("external_session", input.ExternalSessionID)),
+					zap.Uint32("root_pid", input.PID),
+					zap.String("source", string(verified.Source.SourceType)),
+				)
+			} else {
+				logger.Warn("agent_guard_tool_session_recovery_failed",
+					zap.String("host_id", m.cfg.HostID),
+					zap.String("external_session_ref", stableID("external_session", input.ExternalSessionID)),
+					zap.String("error_code", errorCode(startErr)),
+				)
+			}
+		}
+	}
+	if session.SessionID == "" {
+		logger.Warn("agent_guard_tool_session_unavailable",
+			zap.String("host_id", m.cfg.HostID),
+			zap.String("external_session_ref", stableID("external_session", input.ExternalSessionID)),
+			zap.String("subject_session_id", subject.SessionID),
+			zap.String("operation", input.Operation),
+			zap.String("tool_name", input.ToolName),
+			zap.Uint32("hook_pid", input.PID),
+			zap.Uint64("hook_start_ticks", input.StartTicks),
+		)
 		return BehaviorEvent{}, errors.New("agent_guard_tool_session_unavailable")
 	}
 	m.queueTrustedSessionStatus(session, sessionChanged)
 	parentEventID := ""
-	if link, exists := m.toolAdapter.Lookup(process.Identity); exists &&
+	if link, exists := adapter.Lookup(process.Identity); exists &&
 		link.CorrelationHash == verified.CorrelationHash && link.ToolCallID == input.ToolCallID {
 		parentEventID = link.ToolEventID
 	}
-	attributes := map[string]any{"tool_call_id": input.ToolCallID}
-	if input.ProcessEventID != "" {
-		attributes["process_event_id"] = input.ProcessEventID
+	evidence, evidenceMatched := adapter.Evidence(input.ToolCallID)
+	if evidenceMatched && evidence.Link.CorrelationHash != verified.CorrelationHash {
+		evidenceMatched = false
 	}
-	if len(input.ResourceEventIDs) > 0 {
-		attributes["resource_event_ids"] = append([]string(nil), input.ResourceEventIDs...)
+	if evidenceMatched && evidence.Representative.Identity.Valid() {
+		if candidate, readErr := m.scanner.ReadPID(evidence.Representative.Identity.PID); readErr == nil &&
+			candidate.Identity == evidence.Representative.Identity {
+			process = candidate
+		}
+	}
+	attributes := map[string]any{"tool_call_id": input.ToolCallID}
+	if input.TurnID != "" {
+		attributes["turn_id"] = input.TurnID
+	}
+	if value := trustedJSONValue(input.ToolInput); value != nil {
+		attributes["tool_input"] = value
+	}
+	if value := trustedJSONValue(input.ToolResponse); value != nil {
+		attributes["tool_response"] = value
+	}
+	commandText := toolCommandText(input.ToolName, input.ToolInput)
+	if commandText != "" {
+		attributes["command"] = commandText
+	}
+	if evidenceMatched && evidence.Representative.Identity.Valid() {
+		attributes["correlation_status"] = "matched"
+		attributes["correlation_method"] = evidence.Method
+		attributes["correlated_process_pid"] = evidence.Representative.Identity.PID
+		attributes["correlated_process_start_ticks"] = evidence.Representative.Identity.StartTicks
+	} else {
+		attributes["correlation_status"] = "unmatched"
+		attributes["correlation_method"] = "ebpf_unresolved"
+	}
+	processEventID := input.ProcessEventID
+	resourceEventIDs := append([]string(nil), input.ResourceEventIDs...)
+	if evidenceMatched {
+		if evidence.ProcessEventID != "" {
+			processEventID = evidence.ProcessEventID
+		}
+		if len(evidence.ResourceEventIDs) > 0 {
+			resourceEventIDs = append([]string(nil), evidence.ResourceEventIDs...)
+		}
+	}
+	if processEventID != "" {
+		attributes["process_event_id"] = processEventID
+	}
+	if len(resourceEventIDs) > 0 {
+		attributes["resource_event_ids"] = resourceEventIDs
 	}
 	remoteCoverage := string(CoverageRemoteUnobservable)
 	if verified.Remote != nil {
@@ -522,11 +907,14 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 	} else if input.Operation == ToolEventFailed {
 		outcome = OutcomeFailed
 	}
+	// Tool calls are behavior facts, not lifecycle/state events. Keep the
+	// canonical Agent Guard event type so the server/DC projection path stores
+	// them in agent_behavior_events; category=tool carries the tool semantic.
 	event, accepted := m.observeRawEvent(RawBehavior{
-		EventID: input.EventID, EventType: "agent_tool_call", SessionID: session.SessionID,
+		EventID: input.EventID, EventType: "agent_behavior", SessionID: session.SessionID,
 		CorrelationID: verified.CorrelationHash, ParentEventID: parentEventID,
 		OccurredAt: input.OccurredAt, Category: CategoryTool, Operation: input.Operation,
-		Outcome: outcome, Process: process,
+		Outcome: outcome, Process: process, Argv: process.Argv,
 		Resource: Resource{Type: "tool", Identity: input.ToolName, Attributes: attributes},
 		Source:   verified.Source.SourceType, Sensor: verified.Source.SourceID, Visibility: "complete",
 		Decision: DecisionAudit, Severity: "info",
@@ -540,15 +928,46 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 		return BehaviorEvent{}, errors.New("agent_guard_tool_event_unattributed")
 	}
 	if input.Operation == ToolEventStarted {
-		m.toolAdapter.Bind(process.Identity, toolCorrelationLink{
+		adapter.Bind(process.Identity, toolCorrelationLink{
 			CorrelationHash: verified.CorrelationHash, ToolEventID: event.EventID,
 			ToolCallID: input.ToolCallID, SessionID: session.SessionID,
-			ExpiresAt: input.OccurredAt.Add(30 * time.Minute),
+			CommandText: commandText,
+			ExpiresAt:   input.OccurredAt.Add(30 * time.Minute),
 		})
 	} else {
-		m.toolAdapter.Complete(process.Identity)
+		adapter.CompleteToolCall(input.ToolCallID)
 	}
 	return event, nil
+}
+
+func trustedJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return value
+}
+
+func toolCommandText(toolName string, raw json.RawMessage) string {
+	value := trustedJSONValue(raw)
+	if object, ok := value.(map[string]any); ok {
+		for _, key := range []string{"command", "cmdline", "command_line", "script"} {
+			if command, ok := object[key].(string); ok && strings.TrimSpace(command) != "" {
+				return strings.TrimSpace(command)
+			}
+		}
+	}
+	if value == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return strings.TrimSpace(toolName)
+	}
+	return string(encoded)
 }
 
 // ObserveTrustedPayload routes the shared signed hook socket without inferring
@@ -569,7 +988,8 @@ func (m *Manager) ObserveTrustedPayload(payload []byte) (BehaviorEvent, error) {
 }
 
 func (m *Manager) ObserveTrustedSessionPayload(payload []byte) (BehaviorEvent, error) {
-	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.sessionEnabled.Load() || m.toolAdapter == nil {
+	adapter := m.currentToolAdapter()
+	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.sessionEnabled.Load() || adapter == nil {
 		return BehaviorEvent{}, errors.New("session_lifecycle_unobservable")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(payload)))
@@ -582,7 +1002,7 @@ func (m *Manager) ObserveTrustedSessionPayload(payload []byte) (BehaviorEvent, e
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return BehaviorEvent{}, errors.New("agent_guard_session_event_json_invalid")
 	}
-	verified, err := m.toolAdapter.VerifySession(input)
+	verified, err := adapter.VerifySession(input)
 	if err != nil {
 		return BehaviorEvent{}, err
 	}
@@ -693,9 +1113,13 @@ func (m *Manager) setToolIngressDesired(enabled bool) error {
 	if m.toolIngress != nil {
 		return nil
 	}
+	adapter := m.currentToolAdapter()
+	if adapter == nil {
+		return errors.New("agent_guard_tool_adapter_unavailable")
+	}
 	ingress, err := StartToolHookReceiver(
-		m.cfg.ToolHookSocket, m.toolAdapter.SocketPolicy(),
-		m.toolAdapter.AuthorizePeer, m.ObserveTrustedPayload,
+		m.cfg.ToolHookSocket, adapter.SocketPolicy(),
+		adapter.AuthorizePeer, m.ObserveTrustedPayload,
 	)
 	if err != nil {
 		return err
@@ -798,8 +1222,9 @@ func (m *Manager) observeRawEvent(raw RawBehavior) (BehaviorEvent, bool) {
 	if !m.cfg.Enabled || !m.monitorEnabled.Load() {
 		return BehaviorEvent{}, false
 	}
-	if raw.CorrelationID == "" && m.toolEnabled.Load() && m.toolAdapter != nil {
-		if link, ok := m.toolAdapter.Lookup(raw.Process.Identity); ok {
+	adapter := m.currentToolAdapter()
+	if raw.CorrelationID == "" && m.toolEnabled.Load() && adapter != nil {
+		if link, ok := adapter.Lookup(raw.Process.Identity); ok {
 			raw.SessionID = link.SessionID
 			raw.CorrelationID = link.CorrelationHash
 			raw.ParentEventID = link.ToolEventID
@@ -813,6 +1238,11 @@ func (m *Manager) observeRawEvent(raw RawBehavior) (BehaviorEvent, bool) {
 	event, ok := m.normalizer.Normalize(raw)
 	if !ok {
 		return BehaviorEvent{}, false
+	}
+	if raw.CorrelationID != "" && raw.Category != CategoryTool && m.toolEnabled.Load() && adapter != nil {
+		if link, linked := adapter.Lookup(raw.Process.Identity); linked && link.CorrelationHash == raw.CorrelationID {
+			adapter.RecordEvidence(raw.Process.Identity, event.EventID, string(raw.Category), raw.Operation, raw.Process)
+		}
 	}
 	m.enqueueAggregates(m.aggregator.Add(event))
 	return event, true
@@ -839,8 +1269,8 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 		parent, err := m.scanner.ReadPID(process.PPID)
 		if err == nil {
 			m.tracker.OnFork(parent.Identity, process)
-			if m.toolAdapter != nil {
-				m.toolAdapter.OnFork(parent.Identity, process.Identity)
+			if adapter := m.currentToolAdapter(); adapter != nil {
+				adapter.OnFork(parent.Identity, process.Identity)
 			}
 		}
 	case "process_exec":
@@ -1095,6 +1525,9 @@ func (m *Manager) observeEscapeViolation(
 	process ProcessSnapshot,
 	parent BehaviorEvent,
 ) bool {
+	if !m.cfg.Enabled || !m.monitorEnabled.Load() || !m.escapeEnabled.Load() {
+		return false
+	}
 	subject, ok := m.tracker.Attribute(process)
 	if !ok {
 		return false
@@ -1436,7 +1869,9 @@ func (m *Manager) queuePendingLifecyclesLocked() {
 			zap.Uint32("controller_pid", instance.Controller.PID))
 	}
 	for _, unit := range m.tracker.Units() {
-		if m.startedUnits[unit.UnitID] || !m.started[unit.InstanceID] {
+		session, sessionExists := m.tracker.Session(unit.SessionID)
+		if m.startedUnits[unit.UnitID] || !m.started[unit.InstanceID] ||
+			!sessionExists || !isTrustedSession(session) {
 			continue
 		}
 		m.startedUnits[unit.UnitID] = true
@@ -1449,7 +1884,8 @@ func (m *Manager) queuePendingLifecyclesLocked() {
 			zap.String("coverage", string(unit.Coverage)))
 	}
 	for _, session := range m.tracker.Sessions() {
-		if m.startedSessions[session.SessionID] || !m.started[session.InstanceID] {
+		if m.startedSessions[session.SessionID] || !m.started[session.InstanceID] ||
+			!isTrustedSession(session) {
 			continue
 		}
 		m.startedSessions[session.SessionID] = true
@@ -1532,6 +1968,16 @@ func (m *Manager) queueConfigStatus(status string, version int64, digest, code s
 	m.queueStatusEvent("agent_guard_config_status", body, "info")
 }
 
+func (m *Manager) queueRuntimeSettingsStatus(status string, version int64, code string, injections []string) {
+	body := map[string]any{
+		"schema": GuardSchemaV1, "settings_schema": AgentGuardRuntimeSettingsSchema,
+		"status": status, "settings_version": version, "error_code": code,
+		"injections": injections, "occurred_at": time.Now().UTC(),
+		"coverage_level": m.currentEnforcementCoverage(),
+	}
+	m.queueStatusEvent("agent_guard_config_status", body, "info")
+}
+
 func (m *Manager) currentEnforcementCoverage() CoverageLevel {
 	m.kernelPolicyMu.RLock()
 	policy := m.kernelPolicy
@@ -1568,6 +2014,10 @@ func (m *Manager) queueInstanceStatus(instance RuntimeInstance, eventType string
 }
 
 func (m *Manager) queueExecutionUnitStatus(unit ExecutionUnit, eventType string) {
+	session, ok := m.tracker.Session(unit.SessionID)
+	if !ok || !isTrustedSession(session) {
+		return
+	}
 	baseline := redactIsolationState(unit.IsolationBaseline)
 	actual := redactIsolationState(unit.IsolationActual)
 	diff := redactIsolationDiff(unit.IsolationDiff, 0)
@@ -1600,6 +2050,9 @@ func (m *Manager) queueExecutionUnitStatus(unit ExecutionUnit, eventType string)
 }
 
 func (m *Manager) queueSessionStatus(session BehaviorSession, eventType string) {
+	if !isTrustedSession(session) {
+		return
+	}
 	body := map[string]any{
 		"schema":                 GuardSchemaV1,
 		"session_id":             session.SessionID,

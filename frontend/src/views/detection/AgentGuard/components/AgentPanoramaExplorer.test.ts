@@ -1,30 +1,59 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
+import { mount } from '@vue/test-utils'
 import AgentPanoramaExplorer from './AgentPanoramaExplorer.vue'
 
 describe('AgentPanoramaExplorer', () => {
-  it('keeps process and behavior evidence in the same hierarchy', async () => {
-    const loadChildren = vi.fn().mockResolvedValue([{
-      id: 'file-1',
-      parent_id: 'process-1',
-      node_type: 'file',
-      label: 'write · payload.bin',
-      severity: 'high',
-      has_children: false,
-      occurred_at: '2026-07-30T10:00:01Z',
-    }])
+  it('paginates behavior tool calls and emits the requested page', async () => {
+    const PaginationStub = defineComponent({
+      emits: ['current-change'],
+      setup(_, { emit }) {
+        return () => h('button', {
+          class: 'panorama-pagination',
+          onClick: () => emit('current-change', 2),
+        }, 'next')
+      },
+    })
     const wrapper = mount(AgentPanoramaExplorer, {
       props: {
         nodes: [{
-          id: 'process-1',
-          node_type: 'process',
-          label: 'python',
+          id: 'tool-1', node_type: 'tool_call', label: 'Bash', tool_name: 'Bash', command: 'echo hello', has_children: false,
+        }],
+        total: 42,
+        page: 1,
+        pageSize: 20,
+        loadChildren: vi.fn().mockResolvedValue([]),
+        mode: 'behavior',
+      },
+      global: {
+        stubs: {
+          'el-pagination': PaginationStub,
+          'el-tag': true,
+          'el-alert': true,
+          'el-empty': true,
+        },
+      },
+    })
+
+    await wrapper.get('.panorama-pagination').trigger('click')
+    expect(wrapper.emitted('page-change')).toEqual([[2]])
+  })
+
+  it('renders tool execution content without an evidence panel or process tree', async () => {
+    const loadChildren = vi.fn().mockResolvedValue([])
+    const wrapper = mount(AgentPanoramaExplorer, {
+      props: {
+        nodes: [{
+          id: 'tool-1',
+          node_type: 'tool_call',
+          label: 'Bash',
+          tool_name: 'Bash',
+          command: 'python worker --task payload.bin',
+          tool_response: 'completed',
           pid: 4120,
           ppid: 4110,
-          process_start_ticks: '9200',
-          process_status: 'running',
-          has_children: true,
+          has_children: false,
           occurred_at: '2026-07-30T10:00:00Z',
         }],
         loadChildren,
@@ -33,101 +62,77 @@ describe('AgentPanoramaExplorer', () => {
       global: {
         stubs: {
           'el-tag': { template: '<span><slot /></span>' },
-          'el-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
           'el-alert': true,
           'el-empty': true,
         },
       },
     })
 
-	expect(wrapper.text()).toContain('PID 4120 · python')
-	expect(wrapper.text()).toContain('PPID 4110 · 运行中')
-    await wrapper.get('[data-testid="panorama-expand-process-1"]').trigger('click')
-    await flushPromises()
-    expect(loadChildren).toHaveBeenCalledWith('process-1')
-    expect(wrapper.text()).toContain('write · payload.bin')
-    await wrapper.get('[data-testid="panorama-node-file-1"]').trigger('click')
-    expect(wrapper.emitted('select')?.at(-1)?.[0]).toMatchObject({ id: 'file-1' })
+    expect(wrapper.text()).toContain('Bash')
+    expect(wrapper.text()).toContain('python worker --task payload.bin')
+    expect(wrapper.text()).toContain('completed')
+    expect(wrapper.classes()).toContain('tool-call-layout')
+    expect(wrapper.find('.panorama-evidence').exists()).toBe(false)
+    expect(loadChildren).not.toHaveBeenCalled()
   })
 
-  it('marks activity windows as inferred instead of Codex conversations', () => {
-    const wrapper = mount(AgentPanoramaExplorer, {
-      props: {
-        nodes: [{
-          id: 'session-1',
-          node_type: 'session',
-          label: 'inferred activity window',
-          session_source: 'activity_window',
-          session_confidence: 'inferred',
-          has_children: false,
-        }],
-        loadChildren: vi.fn().mockResolvedValue([]),
-        mode: 'behavior',
-      },
-      global: {
-        stubs: {
-          'el-tag': true,
-          'el-alert': true,
-          'el-empty': true,
-        },
-      },
-    })
-
-    expect(wrapper.text()).toContain('推断活动窗口（非 Codex 会话）')
-    expect(wrapper.text()).toContain('未获得来源会话 ID')
-  })
-
-	it('shows the real Codex session id and PID plus cmdline', async () => {
-		const wrapper = mount(AgentPanoramaExplorer, {
-			props: {
-				nodes: [{
-					id: 'session-real', node_type: 'session', label: 'masked',
-					external_session_id: 'thr_real_123', session_source: 'agent_official',
-					session_confidence: 'confirmed', has_children: false,
-				}, {
-					id: 'process-real', node_type: 'process', label: 'codex', pid: 4100, ppid: 1,
-					cmdline: 'codex app-server', process_status: 'running', has_children: false,
-				}],
-				loadChildren: vi.fn().mockResolvedValue([]), mode: 'behavior',
-			},
-			global: { stubs: { 'el-tag': true, 'el-alert': true, 'el-empty': true } },
-		})
-		expect(wrapper.text()).toContain('thr_real_123')
-		expect(wrapper.text()).toContain('PID 4100 · codex app-server')
-		await wrapper.get('[data-testid="panorama-node-session-real"]').trigger('click')
-		expect(wrapper.text()).toContain('会话 ID')
-	})
-
-  it('shows tool semantics only with trusted provenance and keeps missing hooks explicit', async () => {
+  it('does not render a Codex root or evidence details in behavior mode', () => {
     const wrapper = mount(AgentPanoramaExplorer, {
       props: {
         nodes: [{
           id: 'tool-1',
           node_type: 'tool_call',
-          label: 'shell',
+          label: 'Bash',
+          tool_name: 'Bash',
+          command: 'echo session-1',
           has_children: false,
-          trust: {
-            tool_semantics: 'trusted',
-            source: 'adapter_hook',
-            proof_verified: true,
-            correlation: 'matched',
-          },
-        }, {
-          id: 'remote-1',
-          node_type: 'execution_unit',
-          label: 'remote sandbox',
-          has_children: false,
-          collection: {
-            visibility: 'unobservable',
-            limitations: ['tool_semantics_unobservable', 'remote_unobservable'],
-          },
-          trust: {
-            tool_semantics: 'tool_semantics_unobservable',
-            remote_visibility: 'remote_unobservable',
-          },
         }],
         loadChildren: vi.fn().mockResolvedValue([]),
         mode: 'behavior',
+      },
+      global: { stubs: { 'el-tag': true, 'el-alert': true, 'el-empty': true } },
+    })
+
+    expect(wrapper.text()).toContain('echo session-1')
+    expect(wrapper.text()).not.toContain('推断活动窗口')
+    expect(wrapper.find('.panorama-evidence').exists()).toBe(false)
+  })
+
+  it('shows PID and the complete command line', () => {
+    const wrapper = mount(AgentPanoramaExplorer, {
+      props: {
+        nodes: [{
+          id: 'tool-real',
+          node_type: 'tool_call',
+          label: 'Bash',
+          tool_name: 'Bash',
+          command: 'codex app-server --config /etc/codex/config.toml',
+          pid: 4100,
+          ppid: 1,
+          has_children: false,
+        }],
+        loadChildren: vi.fn().mockResolvedValue([]),
+        mode: 'behavior',
+      },
+      global: { stubs: { 'el-tag': true, 'el-alert': true, 'el-empty': true } },
+    })
+
+    expect(wrapper.text()).toContain('codex app-server --config /etc/codex/config.toml')
+  })
+
+  it('keeps trusted provenance details in the escape view', async () => {
+    const wrapper = mount(AgentPanoramaExplorer, {
+      props: {
+        nodes: [{
+          id: 'tool-1', node_type: 'tool_call', label: 'shell', has_children: false,
+          trust: { tool_semantics: 'trusted', source: 'adapter_hook', proof_verified: true, correlation: 'matched' },
+        }, {
+          id: 'remote-1', node_type: 'execution_unit', label: 'remote sandbox', has_children: false,
+          collection: { visibility: 'unobservable', limitations: ['tool_semantics_unobservable', 'remote_unobservable'] },
+          trust: { tool_semantics: 'tool_semantics_unobservable', remote_visibility: 'remote_unobservable' },
+        }],
+        loadChildren: vi.fn().mockResolvedValue([]),
+        mode: 'escape',
       },
       global: {
         stubs: {
@@ -142,7 +147,6 @@ describe('AgentPanoramaExplorer', () => {
     await wrapper.get('[data-testid="panorama-node-tool-1"]').trigger('click')
     expect(wrapper.text()).toContain('adapter_hook')
     expect(wrapper.text()).toContain('tool call → process → resource')
-
     await wrapper.get('[data-testid="panorama-node-remote-1"]').trigger('click')
     expect(wrapper.text()).toContain('未获得可信 Agent 工具 Hook')
     expect(wrapper.text()).toContain('远端未关联可信传感器')

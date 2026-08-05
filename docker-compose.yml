@@ -76,6 +76,7 @@ services:
       PGPASSWORD: ${DB_PASSWORD:-a_strong_db_password}
     volumes:
       - ./migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
+      - ./migrations/030_v6.2_zcode_agent_guard_profile.sql:/migrations/030_v6.2_zcode_agent_guard_profile.sql:ro
     command:
       - "psql"
       - "-v"
@@ -88,6 +89,8 @@ services:
       - "aegis_db"
       - "-f"
       - "/migrations/029_v6.2_agent_guard.sql"
+      - "-f"
+      - "/migrations/030_v6.2_zcode_agent_guard_profile.sql"
     networks:
       - aegis-network
 

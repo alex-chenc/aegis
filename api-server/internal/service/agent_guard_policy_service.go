@@ -361,7 +361,7 @@ func validateAgentGuardTargets(targets model.AgentGuardPolicyTargets, addError f
 	if len(targets.AgentTypes) == 0 {
 		addError("targets.agent_types", "required", "at least one agent type or * is required")
 	}
-	allowed := stringSet("codex", "openclaw", "hermes", "claude-code", "opencode", "gemini-cli", "*")
+	allowed := stringSet("codex", "openclaw", "hermes", "claude-code", "zcode", "opencode", "gemini-cli", "*")
 	for index, agentType := range targets.AgentTypes {
 		if !allowed[agentType] {
 			addError(fmt.Sprintf("targets.agent_types[%d]", index), "unknown_enum", "unsupported agent type")

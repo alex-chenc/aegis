@@ -14,15 +14,38 @@ import (
 
 	"server/internal/queue"
 	pb "server/pkg/api/v1"
+	"server/pkg/logger"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	agentGuardBundleConfigType = "agent_guard_bundle"
-	agentGuardBundleSchema     = "aegis.agent_guard.bundle.v1"
+	agentGuardBundleConfigType          = "agent_guard_bundle"
+	agentGuardBundleSchema              = "aegis.agent_guard.bundle.v1"
+	agentGuardRuntimeSettingsConfigType = "agent_guard_runtime_settings"
+	agentGuardRuntimeSettingsSchema     = "aegis.agent_guard.runtime_settings.v1"
+	agentGuardRuntimeSettingsKeyPrefix  = "agent_guard.runtime."
 )
+
+type agentGuardRuntimeHookInjection struct {
+	AgentType       string `json:"agent_type"`
+	Enabled         bool   `json:"enabled"`
+	BehaviorEnabled bool   `json:"behavior_enabled"`
+	EscapeEnabled   bool   `json:"escape_enabled"`
+}
+
+type agentGuardRuntimeSettingsPayload struct {
+	Schema                string                           `json:"schema"`
+	Version               int64                            `json:"version"`
+	HostID                string                           `json:"host_id"`
+	ToolAdapterEnabled    bool                             `json:"tool_adapter_enabled"`
+	SessionHookEnabled    bool                             `json:"session_hook_enabled"`
+	BehaviorPolicyEnabled bool                             `json:"behavior_policy_enabled"`
+	EscapePolicyEnabled   bool                             `json:"escape_policy_enabled"`
+	Injections            []agentGuardRuntimeHookInjection `json:"injections"`
+}
 
 var (
 	errAgentGuardBundleInvalid  = errors.New("invalid agent guard bundle envelope")
@@ -366,5 +389,81 @@ func (s *GRPCServer) configsForAgent(hostID uuid.UUID) []*pb.ConfigSync {
 	if snapshot, ok := s.loadAgentGuardBundle(hostID); ok {
 		configs = append(configs, snapshot.Config)
 	}
+	if config, ok := s.loadAgentGuardRuntimeSettings(hostID); ok {
+		configs = append(configs, config)
+	}
 	return configs
+}
+
+func (s *GRPCServer) cacheAgentGuardRuntimeSettings(hostID uuid.UUID, config *pb.ConfigSync) error {
+	if config == nil || config.ConfigType != agentGuardRuntimeSettingsConfigType ||
+		config.Action != "full_sync" || strings.TrimSpace(config.Payload) == "" {
+		return errors.New("invalid agent guard runtime settings")
+	}
+	var envelope struct {
+		Schema  string `json:"schema"`
+		Version int64  `json:"version"`
+		HostID  string `json:"host_id"`
+	}
+	if err := json.Unmarshal([]byte(config.Payload), &envelope); err != nil ||
+		envelope.Schema != agentGuardRuntimeSettingsSchema || envelope.Version < 1 || envelope.HostID != hostID.String() {
+		return errors.New("invalid agent guard runtime settings")
+	}
+	normalizedPayload, err := normalizeAgentGuardRuntimeSettingsPayload(config.Payload, hostID)
+	if err != nil {
+		return err
+	}
+	cached := proto.Clone(config).(*pb.ConfigSync)
+	cached.Payload = normalizedPayload
+	s.agentGuardRuntimeSettings.Store(hostID, cached)
+	return nil
+}
+
+func (s *GRPCServer) loadAgentGuardRuntimeSettings(hostID uuid.UUID) (*pb.ConfigSync, bool) {
+	value, ok := s.agentGuardRuntimeSettings.Load(hostID)
+	if ok {
+		return proto.Clone(value.(*pb.ConfigSync)).(*pb.ConfigSync), true
+	}
+	if s.systemConfigRepo == nil {
+		return nil, false
+	}
+	stored, err := s.systemConfigRepo.GetByKey(agentGuardRuntimeSettingsKeyPrefix + hostID.String())
+	if err != nil {
+		return nil, false
+	}
+	normalizedPayload, err := normalizeAgentGuardRuntimeSettingsPayload(string(stored.ConfigValue), hostID)
+	if err != nil {
+		logger.Warn("agent_guard_runtime_settings_persisted_config_invalid",
+			zap.String("host_id", hostID.String()),
+			zap.String("error_code", "agent_guard_runtime_settings_invalid"))
+		return nil, false
+	}
+	config := &pb.ConfigSync{
+		ConfigType: agentGuardRuntimeSettingsConfigType,
+		Action:     "full_sync",
+		Payload:    normalizedPayload,
+	}
+	s.agentGuardRuntimeSettings.Store(hostID, config)
+	return proto.Clone(config).(*pb.ConfigSync), true
+}
+
+func normalizeAgentGuardRuntimeSettingsPayload(payload string, hostID uuid.UUID) (string, error) {
+	var settings agentGuardRuntimeSettingsPayload
+	if err := json.Unmarshal([]byte(payload), &settings); err != nil ||
+		settings.Schema != agentGuardRuntimeSettingsSchema || settings.Version < 1 ||
+		settings.HostID != hostID.String() {
+		return "", errors.New("invalid agent guard runtime settings")
+	}
+	seen := make(map[string]struct{}, len(settings.Injections))
+	for _, injection := range settings.Injections {
+		if _, ok := seen[injection.AgentType]; ok {
+			return "", errors.New("duplicate agent guard runtime hook agent type")
+		}
+		seen[injection.AgentType] = struct{}{}
+	}
+	normalized, err := json.Marshal(settings)
+	if err != nil {
+		return "", err
+	}
+	return string(normalized), nil
 }

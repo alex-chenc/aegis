@@ -1,6 +1,10 @@
 <template>
-  <div class="panorama-explorer">
-    <section class="panorama-tree" :aria-label="t('agentGuard.panorama.tree')">
+  <div class="panorama-explorer" :class="{ 'tool-call-layout': mode === 'behavior' }">
+    <section
+      class="panorama-tree"
+      :class="{ 'tool-call-list': mode === 'behavior' }"
+      :aria-label="t('agentGuard.panorama.tree')"
+    >
       <el-empty v-if="rows.length === 0" :description="t('agentGuard.states.panoramaNotCollected')" />
       <div
         v-for="row in rows"
@@ -30,6 +34,12 @@
         <span class="node-kind">{{ nodeKind(row.node.node_type) }}</span>
         <span class="node-copy">
           <strong>{{ nodeLabel(row.node) }}</strong>
+          <code v-if="row.node.node_type === 'tool_call' && row.node.command" class="tool-command">
+            {{ row.node.command }}
+          </code>
+          <span v-if="row.node.node_type === 'tool_call' && row.node.tool_response !== undefined" class="tool-result">
+            {{ formatToolPayload(row.node.tool_response) }}
+          </span>
           <small>
             {{ nodeMeta(row.node) }}
           </small>
@@ -58,9 +68,20 @@
           !
         </span>
       </div>
+      <el-pagination
+        v-if="mode === 'behavior' && total > pageSize"
+        class="panorama-pagination"
+        background
+        small
+        layout="total, prev, pager, next"
+        :current-page="page"
+        :page-size="pageSize"
+        :total="total"
+        @current-change="emit('page-change', $event)"
+      />
     </section>
 
-    <aside class="panorama-evidence">
+    <aside v-if="mode !== 'behavior'" class="panorama-evidence">
       <el-empty v-if="!selected" :description="t('agentGuard.panorama.selectNode')" />
       <template v-else>
         <div class="evidence-heading">
@@ -145,13 +166,21 @@ interface TreeRow {
 
 const props = defineProps<{
   nodes: PanoramaTreeNode[]
+  total?: number
+  page?: number
+  pageSize?: number
   mode: AgentGuardMode
   loadChildren: (nodeId: string) => Promise<PanoramaTreeNode[]>
 }>()
 
 const emit = defineEmits<{
   (event: 'select', node: PanoramaTreeNode): void
+  (event: 'page-change', page: number): void
 }>()
+
+const total = computed(() => props.total || 0)
+const page = computed(() => props.page || 1)
+const pageSize = computed(() => props.pageSize || 20)
 
 const { t } = useI18n()
 const rows = ref<TreeRow[]>([])
@@ -226,6 +255,9 @@ function nodeKind(type: string) {
 }
 
 function nodeLabel(node: PanoramaTreeNode) {
+	if (node.node_type === 'tool_call') {
+		return node.tool_name || node.label || t('agentGuard.panorama.toolCall')
+	}
   if (node.node_type === 'process' && node.pid) {
     if (node.label?.startsWith(`PID ${node.pid}`)) return node.label
     const command = node.cmdline || node.label
@@ -241,6 +273,11 @@ function nodeLabel(node: PanoramaTreeNode) {
 }
 
 function nodeMeta(node: PanoramaTreeNode) {
+	if (node.node_type === 'tool_call') {
+		const parts = [node.tool_call_id, node.pid ? `PID ${node.pid}` : '', node.ppid !== undefined ? `PPID ${node.ppid}` : '']
+		if (node.correlation_status) parts.push(node.correlation_status)
+		return parts.filter(Boolean).join(' · ') || node.occurred_at || t('agentGuard.panorama.noTimestamp')
+	}
   if (node.pid) {
     const parts: string[] = []
     if (node.ppid !== undefined) parts.push(`PPID ${node.ppid}`)
@@ -274,6 +311,15 @@ function severityType(severity: string) {
   if (severity === 'low') return 'success'
   return 'info'
 }
+
+function formatToolPayload(payload: unknown) {
+	if (typeof payload === 'string') return payload
+	try {
+		return JSON.stringify(payload)
+	} catch {
+		return String(payload)
+	}
+}
 </script>
 
 <style scoped>
@@ -284,6 +330,10 @@ function severityType(severity: string) {
   min-height: 420px;
 }
 
+.panorama-explorer.tool-call-layout {
+  grid-template-columns: 1fr;
+}
+
 .panorama-tree,
 .panorama-evidence {
   min-width: 0;
@@ -292,6 +342,11 @@ function severityType(severity: string) {
   border: 1px solid var(--aegis-border);
   border-radius: 14px;
   background: var(--aegis-surface, #fff);
+}
+
+.panorama-pagination {
+  justify-content: center;
+  margin-top: 12px;
 }
 
 .panorama-row {
@@ -351,6 +406,30 @@ function severityType(severity: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-call-list .node-copy strong {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.tool-command,
+.tool-result {
+	display: block;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.tool-command {
+	color: var(--aegis-text);
+	font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tool-result {
+	color: var(--aegis-text-muted);
+	font-size: 12px;
 }
 
 .node-copy small,

@@ -96,7 +96,7 @@ func normalizeAgentToolSemantics(envelope *behaviorEnvelope, occurredAt time.Tim
 
 	attributes := envelope.Resource.Attributes
 	toolCallID := stringValueAny(attributes["tool_call_id"])
-	if !isNonNilUUID(toolCallID) {
+	if !isToolCallID(toolCallID) {
 		return fmt.Errorf("%w: tool_call_id", ErrAgentBehaviorInvalidContract)
 	}
 	processEventID := stringValueAny(attributes["process_event_id"])
@@ -142,6 +142,19 @@ func normalizeAgentToolSemantics(envelope *behaviorEnvelope, occurredAt time.Tim
 		"correlation_token_hash_only": true,
 	}
 	return nil
+}
+
+func isToolCallID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 255 {
+		return false
+	}
+	for _, char := range value {
+		if char <= 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func isSHA256Reference(value string) bool {

@@ -93,6 +93,7 @@ var kernelAgentTypes = map[string]struct{}{
 	"claude-code": {},
 	"opencode":    {},
 	"gemini-cli":  {},
+	"zcode":       {},
 }
 
 var kernelProfileKeys = map[string]struct{}{
@@ -102,6 +103,7 @@ var kernelProfileKeys = map[string]struct{}{
 	"claude-code-linux": {},
 	"opencode-linux":    {},
 	"gemini-cli-linux":  {},
+	"zcode-linux":       {},
 }
 
 var builtinRuntimeSocketPaths = []string{

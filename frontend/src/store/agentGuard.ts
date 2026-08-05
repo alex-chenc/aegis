@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import {
   createAgentGuardPolicy,
+  deleteAgentGuardSessions,
   freezeAgentExecutionUnit,
   getAgentGuardAction,
   analyzeAgentSecurityFinding,
@@ -16,10 +17,12 @@ import {
   listAgentExecutionUnits,
   listAgentExecutionUnitTimeline,
   listAgentGuardInstances,
+  listAgentGuardSessions,
   listAgentGuardPolicies,
   listAgentGuardPolicyDeliveries,
   listAgentSecurityFindings,
   listBuiltinAgentBehaviorRules,
+  listBuiltinAgentEscapeRules,
   publishAgentGuardPolicy,
   resumeAgentExecutionUnit,
   validateAgentGuardPolicy,
@@ -42,8 +45,10 @@ import type {
   AgentGuardPolicyValidation,
   AgentSecurityAnalysisRun,
   AgentRuntimeInstance,
+  AgentBehaviorSession,
   AgentSecurityFindingSummary,
   BuiltinAgentBehaviorRuleSummary,
+  BuiltinAgentEscapeRuleSummary,
   PanoramaTreeNode,
 } from '@/types/agentGuard'
 
@@ -102,15 +107,28 @@ export const useAgentGuardStore = defineStore('agentGuard', {
     agentTotal: 0,
     instances: [] as AgentRuntimeInstance[],
     instanceTotal: 0,
+    sessions: [] as AgentBehaviorSession[],
+    sessionTotal: 0,
+    sessionPage: 1,
+    sessionPageSize: 20,
     panoramaNodes: [] as PanoramaTreeNode[],
+    panoramaTotal: 0,
+    panoramaPage: 1,
+    panoramaPageSize: 20,
     selectedPanoramaNode: null as PanoramaTreeNode | null,
     executionUnits: [] as AgentExecutionUnit[],
     selectedExecutionUnit: null as AgentExecutionUnit | null,
     builtinRules: [] as BuiltinAgentBehaviorRuleSummary[],
+    escapeRules: [] as BuiltinAgentEscapeRuleSummary[],
     findings: [] as AgentSecurityFindingSummary[],
     findingTotal: 0,
+    findingPage: 1,
+    findingPageSize: 20,
     selectedFinding: null as AgentSecurityFindingSummary | null,
     analyses: [] as AgentSecurityAnalysisRun[],
+    analysisTotal: 0,
+    analysisPage: 1,
+    analysisPageSize: 10,
     selectedBehavior: null as AgentBehaviorIndex | null,
     policies: [] as AgentGuardPolicy[],
     policyTotal: 0,
@@ -174,12 +192,62 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       }
     },
 
+    async fetchSessions(instanceId: string, page = 1) {
+      this.loading.panorama = true
+      this.errors.panorama = ''
+      try {
+        const result = await listAgentGuardSessions(instanceId, { page, page_size: this.sessionPageSize })
+        this.sessions = result.items || []
+        this.sessionTotal = result.total || 0
+        this.sessionPage = page
+        return this.sessions
+      } catch (error) {
+        this.errors.panorama = errorMessage(error)
+        return []
+      } finally {
+        this.loading.panorama = false
+      }
+    },
+
+    async fetchSessionsForInstances(instanceIds: string[]) {
+      this.loading.panorama = true
+      this.errors.panorama = ''
+      try {
+        const results = await Promise.all(instanceIds.map(instanceId =>
+          listAgentGuardSessions(instanceId, { page: 1, page_size: this.sessionPageSize }),
+        ))
+        const sessions = results
+          .flatMap(result => result.items || [])
+          .sort((left, right) => String(right.last_seen_at).localeCompare(String(left.last_seen_at)))
+        this.sessions = sessions
+        this.sessionTotal = results.reduce((total, result) => total + (result.total || 0), 0)
+        this.sessionPage = 1
+        return sessions
+      } catch (error) {
+        this.errors.panorama = errorMessage(error)
+        return []
+      } finally {
+        this.loading.panorama = false
+      }
+    },
+
+    async deleteSessions(sessionIds: string[]) {
+      await deleteAgentGuardSessions(sessionIds)
+      const deleted = new Set(sessionIds)
+      this.sessions = this.sessions.filter(session => !deleted.has(session.id))
+      this.sessionTotal = Math.max(0, this.sessionTotal - deleted.size)
+      return true
+    },
+
     async fetchPanorama(params: AgentGuardPanoramaQuery) {
       this.loading.panorama = true
       this.errors.panorama = ''
       try {
         const result = await getAgentPanorama(params)
         this.panoramaNodes = result.items || result.nodes || (result.root ? [result.root] : [])
+        this.panoramaTotal = result.total || 0
+        this.panoramaPage = params.page || 1
+        this.panoramaPageSize = params.page_size || this.panoramaPageSize
       } catch (error) {
         this.errors.panorama = errorMessage(error)
       } finally {
@@ -301,6 +369,15 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       }
     },
 
+    async fetchEscapeRules() {
+      try {
+        const result = await listBuiltinAgentEscapeRules()
+        this.escapeRules = result.items || []
+      } catch (error) {
+        this.errors.analysis = errorMessage(error)
+      }
+    },
+
     async fetchFindings(params: AgentGuardFindingQuery) {
       this.loading.analysis = true
       this.errors.analysis = ''
@@ -308,6 +385,9 @@ export const useAgentGuardStore = defineStore('agentGuard', {
         const result = await listAgentSecurityFindings(params)
         this.findings = result.items || []
         this.findingTotal = result.total || 0
+        this.findingPage = params.page
+        this.findingPageSize = params.page_size
+        return result
       } catch (error) {
         this.errors.analysis = errorMessage(error)
       } finally {
@@ -315,11 +395,11 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       }
     },
 
-    async fetchFinding(id: string) {
+    async fetchFinding(id: string, params: { instance_id?: string; session_id?: string } = {}) {
       this.loading.analysis = true
       this.errors.analysis = ''
       try {
-        const result = await getAgentSecurityFinding(id)
+        const result = await getAgentSecurityFinding(id, params)
         this.selectedFinding = result || null
         if (result) {
           const index = this.findings.findIndex(item => item.id === result.id)
@@ -327,7 +407,12 @@ export const useAgentGuardStore = defineStore('agentGuard', {
           else this.findings = [result]
         }
         this.findingTotal = Math.max(this.findingTotal, result ? 1 : 0)
-        if (result) await this.fetchFindingAnalyses(result.id)
+        if (result) {
+          this.analyses = []
+          this.analysisTotal = 0
+          await this.fetchFindingAnalyses(result.id, { page: 1, page_size: this.analysisPageSize })
+        }
+        return result
       } catch (error) {
         this.errors.analysis = errorMessage(error)
       } finally {
@@ -335,10 +420,19 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       }
     },
 
-    async fetchFindingAnalyses(id: string) {
+    async fetchFindingAnalyses(
+      id: string,
+      params: { page?: number; page_size?: number } = {},
+    ) {
       try {
-        const result = await listAgentSecurityFindingAnalyses(id)
+        const page = params.page || 1
+        const pageSize = params.page_size || this.analysisPageSize
+        const result = await listAgentSecurityFindingAnalyses(id, { page, page_size: pageSize })
         this.analyses = result.items || []
+        this.analysisTotal = result.total || 0
+        this.analysisPage = page
+        this.analysisPageSize = pageSize
+        return result
       } catch (error) {
         this.errors.analysis = errorMessage(error)
       }
@@ -349,7 +443,14 @@ export const useAgentGuardStore = defineStore('agentGuard', {
       this.errors.analysis = ''
       try {
         const run = await analyzeAgentSecurityFinding(id)
+        const alreadyPresent = this.analyses.some(item => item.id === run.id)
         this.analyses = [run, ...this.analyses.filter(item => item.id !== run.id)]
+        this.analysisPage = 1
+        this.analysisTotal = Math.max(
+          this.analysisTotal + (alreadyPresent ? 0 : 1),
+          this.analyses.length,
+        )
+        await this.fetchFindingAnalyses(id, { page: 1, page_size: this.analysisPageSize })
         return run
       } catch (error) {
         this.errors.analysis = errorMessage(error)
@@ -447,15 +548,27 @@ export const useAgentGuardStore = defineStore('agentGuard', {
     resetDetail() {
       this.instances = []
       this.instanceTotal = 0
+      this.sessions = []
+      this.sessionTotal = 0
+      this.sessionPage = 1
+      this.sessionPageSize = 20
       this.panoramaNodes = []
+      this.panoramaTotal = 0
+      this.panoramaPage = 1
+      this.panoramaPageSize = 20
       this.selectedPanoramaNode = null
       this.executionUnits = []
       this.selectedExecutionUnit = null
       this.builtinRules = []
       this.findings = []
       this.findingTotal = 0
+      this.findingPage = 1
+      this.findingPageSize = 20
       this.selectedFinding = null
       this.analyses = []
+      this.analysisTotal = 0
+      this.analysisPage = 1
+      this.analysisPageSize = 10
       this.selectedBehavior = null
       this.actions = []
       this.errors.instances = ''

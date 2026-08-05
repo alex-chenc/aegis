@@ -1,14 +1,16 @@
 # Aegis V6.2 Agent Guard 数据库设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施  
-**建议迁移**：`migrations/029_v6.2_agent_guard.sql`
+**日期**：2026-08-06
+**状态**：按当前 Agent Guard 工具事件、真实会话、运行时设置和只读规则目录校准
+**建议迁移**：`migrations/029_v6.2_agent_guard.sql`、`migrations/030_v6.2_zcode_agent_guard_profile.sql`
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 
 ## 1. 设计原则
 
 1. 复用 `hosts` 和 `host_application_assets`，不复制静态主机/AI Agent 资产。
-2. 策略/Profile 使用版本化不可变发布语义。
+2. 策略/Profile 使用版本化不可变发布语义；内置规则目录只读，Hook 启停使用现有 `system_configs` 运行时设置记录。
 3. 运行实例、behavior session 和执行单元存长期可查询状态；瞬时进程成员主要保存在 Agent 内存/BPF map。
 4. `runtime_events` 保存原始上报，`agent_behavior_events` 是不可变的可筛选行为投影。
 5. 行为事实、规则/智能分析结论和处置动作分表；重新分析不能覆盖原始事实。
@@ -24,7 +26,7 @@ erDiagram
   hosts ||--o{ agent_runtime_instances : runs
   host_application_assets o|--o{ agent_runtime_instances : identifies
   agent_guard_adapter_profiles ||--o{ agent_runtime_instances : matches
-  agent_behavior_rule_definitions ||--o{ agent_guard_policies : logical_refs
+  agent_behavior_rule_definitions ||--o{ agent_guard_policies : historical_refs
   agent_runtime_instances ||--o{ agent_execution_units : contains
   agent_runtime_instances ||--o{ agent_behavior_sessions : groups
   agent_execution_units o|--o{ agent_behavior_sessions : scopes
@@ -41,6 +43,10 @@ erDiagram
 ```
 
 `agent_behavior_rule_definitions -> agent_guard_policies` 是 JSON 中 rule key/version 的逻辑引用，发布事务由 Service/Repository 校验；PostgreSQL 无法对 JSONB 数组元素建立普通外键，因此 compiled preview 必须保存 definition digest。
+
+`agent_guard_policies` 是历史策略/Bundle 兼容模型。当前前端只读展示五条内置规则，
+不创建或发布 policy draft；`system_configs` 中 key 为
+`agent_guard.runtime.<host_id>` 的 JSON 记录保存当前 Hook/工具适配器运行时设置。
 
 ## 3. `agent_guard_adapter_profiles`
 
@@ -156,9 +162,15 @@ migration 使用 `ON CONFLICT (rule_key, rule_version) DO NOTHING`。应用启�
 完整定义见
 [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md)。
 
+AGB-BUILTIN-004 的 DB `engine` 字段保留历史兼容值；当前真实执行位置由规则目录的
+`execution_location=api_server_tool_event` 表达。该规则的输入是可信 Native Hook
+工具事件，不能把数据库中的历史 `agent_and_dc` 值解释为 DC 仍负责工具命中。
+
 ## 5. `agent_guard_policies`
 
-策略同时包含采集、原子行为、跨事件关联、智能分析和逃逸规则，避免下发时跨表拼出不一致版本。
+策略同时包含通用采集、原子行为、跨事件关联、智能分析和逃逸规则，避免历史下发时
+跨表拼出不一致版本。它不控制当前 Native Hook 是否开启；Hook 开关写入 `system_configs`
+并立即经 ConfigSync 下发。
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_guard_policies (
@@ -220,7 +232,7 @@ published 行不可更新规则内容，只能创建新 version。发布新版�
 {
   "host_ids": [],
   "host_group_ids": ["uuid"],
-  "agent_types": ["codex", "openclaw", "hermes"],
+  "agent_types": ["codex", "claude-code", "openclaw", "hermes", "zcode"],
   "profile_keys": []
 }
 ```
@@ -332,6 +344,34 @@ CREATE INDEX IF NOT EXISTS idx_agent_guard_deliveries_status
 ```
 
 状态不能仅由 gRPC 发送成功改为 `applied`。只有 Agent `agent_guard_config_status` 携带相同 version/digest 后才能 applied/degraded。
+
+## 6.1 `system_configs` 中的 Agent Guard 运行时设置
+
+不新增专用表。api-server 使用现有 `system_configs` 保存每个目标主机的
+`agent_guard.runtime.<host_id>` 配置键，`config_value` 为：
+
+```json
+{
+  "schema": "aegis.agent_guard.runtime_settings.v1",
+  "version": 12,
+  "host_id": "host-uuid",
+  "tool_adapter_enabled": true,
+  "session_hook_enabled": true,
+  "injections": [
+    {"agent_type": "codex", "enabled": true, "status": "applied"},
+    {"agent_type": "claude-code", "enabled": true, "status": "applied"},
+    {"agent_type": "openclaw", "enabled": true, "status": "applied"},
+    {"agent_type": "hermes", "enabled": false, "status": "disabled"},
+    {"agent_type": "zcode", "enabled": true, "status": "applied"}
+  ],
+  "dispatch_status": "applied",
+  "updated_at": "2026-08-06T10:00:00Z"
+}
+```
+
+该记录是控制面期望和最后已知下发状态，不替代 Agent 上报的实际工具事件。在线
+Agent 应用设置后开始上报；关闭后清理 Hook 配置并停止上报。Agent 离线时状态为
+`pending_reconnect`，不是策略发布失败，也不要求前端展示旧的“待下发”状态。
 
 ## 7. `agent_runtime_instances`
 
@@ -507,7 +547,10 @@ remote: host + instance + backend + remote execution ID
 
 ## 9. `agent_behavior_sessions`
 
-session 用于把同一次 Agent task/run/conversation 或推导活动窗口中的行为关联起来。
+session 用于把 Native Hook 明确上报的同一次 Agent task/run/conversation 行为关联起来。
+没有可信 session ID 时不创建伪造的官方会话；事件只能进入未归属索引。历史
+`execution_unit/activity_window` 来源可保留以兼容旧数据，但不应被新的安全分析 UI
+作为真实会话选择项。
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_behavior_sessions (
@@ -555,7 +598,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_behavior_sessions_external
 
 ## 10. `agent_behavior_events`
 
-`runtime_events` 是原始事件表，Behavior 表用于业务查询和关联分析。`raw_event_id` 对应 `RuntimeEvent.event_id`，投影记录不可被规则或模型更新。
+`runtime_events` 是原始事件表，Behavior 表用于业务查询和关联分析。`raw_event_id` 对应 `RuntimeEvent.event_id`，投影记录不可被规则或模型更新。工具事件的 `category=tool`、
+`operation=tool_call_started|tool_call_completed|tool_call_failed` 和 `evidence` 中的
+`tool_name/tool_call_id/tool_input/tool_output_summary/command` 必须保留；其中
+`session_id` 只能来自可信 Hook。
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_behavior_events (
@@ -660,7 +706,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_behavior_events_collection_gin
 
 ## 11. `agent_security_findings`
 
-Finding 是规则和智能分析结论的事实源，不把每个行为事件升级为告警。
+Finding 是规则和智能分析结论的事实源，不把每个行为事件升级为告警。Agent Guard
+工具 Finding 由 api-server 创建，直接引用 Hook 工具 `raw_event_id`；eBPF PID/PPID
+关联状态写入 `evidence_graph`，不作为另一条规则命中的依据。
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_security_findings (
@@ -714,7 +762,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_security_findings_rule_hits
     ON agent_security_findings USING GIN(rule_hits);
 ```
 
-`finding_key` 使用 rule version + instance/session/unit + correlation bucket 生成。迟到事件可以增加 open finding 的 evidence；已关闭 finding 不原地改写结论，而是记录 revision 或创建新的 finding。
+`finding_key` 使用 rule version + instance/session/unit + correlation bucket 生成。工具
+事件命中还必须包含 `tool_call_id`，保证 started/terminal 合并且重放幂等。迟到事件可以
+增加 open finding 的 evidence；已关闭 finding 不原地改写结论，而是记录 revision 或创建新的 finding。
 
 ## 12. `agent_security_analysis_runs`
 
@@ -872,7 +922,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_guard_actions_finding
 
 所有类型仍先写 `runtime_events` 原始事件。
 
-`agent_behavior` 写入 `agent_behavior_events`；DC 规则命中创建/更新 `agent_security_findings`；智能分析任务写入 `agent_security_analysis_runs`。三者均先有 raw runtime event 或明确的派生来源，不允许跳过证据直接创建“已攻击”事实。
+`agent_behavior` 写入 `agent_behavior_events`。通用 OS/资源规则可由既有 DC/Agent 链路
+创建或更新 Finding；Agent Guard 工具事件由 api-server 消费 Kafka 后匹配
+`AGB-BUILTIN-004` 并直接创建/更新 `agent_security_findings`，其中 `raw_event_id`
+是直接证据、`evidence_graph.rule_owner=api-server`。DC 只投影工具事件，不重复创建该
+Finding。智能分析任务写入 `agent_security_analysis_runs`。所有结论均先有 raw runtime
+event 或明确的派生来源，不允许跳过证据直接创建“已攻击”事实。
 
 ## 15. 状态机约束
 

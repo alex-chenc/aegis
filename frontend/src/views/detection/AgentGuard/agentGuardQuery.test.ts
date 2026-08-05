@@ -1,12 +1,37 @@
 import { describe, expect, it } from 'vitest'
 import {
-  clearAgentGuardDetailQuery,
-  parseAgentGuardQuery,
-  serializeAgentGuardListQuery,
+	buildAgentGuardDetailInstanceQuery,
+	clearAgentGuardDetailQuery,
+	parseAgentGuardQuery,
+	selectPreferredAgentGuardInstance,
+	serializeAgentGuardListQuery,
   withAgentGuardDetailQuery,
 } from './agentGuardQuery'
 
 describe('Agent Guard route query', () => {
+  it('loads historical instances for detail instead of restricting to running ones', () => {
+    expect(buildAgentGuardDetailInstanceQuery({
+      assetId: 'asset-1',
+      scopeKey: '',
+      instanceId: '',
+    })).toEqual({
+      asset_ids: ['asset-1'],
+      agent_scope_key: undefined,
+      instance_ids: undefined,
+      page: 1,
+      page_size: 100,
+    })
+  })
+
+  it('prefers an instance that already has a session over a newer empty instance', () => {
+    const preferred = selectPreferredAgentGuardInstance([
+      { id: 'new-empty', last_seen_at: '2026-08-05T10:00:00Z', high_risk_finding_count: 0 } as any,
+      { id: 'historical-data', last_seen_at: '2026-08-04T10:00:00Z', high_risk_finding_count: 0 } as any,
+    ], [{ id: 'session-1', instance_id: 'historical-data' } as any])
+
+    expect(preferred?.id).toBe('historical-data')
+  })
+
   it('restores filters, pagination, drawer selection and a whitelisted tab', () => {
     const parsed = parseAgentGuardQuery({
       host_id: 'host-1',
@@ -34,6 +59,7 @@ describe('Agent Guard route query', () => {
       assetId: 'asset-1',
       scopeKey: '',
       instanceId: 'instance-1',
+      sessionId: '',
       findingId: '',
       eventId: '',
       tab: 'analysis',

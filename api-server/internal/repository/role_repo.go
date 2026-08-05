@@ -13,9 +13,11 @@ const (
 	PermissionAgentGuardPolicyWrite   = "agent_guard:policy:write"
 	PermissionAgentGuardPolicyPublish = "agent_guard:policy:publish"
 	PermissionAgentGuardAnalysisRun   = "agent_guard:analysis:run"
+	PermissionAgentGuardSessionDelete = "agent_guard:session:delete"
 	PermissionAgentGuardActionFreeze  = "agent_guard:action:freeze"
 	PermissionAgentGuardActionResume  = "agent_guard:action:resume"
 	PermissionAgentGuardActionKill    = "agent_guard:action:kill"
+	PermissionAgentGuardSettings      = "agent_guard:settings"
 )
 
 type RoleRepo struct {
@@ -111,9 +113,11 @@ func (r *RoleRepo) HasPermission(role, operation string) bool {
 			PermissionAgentGuardPolicyWrite,
 			PermissionAgentGuardPolicyPublish,
 			PermissionAgentGuardAnalysisRun,
+			PermissionAgentGuardSessionDelete,
 			PermissionAgentGuardActionFreeze,
 			PermissionAgentGuardActionResume,
 			PermissionAgentGuardActionKill,
+			PermissionAgentGuardSettings,
 		},
 	}
 	ops, ok := permissions[role]

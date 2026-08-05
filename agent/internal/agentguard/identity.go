@@ -104,24 +104,11 @@ func (t *IdentityTracker) observeControllerLocked(process ProcessSnapshot, match
 		FirstSeenAt:        now,
 		LastSeenAt:         now,
 	}
-	sessionID := stableID("session", instanceID, "activity")
-	unitID := stableID("unit", instanceID, string(IsolationLocalProcessTree))
-	session := BehaviorSession{
-		SessionID: sessionID, InstanceID: instanceID, Source: "activity_window",
-		Confidence: ConfidenceInferred, Status: "active", FirstSeenAt: now, LastSeenAt: now,
-	}
-	unit := ExecutionUnit{
-		UnitID: unitID, InstanceID: instanceID, SessionID: sessionID,
-		Type: IsolationLocalProcessTree, RootProcess: process.Identity,
-		Coverage: coverage, Status: "observed", FirstSeenAt: now, LastSeenAt: now,
-	}
-	subject := GuardSubject{
-		InstanceID: instanceID, SessionID: sessionID, UnitID: unitID,
-		Confidence: match.Confidence,
-	}
+	// Runtime discovery is not a session boundary. Until a signed Codex
+	// SessionStart hook arrives, keep only the instance/process identity and do
+	// not fabricate an activity_window session for behavior collection.
+	subject := defaultControllerSubject(instanceID, match.Confidence)
 	t.instances[instanceID] = instance
-	t.sessions[sessionID] = session
-	t.units[unitID] = unit
 	t.processLabels[process.Identity.PID] = processLabel{Identity: process.Identity, Process: process, Subject: subject}
 	return instance, true
 }
@@ -129,8 +116,6 @@ func (t *IdentityTracker) observeControllerLocked(process ProcessSnapshot, match
 func defaultControllerSubject(instanceID string, confidence Confidence) GuardSubject {
 	return GuardSubject{
 		InstanceID: instanceID,
-		SessionID:  stableID("session", instanceID, "activity"),
-		UnitID:     stableID("unit", instanceID, string(IsolationLocalProcessTree)),
 		Confidence: confidence,
 	}
 }
@@ -259,10 +244,36 @@ func (t *IdentityTracker) ExitController(identity ProcessIdentity, observedAt ti
 	}
 	if label, exists := t.processLabels[identity.PID]; exists && label.Identity == identity {
 		process = label.Process
-		delete(t.processLabels, identity.PID)
 	}
 	subject := defaultControllerSubject(instanceID, instance.Confidence)
 	result := ProcessExitResult{Process: process, Subject: subject, InstanceStopped: true}
+	if label, exists := t.processLabels[identity.PID]; exists && label.Identity == identity {
+		subject = label.Subject
+		result.Subject = subject
+		delete(t.processLabels, identity.PID)
+	} else {
+		// The controller can disappear between procfs reconciliation passes. In
+		// that case recover the active hook session from its pinned unit so a
+		// dead Codex root cannot leave the real session active forever.
+		for _, candidate := range t.sessions {
+			if candidate.InstanceID != instanceID || candidate.Status != "active" || !isTrustedSession(candidate) {
+				continue
+			}
+			for _, unit := range t.units {
+				if unit.InstanceID == instanceID && unit.SessionID == candidate.SessionID && unit.RootProcess == identity {
+					subject = GuardSubject{
+						InstanceID: instanceID, SessionID: candidate.SessionID,
+						UnitID: unit.UnitID, Confidence: ConfidenceConfirmed,
+					}
+					result.Subject = subject
+					break
+				}
+			}
+			if result.Subject.SessionID != "" {
+				break
+			}
+		}
+	}
 	instance.Status = "stopped"
 	instance.LastSeenAt = observedAt
 	t.instances[instanceID] = instance
@@ -278,6 +289,13 @@ func (t *IdentityTracker) ExitController(identity ProcessIdentity, observedAt ti
 		unit.LastSeenAt = observedAt
 		t.units[subject.UnitID] = unit
 		result.Unit = unit
+	}
+	if subject.SessionID != "" {
+		for pid, label := range t.processLabels {
+			if label.Subject.SessionID == subject.SessionID {
+				delete(t.processLabels, pid)
+			}
+		}
 	}
 	return result, true
 }
@@ -350,12 +368,8 @@ func (t *IdentityTracker) AttachContainer(instanceID string, info ContainerCgrou
 		return ExecutionUnit{}, fmt.Errorf("instance %s not found", instanceID)
 	}
 	now := time.Now().UTC()
-	sessionID := stableID("session", instanceID, "container", info.ContainerID)
+	sessionID := t.activeTrustedSessionIDLocked(instanceID)
 	unitID := stableID("unit", instanceID, info.ContainerID)
-	session := BehaviorSession{
-		SessionID: sessionID, InstanceID: instanceID, Source: "execution_unit",
-		Confidence: ConfidenceConfirmed, Status: "active", FirstSeenAt: now, LastSeenAt: now,
-	}
 	unit := ExecutionUnit{
 		UnitID: unitID, InstanceID: instanceID, SessionID: sessionID,
 		Type: IsolationOCIContainer, RootProcess: ProcessIdentity{},
@@ -366,7 +380,6 @@ func (t *IdentityTracker) AttachContainer(instanceID string, info ContainerCgrou
 		InstanceID: instance.InstanceID, SessionID: sessionID,
 		UnitID: unitID, Confidence: ConfidenceConfirmed,
 	}
-	t.sessions[sessionID] = session
 	t.units[unitID] = unit
 	t.cgroupLabels[normalizeCgroupPath(info.Path)] = subject
 	t.cgroupLabels["container:"+info.ContainerID] = subject
@@ -384,16 +397,11 @@ func (t *IdentityTracker) AttachNamespace(instanceID string, process ProcessSnap
 		return ExecutionUnit{}, fmt.Errorf("instance %s not found", instanceID)
 	}
 	fingerprint := namespaceFingerprint(state)
-	sessionID := stableID("session", instanceID, "namespace", fingerprint)
+	sessionID := t.activeTrustedSessionIDLocked(instanceID)
 	unitID := stableID("unit", instanceID, "namespace", fingerprint)
 	now := time.Now().UTC()
 	unit, exists := t.units[unitID]
 	if !exists {
-		session := BehaviorSession{
-			SessionID: sessionID, InstanceID: instanceID, Source: "execution_unit",
-			Confidence: ConfidenceConfirmed, Status: "active",
-			FirstSeenAt: now, LastSeenAt: now,
-		}
 		unit = ExecutionUnit{
 			UnitID: unitID, InstanceID: instanceID, SessionID: sessionID,
 			Type: IsolationLinuxNamespace, RootProcess: process.Identity,
@@ -404,7 +412,13 @@ func (t *IdentityTracker) AttachNamespace(instanceID string, process ProcessSnap
 			Completeness:  state.Completeness(), Status: "observed",
 			FirstSeenAt: now, LastSeenAt: now,
 		}
-		t.sessions[sessionID] = session
+		t.units[unitID] = unit
+	} else if unit.SessionID != sessionID {
+		// A namespace can be discovered before SessionStart. Once a real hook
+		// session is active, bind the existing unit to that session instead of
+		// inventing an execution_unit session that could leak unattributed data.
+		unit.SessionID = sessionID
+		unit.LastSeenAt = now
 		t.units[unitID] = unit
 	}
 	subject := GuardSubject{
@@ -415,6 +429,24 @@ func (t *IdentityTracker) AttachNamespace(instanceID string, process ProcessSnap
 		Identity: process.Identity, Process: process, Subject: subject,
 	}
 	return unit, nil
+}
+
+// activeTrustedSessionIDLocked returns the real external-session-backed
+// session currently owning an instance. Runtime/isolation discovery may run
+// before the lifecycle hook, so it must never manufacture a session ID of its
+// own. An empty result deliberately leaves the unit unable to pass the
+// behavior-event trust gate until SessionStart arrives.
+func (t *IdentityTracker) activeTrustedSessionIDLocked(instanceID string) string {
+	var selected BehaviorSession
+	for _, session := range t.sessions {
+		if session.InstanceID != instanceID || session.Status != "active" || !isTrustedSession(session) {
+			continue
+		}
+		if selected.SessionID == "" || session.LastSeenAt.After(selected.LastSeenAt) {
+			selected = session
+		}
+	}
+	return selected.SessionID
 }
 
 func (t *IdentityTracker) AssignProcessToUnit(process ProcessSnapshot, unitID string) bool {
@@ -589,7 +621,8 @@ func (t *IdentityTracker) ObserveTrustedSession(
 	defer t.mu.Unlock()
 	now := time.Now().UTC()
 	session, exists := t.sessions[subject.SessionID]
-	if !exists {
+	if !exists || !isTrustedSession(session) || session.Status != "active" ||
+		session.ExternalSessionID != externalSessionID || externalSessionID == "" {
 		return BehaviorSession{}, false
 	}
 	changed := session.Source != source || session.Confidence != ConfidenceConfirmed ||
@@ -680,6 +713,16 @@ func (t *IdentityTracker) StartTrustedSession(
 	}
 	t.sessions[sessionID] = session
 	t.units[unitID] = unit
+	// The Hook root may already have descendants that were discovered before
+	// SessionStart. Rebind the complete currently attributed runtime tree so
+	// the whole session uses one real session and execution-unit identity.
+	for pid, label := range t.processLabels {
+		if label.Subject.InstanceID != instance.InstanceID {
+			continue
+		}
+		label.Subject = rootSubject
+		t.processLabels[pid] = label
+	}
 	t.processLabels[process.Identity.PID] = processLabel{
 		Identity: process.Identity, Process: process, Subject: rootSubject,
 	}
@@ -758,6 +801,31 @@ func trustedLifecycleSource(source string) bool {
 	}
 }
 
+func isTrustedSession(session BehaviorSession) bool {
+	return trustedLifecycleSource(session.Source) &&
+		session.Confidence == ConfidenceConfirmed && session.ExternalSessionID != ""
+}
+
+// TrustedSession is the fail-closed gate used by behavior normalization. A
+// process must point at an active, hook-confirmed session and its matching
+// execution unit before any event can enter the runtime stream.
+func (t *IdentityTracker) TrustedSession(subject GuardSubject) (BehaviorSession, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if subject.SessionID == "" || subject.UnitID == "" {
+		return BehaviorSession{}, false
+	}
+	session, ok := t.sessions[subject.SessionID]
+	if !ok || session.Status != "active" || !isTrustedSession(session) {
+		return BehaviorSession{}, false
+	}
+	unit, ok := t.units[subject.UnitID]
+	if !ok || unit.SessionID != subject.SessionID || unit.Status != "observed" {
+		return BehaviorSession{}, false
+	}
+	return session, true
+}
+
 func (t *IdentityTracker) Units() []ExecutionUnit {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -766,6 +834,13 @@ func (t *IdentityTracker) Units() []ExecutionUnit {
 		out = append(out, unit)
 	}
 	return out
+}
+
+func (t *IdentityTracker) Session(sessionID string) (BehaviorSession, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	session, ok := t.sessions[sessionID]
+	return session, ok
 }
 
 func (t *IdentityTracker) touchLocked(subject GuardSubject, now time.Time) {

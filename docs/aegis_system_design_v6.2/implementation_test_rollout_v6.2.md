@@ -1,8 +1,10 @@
 # Aegis V6.2 实施、测试与发布计划
 
 **版本**：6.2  
-**日期**：2026-08-03
-**状态**：P0～P4 已形成代码增量并进入发布资格验证；P5 方案完成，待实施
+**日期**：2026-08-06
+**状态**：Agent Guard 工具事件/真实会话/运行时设置/只读规则目录已实现；完整 P5 会话正文仍待实施
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 
 ## 1. 实施原则
 
@@ -56,6 +58,12 @@ agent:
   agent_session.history_backfill_enabled=false
 ```
 
+当前 Native Hook 运行时设置不要求用户手工维护上述本地配置文件。页面设置写入
+`system_configs` 的 `agent_guard.runtime.<host_id>`，经 `agent_guard_runtime_settings`
+ConfigSync 立即下发；`tool_adapter_enabled`、`session_hook_enabled` 和五类
+`injections[]` 是实际控制面。打开表示 Agent 应用并开始上报，关闭表示 Agent 清理
+Hook 并停止上报。上述 feature flag 是服务级安全总闸，不能被页面开关绕过。
+
 开关规则：
 
 - Agent `enabled=false` 时不加载 Agent Guard BPF，不影响原有 eBPF/Sigma。
@@ -67,6 +75,18 @@ agent:
   采集不影响 P0～P4 的 OS 行为防护。
 - 会话采集默认从 `metadata_only` 或 `redacted_text` 灰度，禁止直接全局开启原文。
 - 不允许前端 feature flag 绕过后端开关。
+
+### 2.1 当前链路职责校准
+
+- Native Hook 产生真实 `session_started/session_activated/session_ended` 和
+  `tool_call_started/completed/failed`，支持 Codex、Claude Code、OpenClaw、Hermes、Zcode。
+- api-server 消费可信工具事件，按 `tool_call_id` 合并并从工具输入/attributes 提取
+  命令，匹配 `AGB-BUILTIN-004`，直接写入会话范围 Finding。
+- Agent eBPF/`/proc` 只做 PID/PPID/start_ticks/cmdline 和 tool-to-process 关联；
+  DC 只做 Agent Guard 工具事件规范化/投影，不重复执行工具规则。
+- 安全分析只查询当前选中真实 session；行为全景可展示该会话的进程事实，安全分析
+  不展示全量进程树。
+- 内置策略目录只读；运行时开关不等同于历史 PolicyDelivery 的 `pending/applied`。
 
 ## 3. 阶段划分
 
@@ -82,13 +102,14 @@ agent:
 
 - 新增 `migrations/029_v6.2_agent_guard.sql`。
 - 新增 11 张 Agent Guard/Behavior 表、约束和索引。
-- 幂等插入五个内置规则及 Codex、OpenClaw、Hermes 初始 Profile。
+- 幂等插入五个内置规则及内置 Profile；Native Hook 注入覆盖 Codex、Claude Code、OpenClaw、Hermes、Zcode。
 - 增加 migration/schema tests。
 
 #### api-server
 
 - 新增 Agent Guard model/repository/service/handler。
-- 实现 Profile/五个内置规则/策略只读和策略 draft/validate。
+- 实现 Profile/五个内置规则只读目录和策略查询；策略 draft/validate 仅保留历史兼容
+  API，不作为当前前端入口。
 - 实现概览、实例、session、执行单元、行为、finding、analysis、动作查询。
 - 暂不开放 publish/action 或由 feature flag 关闭。
 
@@ -117,13 +138,15 @@ agent:
 #### Agent
 
 - 新增 `internal/agentguard` 框架。
-- 增加 Codex/OpenClaw/Hermes Profile。
+- 增加 Codex/Claude Code/OpenClaw/Hermes/Zcode Profile。
 - 改进进程采集的 cgroup v1/v2/containerd/Podman 识别。
 - 复用/改造 fork/exec/exit，维护 guarded PID。
 - 建立 container/cgroup execution unit。
-- 建立 official/hook/wrapper/execution unit/activity window session。
+- 建立 Native Hook 真实 session；旧 execution unit/activity window 仅保留历史兼容索引，
+  不作为新的官方 session ID。
 - 新增 process/file/network/identity/kernel/isolation 行为传感器。
-- 为五个内置规则生成规定的 PID/cmdline/path/address/credential before-after 证据。
+- 为通用 OS 事实生成规定的 PID/cmdline/path/address/credential before-after 证据；
+  AGB-BUILTIN-004 的规则输入改由可信工具事件提供。
 - 新增动态资源策略和文件读操作。
 - 处理 cwd/dirfd/container root 路径解析。
 - 实现命令 argv/path/URL 脱敏、字段截断、read/write 聚合和本地 spool 优先级。
@@ -152,7 +175,7 @@ agent:
 
 #### frontend
 
-- 策略创建/校验/发布。
+- 历史策略创建/校验/发布接口兼容性；当前前端只读内置规则目录和运行时设置。
 - 下发状态。
 - 运行实例、session、执行单元、行为时间线和 PID 主干行为全景树。
 
@@ -180,7 +203,8 @@ agent:
 - 行为 attempt 与后续状态漂移关联。
 - Codex namespace、OpenClaw/Hermes container Adapter 规则。
 - remote backend 状态和 correlation token。
-- DC 资源分类、单事件规则、序列/聚合规则、finding 幂等和 evidence graph。
+- DC 资源分类、通用单事件/序列/聚合投影、finding 幂等和 evidence graph；工具命令
+  规则由 api-server 消费者匹配，不在 DC 重复命中。
 - 实现 `AGB-BUILTIN-001..005` 敏感目录、外链、文件生成、敏感命令和提权 evaluator。
 - 首批五规则联合链、下载执行、凭据访问、持久化、防御规避、破坏、横向移动、外传和逃逸规则。
 - api-server Evidence Window Builder、LLM worker、结构化输出和 event ID 校验。
@@ -242,21 +266,27 @@ agent:
 5. 明确高危规则启用 freeze。
 6. AI-only 结论始终保持 alert/人工确认。
 
-### P4：工具语义、远程执行关联与通用 Profile 扩展
+### P4：工具语义、真实会话、运行时设置、远程执行关联与通用 Profile 扩展
 
 ### 目标
 
 - 关联 Hermes/OpenClaw SSH、Modal、Daytona、OpenShell 等远程执行。
-- 验证并接入 Agent 官方 audit log/plugin hook 或 Aegis wrapper correlation token。
+- 验证并接入 Agent Native Hook/官方 audit log/plugin hook 或 Aegis wrapper correlation token。
 - 形成 `tool_call -> process -> resource` 可信关联。
-- 增加 Claude Code、OpenCode、Gemini CLI 等 Profile。
+- 通过运行时设置即时控制 Native Hook；支持 Codex、Claude Code、OpenClaw、Hermes、Zcode。
+- 增加完整 P5 所需的 Claude Code/OpenCode Profile 兼容设计，但完整正文仍后置。
 - 形成 Profile 版本兼容和回归套件。
 
 远程完整防护的前提是远端环境可以部署 Aegis Agent 或受信传感器。不能部署时继续显示 `remote_unobservable`。
 
-没有可信工具 Hook 时继续显示 `tool_semantics_unobservable`，不能根据进程名伪造工具调用；OS 行为覆盖状态单独计算。
+没有可信工具 Hook 时继续显示 `tool_semantics_unobservable`，不能根据进程名伪造工具调用；
+OS 行为覆盖状态单独计算。api-server 工具命中直接写 Finding，Agent/DC 不重复命中。
 
 ### P5：智能体会话检测
+
+说明：真实 Native Hook session 生命周期和工具事件已经纳入 P4/当前事件页闭环；
+本阶段只实施完整会话正文、AI 语义、风险 marking 和独立会话检测页面，不重复建设
+session ID 或把工具规则移回 DC。
 
 ### 目标
 
@@ -473,8 +503,9 @@ migrations/029_v6.2_agent_guard.sql
 
 | 层 | 正常 | 边界 | 失败 | 安全回归 |
 | --- | --- | --- | --- | --- |
-| Profile | 三个 Agent 正确识别 | 多版本/同名进程 | 证据不足 candidate | 伪造进程名不触发 freeze |
-| 进程/session 归属 | fork/exec/exit/official session | double fork、PID reuse、inferred session | 事件丢失/reconcile | 非 Agent 进程不归属、不跨 session |
+| Profile | 五类 Native Hook Agent 正确识别 | 多版本/同名进程 | 证据不足 candidate | 伪造进程名不触发 freeze |
+| 进程/session 归属 | fork/exec/exit/真实 Hook session | double fork、PID reuse、无可信 ID 未归属 | 事件丢失/reconcile | 非 Agent 进程不归属、不跨 session |
+| 工具规则链 | Hook tool started/completed/failed → api-server AGB-004 Finding | 同 tool_call_id 重放/乱序、工具无 PID | 输入缺失/关联失败 | DC 不重复命中，不能用 Agent PID 冒充 |
 | 容器归属 | Docker/cgroup v2 | containerd/Podman | orphan container | 不冻结 dockerd |
 | 命令 | exe/argv/cwd/exit | shell stdin/解释器/截断 | argv read failure | secret 脱敏、不采 stdin/output |
 | 文件 | open/read/write/delete/rename/chmod | cwd/dirfd/symlink/container path | unresolved/permission | 不采集文件内容 |
@@ -488,7 +519,7 @@ migrations/029_v6.2_agent_guard.sql
 | LSM | deny 前置返回 EPERM | capability 降级 | hook load failure | monitor-only 不谎报 deny |
 | Freeze | cgroup freeze/resume | 新增子进程 | unit stopped/offline | protected target 不可操作 |
 | Bundle | publish/apply | 重连/重复版本 | digest invalid | last-known-good 保留 |
-| DC | 投影/规则/finding/告警/action | 乱序/重放 | invalid JSON/DB retry | 普通行为不产生告警风暴 |
+| DC | 投影/通用规则/finding/告警/action | 乱序/重放 | invalid JSON/DB retry | Agent Guard 工具事件只投影，不重复创建 Finding |
 | API | CRUD/query/analysis/action | 分页/冲突 | 模型/权限/离线/不支持 | evidence 权限、AI 不越权 |
 | Frontend | 时间线/PID 全景树/finding 全状态 | stale/degraded/万级树 | 懒加载/analysis/action failed | 事实和研判区分、字段/权限准确 |
 
@@ -666,6 +697,9 @@ download -> write -> chmod -> execute -> local callback
 - 对一个 execution unit 执行 freeze/resume/kill 时，同机其他 Agent 和
   同类型其他实例保持原状态。
 - 万级模拟行为使用 lazy loading/cursor，不在单次响应返回全树。
+- 工具事件专项：Native Hook 上报真实 session ID 和 tool_call 生命周期；api-server
+  匹配 `AGB-BUILTIN-004`，Finding 直接引用工具 raw event；安全分析只返回当前 session
+  的命中工具、命令行和可关联 PID/PPID。
 
 ## 7. 构建与验证命令
 

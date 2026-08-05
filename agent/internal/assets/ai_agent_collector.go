@@ -130,6 +130,11 @@ func linuxAgentProfiles() []AgentProfile {
 			ConfigPaths: []string{"~/.claude"},
 		},
 		{
+			Name:        "zcode",
+			DisplayName: "Zcode",
+			ConfigPaths: []string{"~/.zcode"},
+		},
+		{
 			Name:        "claude-desktop",
 			DisplayName: "Claude Desktop",
 			ConfigPaths: []string{"~/.config/claude"},

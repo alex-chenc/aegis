@@ -281,6 +281,7 @@ func main() {
 		ReconcileInterval:      time.Duration(cfg.AgentGuardReconcileSeconds) * time.Second,
 	}, agentguard.NewProcFSScanner("/proc"), c)
 	c.ConfigManager().SetAgentGuardBundleHandler(guardManager.ApplyBundle)
+	c.ConfigManager().SetAgentGuardRuntimeSettingsHandler(guardManager.ApplyRuntimeSettings)
 	c.SetAgentGuardActionHandler(guardManager)
 	var guardStartOnce sync.Once
 	var guardStartErr error

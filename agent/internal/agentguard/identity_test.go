@@ -68,6 +68,12 @@ func TestTrustedSessionLifecycleUsesExternalIDAndHookRootProcess(t *testing.T) {
 	if !ok {
 		t.Fatal("controller attribution missing")
 	}
+	if sessions := tracker.Sessions(); len(sessions) != 0 {
+		t.Fatalf("runtime discovery fabricated sessions before hook: %#v", sessions)
+	}
+	if units := tracker.Units(); len(units) != 0 {
+		t.Fatalf("runtime discovery fabricated execution units before hook: %#v", units)
+	}
 
 	session, unit, changed, err := tracker.StartTrustedSession(
 		controller, baseSubject, ToolSourceAgentOfficial, "thr_real_123", time.Now().UTC(),

@@ -1,8 +1,10 @@
 # Aegis V6.2 智能体防护前端 PRD
 
 **版本**：6.2  
-**日期**：2026-08-03
-**状态**：事件/逃逸页已设计；P5 会话检测入口已纳入
+**日期**：2026-08-06
+**状态**：事件页真实会话/工具命中/运行时设置和只读内置规则目录按当前实现更新；完整 P5 会话正文仍待实施
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 **适用端**：Aegis Web 管理控制台  
 **父导航**：智能体防护
 
@@ -15,8 +17,9 @@
    并呈现真实阻断结果。
 2. **智能体逃逸防护**：识别 Agent 实际使用的 namespace、容器或远程沙箱，
    对隔离基线变化、越界访问和逃逸尝试进行监控、阻断、冻结和溯源。
-3. **智能体会话检测**：提取 Codex、Claude Code、OpenCode 会话，由 AI 标记
-   恶意语义，并关联真实 OS 行为。完整页面以
+3. **智能体会话检测**：当前先接收 Codex、Claude Code、OpenClaw、Hermes、Zcode
+   的 Native Hook 真实会话边界和工具事件；完整正文由 AI 标记恶意语义并关联真实
+   OS 行为仍属于 P5。完整页面以
    [agent_session_detection_frontend_prd_v6.2.md](agent_session_detection_frontend_prd_v6.2.md)
    为准。
 
@@ -163,8 +166,8 @@ detail_tab
 | 原设计能力 | 新位置 |
 | --- | --- |
 | 防护概览 | 事件/逃逸两个子页各自 KPI 和主卡片 |
-| 防护策略 | 事件页右上角“策略配置”抽屉 |
-| 五个内置规则 | 事件页规则 chips + “查看全部规则”抽屉 |
+| 防护策略 | 后端历史兼容数据；当前页面只读展示内置规则目录 |
+| 五个内置规则 | 事件页“查看全部规则”只读目录，按行为监控/工具命令分组 |
 | 运行实例 | 事件页筛选与实例详情深链 |
 | 行为全景 | 事件页主内容区 |
 | 行为流水 | 全景树的列表模式/底部抽屉 |
@@ -175,7 +178,7 @@ detail_tab
 
 同一主机允许：
 
-- 同时安装/识别 Codex、OpenClaw、Hermes 等多个 Agent 资产。
+- 同时安装/识别 Codex、Claude Code、OpenClaw、Hermes、Zcode 等多个 Agent 资产。
 - 同一种 Agent 同时存在多个 controller 运行实例。
 - 每个运行实例拥有独立 session、execution unit 和 PID 进程树。
 
@@ -200,8 +203,9 @@ dev-ai-02  / Codex     1 个实例  PID 4300
 
 ```text
 选中 Agent asset
-└── Runtime instance selector
-    └── Session / execution unit / PID / operation / finding
+└── 分页 Session ID selector
+    └── Runtime instance selector
+        └── Execution unit / PID / operation / finding
 ```
 
 即使 Agent A 启动了 Agent B，外层仍是两个独立 Agent 行；跨 Agent
@@ -341,19 +345,20 @@ controller PID 摘要
 智能体详情 · <Agent display name>
 ```
 
-标题下展示主机/IP、Agent 类型、运行实例数、当前防护状态。实例 selector：
+标题下展示主机/IP、Agent 类型、运行实例数、当前防护状态。先分页选择真实 Session ID，
+运行实例作为辅助 selector：
 
 ```text
-[全部实例（N）] [PID 4100] [PID 4400]
+[Session 019f...（第 1 页）] [Session 862b...] [下一页]
 ```
 
-当用户从高危数量进入时，默认选中最高风险实例；普通行点击默认选择最近活动
-实例。“全部实例”只在分析 tab 做聚合，在行为全景中仍以各实例为独立分支。
+当用户从高危数量进入时，默认选择最近活动会话；普通行点击默认选择最近活动
+会话。没有可信 Hook session ID 时显示未归属，不创建伪造会话。
 
 抽屉内部严格只有两个 tabs：
 
 ```text
-[行为全景] [安全分析（Finding 数）]
+[行为全景] [安全分析]
 ```
 
 ### 7.6 抽屉 Tab：行为全景
@@ -418,14 +423,14 @@ Selected Agent asset
 
 ### 7.7 抽屉 Tab：安全分析
 
-安全分析 tab 集中展示五个内置规则概况、Finding 和智能研判：
+安全分析 tab 只展示当前选中真实会话的命中规则、工具调用和研判：
 
-1. 五个内置规则：rule ID/version、enabled、命中数、最高风险和 action。
-2. Finding 列表：severity、verdict、confidence、decision source 和状态。
-3. 选中 Finding 的攻击链、规则证据和引用的全景节点。
-4. 智能分析摘要、意图假设、反证、不确定性和建议动作。
-5. 证据完整性：drop、truncated、远程/工具语义盲区。
-6. 动作与处置：策略版本、自动/人工动作及真实终态。
+1. 命中的规则名称（中文，英文名称和 ID 作为辅助）及规则版本。
+2. 命中工具名称、tool_call_id、工具输入/结果和匹配出的命令行。
+3. 可关联的 PID/PPID/cmdline；关联失败时显示 `unattributed`，不使用统一 Agent PID。
+4. Finding 的规则归属 `api-server` 和直接 Hook raw event ID。
+5. 智能分析摘要、意图假设、反证、不确定性和建议动作（若已有分析）。
+6. 证据完整性：drop、truncated、远程/工具语义盲区；不展示全量进程树。
 
 AI-only 结论必须显示：
 
@@ -585,22 +590,22 @@ API 返回 accepted 后显示 pending/dispatching，只有 Agent 回传终态才
 并固定提示“仅影响当前执行单元，不影响本机其他 Agent”。不得提供主机级
 “冻结全部 Agent”操作；终止整个 Agent instance 也不能扩展到同机其他实例。
 
-## 9. 策略和规则入口
+## 9. 运行时设置与内置规则入口
 
 事件/逃逸两个主页面不再增加其他侧边栏子菜单。外层内容区仍只展示 Agent 基本信息；
 页面标题栏可以提供全局配置入口，不在列表卡片内展开规则内容：
 
-- “规则配置”：打开五个内置规则抽屉。
-- “防护策略”：打开策略列表抽屉或内部详情视图。
-- “下发状态”：打开 PolicyDeliveryTable。
+- “规则目录”：打开五个内置规则的只读目录，按行为监控/工具命令分组并展示完整规则字段。
+- “设置”：打开工具调用适配器、会话 Hook 和 Codex/Claude Code/OpenClaw/Hermes/Zcode 注入开关。
 
 逃逸页右上角提供：
 
 - “逃逸策略”：定位到当前策略的隔离逃逸步骤。
 - “能力覆盖”：展示 full/monitor/no isolation/unobservable 主机。
 
-published 策略不可原地编辑；编辑时创建新 draft version。发布必须先 validate，
-展示目标主机、能力降级、预计命中量和 freeze/deny 风险，并要求填写发布理由。
+设置开关保存后立即经 ConfigSync 下发；打开表示 Agent 应用 Hook 并开始上报，关闭
+表示 Agent 清理配置并停止上报。页面不展示“待下发/等待 Agent 重连/失败/未启用”等
+旧状态。历史 published 策略不在当前页面编辑，旧接口只用于兼容和审计。
 某个 Agent 的规则命中和分析只在其详情抽屉的分析 tab 展示。
 
 ## 10. 页面状态
@@ -742,13 +747,15 @@ GET /api/v1/agent-guard/actions/:id
 2. 外层只显示 Agent 基本信息，DOM 中不存在进程树、路径、连接地址和分析正文。
 3. 同一主机 Codex/OpenClaw/Hermes 分别成行；同一 Agent 两个运行实例聚合为一行。
 4. 点击 Agent 行打开详情抽屉，关闭后保留列表筛选、分页和滚动位置。
-5. 抽屉实例 selector 按 controller PID/start_ticks 分开实例。
+5. 抽屉先对真实 Session ID 分页，运行实例按 controller PID/start_ticks 分开。
 6. 抽屉只有“行为全景”和“安全分析”两个 tabs。
 7. PID、cmdline、文件名/路径、连接地址可在行为全景内搜索并定位。
 8. 文件和网络操作挂在真实发起 PID 下，PID reuse 不合并。
 9. 五个内置规则 ID/version 稳定，定义不可删除。
-10. AI-only Finding 不显示自动阻断。
-11. drop/truncated/unobservable 不展示成无风险。
+10. 安全分析只显示当前 session 的命中规则、工具、命令行和关联 PID/PPID，不显示全量进程树；无关联时显示 unattributed。
+11. Runtime settings 开关开启后立即下发并应用，关闭后清理 Hook 并停止上报。
+12. AI-only Finding 不显示自动阻断。
+13. drop/truncated/unobservable 不展示成无风险。
 
 ### 16.3 逃逸防护页
 
@@ -778,7 +785,7 @@ GET /api/v1/agent-guard/actions/:id
 4. 详情抽屉清楚展示 Agent asset → runtime instance → session →
    execution unit → PID → 操作关系，并支持同机多 Agent、同 Agent 多实例。
 5. 文件节点展示文件名称和完整路径，网络节点展示连接地址和端口。
-6. 五个首批内置规则可见、可筛选、可配置 override，但不可删除定义。
+6. 五个首批内置规则可见、可筛选、可查看完整中英文详情，但不可通过当前页面配置 override、发布或删除定义。
 7. 规则事实、智能分析、Finding 和动作终态可以逐项追溯。
 8. 逃逸详情清楚展示实际隔离方式、基线、漂移、规则和处置。
 9. monitor-only、no-isolation、remote-unobservable 和 would-deny 不被包装成已防护。

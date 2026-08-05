@@ -23,6 +23,7 @@ const (
 	AgentGuardProfileIDClaudeCodeLinux = "62000000-0000-4000-8000-000000000104"
 	AgentGuardProfileIDOpenCodeLinux   = "62000000-0000-4000-8000-000000000105"
 	AgentGuardProfileIDGeminiCLILinux  = "62000000-0000-4000-8000-000000000106"
+	AgentGuardProfileIDZcodeLinux      = "62000000-0000-4000-8000-000000000107"
 )
 
 var builtinAgentBehaviorRules = []AgentBehaviorRuleDefinition{
@@ -356,6 +357,33 @@ var builtinAgentGuardProfiles = []AgentGuardAdapterProfile{
 		Digest:             "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
 		Enabled:            true,
 	},
+	{
+		ID:             uuid.MustParse(AgentGuardProfileIDZcodeLinux),
+		ProfileKey:     AgentGuardProfileKeyZcodeLinux,
+		ProfileVersion: 1,
+		AgentType:      "zcode",
+		DisplayName:    "Zcode",
+		Source:         "builtin",
+		SandboxFamily:  "local_process_tree",
+		ControllerMatch: jsonValue(`[
+			{"exe_basenames":["zcode","zcode-cli"],"cmdline_tokens":["zcode"],"evidence_weight":60},
+			{"config_paths":[".zcode/cli/config.json"],"evidence_weight":40}
+		]`),
+		WorkerMatch: jsonValue(`[
+			{"ancestor_basenames":["zcode","zcode-cli"],"fork_descendant":true}
+		]`),
+		BackendDetectors: jsonValue(`[
+			{"backend":"local","signals":["terminal_local"]},
+			{"backend":"ssh","signals":["ssh_backend","remote_execution_id"]}
+		]`),
+		IsolationExpectation: jsonValue(`{
+			"local":{"coverage":"no_isolation"},
+			"ssh":{"family":"remote_sandbox","coverage_without_sensor":"remote_unobservable"}
+		}`),
+		DefaultEscapeRules: jsonValue(`["access_container_runtime_socket","join_external_namespace","write_cgroupfs","credential_or_capability_gain","isolation_baseline_drift"]`),
+		Digest:             "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
+		Enabled:            true,
+	},
 }
 
 // BuiltinAgentBehaviorRuleManifest returns a deep copy so callers cannot
@@ -476,8 +504,8 @@ func VerifyBuiltinAgentGuardManifest() error {
 	if len(builtinAgentBehaviorRules) != 5 {
 		return fmt.Errorf("built-in rule count = %d, want 5", len(builtinAgentBehaviorRules))
 	}
-	if len(builtinAgentGuardProfiles) != 6 {
-		return fmt.Errorf("built-in profile count = %d, want 6", len(builtinAgentGuardProfiles))
+	if len(builtinAgentGuardProfiles) != 7 {
+		return fmt.Errorf("built-in profile count = %d, want 7", len(builtinAgentGuardProfiles))
 	}
 	identities := make(map[string]struct{}, 8)
 	for _, rule := range builtinAgentBehaviorRules {

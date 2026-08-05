@@ -1,8 +1,12 @@
 # Aegis V6.2 智能体运行防护与会话审计开发主提示词
 
 **版本**：6.2  
-**日期**：2026-08-03
-**状态**：可用于开发  
+**日期**：2026-08-06
+**状态**：按当前实现基线更新，可用于后续完整 P5 开发
+
+> 开发前必须阅读 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
+> 其中已实现的 Native Hook 生命周期、工具事件、api-server 工具规则匹配、运行时
+> 设置和只读规则目录不得被后续开发改回旧的 DC 命中或策略发布模型。
 **默认执行范围**：完整 V6.2，按 P0 → P5 阶段门禁推进
 
 ## 1. 使用说明
@@ -100,7 +104,7 @@ agent_ebpf_enforcement_design_v6.2.md 为准。发现文档与当前代码不兼
 V6.2 建设三个相互关联但可独立降级的闭环：
 
 1. 智能体事件感知与防护：
-   - 识别 Codex、OpenClaw、Hermes 等 Agent 资产和运行实例。
+   - 识别 Codex、Claude Code、OpenClaw、Hermes、Zcode 等 Agent 资产和运行实例。
    - 归属它们的 session、execution unit、PID/PPID 进程链。
    - 采集命令/进程、文件、网络、身份权限、持久化、隔离、内核、IPC，
      以及可信 Adapter 能提供的工具/control 语义。
@@ -114,7 +118,8 @@ V6.2 建设三个相互关联但可独立降级的闭环：
    - 能力允许时通过 BPF LSM 在危险操作生效前返回 EPERM，并按明确策略
      freeze 单个 execution unit。
 3. 智能体会话检测：
-   - 提取 Codex、Claude Code、OpenCode 的产品正式会话。
+   - 完整 P5 提取 Codex、Claude Code、OpenCode 的产品正式会话；当前五类 Native Hook
+     的真实 session 生命周期和工具调用已属于现有 Agent Guard 运行链路。
    - 规范化用户消息、助手可见回复、工具调用/结果状态、权限决策、compact、
      子智能体和生命周期事件。
    - 使用有界、脱敏、异步 AI 识别恶意意图并形成可人工确认的风险标记。
@@ -175,7 +180,8 @@ V6.2 建设三个相互关联但可独立降级的闭环：
 2. tracepoint/kprobe 只能监控；需要提前拒绝时必须使用 BPF LSM 或其他
    能证明前置执行的机制，不能把“事件上报后 kill”描述成提前阻断。
 3. 本地 action 只接受已验证的版本化 bundle 和可编译原子规则。
-4. 跨事件关联规则由 DC 执行，不能伪装成内核同步 deny。
+4. 通用 OS 跨事件关联规则可由 DC 执行；Agent Guard 工具命令规则由 api-server
+   消费可信工具事件匹配，DC 只做工具事件投影，不重复创建命中。
 5. AI-only verdict 的动作上限固定为 alert/人工确认。模型无工具、无策略
    写权限、无 freeze/kill 权限。
 6. 自动 freeze 至少要求：
@@ -192,6 +198,8 @@ V6.2 建设三个相互关联但可独立降级的闭环：
     full_enforcement、monitor_only、no_isolation、remote_unobservable、
     degraded。能力不足时使用 would_deny/enforcement_unavailable，不能报告
     denied/frozen 成功。
+11. Agent eBPF/`/proc` 只负责 OS 事实和 PID/PPID/start_ticks/cmdline 关联；没有
+    工具事件 Hook 时不能根据进程名猜测工具调用，也不能用 Agent 主 PID 代替实际 PID。
 11. Aegis Agent、关键系统进程、容器 runtime 等 protected targets 不允许
     被误冻结或误杀。
 
@@ -208,12 +216,14 @@ V6.2 建设三个相互关联但可独立降级的闭环：
 实现要求：
 
 1. rule_key、rule_version、核心证据字段和 engine 不允许管理员原地修改。
-2. 管理员只通过 policy override 配置启停、范围、severity、action、参数和例外。
+2. 内置规则在当前前端是只读目录，不提供启停、范围、severity、action、参数、例外或发布编辑；
+   Hook/工具适配器启停使用 `agent_guard_runtime_settings.v1` 即时下发。
 3. definition digest 不一致时报告 builtin_rule_digest_mismatch，禁止静默覆盖。
 4. 首次部署默认 audit/alert，不得默认全局 deny/freeze。
 5. 单个 rule hit 只是行为证据，不自动等同于恶意。
-6. 五规则可在同一 instance/session/unit/process 真实关联边和默认 5 分钟窗口内
-   形成攻击链；Finding 必须引用每个真实 behavior event ID。
+6. 通用 OS 规则可在同一 instance/session/unit/process 真实关联边和默认 5 分钟窗口内
+   形成攻击链；AGB-BUILTIN-004 只在 api-server 对可信 tool event 匹配，Finding
+   直接引用 tool event ID 和 `evidence_graph.rule_owner`。
 7. 失败 attempt 与成功状态变化必须区分：
    - create intent 失败不能显示“文件已生成”。
    - sudo 执行失败不能显示“提权成功”。
@@ -302,7 +312,8 @@ Frontend
 Agent/eBPF
   -> server
   -> Kafka topic aegis.security.events
-  -> dc normalizer/projector/rule/finding
+  -> dc normalizer/projector（Agent Guard 工具事件只投影）
+  -> api-server tool-rule consumer/matcher（可信工具命令）
   -> PostgreSQL
   -> api-server/WebSocket
   -> frontend
@@ -323,10 +334,10 @@ OpenCode Aegis plugin + authenticated local API/SSE + sanitized export fallback
 要求：
 
 - server 只负责连接、转发、Kafka 生产和重连补发，不复制策略判断。
-- api-server 是 Profile、policy、query、analysis orchestration、action auth 和
-  audit 的控制面。
-- DC 负责事件规范化、资源分类、单事件/序列规则、Finding、analysis request、
-  告警和 action 投影。
+- api-server 是 Profile、只读规则目录、policy 兼容数据、runtime settings、query、
+  工具规则匹配、analysis orchestration、action auth 和 audit 的控制面。
+- DC 负责事件规范化、资源分类、通用单事件/序列规则、投影、告警和 action；
+  Agent Guard 工具事件不在 DC 再次执行命令规则。
 - Agent 负责实例/执行单元归属、内核采集、本地 bundle、同步决策和真实动作。
 - Agent Guard 核心 BPF 随签名 Agent 发布，不作为可动态卸载的 DetectionPackage。
 - P5 会话正文不复用 P4 trusted tool adapter 的受限 OS 语义事件；使用独立
@@ -338,7 +349,7 @@ HTTP 根路径为 /api/v1/agent-guard，至少实现文档定义的：
 
 - /overview、/coverage、/hosts/:host_id/status
 - /agents
-- /profiles、/rules、/policies 和 policy deliveries
+- /profiles、只读 /rules、历史兼容 /policies 和 policy deliveries
 - /instances、/sessions、/execution-units
 - /panorama 及节点懒加载
 - /behaviors、/findings、/analysis-runs
@@ -439,7 +450,8 @@ cursor/分页和必要的虚拟滚动，禁止一次返回万级全树。
 
 P0：契约、数据库与只读控制面
 
-- 建立 migration、11 张表、五规则和三个初始 Profile 的幂等 seed。
+- 建立 migration、11 张表、五规则和内置 Profile 的幂等 seed；Native Hook 注入支持
+  Codex、Claude Code、OpenClaw、Hermes、Zcode。
 - 建立 api-server model/repository/service/handler 和只读查询、策略
   draft/validate。
 - 建立 /agents 基本信息聚合 API、详情懒加载契约和错误码。
@@ -452,7 +464,7 @@ P0：契约、数据库与只读控制面
 
 P1：真实归属与全行为 monitor-only
 
-- Agent Guard 生命周期、Codex/OpenClaw/Hermes Profile、实例/session/unit。
+- Agent Guard 生命周期、Codex/Claude Code/OpenClaw/Hermes/Zcode Profile、实例/session/unit。
 - fork 标签传播、PID start_ticks、cgroup v1/v2、containerd/Podman 和 reconciler。
 - process/file/network/identity/kernel/isolation 安全语义传感器。
 - cwd/dirfd/container root 路径解析、redaction、聚合、spool 和 drop 可见。
@@ -461,10 +473,10 @@ P1：真实归属与全行为 monitor-only
 - 门禁：Codex -> bash -> Python 完整归属；普通 bash 不归属；Docker 不依赖
   PPID；PID reuse 不串联；重启可校准；日志和事件无测试 secret；仅监控不 deny。
 
-P2：五规则、关联规则、智能研判与逃逸 audit
+P2：通用规则、工具命令匹配、智能研判与逃逸 audit
 
-- 实现 AGB-BUILTIN-001..005 evaluator、资源分类、序列/聚合 Finding、
-  evidence graph、幂等和乱序/重放。
+- 实现通用 OS 资源分类、序列/聚合 Finding、evidence graph、幂等和乱序/重放；
+  AGB-BUILTIN-004 由 api-server tool-rule consumer 对可信工具输入匹配，DC 只投影。
 - 建立隔离基线，采集 attempt + state drift，首批 escape rule 全部 audit/alert。
 - 实现 Evidence Window Builder、异步 LLM worker、固定 Schema、event ID 校验、
   counter evidence、uncertainty 和失败降级。
@@ -482,16 +494,23 @@ P3：BPF LSM deny 与 execution unit freeze
 - 门禁：只在专用测试主机验证 EPERM、freeze/resume；无 LSM 主机真实显示
   monitor_only/would_deny；目标 unit 动作不影响同机其他 Agent。
 
-P4：可信工具语义、远程执行关联与 Profile 扩展
+P4：可信工具语义、真实会话、运行时设置、远程执行关联与 Profile 扩展
 
-- 接入经过验证的官方 audit log/plugin hook/Aegis wrapper correlation token。
-- 形成 tool_call -> process -> resource 可信关系。
+- 接入经过验证的官方 Native Hook/Aegis wrapper 事件；记录 session start/end 和
+  tool_call_started/completed/failed。
+- 通过 `agent_guard_runtime_settings.v1` 提供页面开关，在线 Agent 应用即开始上报，
+  关闭即清理 Hook；形成 tool_call -> process -> resource 关联。
+- api-server 匹配敏感工具命令，Agent eBPF 只关联 PID/PPID，不创建规则命中。
 - 远端部署 Aegis Agent/受信传感器时关联远端证据；否则保持 remote_unobservable。
-- 增加 Claude Code、OpenCode、Gemini CLI 等 Profile 和版本回归套件。
+- Native Hook 支持 Codex、Claude Code、OpenClaw、Hermes、Zcode；完整会话正文的
+  Codex/Claude/OpenCode Adapter 仍留在 P5。
 - 门禁：没有 Hook 不伪造工具语义；没有远端传感器不伪造远端行为；新增产品
   优先只新增 Profile，只有出现新隔离族才新增内核能力。
 
 P5：智能体会话检测
+
+当前 Native Hook session 生命周期和 tool event 已实现，不得在 P5 重复建设或改为
+PID/活动窗口推导。P5 只补完整会话正文、AI 语义、风险 marking 和专用会话页。
 
 - P5.0：新增 migration 030、7 张表、Session/Item/ToolCall Schema、只读 API、
   权限、审计、第三个菜单和页面骨架。
@@ -515,6 +534,8 @@ P5：智能体会话检测
 实现并遵守 implementation_test_rollout_v6.2.md 中的开关，至少包括：
 
 - api-server：AGENT_GUARD_ENABLED、POLICY_WRITE、ANALYSIS、ACTION。
+- api-server runtime settings：`tool_adapter_enabled`、`session_hook_enabled` 和
+  `injections[]` 通过 `agent_guard_runtime_settings.v1` 保存/下发，不要求手工改 Agent 配置文件。
 - dc：PROJECTION、RULES、FINDINGS、ANALYSIS_REQUEST、ALERT。
 - agent：enabled、behavior_monitor_enabled、tool_adapter_enabled、
   enforcement_enabled、freeze_enabled。
@@ -526,7 +547,7 @@ P5：智能体会话检测
 - agent P5：agent_session.enabled、hook_ingress_enabled、
   transcript_tail_enabled、history_backfill_enabled。
 
-默认关闭 Agent Guard/enforcement/freeze；monitor、projection、rules、
+默认关闭 enforcement/freeze；运行时设置由页面开关表达期望状态；monitor、projection、rules、
 findings、alert、analysis、escape audit、deny、freeze 必须按文档逐级开启。
 P5 按 consumer/migration → read-only UI → metadata-only → redacted-text → AI
 shadow → marking/alert → behavior link → 授权 reveal/export 顺序开启。
@@ -591,31 +612,34 @@ Frontend：
 
 十三、必须覆盖的关键回归
 
-1. 同机 Codex、OpenClaw、Hermes 分别成行、分别归属。
+1. 同机 Codex、Claude Code、OpenClaw、Hermes、Zcode 分别成行、分别归属。
 2. 同类型两个 controller 实例按 PID + start_ticks 分开。
 3. 普通 shell 执行同样命令/文件/网络操作不归属最近 Agent。
 4. containerd-shim 是父进程时，容器任务仍通过 cgroup 正确归属。
 5. ambiguous/unattributed 事件不复制、不形成自动 action。
 6. 五规则的 attempt/success/inconclusive 和反证语义准确。
-7. download -> write -> chmod -> execute -> callback 跨事件 Finding 可复核，
+7. Native Hook session start/end 使用真实 session ID；工具 started/completed/failed
+   按 tool_call_id 幂等合并；AGB-BUILTIN-004 只由 api-server 命中，DC 不重复创建。
+8. download -> write -> chmod -> execute -> callback 跨事件 Finding 可复核，
    乱序和 Kafka 重放不重复。
-8. 命令/文件名中的“忽略系统指令”只是不可信 evidence，不能注入分析器。
-9. AI timeout/invalid output 不影响原始事件和规则 Finding。
-10. 无 BPF LSM 时不宣称 deny；远端无传感器时不宣称可观测。
-11. freeze/resume/kill 只影响目标 execution unit，protected target 不可操作。
-12. 外层 Agent 列表不泄露 cmdline、路径、地址和分析证据。
-13. 抽屉树准确显示 PID、PPID、脱敏 cmdline、文件名/路径、外链目标和 outcome。
-14. 万级树使用 lazy loading/cursor，不在单次响应返回全树。
-15. 日志、事件和页面不泄露测试 password/token/secret、文件内容或网络 payload。
-16. Codex、Claude Code、OpenCode 会话增量提取完整，重复/乱序/rotate/truncate/
+9. 命令/文件名中的“忽略系统指令”只是不可信 evidence，不能注入分析器。
+10. AI timeout/invalid output 不影响原始事件和规则 Finding。
+11. 无 BPF LSM 时不宣称 deny；远端无传感器时不宣称可观测。
+12. freeze/resume/kill 只影响目标 execution unit，protected target 不可操作。
+13. 外层 Agent 列表不泄露 cmdline、路径、地址和分析证据。
+14. 抽屉树准确显示 PID、PPID、脱敏 cmdline、文件名/路径、外链目标和 outcome。
+15. 安全分析严格按 session 过滤，只显示命中规则工具、命令行和可关联 PID/PPID，不显示全量进程树。
+16. 万级树使用 lazy loading/cursor，不在单次响应返回全树。
+17. 日志、事件和页面不泄露测试 password/token/secret、文件内容或网络 payload。
+18. Codex、Claude Code、OpenCode 会话增量提取完整，重复/乱序/rotate/truncate/
     compact/断网回补不重复、不丢失且 coverage 准确。
-17. Hook/transcript/API/export 同一会话对账幂等；伪造 Hook、错误 owner/mode、
+19. Hook/transcript/API/export 同一会话对账幂等；伪造 Hook、错误 owner/mode、
     不支持格式和跨用户文件安全拒绝或降级。
-18. 会话中的提示注入只能作为不可信数据，AI 结构化引用必须指向真实 item/tool/
+20. 会话中的提示注入只能作为不可信数据，AI 结构化引用必须指向真实 item/tool/
     event；讨论危险操作不能被显示为 executed。
-19. 无 session content 权限时列表、WebSocket、通知、URL、日志和 API 都不泄露
+21. 无 session content 权限时列表、WebSocket、通知、URL、日志和 API 都不泄露
     正文；reveal/copy/export 均留下主体、理由、范围和结果审计。
-20. 同机多 Agent、多实例、多会话分别展示，session 行和详情抽屉状态在刷新、
+22. 同机多 Agent、多实例、多会话分别展示，session 行和详情抽屉状态在刷新、
     WebSocket 更新和长列表虚拟滚动下保持稳定。
 
 十四、阶段完成后的自检和输出

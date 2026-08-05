@@ -45,9 +45,10 @@ type ConfigManager struct {
 	mu            sync.RWMutex
 
 	// Callbacks for V5.8 detection package handling
-	onDetectionPackage func(action, payload string) error
-	onAllowlistUpdate  func(payload string) error
-	onAgentGuardBundle func(payload string) error
+	onDetectionPackage          func(action, payload string) error
+	onAllowlistUpdate           func(payload string) error
+	onAgentGuardBundle          func(payload string) error
+	onAgentGuardRuntimeSettings func(payload string) error
 }
 
 func NewConfigManager() *ConfigManager {
@@ -78,6 +79,15 @@ func (m *ConfigManager) SetAgentGuardBundleHandler(fn func(payload string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onAgentGuardBundle = fn
+}
+
+// SetAgentGuardRuntimeSettingsHandler installs the runtime control-plane
+// callback. These settings are applied in memory and are never written to the
+// Agent TOML configuration file.
+func (m *ConfigManager) SetAgentGuardRuntimeSettingsHandler(fn func(payload string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAgentGuardRuntimeSettings = fn
 }
 
 func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
@@ -113,6 +123,11 @@ func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 			return fmt.Errorf("agent_guard_bundle handler is not configured")
 		}
 		return m.onAgentGuardBundle(sync.Payload)
+	case "agent_guard_runtime_settings":
+		if m.onAgentGuardRuntimeSettings == nil {
+			return fmt.Errorf("agent_guard_runtime_settings handler is not configured")
+		}
+		return m.onAgentGuardRuntimeSettings(sync.Payload)
 	default:
 		return fmt.Errorf("unknown config type: %s", sync.ConfigType)
 	}

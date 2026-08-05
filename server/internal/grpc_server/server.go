@@ -3,6 +3,7 @@ package grpc_server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -36,24 +37,25 @@ type runtimeEventKafkaProducer interface {
 
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
-	server               *grpc.Server
-	hostRepo             *repository.HostRepository
-	taskLogRepo          *repository.TaskLogRepository
-	sigmaRuleRepo        *repository.SigmaRuleRepository
-	alertRepo            *repository.AlertRepository
-	runtimeEventRepo     *repository.RuntimeEventRepository
-	blockPolicyRepo      *repository.BlockPolicyRepository
-	commandAuditRuleRepo *repository.CommandAuditRuleRepo
-	systemConfigRepo     *repository.SystemConfigRepo
-	detectionPackageRepo *repository.DetectionPackageRepository
-	wsBroadcaster        WebSocketBroadcaster
-	redisClient          *storage.RedisClient
-	kafkaProducer        runtimeEventKafkaProducer
-	agentConnections     sync.Map
-	callbackPorts        sync.Map // hostID -> callback port
-	agentGuardBundles    sync.Map // hostID -> agentGuardBundleSnapshot
-	port                 int
-	taskResultCallback   TaskResultCallback
+	server                    *grpc.Server
+	hostRepo                  *repository.HostRepository
+	taskLogRepo               *repository.TaskLogRepository
+	sigmaRuleRepo             *repository.SigmaRuleRepository
+	alertRepo                 *repository.AlertRepository
+	runtimeEventRepo          *repository.RuntimeEventRepository
+	blockPolicyRepo           *repository.BlockPolicyRepository
+	commandAuditRuleRepo      *repository.CommandAuditRuleRepo
+	systemConfigRepo          *repository.SystemConfigRepo
+	detectionPackageRepo      *repository.DetectionPackageRepository
+	wsBroadcaster             WebSocketBroadcaster
+	redisClient               *storage.RedisClient
+	kafkaProducer             runtimeEventKafkaProducer
+	agentConnections          sync.Map
+	callbackPorts             sync.Map // hostID -> callback port
+	agentGuardBundles         sync.Map // hostID -> agentGuardBundleSnapshot
+	agentGuardRuntimeSettings sync.Map // hostID -> *pb.ConfigSync
+	port                      int
+	taskResultCallback        TaskResultCallback
 
 	// V5.8: Detection package status storage
 	detectionPackageStatuses sync.Map // key: "hostID:packageID:version" -> *pb.DetectionPackageHostStatus
@@ -114,6 +116,59 @@ func (s *GRPCServer) SetSystemConfigRepo(repo *repository.SystemConfigRepo) {
 
 func (s *GRPCServer) SetDetectionPackageRepo(repo *repository.DetectionPackageRepository) {
 	s.detectionPackageRepo = repo
+}
+
+func (s *GRPCServer) createAgentCallbackConnection(hostID uuid.UUID) (pb.AgentServiceClient, *grpc.ClientConn, error) {
+	value, ok := s.callbackPorts.Load(hostID.String())
+	if !ok {
+		return nil, nil, errors.New("agent callback port unavailable")
+	}
+	callbackPort, ok := value.(int)
+	if !ok || callbackPort <= 0 {
+		return nil, nil, errors.New("agent callback port invalid")
+	}
+	agentIP := "127.0.0.1"
+	if s.hostRepo != nil {
+		if host, err := s.hostRepo.FindByID(hostID); err == nil && host != nil && host.IPAddress != "" {
+			agentIP = host.IPAddress
+		}
+	}
+	callbackAddr := fmt.Sprintf("%s:%d", agentIP, callbackPort)
+	callbackConn, err := grpc.NewClient(callbackAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, nil, err
+	}
+	return pb.NewAgentServiceClient(callbackConn), callbackConn, nil
+}
+
+func (s *GRPCServer) ensureAgentCallbackConnection(hostID uuid.UUID) (*AgentConnection, bool) {
+	if value, ok := s.agentConnections.Load(hostID); ok {
+		if connection, valid := value.(*AgentConnection); valid && connection != nil {
+			return connection, true
+		}
+	}
+	callbackClient, callbackConn, err := s.createAgentCallbackConnection(hostID)
+	if err != nil {
+		logger.Warn("agent callback connection unavailable",
+			zap.String("host_id", hostID.String()), zap.Error(err))
+		return nil, false
+	}
+	candidate := &AgentConnection{
+		HostID:         hostID,
+		CallbackClient: callbackClient,
+		CallbackConn:   callbackConn,
+	}
+	actual, loaded := s.agentConnections.LoadOrStore(hostID, candidate)
+	if loaded {
+		callbackConn.Close()
+		if connection, valid := actual.(*AgentConnection); valid && connection != nil {
+			return connection, true
+		}
+		return nil, false
+	}
+	logger.Info("agent callback connection established",
+		zap.String("host_id", hostID.String()), zap.String("channel", "callback"))
+	return candidate, true
 }
 
 // Start 启动 gRPC 服务器
@@ -242,6 +297,7 @@ func (s *GRPCServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb
 			zap.String("host_id", hostID.String()),
 			zap.Int32("callback_port", req.CallbackPort),
 		)
+		s.ensureAgentCallbackConnection(hostID)
 	}
 
 	go s.pushConfigToAgent(hostID)
@@ -339,33 +395,17 @@ func (s *GRPCServer) ExecuteCommand(stream pb.AgentService_ExecuteCommandServer)
 			if r.Execute != nil {
 				hostID, _ = uuid.Parse(r.Execute.HostId)
 
-				// Look up callback port and create callback client to agent
+				// Reuse the callback connection created during registration when available.
 				var callbackClient pb.AgentServiceClient
 				var callbackConn *grpc.ClientConn
-				if cbPort, ok := s.callbackPorts.Load(hostID.String()); ok {
-					agentIP := ""
-					if host, err := s.hostRepo.FindByID(hostID); err == nil && host != nil {
-						agentIP = host.IPAddress
+				if existing, loaded := s.agentConnections.Load(hostID); loaded {
+					if existingConnection, valid := existing.(*AgentConnection); valid && existingConnection != nil {
+						callbackClient = existingConnection.CallbackClient
+						callbackConn = existingConnection.CallbackConn
 					}
-					if agentIP == "" {
-						agentIP = "127.0.0.1" // fallback
-					}
-					callbackAddr := fmt.Sprintf("%s:%d", agentIP, cbPort.(int))
-					var err error
-					callbackConn, err = grpc.NewClient(callbackAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-					if err != nil {
-						logger.Error("failed to create callback connection to agent",
-							zap.Stringer("host_id", hostID),
-							zap.String("addr", callbackAddr),
-							zap.Error(err),
-						)
-					} else {
-						callbackClient = pb.NewAgentServiceClient(callbackConn)
-						logger.Info("agent callback client created",
-							zap.Stringer("host_id", hostID),
-							zap.String("addr", callbackAddr),
-						)
-					}
+				}
+				if callbackClient == nil {
+					callbackClient, callbackConn, _ = s.createAgentCallbackConnection(hostID)
 				}
 
 				connection = &AgentConnection{

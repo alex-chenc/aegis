@@ -1,8 +1,12 @@
 # Aegis V6.2 首批内置行为规则与全景树设计
 
 **版本**：6.2  
-**日期**：2026-07-30  
-**状态**：设计完成，待实施
+**日期**：2026-08-06
+**状态**：内置规则目录、工具命令匹配和会话范围展示已按当前实现更新
+
+> 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
+> 内置规则是只读目录；前端不再创建/编辑/发布策略。Agent Guard 工具命令规则由
+> api-server 匹配，Agent eBPF 只做进程事实和 PID/PPID 关联，DC 只做投影。
 
 ## 1. 设计目标
 
@@ -13,17 +17,14 @@ V6.2 第一批内置以下五个规则族：
 | `AGB-BUILTIN-001` | 操作敏感目录 | file |
 | `AGB-BUILTIN-002` | 外部网络连接 | network |
 | `AGB-BUILTIN-003` | 文件生成 | file |
-| `AGB-BUILTIN-004` | 敏感命令执行 | process |
+| `AGB-BUILTIN-004` | 敏感命令执行 | tool/process |
 | `AGB-BUILTIN-005` | 提权行为 | identity/process |
 
-规则定义随 Aegis 版本发布并在数据库中版本化。管理员可以：
-
-- 启用或停用规则。
-- 选择 Agent、Profile、主机和主机组范围。
-- 调整 severity、action、例外和参数。
-- 复制为自定义规则。
-
-管理员不能修改内置规则的 `rule_key`、`rule_version`、核心证据字段和执行位置。修改检测语义必须发布新的 rule version，确保历史 finding 可复核。
+规则定义随 Aegis 版本发布并在数据库中版本化。前端以“行为监控”和“工具命令”
+两个只读内置策略视图展示规则详情，包括中文/英文名称、版本、描述、类别、严重级别、
+动作、执行位置、所需证据、允许条件、MITRE、默认参数和 Schema。历史策略和 Bundle
+接口仍保留兼容性，但不再作为当前页面的编辑/发布入口。修改检测语义必须发布新的
+rule version，确保历史 finding 可复核。
 
 五个规则不是五个简单字符串匹配。每个规则都需要：
 
@@ -36,7 +37,8 @@ V6.2 第一批内置以下五个规则族：
   -> rule hit
 ```
 
-单个 rule hit 表示“发生了需要关注的行为”，不一定表示攻击。DC 可以把多个 rule hit 关联成攻击链，再由 Aegis 智能分析器补充研判。
+单个 rule hit 表示“发生了需要关注的行为”，不一定表示攻击。通用 OS 规则仍可由
+Agent/DC 的既有链路关联；Agent Guard 工具命中由 api-server 产生，DC 不重复创建。
 
 ## 2. 通用规则契约
 
@@ -64,7 +66,7 @@ V6.2 第一批内置以下五个规则族：
 
 | 字段 | 含义 |
 | --- | --- |
-| `engine` | `agent_atomic`、`dc_single_event`、`dc_correlation` 或 `agent_and_dc` |
+| `engine` | 历史兼容字段，可为 `agent_atomic`、`dc_single_event`、`dc_correlation` 或 `agent_and_dc`；当前 `AGB-BUILTIN-004` 的工具事件执行位置由 `execution_location=api_server_tool_event` 明确覆盖 |
 | `default_action` | 首次部署使用的动作，首批规则不得默认全局 freeze |
 | `recommended_action` | 证据充分、完成灰度后的建议动作 |
 | `parameters_schema` | 前后端共同校验的参数 JSON Schema |
@@ -307,7 +309,17 @@ outcome/errno
 
 ### 6.2 匹配方式
 
-匹配优先级：
+AGB-BUILTIN-004 的规则输入是可信 Native Hook 工具事件，不是 Agent eBPF exec
+事件，也不是 DC 从全量进程树推导出的命令。api-server 消费：
+
+```text
+tool_call_started
+tool_call_completed
+tool_call_failed
+```
+
+同一 `tool_call_id` 的开始和终态合并为一个逻辑调用；规则在工具调用完成或失败
+事件到达时对工具名称、工具输入/attributes 中提取的命令和结果进行匹配。匹配优先级：
 
 1. resolved executable path + inode/dev 或 digest。
 2. executable path + basename。
@@ -315,6 +327,12 @@ outcome/errno
 4. shell `-c` 中可见的命令作为补充证据。
 
 禁止只对完整 cmdline 做无边界 substring 匹配。例如参数文件名包含 `sudo` 不能命中 privilege command。
+Shell `-c` 只有在 Hook 工具输入中可见时才作为命令证据；仅有 eBPF exec 不能单独
+形成 Agent Guard 工具命中。
+
+Agent eBPF/`/proc` 只补充实际进程关联：根据命令行、发生时间、PID start_ticks、
+父子关系和 tool correlation 解析 PID/PPID。关联失败时 Finding 仍保留工具命中，
+但标记 `correlation_status=unattributed`，不能用 Agent 主进程 PID 冒充。
 
 必需展示字段：
 
@@ -327,6 +345,10 @@ cwd
 command category
 matched argument condition
 outcome/exit code（可获得时）
+tool name
+tool call ID
+session ID
+source event ID
 ```
 
 ### 6.3 默认动作
@@ -338,7 +360,10 @@ outcome/exit code（可获得时）
 | 命令后发生提权、持久化、破坏或逃逸 | high/critical | 关联规则告警 |
 | 明确操作 Aegis 自保护目标 | critical | 按自保护策略 deny/freeze |
 
-BPF LSM 可以按 executable 做前置 deny，但依赖复杂 argv 的规则只能监控或在 exec 后暂停，UI 必须显示真实执行阶段。
+AGB-BUILTIN-004 的默认结果由 api-server 写入 `agent_security_findings`，直接引用
+Hook 工具事件的 `raw_event_id`，并记录 `evidence_graph.rule_owner=api-server`。
+eBPF 关联信息只是补充证据。BPF LSM/Agent 本地策略仍可对独立的自保护或逃逸
+规则做前置 deny，但不能把本规则的工具命中重复上报为 Agent/DC 命中。
 
 ## 7. `AGB-BUILTIN-005` 提权行为
 
@@ -394,7 +419,8 @@ outcome/errno
 
 ## 8. 五规则联合攻击链
 
-首批内置关联模板：
+首批内置关联模板（通用 OS 事实与工具事件可在服务端形成证据关系；不表示 DC
+重新执行工具规则）：
 
 ```text
 AGB-BUILTIN-002 外链
@@ -407,7 +433,7 @@ AGB-BUILTIN-002 外链
 关联条件：
 
 - 同一 Agent instance。
-- 优先同一 confirmed/probable session。
+- 优先同一 Native Hook 真实 session；没有可信 session ID 时不得伪造会话关联。
 - 同一 execution unit 或存在真实 process/correlation 边。
 - 默认窗口 5 分钟，可按策略调整。
 - 前后事件 outcome 和资源关系一致。
@@ -428,8 +454,8 @@ Finding 必须逐项引用五个 rule hit 对应的 behavior event ID，不能�
 ## 9. 全景树信息架构
 
 全景图第一版使用树状关系，不使用自由布局关系图。外层页面不显示全景；
-点击 Agent 后，在详情抽屉中先按运行实例分支，每个实例内部再以实际进程
-父子关系为主干，行为操作作为发起进程的子节点：
+点击 Agent 后先对真实会话 ID 分页，再按运行实例和实际进程父子关系展示行为。
+安全分析不使用这棵全量行为树，而只展示命中规则的工具调用及关联进程字段。
 
 ```text
 选中 Agent：Codex @ host-a · 2 个运行实例
@@ -593,24 +619,16 @@ attempted/succeeded/inconclusive
 规则卡片固定展示五项：
 
 - 名称、稳定 rule ID、version。
-- enabled/disabled。
-- 默认和当前 severity/action。
-- 执行位置。
-- 今日 hit/finding 数。
-- 目标 Agent/主机范围。
-- 例外数量。
-- 当前支持/不支持的主机数。
+- 中文名称、英文名称和描述。
+- 默认 severity/action、执行位置和规则归属。
+- 所需 evidence、allow conditions、MITRE 映射。
+- 默认参数、参数 Schema、规则 digest。
+- 行为监控/工具命令所属内置策略视图。
 
-内置规则不能删除，编辑按钮打开“策略覆盖”抽屉：
-
-- 开关。
-- 范围。
-- 参数。
-- severity/action override。
-- allowlist/临时例外。
-- 灰度预览。
-
-发布仍生成不可变 Agent Guard policy version。
+内置规则不能删除或原地编辑。当前页面不提供 enabled/disabled、范围、参数覆盖、
+例外、灰度、发布或下发状态编辑；历史策略 API 仅为旧 Bundle 和审计数据兼容保留。
+Agent Guard 工具适配器、会话 Hook 以及 Codex/Claude Code/OpenClaw/Hermes/Zcode
+注入使用单独的运行时设置开关，开启即立即请求 Agent 应用，关闭即清理 Hook 并停止上报。
 
 ### 11.2 Agent 详情抽屉中的行为全景
 
@@ -626,11 +644,11 @@ attempted/succeeded/inconclusive
 抽屉结构：
 
 ```text
-抽屉顶部：选中 Agent 基本信息、运行实例 selector
+抽屉顶部：选中 Agent 基本信息、会话 ID 分页 selector
 内部 Tabs：行为全景 / 安全分析
-全景顶部：Session、时间范围、风险、规则筛选
+全景顶部：运行实例、Session、时间范围、风险、规则筛选
 左侧：Agent 行为全景树
-右侧：选中节点证据详情
+安全分析：命中规则名称、命中工具、工具输入/结果、匹配命令行和关联 PID/PPID
 ```
 
 默认筛选最近 30 分钟、当前 session；允许选择：
@@ -652,6 +670,8 @@ attempted/succeeded/inconclusive
 - 支持搜索 PID、cmdline、文件名/路径、IP/domain。
 - 支持“定位到 PID”和“定位到事件”。
 - 大树使用虚拟滚动、懒加载和每节点分页。
+- 安全分析严格按当前 session 查询，不显示其他 session 或全量 findings；没有 PID
+  关联时显示 `unattributed`，不回退为统一的 controller PID。
 
 ## 12. 全景树 API
 

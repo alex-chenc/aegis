@@ -63,6 +63,13 @@ func ClassifyAgentBehavior(event *model.AgentBehaviorEvent, options RuleEvaluati
 			resource["classification"] = category
 			attributes["command_category"] = category
 		}
+	case "tool":
+		category := classifyToolCommand(attributes, event.ResourceIdentity)
+		if category != "" {
+			classified.ResourceClassification = category
+			resource["classification"] = category
+			attributes["command_category"] = category
+		}
 	case "identity":
 		classification := classifyIdentityTransition(attributes, event.Outcome)
 		classified.ResourceClassification = classification
@@ -179,6 +186,36 @@ func classifyCommand(event *model.AgentBehaviorEvent) string {
 			executable = filepath.Base(argv[0])
 		}
 	}
+	return classifyExecutable(executable)
+}
+
+func classifyToolCommand(attributes map[string]any, toolName string) string {
+	command := stringValueAny(attributes["command"])
+	if command == "" {
+		if input, ok := attributes["tool_input"].(map[string]any); ok {
+			for _, key := range []string{"command", "cmdline", "command_line", "script"} {
+				if value := stringValueAny(input[key]); value != "" {
+					command = value
+					break
+				}
+			}
+		}
+	}
+	if command == "" {
+		command = toolName
+	}
+	// A shell tool may wrap the real command in `bash -lc`; scan all tokens
+	// and return the first sensitive executable instead of classifying only the
+	// wrapper.
+	for _, token := range strings.Fields(command) {
+		if category := classifyExecutable(filepath.Base(strings.Trim(token, "\"'`;,()[]{}"))); category != "" {
+			return category
+		}
+	}
+	return ""
+}
+
+func classifyExecutable(executable string) string {
 	switch executable {
 	case "curl", "wget", "nc", "ncat", "socat", "ssh", "scp":
 		return "network_transfer"

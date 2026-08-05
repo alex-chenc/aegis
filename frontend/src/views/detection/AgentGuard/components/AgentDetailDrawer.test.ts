@@ -68,6 +68,7 @@ function mountDrawer(mode: 'behavior' | 'escape') {
         'el-button': true,
         'el-tag': true,
         'el-tooltip': true,
+        'el-pagination': true,
         AgentRuntimeSelector: true,
         CoverageBadge: true,
       },
@@ -78,13 +79,13 @@ function mountDrawer(mode: 'behavior' | 'escape') {
 describe('AgentDetailDrawer', () => {
   it.each([
     ['behavior', ['panorama', 'analysis']],
-    ['escape', ['panorama', 'analysis']],
-  ] as const)('uses a 76%% drawer and exactly two tabs for %s', (mode, names) => {
+    ['escape', ['analysis']],
+  ] as const)('uses a 76%% drawer and the scoped detail tabs for %s', (mode, names) => {
     const wrapper = mountDrawer(mode)
 
     expect(wrapper.find('.drawer').attributes('data-size')).toBe('76%')
     expect(wrapper.find('.drawer').attributes('style')).toContain('min-width: 880px')
-    expect(wrapper.findAll('.tab-pane')).toHaveLength(2)
+    expect(wrapper.findAll('.tab-pane')).toHaveLength(names.length)
     expect(wrapper.findAll('.tab-pane').map(tab => tab.attributes('data-name'))).toEqual(names)
     expect(wrapper.text()).toContain('Codex')
   })

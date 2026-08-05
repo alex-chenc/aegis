@@ -6,19 +6,23 @@ import {
   getAgentGuardOverview,
   getAgentPanorama,
   getAgentSecurityFinding,
+  deleteAgentGuardSessions,
   killAgentExecutionUnit,
   listAgentExecutionUnitTimeline,
   createAgentGuardPolicy,
   listAgentGuardAgents,
   listAgentGuardInstances,
+  listAgentGuardSessions,
   listAgentGuardPolicies,
   publishAgentGuardPolicy,
   resumeAgentExecutionUnit,
   listAgentSecurityFindings,
+  listAgentSecurityFindingAnalyses,
   validateAgentGuardPolicy,
 } from './agentGuard'
 
-const { getMock, postMock } = vi.hoisted(() => ({
+const { deleteMock, getMock, postMock } = vi.hoisted(() => ({
+  deleteMock: vi.fn(),
   getMock: vi.fn(),
   postMock: vi.fn(),
 }))
@@ -27,6 +31,7 @@ vi.mock('./index', () => ({
   default: {
     get: getMock,
     post: postMock,
+    delete: deleteMock,
   },
 }))
 
@@ -64,17 +69,31 @@ describe('Agent Guard API', () => {
     getMock.mockResolvedValue({ items: [], total: 0 })
 
     await listAgentGuardInstances({ asset_ids: ['asset-1'] })
-    await getAgentPanorama({ asset_id: 'asset-1', instance_ids: ['instance-1'] })
-    await listAgentSecurityFindings({ asset_id: 'asset-1', page: 1, page_size: 20 })
+    await listAgentGuardSessions('instance-1')
+    await getAgentPanorama({
+      asset_id: 'asset-1', instance_ids: ['instance-1'], session_id: 'session-1',
+      page: 2, page_size: 20,
+    })
+    await listAgentSecurityFindings({
+      asset_id: 'asset-1', session_id: 'session-1', finding_domain: 'tool', page: 1, page_size: 20,
+    })
 
     expect(getMock).toHaveBeenNthCalledWith(1, '/agent-guard/instances', {
       params: { asset_ids: ['asset-1'] },
     })
-    expect(getMock).toHaveBeenNthCalledWith(2, '/agent-guard/panorama', {
-      params: { asset_id: 'asset-1', instance_ids: ['instance-1'] },
+    expect(getMock).toHaveBeenNthCalledWith(2, '/agent-guard/instances/instance-1/sessions', {
+      params: { page: 1, page_size: 100 },
     })
-    expect(getMock).toHaveBeenNthCalledWith(3, '/agent-guard/findings', {
-      params: { asset_id: 'asset-1', page: 1, page_size: 20 },
+    expect(getMock).toHaveBeenNthCalledWith(3, '/agent-guard/panorama', {
+      params: {
+        asset_id: 'asset-1', instance_ids: ['instance-1'], session_id: 'session-1',
+        page: 2, page_size: 20,
+      },
+    })
+    expect(getMock).toHaveBeenNthCalledWith(4, '/agent-guard/findings', {
+      params: {
+        asset_id: 'asset-1', session_id: 'session-1', finding_domain: 'tool', page: 1, page_size: 20,
+      },
     })
   })
 
@@ -86,6 +105,27 @@ describe('Agent Guard API', () => {
 
     expect(getMock).toHaveBeenNthCalledWith(1, '/agent-guard/findings/finding%2F1')
     expect(getMock).toHaveBeenNthCalledWith(2, '/agent-guard/behaviors/event%2F1')
+  })
+
+  it('passes caller pagination to finding analysis history', async () => {
+    getMock.mockResolvedValue({ items: [], total: 0 })
+
+    await listAgentSecurityFindingAnalyses('finding/1', { page: 2, page_size: 10 })
+
+    expect(getMock).toHaveBeenCalledWith(
+      '/agent-guard/findings/finding%2F1/analyses',
+      { params: { page: 2, page_size: 10 } },
+    )
+  })
+
+  it('deletes selected sessions by their database IDs', async () => {
+    deleteMock.mockResolvedValue({ deleted: 2 })
+
+    await deleteAgentGuardSessions(['session-1', 'session-2'])
+
+    expect(deleteMock).toHaveBeenCalledWith('/agent-guard/sessions', {
+      data: { session_ids: ['session-1', 'session-2'] },
+    })
   })
 
   it('keeps policy validation and publishing on protected server endpoints', async () => {
