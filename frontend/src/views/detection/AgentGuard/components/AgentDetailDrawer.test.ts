@@ -84,7 +84,8 @@ describe('AgentDetailDrawer', () => {
     const wrapper = mountDrawer(mode)
 
     expect(wrapper.find('.drawer').attributes('data-size')).toBe('76%')
-    expect(wrapper.find('.drawer').attributes('style')).toContain('min-width: 880px')
+    expect(wrapper.find('.drawer').attributes('style')).toContain('min-width: min(880px, 100vw)')
+    expect(wrapper.find('.drawer').attributes('style')).toContain('max-width: 100vw')
     expect(wrapper.findAll('.tab-pane')).toHaveLength(names.length)
     expect(wrapper.findAll('.tab-pane').map(tab => tab.attributes('data-name'))).toEqual(names)
     expect(wrapper.text()).toContain('Codex')

@@ -4,7 +4,7 @@
     :model-value="visible"
     direction="rtl"
     size="76%"
-    style="min-width: 880px"
+    style="min-width: min(880px, 100vw); max-width: 100vw"
     :append-to-body="true"
     :destroy-on-close="false"
     @close="emit('close')"
@@ -329,7 +329,8 @@ function changeTab(value: string | number) {
 
 <style>
 .agent-guard-detail-drawer {
-  min-width: 880px;
+  min-width: min(880px, 100vw);
+  max-width: 100vw;
 }
 </style>
 
