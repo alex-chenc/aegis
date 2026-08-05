@@ -24,8 +24,8 @@
           @click="emit('select-finding', row.id)"
         >
           <span class="finding-row-main">
-            <strong>{{ row.title || t('agentGuard.drawer.escapeAnalysisDetail.untitled') }}</strong>
-            <small>{{ ruleLabel(row) }}</small>
+            <strong>{{ ruleLabel(row) }}</strong>
+            <small class="finding-row-title" :title="row.title || ''">{{ row.title || t('agentGuard.drawer.escapeAnalysisDetail.untitled') }}</small>
             <small>{{ formatObservedAt(row.last_observed_at) }}</small>
           </span>
           <span class="finding-risk">
@@ -446,18 +446,20 @@ function unique(items: string[]) { return [...new Set(items.filter(Boolean))] }
 
 <style scoped>
 .escape-analysis { display: grid; gap: 18px; }
-.analysis-workspace { display: grid; min-width: 0; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+.analysis-workspace { display: grid; min-width: 0; grid-template-columns: minmax(320px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .finding-list, .finding-detail { box-sizing: border-box; min-width: 0; max-width: 100%; padding: 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; background: var(--el-fill-color-blank); }
 .finding-list { display: grid; gap: 8px; overflow: hidden; }
 .panel-header, .finding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.panel-header > div, .finding-heading > div { min-width: 0; }
 .panel-header h3, .finding-heading h3 { margin: 0; color: var(--aegis-text); font-size: 16px; }
-.panel-header p, .finding-heading p, .finding-summary { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.panel-header p, .finding-heading p, .finding-summary { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .finding-row { box-sizing: border-box; display: flex; width: 100%; max-width: 100%; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .finding-row:hover, .finding-row.selected { border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
 .finding-row-main { min-width: 0; display: grid; gap: 3px; }
-.finding-row strong, .finding-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.finding-row strong { font-size: 13px; }
-.finding-row small { color: var(--el-text-color-secondary); font-size: 11px; }
+.finding-row strong, .finding-row small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.finding-row strong { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+.finding-row small { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
+.finding-row .finding-row-title { display: -webkit-box; white-space: normal; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; }
 .finding-risk { display: grid; flex: none; justify-items: end; gap: 3px; }
 .finding-risk small { color: var(--el-text-color-secondary); font-size: 11px; }
 .finding-pagination { margin-top: 4px; }
