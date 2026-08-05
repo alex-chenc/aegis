@@ -168,7 +168,7 @@ type TrustedToolAdapter struct {
 	sources map[string]TrustedToolSource
 	mu      sync.Mutex
 	seen    map[string]time.Time
-	links   map[ProcessIdentity]toolCorrelationLink
+	links   map[ProcessIdentity][]toolCorrelationLink
 	states  map[string]*toolCorrelationState
 	now     func() time.Time
 	socket  ToolSocketRuntimePolicy
@@ -205,7 +205,7 @@ func LoadTrustedToolAdapter(manifestPath string) (*TrustedToolAdapter, error) {
 	}
 	adapter := &TrustedToolAdapter{
 		sources: make(map[string]TrustedToolSource), seen: make(map[string]time.Time),
-		links: make(map[ProcessIdentity]toolCorrelationLink), states: make(map[string]*toolCorrelationState), now: time.Now,
+		links: make(map[ProcessIdentity][]toolCorrelationLink), states: make(map[string]*toolCorrelationState), now: time.Now,
 	}
 	adapter.socket, err = normalizeToolSocketPolicy(manifest.Socket)
 	if err != nil {
@@ -559,6 +559,10 @@ func trustedOwnedRegularFile(info os.FileInfo, maxSize int64) bool {
 func (a *TrustedToolAdapter) Bind(identity ProcessIdentity, link toolCorrelationLink) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.bindLocked(identity, link)
+}
+
+func (a *TrustedToolAdapter) bindLocked(identity ProcessIdentity, link toolCorrelationLink) {
 	state := a.states[link.ToolCallID]
 	if state == nil {
 		state = &toolCorrelationState{Link: link, CorrelationMethod: "ebpf_descendant"}
@@ -566,34 +570,54 @@ func (a *TrustedToolAdapter) Bind(identity ProcessIdentity, link toolCorrelation
 	} else {
 		state.Link = link
 	}
-	a.links[identity] = link
+	links := a.links[identity]
+	for index, existing := range links {
+		if existing.ToolCallID == link.ToolCallID {
+			links[index] = link
+			a.links[identity] = links
+			return
+		}
+	}
+	a.links[identity] = append(links, link)
 }
 
 func (a *TrustedToolAdapter) Lookup(identity ProcessIdentity) (toolCorrelationLink, bool) {
+	return a.LookupForProcess(identity, ProcessSnapshot{})
+}
+
+// LookupForProcess selects the active tool link that best explains a process
+// snapshot. A single Hook/controller can emit several concurrent tool calls,
+// so PID+start_ticks alone is not a unique tool identity. Prefer the command
+// match while retaining the previous latest-link fallback for sparse events.
+func (a *TrustedToolAdapter) LookupForProcess(identity ProcessIdentity, process ProcessSnapshot) (toolCorrelationLink, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	link, ok := a.links[identity]
-	if !ok || a.now().After(link.ExpiresAt) {
-		delete(a.links, identity)
-		return toolCorrelationLink{}, false
-	}
-	return link, true
+	return a.lookupForProcessLocked(identity, process)
 }
 
 func (a *TrustedToolAdapter) OnFork(parent, child ProcessIdentity) {
-	if !parent.Valid() || !child.Valid() {
+	a.OnForkProcess(parent, ProcessSnapshot{Identity: child})
+}
+
+// OnForkProcess preserves the command snapshot at the fork boundary. This is
+// where concurrent tool calls sharing one Hook PID are separated into their
+// respective worker process identities.
+func (a *TrustedToolAdapter) OnForkProcess(parent ProcessIdentity, child ProcessSnapshot) {
+	if !parent.Valid() || !child.Identity.Valid() {
 		return
 	}
-	if link, ok := a.Lookup(parent); ok {
-		a.Bind(child, link)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if link, ok := a.lookupForProcessLocked(parent, child); ok {
+		a.bindLocked(child.Identity, link)
 	}
 }
 
 func (a *TrustedToolAdapter) Complete(identity ProcessIdentity) {
 	a.mu.Lock()
-	link, ok := a.links[identity]
+	links := a.links[identity]
 	delete(a.links, identity)
-	if ok {
+	for _, link := range links {
 		a.removeStateIfUnlinkedLocked(link.ToolCallID)
 	}
 	a.mu.Unlock()
@@ -609,8 +633,8 @@ func (a *TrustedToolAdapter) RecordEvidence(identity ProcessIdentity, eventID, c
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	link, ok := a.links[identity]
-	if !ok || a.now().After(link.ExpiresAt) {
+	link, ok := a.lookupForProcessLocked(identity, process)
+	if !ok {
 		return
 	}
 	state := a.states[link.ToolCallID]
@@ -669,20 +693,69 @@ func (a *TrustedToolAdapter) CompleteToolCall(toolCallID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for identity, link := range a.links {
-		if link.ToolCallID == toolCallID {
+		remaining := link[:0]
+		for _, candidate := range link {
+			if candidate.ToolCallID != toolCallID {
+				remaining = append(remaining, candidate)
+			}
+		}
+		if len(remaining) == 0 {
 			delete(a.links, identity)
+		} else {
+			a.links[identity] = remaining
 		}
 	}
 	delete(a.states, toolCallID)
 }
 
 func (a *TrustedToolAdapter) removeStateIfUnlinkedLocked(toolCallID string) {
-	for _, link := range a.links {
-		if link.ToolCallID == toolCallID {
-			return
+	for _, links := range a.links {
+		for _, link := range links {
+			if link.ToolCallID == toolCallID {
+				return
+			}
 		}
 	}
 	delete(a.states, toolCallID)
+}
+
+func (a *TrustedToolAdapter) activeLinksLocked(identity ProcessIdentity) []toolCorrelationLink {
+	links := a.links[identity]
+	if len(links) == 0 {
+		return nil
+	}
+	now := a.now()
+	active := links[:0]
+	for _, link := range links {
+		if now.After(link.ExpiresAt) {
+			continue
+		}
+		active = append(active, link)
+	}
+	if len(active) == 0 {
+		delete(a.links, identity)
+		return nil
+	}
+	a.links[identity] = active
+	return active
+}
+
+func (a *TrustedToolAdapter) lookupForProcessLocked(identity ProcessIdentity, process ProcessSnapshot) (toolCorrelationLink, bool) {
+	links := a.activeLinksLocked(identity)
+	if len(links) == 0 {
+		return toolCorrelationLink{}, false
+	}
+	if len(process.Argv) == 0 {
+		return links[len(links)-1], true
+	}
+	bestIndex, bestScore := len(links)-1, 0
+	for index, link := range links {
+		score := processCommandMatchScore(link.CommandText, process)
+		if score > bestScore {
+			bestIndex, bestScore = index, score
+		}
+	}
+	return links[bestIndex], true
 }
 
 func processCommandMatchScore(expected string, process ProcessSnapshot) int {

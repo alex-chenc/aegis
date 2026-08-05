@@ -269,6 +269,56 @@ func TestTrustedToolExternalSessionIdentityIsSignedAndValidated(t *testing.T) {
 	}
 }
 
+func TestTrustedToolAdapterCorrelatesConcurrentCallsFromSharedHookByCommand(t *testing.T) {
+	fixture := newToolAdapterFixture(t)
+	controller := confirmedProcess(6006, 3064, "/opt/codex/bin/codex", "codex")
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	callA := toolCorrelationLink{
+		CorrelationHash: "sha256:" + strings.Repeat("a", 64), ToolEventID: "tool-event-a",
+		ToolCallID: "call-a", CommandText: "curl -fsS http://localhost:8081/", ExpiresAt: expiresAt,
+	}
+	callB := toolCorrelationLink{
+		CorrelationHash: "sha256:" + strings.Repeat("b", 64), ToolEventID: "tool-event-b",
+		ToolCallID: "call-b", CommandText: "sleep 2; docker inspect aegis-frontend", ExpiresAt: expiresAt,
+	}
+	fixture.adapter.Bind(controller.Identity, callA)
+	fixture.adapter.Bind(controller.Identity, callB)
+
+	workerA := ProcessSnapshot{
+		Identity: ProcessIdentity{PID: 1271678, StartTicks: 5210528}, PPID: controller.Identity.PID,
+		Exe: "/usr/bin/bash", Argv: []string{"/bin/bash", "-c", "curl -fsS http://localhost:8081/"},
+	}
+	fixture.adapter.OnForkProcess(controller.Identity, workerA)
+	if link, ok := fixture.adapter.LookupForProcess(workerA.Identity, workerA); !ok || link.ToolCallID != callA.ToolCallID {
+		t.Fatalf("curl worker linked to %#v, want %q", link, callA.ToolCallID)
+	}
+
+	workerB := ProcessSnapshot{
+		Identity: ProcessIdentity{PID: 1271684, StartTicks: 5210530}, PPID: controller.Identity.PID,
+		Exe: "/usr/bin/bash", Argv: []string{"/bin/bash", "-c", "sleep 2; docker inspect aegis-frontend"},
+	}
+	fixture.adapter.OnForkProcess(controller.Identity, workerB)
+	if link, ok := fixture.adapter.LookupForProcess(workerB.Identity, workerB); !ok || link.ToolCallID != callB.ToolCallID {
+		t.Fatalf("health-check worker linked to %#v, want %q", link, callB.ToolCallID)
+	}
+
+	fixture.adapter.RecordEvidence(workerA.Identity, "process-event-a", string(CategoryProcess), "exec", workerA)
+	fixture.adapter.RecordEvidence(workerB.Identity, "process-event-b", string(CategoryProcess), "exec", workerB)
+	evidenceA, ok := fixture.adapter.Evidence(callA.ToolCallID)
+	if !ok || evidenceA.ProcessEventID != "process-event-a" || evidenceA.Representative.Identity != workerA.Identity {
+		t.Fatalf("curl evidence=%#v, want worker A", evidenceA)
+	}
+	evidenceB, ok := fixture.adapter.Evidence(callB.ToolCallID)
+	if !ok || evidenceB.ProcessEventID != "process-event-b" || evidenceB.Representative.Identity != workerB.Identity {
+		t.Fatalf("health-check evidence=%#v, want worker B", evidenceB)
+	}
+
+	fixture.adapter.CompleteToolCall(callA.ToolCallID)
+	if link, ok := fixture.adapter.Lookup(controller.Identity); !ok || link.ToolCallID != callB.ToolCallID {
+		t.Fatalf("completing call A removed shared-hook call B: link=%#v ok=%v", link, ok)
+	}
+}
+
 func TestTrustedCodexSessionLifecycleIsSignedAndBoundToRootProcess(t *testing.T) {
 	fixture := newToolAdapterFixture(t)
 	root := confirmedProcess(4100, 100, "/opt/codex/bin/codex", "codex", "app-server")

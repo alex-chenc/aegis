@@ -842,13 +842,12 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 	}
 	m.queueTrustedSessionStatus(session, sessionChanged)
 	parentEventID := ""
-	if link, exists := adapter.Lookup(process.Identity); exists &&
-		link.CorrelationHash == verified.CorrelationHash && link.ToolCallID == input.ToolCallID {
-		parentEventID = link.ToolEventID
-	}
 	evidence, evidenceMatched := adapter.Evidence(input.ToolCallID)
 	if evidenceMatched && evidence.Link.CorrelationHash != verified.CorrelationHash {
 		evidenceMatched = false
+	}
+	if evidenceMatched {
+		parentEventID = evidence.Link.ToolEventID
 	}
 	if evidenceMatched && evidence.Representative.Identity.Valid() {
 		if candidate, readErr := m.scanner.ReadPID(evidence.Representative.Identity.PID); readErr == nil &&
@@ -1224,7 +1223,7 @@ func (m *Manager) observeRawEvent(raw RawBehavior) (BehaviorEvent, bool) {
 	}
 	adapter := m.currentToolAdapter()
 	if raw.CorrelationID == "" && m.toolEnabled.Load() && adapter != nil {
-		if link, ok := adapter.Lookup(raw.Process.Identity); ok {
+		if link, ok := adapter.LookupForProcess(raw.Process.Identity, raw.Process); ok {
 			raw.SessionID = link.SessionID
 			raw.CorrelationID = link.CorrelationHash
 			raw.ParentEventID = link.ToolEventID
@@ -1240,7 +1239,7 @@ func (m *Manager) observeRawEvent(raw RawBehavior) (BehaviorEvent, bool) {
 		return BehaviorEvent{}, false
 	}
 	if raw.CorrelationID != "" && raw.Category != CategoryTool && m.toolEnabled.Load() && adapter != nil {
-		if link, linked := adapter.Lookup(raw.Process.Identity); linked && link.CorrelationHash == raw.CorrelationID {
+		if link, linked := adapter.LookupForProcess(raw.Process.Identity, raw.Process); linked && link.CorrelationHash == raw.CorrelationID {
 			adapter.RecordEvidence(raw.Process.Identity, event.EventID, string(raw.Category), raw.Operation, raw.Process)
 		}
 	}
@@ -1270,7 +1269,7 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 		if err == nil {
 			m.tracker.OnFork(parent.Identity, process)
 			if adapter := m.currentToolAdapter(); adapter != nil {
-				adapter.OnFork(parent.Identity, process.Identity)
+				adapter.OnForkProcess(parent.Identity, process)
 			}
 		}
 	case "process_exec":
