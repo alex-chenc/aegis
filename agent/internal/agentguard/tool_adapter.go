@@ -83,6 +83,24 @@ type TrustedToolEvent struct {
 	ProcessEventID    string                `json:"process_event_id,omitempty"`
 	ResourceEventIDs  []string              `json:"resource_event_ids,omitempty"`
 	TurnID            string                `json:"turn_id,omitempty"`
+	AgentType         string                `json:"agent_type,omitempty"`
+	Backend           string                `json:"backend,omitempty"`
+	CWD               string                `json:"cwd,omitempty"`
+	PermissionMode    string                `json:"permission_mode,omitempty"`
+	SandboxMode       string                `json:"sandbox_mode,omitempty"`
+	ApprovalPolicy    string                `json:"approval_policy,omitempty"`
+	ApprovalStatus    string                `json:"approval_status,omitempty"`
+	NetworkAccess     *bool                 `json:"network_access,omitempty"`
+	WorkspaceRoots    []string              `json:"workspace_roots,omitempty"`
+	TempRoots         []string              `json:"temp_roots,omitempty"`
+	SandboxEnabled    *bool                 `json:"sandbox_enabled,omitempty"`
+	WorkspaceAccess   string                `json:"workspace_access,omitempty"`
+	AllowedDomains    []string              `json:"allowed_domains,omitempty"`
+	DeniedDomains     []string              `json:"denied_domains,omitempty"`
+	Elevated          bool                  `json:"elevated,omitempty"`
+	ApprovalRequired  bool                  `json:"approval_required,omitempty"`
+	SafeWriteRoot     string                `json:"safe_write_root,omitempty"`
+	RemoteExecutionID string                `json:"remote_execution_id,omitempty"`
 	ToolInput         json.RawMessage       `json:"tool_input,omitempty"`
 	ToolResponse      json.RawMessage       `json:"tool_response,omitempty"`
 	OccurredAt        time.Time             `json:"occurred_at"`
@@ -103,6 +121,24 @@ type TrustedSessionEvent struct {
 	PID               uint32    `json:"pid"`
 	StartTicks        uint64    `json:"start_ticks"`
 	LifecycleReason   string    `json:"lifecycle_reason,omitempty"`
+	AgentType         string    `json:"agent_type,omitempty"`
+	Backend           string    `json:"backend,omitempty"`
+	CWD               string    `json:"cwd,omitempty"`
+	PermissionMode    string    `json:"permission_mode,omitempty"`
+	SandboxMode       string    `json:"sandbox_mode,omitempty"`
+	ApprovalPolicy    string    `json:"approval_policy,omitempty"`
+	ApprovalStatus    string    `json:"approval_status,omitempty"`
+	NetworkAccess     *bool     `json:"network_access,omitempty"`
+	WorkspaceRoots    []string  `json:"workspace_roots,omitempty"`
+	TempRoots         []string  `json:"temp_roots,omitempty"`
+	SandboxEnabled    *bool     `json:"sandbox_enabled,omitempty"`
+	WorkspaceAccess   string    `json:"workspace_access,omitempty"`
+	AllowedDomains    []string  `json:"allowed_domains,omitempty"`
+	DeniedDomains     []string  `json:"denied_domains,omitempty"`
+	Elevated          bool      `json:"elevated,omitempty"`
+	ApprovalRequired  bool      `json:"approval_required,omitempty"`
+	SafeWriteRoot     string    `json:"safe_write_root,omitempty"`
+	RemoteExecutionID string    `json:"remote_execution_id,omitempty"`
 	OccurredAt        time.Time `json:"occurred_at"`
 	IssuedAt          time.Time `json:"issued_at"`
 	Proof             string    `json:"proof,omitempty"`

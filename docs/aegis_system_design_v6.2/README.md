@@ -2,7 +2,7 @@
 
 **版本**：6.2
 **日期**：2026-08-06
-**状态**：Agent Guard 工具事件、真实会话边界、内置策略目录和规则命中链路已更新；完整 P5 会话正文/AI 语义检测仍待实施；专用宿主机发布门禁待验证
+**状态**：Agent Guard 工具事件、真实会话边界、权限优先逃逸检测、内置策略目录和规则命中链路已更新；完整 P5 会话正文/AI 语义检测仍待实施；专用宿主机发布门禁待验证
 **主题**：AI Agent 全行为采集、会话语义审计、操作链可视化与隔离逃逸监控/阻断
 
 ## 1. 版本定位
@@ -11,7 +11,7 @@ V6.2 在 V6.1 当前实现基础上新增“智能体运行防护”能力，形
 
 1. 识别 Codex、Claude Code、OpenClaw、Hermes、Zcode 等 AI Agent 的运行实例、session、执行单元和实际执行进程，采集命令/进程、文件、网络、身份权限、持久化、内核与隔离控制等操作。
 2. 将离散操作关联为 session、工具事件、进程事实和时间线；Agent eBPF 只负责 OS 事实与 PID/PPID 关联，Agent Guard 工具命令规则由 api-server 基于上层工具事件匹配。
-3. 识别 AI Agent 实际采用的本地进程、Linux namespace、OCI 容器或远程沙箱隔离方式，监控隔离边界变化和逃逸行为；在本机能力允许时通过 BPF LSM 提前拒绝，并按策略暂停对应执行单元。
+3. 以 session 有效权限为第一判断条件，结合可信 Hook、PID/start_ticks 和 eBPF 执行结果检测工作区、网络、确认、运行时接口和进程边界违规；Full Access、明确无隔离、远端不可观测和证据不完整时不生成逃逸 finding。
 4. 当前已实现 Codex、Claude Code、OpenClaw、Hermes、Zcode 的真实 session 生命周期 Hook 和工具事件；完整会话正文、长会话 AI 语义检测和授权导出仍属于 P5 设计，不计入当前已完成能力。
 
 敏感文件访问只是文件行为域的一类高风险证据，不再是 V6.2 的能力边界。P5
@@ -60,7 +60,8 @@ V6.2 各专项文档中的当前实现以
 | [agent_behavior_telemetry_and_analysis_design_v6.2.md](agent_behavior_telemetry_and_analysis_design_v6.2.md) | 全行为域、统一事件模型、操作链、规则关联、智能研判和动作边界 |
 | [builtin_behavior_rules_and_panorama_tree_v6.2.md](builtin_behavior_rules_and_panorama_tree_v6.2.md) | 五个首批内置规则、联合攻击链、规则页面和 PID 主干行为全景树 |
 | [agent_ebpf_enforcement_design_v6.2.md](agent_ebpf_enforcement_design_v6.2.md) | Agent 运行实例识别、进程/cgroup 归属、行为传感器、逃逸检测、BPF LSM 和暂停机制 |
-| [agent_sandbox_escape_detection_and_response_design_v6.2.md](agent_sandbox_escape_detection_and_response_design_v6.2.md) | 智能体隔离边界、逃逸分类、eBPF/LSM 事实采集、确定性本地阻断和冻结响应 |
+| [agent_sandbox_escape_detection_and_response_design_v6.2.md](agent_sandbox_escape_detection_and_response_design_v6.2.md) | 智能体隔离边界、逃逸总体架构和响应目标；历史隔离漂移章节以权限优先实现契约为准 |
+| [agent_escape_permission_first_refactor_v6.2.md](agent_escape_permission_first_refactor_v6.2.md) | 当前权限优先逃逸判定、五类智能体边界适配、AGE-BUILTIN-101～107 规则和证据链 |
 | [backend_api_protocol_design_v6.2.md](backend_api_protocol_design_v6.2.md) | api-server、server、dc、规则/智能分析、Kafka、gRPC、HTTP API、配置和事件契约 |
 | [database_design_v6.2.md](database_design_v6.2.md) | 数据表、字段、索引、状态机、数据保留和迁移策略 |
 | [frontend_design_v6.2.md](frontend_design_v6.2.md) | 前端路由、页面、交互、类型、实时状态和测试 |

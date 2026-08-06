@@ -240,6 +240,12 @@ const routes = [
     meta: { titleKey: 'routes.agentGuardEscape', permission: 'agent_guard:read' }
   },
   {
+    path: '/detection/agent-guard/configurations',
+    name: 'AgentGuardConfigurations',
+    component: () => import('../views/detection/AgentGuard/AgentConfigurationDetection.vue'),
+    meta: { titleKey: 'routes.agentGuardConfigurations', permission: 'agent_guard:read' }
+  },
+  {
     path: '/risk/weak-password',
     name: 'WeakPassword',
     component: WeakPasswordIndex,

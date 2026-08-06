@@ -1,10 +1,76 @@
 # Aegis V6.2 智能体隔离逃逸检测与响应设计
 
+> **实现基线提示（2026-08-06）**：本文早期的隔离基线、`/proc/cgroup` 复核和旧规则名称仅保留作总体架构/历史上下文。当前生效契约见 [agent_escape_permission_first_refactor_v6.2.md](./agent_escape_permission_first_refactor_v6.2.md)：逃逸检测以 session 有效权限为第一判断条件，Full Access、明确无隔离、远端不可观测和证据不完整时不生成逃逸 finding；受限 session 必须同时具备权限边界、可信 Hook、PID/start_ticks 和 eBPF 执行结果证据。不得按本文旧规则表直接下发规则。
+
 **版本**：6.2  
 **日期**：2026-08-06  
-**状态**：设计方案；复用现有 Agent Guard P0～P4，真实 BPF LSM 与 freeze 发布门禁仍待专用宿主机验证  
+**状态**：总体设计；当前权限优先逃逸判定已落地，真实 BPF LSM 与 freeze 发布门禁仍待专用宿主机验证
 **适用平台**：Linux  
 **设计主题**：识别智能体执行边界，检测权限链路绕过、沙箱策略违规和真实隔离逃逸，并在证据充分时本地阻断或冻结单个执行单元
+
+## 0. 当前实现契约（权限优先）
+
+当前代码不再把所有 namespace、cgroup、mount、capability 或 `no_new_privs` 变化直接判定为逃逸，也不再由 `/proc`/cgroup 隔离漂移单独生成 `agent_isolation_drift` finding。实际判定链路为：
+
+```text
+Native Hook 签名权限快照
+  -> 真实 session 保存有效权限
+  -> Hook tool_call 与进程 PID/start_ticks 关联
+  -> eBPF 提供操作、目标和执行结果
+  -> 产品边界规则评估
+  -> policy_violation_attempt / confirmed_escape / 不生成 finding
+```
+
+### 0.1 有效权限分类
+
+| 分类 | 代码语义 | 逃逸结果 |
+| --- | --- | --- |
+| `full_access` | 明确 Full Access、Codex `bypassPermissions`/`danger-full-access`；Claude 只有原生沙箱同时关闭时才成立 | `not_applicable`，不生成逃逸 finding；行为审计仍继续 |
+| `restricted` | 权限、工作区/临时目录、网络或确认边界已完整上报 | 进入产品化边界规则检测 |
+| `unknown` | 权限快照缺失或不完整 | `evidence_insufficient`，不生成逃逸 finding |
+| `no_isolation` | 产品明确使用本地无隔离运行 | 不把正常暴露面误报为逃逸 |
+| `remote_unobservable` | 远程后端没有可关联的远端传感器 | 不生成逃逸 finding，保留不可观测状态 |
+
+支持的产品语义包括：Claude Code 的 `bypassPermissions` 不会覆盖仍启用的原生沙箱；OpenClaw 按 Docker/Podman/OpenShell、`workspaceAccess`、网络和 `elevated` 判断；Hermes 区分 local 无隔离、容器/远程后端和安全写入根；Zcode 使用确认模式语义，不臆造未上报的 OS 沙箱。
+
+### 0.2 生成逃逸 finding 的必要条件
+
+只有以下条件同时满足才生成用户可见的逃逸 finding：
+
+1. session 权限为完整的 `restricted`，且边界不是 `no_isolation` 或 `remote_unobservable`。
+2. 工具调用来自可信 Hook，并与实际进程的 PID + `start_ticks` 关联。
+3. eBPF 事件提供可用的操作结果；结果未知、Hook/PID 关联失败、PID 复用或证据链不完整时直接抑制 finding。
+4. 实际操作超出当前产品权限边界，或命中独立的运行时接口/进程边界规则。
+
+越界请求被拒绝或执行失败时分类为 `policy_violation_attempt`（可疑）；越界操作成功且证据链完整时分类为 `confirmed_escape`（逃逸）。明确批准的边界扩展分类为 `authorized_boundary_expansion`，不生成逃逸 finding。
+
+当前用户可见的逃逸事件默认以 `alert` 进入审计/告警链路；`would_deny`、`enforcement_unavailable` 等状态仍用于兼容底层能力和历史事件，不能在前端显示为“已阻断”。容器运行时 socket 和进程边界规则可以进入本地内核策略编译，但是否 deny/freeze 必须以实际 operation/hook coverage 为准。
+
+### 0.3 当前内置逃逸规则
+
+控制面通过独立的 `/api/v1/agent-guard/escape-rules` 只读目录提供 AGE 规则；运行时事件中的 `rule` 使用对应的内部语义键：
+
+| 规则 | 内部语义键 | 检测边界 |
+| --- | --- | --- |
+| `AGE-BUILTIN-101` | `access_outside_workspace` | 工作区、临时目录或安全写入根之外的文件访问 |
+| `AGE-BUILTIN-102` | `network_boundary_violation` | 网络关闭、域名不在 allowlist 或命中 denylist |
+| `AGE-BUILTIN-103` | `access_container_runtime_socket` | Docker、containerd、CRI-O、Podman 控制 socket |
+| `AGE-BUILTIN-104` | `process_boundary_operation` | setns、mount、ptrace、内核加载、身份/capability 变更 |
+| `AGE-BUILTIN-105` | `approval_boundary_violation` | 未获确认即执行需要确认的命令、文件或网络操作 |
+| `AGE-BUILTIN-106` | `protected_path_write` | Hermes 安全写入根之外的实际写入 |
+| `AGE-BUILTIN-107` | `host_execution_bypass` | OpenClaw `elevated` 绕过 Docker/Podman/OpenShell 沙箱执行 |
+
+旧的 `join_external_namespace`、`leave_expected_cgroup`、`isolation_baseline_drift` 等规则不再进入新的 escape finding；V6.2 迁移会清理无法按 session/权限解释的 `escape:v1:*` 历史 finding。
+
+### 0.4 前端证据展示
+
+逃逸详情按以下顺序展示，不再以 baseline/actual/diff 作为主结论：
+
+```text
+有效权限 -> Hook 工具/命令 -> 进程 PID/start_ticks -> eBPF 执行结果 -> 判定类型/建议动作
+```
+
+Full Access 显示“逃逸检测不适用”；权限未知显示“不会生成逃逸告警”；受限模式下分别展示“越界请求被拒绝（可疑）”和“越界命令已执行（逃逸）”。行为监控、逃逸告警和本地内核 deny/freeze 是不同能力，不能互相替代。
 
 ## 1. 方案结论
 

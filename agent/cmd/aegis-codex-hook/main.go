@@ -35,23 +35,40 @@ const hookBridgeVersion = "1.0.0"
 var openClawPluginAssets embed.FS
 
 type codexHookInput struct {
-	SessionID     string          `json:"session_id"`
-	HookEventName string          `json:"hook_event_name"`
-	EventType     string          `json:"event_type,omitempty"`
-	AgentType     string          `json:"agent_type,omitempty"`
-	Source        string          `json:"source,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	ToolName      string          `json:"tool_name,omitempty"`
-	ToolUseID     string          `json:"tool_use_id,omitempty"`
-	ToolCallID    string          `json:"tool_call_id,omitempty"`
-	TurnID        string          `json:"turn_id,omitempty"`
-	PID           uint32          `json:"pid,omitempty"`
-	StartTicks    uint64          `json:"start_ticks,omitempty"`
-	ToolInput     json.RawMessage `json:"tool_input,omitempty"`
-	ToolResponse  json.RawMessage `json:"tool_response,omitempty"`
-	Result        json.RawMessage `json:"result,omitempty"`
-	Extra         map[string]any  `json:"extra,omitempty"`
-	Error         any             `json:"error,omitempty"`
+	SessionID         string          `json:"session_id"`
+	HookEventName     string          `json:"hook_event_name"`
+	EventType         string          `json:"event_type,omitempty"`
+	AgentType         string          `json:"agent_type,omitempty"`
+	Backend           string          `json:"backend,omitempty"`
+	Source            string          `json:"source,omitempty"`
+	Reason            string          `json:"reason,omitempty"`
+	ToolName          string          `json:"tool_name,omitempty"`
+	ToolUseID         string          `json:"tool_use_id,omitempty"`
+	ToolCallID        string          `json:"tool_call_id,omitempty"`
+	TurnID            string          `json:"turn_id,omitempty"`
+	PID               uint32          `json:"pid,omitempty"`
+	StartTicks        uint64          `json:"start_ticks,omitempty"`
+	CWD               string          `json:"cwd,omitempty"`
+	PermissionMode    string          `json:"permission_mode,omitempty"`
+	SandboxMode       string          `json:"sandbox_mode,omitempty"`
+	ApprovalPolicy    string          `json:"approval_policy,omitempty"`
+	ApprovalStatus    string          `json:"approval_status,omitempty"`
+	NetworkAccess     *bool           `json:"network_access,omitempty"`
+	WorkspaceRoots    []string        `json:"workspace_roots,omitempty"`
+	TempRoots         []string        `json:"temp_roots,omitempty"`
+	SandboxEnabled    *bool           `json:"sandbox_enabled,omitempty"`
+	WorkspaceAccess   string          `json:"workspace_access,omitempty"`
+	AllowedDomains    []string        `json:"allowed_domains,omitempty"`
+	DeniedDomains     []string        `json:"denied_domains,omitempty"`
+	Elevated          bool            `json:"elevated,omitempty"`
+	ApprovalRequired  bool            `json:"approval_required,omitempty"`
+	SafeWriteRoot     string          `json:"safe_write_root,omitempty"`
+	RemoteExecutionID string          `json:"remote_execution_id,omitempty"`
+	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
+	ToolResponse      json.RawMessage `json:"tool_response,omitempty"`
+	Result            json.RawMessage `json:"result,omitempty"`
+	Extra             map[string]any  `json:"extra,omitempty"`
+	Error             any             `json:"error,omitempty"`
 }
 
 type rootState struct {
@@ -986,6 +1003,67 @@ func run(opts options) error {
 	if input.Error == nil {
 		input.Error = input.Extra["error"]
 	}
+	if input.CWD == "" {
+		input.CWD = extraString(input.Extra, "cwd", "working_directory")
+	}
+	if input.PermissionMode == "" {
+		input.PermissionMode = extraString(input.Extra, "permission_mode", "permissionMode")
+	}
+	if input.SandboxMode == "" {
+		input.SandboxMode = extraString(input.Extra, "sandbox_mode", "sandboxMode")
+	}
+	if input.Backend == "" {
+		input.Backend = extraString(input.Extra, "backend", "sandbox_backend", "sandboxBackend")
+	}
+	if input.ApprovalPolicy == "" {
+		input.ApprovalPolicy = extraString(input.Extra, "approval_policy", "approvalPolicy")
+	}
+	if input.ApprovalStatus == "" {
+		input.ApprovalStatus = extraString(input.Extra, "approval_status", "approvalStatus")
+	}
+	if input.NetworkAccess == nil {
+		if value, ok := extraBool(input.Extra, "network_access", "networkAccess"); ok {
+			input.NetworkAccess = &value
+		}
+	}
+	if input.SandboxEnabled == nil {
+		if value, ok := extraBool(input.Extra, "sandbox_enabled", "sandboxEnabled", "sandbox"); ok {
+			input.SandboxEnabled = &value
+		}
+	}
+	if input.WorkspaceAccess == "" {
+		input.WorkspaceAccess = extraString(input.Extra, "workspace_access", "workspaceAccess")
+	}
+	if len(input.AllowedDomains) == 0 {
+		input.AllowedDomains = extraStrings(input.Extra, "allowed_domains", "allowedDomains")
+	}
+	if len(input.DeniedDomains) == 0 {
+		input.DeniedDomains = extraStrings(input.Extra, "denied_domains", "deniedDomains")
+	}
+	if !input.Elevated {
+		input.Elevated, _ = extraBool(input.Extra, "elevated", "tools_elevated")
+	}
+	if !input.ApprovalRequired {
+		input.ApprovalRequired, _ = extraBool(input.Extra, "approval_required", "approvalRequired")
+	}
+	if input.SafeWriteRoot == "" {
+		input.SafeWriteRoot = extraString(input.Extra, "safe_write_root", "safeWriteRoot")
+	}
+	if input.SafeWriteRoot == "" && opts.agentType == "hermes" {
+		// Hermes documents HERMES_WRITE_SAFE_ROOT as an optional write guard.
+		// The helper signs the value into the session snapshot; it never reads
+		// arbitrary environment variables into telemetry.
+		input.SafeWriteRoot = strings.TrimSpace(os.Getenv("HERMES_WRITE_SAFE_ROOT"))
+	}
+	if input.RemoteExecutionID == "" {
+		input.RemoteExecutionID = extraString(input.Extra, "remote_execution_id", "remoteExecutionId", "execution_id")
+	}
+	if len(input.WorkspaceRoots) == 0 {
+		input.WorkspaceRoots = extraStrings(input.Extra, "workspace_roots", "workspaceRoots")
+	}
+	if len(input.TempRoots) == 0 {
+		input.TempRoots = extraStrings(input.Extra, "temp_roots", "tempRoots")
+	}
 	statePath := filepath.Join(opts.stateDir, sessionStateName(input.SessionID))
 	var operation, lifecycleReason string
 	switch input.HookEventName {
@@ -1031,6 +1109,13 @@ func run(opts options) error {
 		EventID: uuid.NewString(), SourceID: opts.sourceID, SourceVersion: opts.sourceVer,
 		Operation: operation, ExternalSessionID: input.SessionID,
 		PID: root.PID, StartTicks: root.StartTicks, LifecycleReason: lifecycleReason,
+		CWD: input.CWD, PermissionMode: input.PermissionMode, SandboxMode: input.SandboxMode,
+		AgentType: opts.agentType, Backend: input.Backend,
+		ApprovalPolicy: input.ApprovalPolicy, ApprovalStatus: input.ApprovalStatus,
+		NetworkAccess: input.NetworkAccess, WorkspaceRoots: input.WorkspaceRoots, TempRoots: input.TempRoots,
+		SandboxEnabled: input.SandboxEnabled, WorkspaceAccess: input.WorkspaceAccess,
+		AllowedDomains: input.AllowedDomains, DeniedDomains: input.DeniedDomains, Elevated: input.Elevated,
+		ApprovalRequired: input.ApprovalRequired, SafeWriteRoot: input.SafeWriteRoot, RemoteExecutionID: input.RemoteExecutionID,
 		OccurredAt: now, IssuedAt: now,
 	}
 	if err := agentguard.SignTrustedSessionEvent(&event, privateKey); err != nil {
@@ -1079,9 +1164,18 @@ func sendToolEvent(opts options, input codexHookInput, statePath, operation stri
 		Operation: operation, ToolName: strings.TrimSpace(input.ToolName), ToolCallID: strings.TrimSpace(input.ToolUseID),
 		ExternalSessionID: input.SessionID, CorrelationToken: token,
 		PID: root.PID, StartTicks: root.StartTicks, TurnID: strings.TrimSpace(input.TurnID),
-		ToolInput:    append(json.RawMessage(nil), input.ToolInput...),
-		ToolResponse: append(json.RawMessage(nil), input.ToolResponse...),
-		OccurredAt:   now, IssuedAt: now,
+		CWD: strings.TrimSpace(input.CWD), PermissionMode: strings.TrimSpace(input.PermissionMode),
+		AgentType: opts.agentType, Backend: strings.TrimSpace(input.Backend),
+		SandboxMode: strings.TrimSpace(input.SandboxMode), ApprovalPolicy: strings.TrimSpace(input.ApprovalPolicy),
+		ApprovalStatus: strings.TrimSpace(input.ApprovalStatus), NetworkAccess: input.NetworkAccess,
+		WorkspaceRoots: append([]string(nil), input.WorkspaceRoots...), TempRoots: append([]string(nil), input.TempRoots...),
+		SandboxEnabled: input.SandboxEnabled, WorkspaceAccess: strings.TrimSpace(input.WorkspaceAccess),
+		AllowedDomains: append([]string(nil), input.AllowedDomains...), DeniedDomains: append([]string(nil), input.DeniedDomains...),
+		Elevated: input.Elevated, ApprovalRequired: input.ApprovalRequired, SafeWriteRoot: strings.TrimSpace(input.SafeWriteRoot),
+		RemoteExecutionID: strings.TrimSpace(input.RemoteExecutionID),
+		ToolInput:         append(json.RawMessage(nil), input.ToolInput...),
+		ToolResponse:      append(json.RawMessage(nil), input.ToolResponse...),
+		OccurredAt:        now, IssuedAt: now,
 	}
 	if err := agentguard.SignTrustedToolEvent(&event, privateKey); err != nil {
 		return errors.New("event_sign_failed")
@@ -1228,6 +1322,37 @@ func extraString(extra map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func extraBool(extra map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		switch value := extra[key].(type) {
+		case bool:
+			return value, true
+		case string:
+			if parsed, err := strconv.ParseBool(strings.TrimSpace(value)); err == nil {
+				return parsed, true
+			}
+		}
+	}
+	return false, false
+}
+
+func extraStrings(extra map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		values, ok := extra[key].([]any)
+		if !ok {
+			continue
+		}
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 func jsonValue(value any) json.RawMessage {

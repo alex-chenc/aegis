@@ -156,13 +156,13 @@ func validateEscapeRules(rules []BundleRule, allowEnforcement bool) error {
 
 func validateBundleProfiles(profiles []AdapterProfile) error {
 	required := map[string]string{
-		"codex-linux":       "sha256:ac7f7259e1ea26729377e4535cbdbb2a1e2c17befdeb3965a924388acb0c2384",
-		"openclaw-linux":    "sha256:56804a5b02e48827bb944959412ee8f19d46e333257f068e0197d81245e71c4d",
-		"hermes-linux":      "sha256:0bf30bb4daff9b86ccf4fd4fad7bc515f3fb3ed760a7b7ce6ca98f5783889524",
-		"claude-code-linux": "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
-		"opencode-linux":    "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
-		"gemini-cli-linux":  "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
-		"zcode-linux":       "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
+		"codex-linux":       "sha256:5e2058f4656ea4d7540ac1a662b4806edcc46aa9a860ac38ca65c1bb27deb629",
+		"openclaw-linux":    "sha256:e6f916a2eb9b4fab6efd72f539efa7d7c9d51ab2f2d14255a55689249b9cfb79",
+		"hermes-linux":      "sha256:eccaf4fdc6287ff8cfb74e03c3c15aa86304d32d2f2401794d7f31b6fbfb9166",
+		"claude-code-linux": "sha256:94eb603baadec817c6e03857064fbe809aa5da42d612d9dd7e8b486f66cb63a7",
+		"opencode-linux":    "sha256:b0fff61d935a97de75d5e90c658248201117608d256cd9be3f9a30d1ee3a34c2",
+		"gemini-cli-linux":  "sha256:300f72f233925ac36203a8a6d6ad4d8aa3247b93cf03474e8cede761315f5f66",
+		"zcode-linux":       "sha256:dd1e0a0d89bf1fdb6152ce92c57ef7cf460c9f49f1402b503348bba407ff8c2f",
 	}
 	found := make(map[string]bool, len(required))
 	for _, profile := range profiles {

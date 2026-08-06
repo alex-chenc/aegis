@@ -1,7 +1,7 @@
 # Aegis V6.2 实施状态
 
 **目标版本**：6.2
-**当前阶段**：Agent Guard 工具事件、真实会话边界、运行时 Hook 设置和只读内置规则目录已实现；完整 P5 会话正文仍待开发
+**当前阶段**：Agent Guard 工具事件、真实会话边界、权限优先逃逸检测、运行时 Hook 设置和只读内置规则目录已实现；完整 P5 会话正文仍待开发
 **状态**：当前链路已完成定向测试、构建和 Compose 健康验证；P3 专用宿主机门禁及完整 P5 正文语义仍未执行
 **更新时间**：2026-08-06
 
@@ -10,7 +10,11 @@
 ## 1. 结论边界
 
 仓库已经实现 Agent Guard 的运行时设置、Native Hook 会话开始/结束边界、可信工具
-事件采集、api-server 工具命令规则匹配、会话范围安全分析和只读内置规则目录。
+事件采集、api-server 工具命令规则匹配、权限优先逃逸判定、会话范围安全分析和只读内置规则目录。
+逃逸检测按真实 session 保存产品化权限快照，只有受限权限、可信 Hook、PID/start_ticks
+和 eBPF 执行结果完整关联时才生成 finding；Full Access、明确无隔离、远端不可观测、
+权限未知或证据链不完整均不生成逃逸 finding。越界失败归类为
+`policy_violation_attempt`，越界成功且证据完整归类为 `confirmed_escape`。
 完整会话正文采集、AI 语义分析、风险标记和第三个完整会话检测页面仍是 P5 后续范围，
 不能与当前已实现的生命周期 Hook/工具事件混为一谈。
 
@@ -49,9 +53,9 @@
 - 通用 OS 行为链路保留资源分类、attempt/success/inconclusive、跨事件关联、乱序/Kafka
   replay 幂等和真实 evidence graph；Agent Guard 工具命中不再由 DC evaluator 创建。
   `AGB-BUILTIN-004` 由 api-server 消费可信工具事件后匹配并直接写 Finding。
-- Agent 建立 namespace/cgroup/mount/capability/seccomp/no_new_privs 基线，
-  逃逸传感器只报告 audit/would_deny；未证明能力时使用 degraded 或
-  enforcement_unavailable。
+- Agent 仍采集 namespace/cgroup/mount/capability/seccomp/no_new_privs 等 OS 事实，
+  但这些隔离快照不再单独触发逃逸 finding；逃逸链路以权限边界、Hook/PID 关联和
+  eBPF 执行结果为准，未证明能力时使用 degraded 或 enforcement_unavailable。
 - api-server Evidence Window 有界、脱敏、标记 untrusted evidence；LLM 输出
   使用固定 JSON Schema 和真实 event ID 校验。AI-only 始终只到 alert/人工确认。
 - 前端展示行为/沙箱全景、隔离基线差异、规则 Finding、分析历史、反证、

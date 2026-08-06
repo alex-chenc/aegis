@@ -116,13 +116,19 @@ Frontend -> api-server 保存 settings -> Server/Agent ConfigSync
 
 ## 6. 兼容、数据和安全边界
 
-- 不删除历史行为事件和历史 finding；新工具命中使用 API-server 产生的 finding，并在 `evidence_graph` 中记录 `rule_owner=api-server`、source event ID 和 correlation 状态。
+- 行为事件仍保留用于审计；V6.2 迁移会删除无法按 session/权限解释的旧 `escape:v1:*` finding（关联分析级联、动作引用置空），新逃逸发现使用 `escape:v2:<session>:<rule>:<event>`。
 - 工具命中不要求必须存在 eBPF 进程树；缺少关联时仍可展示工具规则命中，但不得声称已完成 PID 绑定。
 - 工具命中不会直接触发 Agent 本地 deny/freeze；当前链路是审计/告警闭环，动作能力仍由独立的本地确定性防护链路控制。
 - 工具 Hook 不采集 prompt、完整工具输出、stdin/stdout/stderr、环境变量、文件正文、网络 payload、密码和 token。
 - API-server、DC、Agent 日志记录稳定事件名和摘要字段，不记录完整命令行或大段原始载荷。
 
-## 7. 当前验证状态
+## 7. 当前验证状态与逃逸权限优先重构
+
+逃逸检测已切换到权限优先模型：Hook 传递并签名 `agent_type`、`backend`、`permission_mode`、`sandbox_mode`、`cwd`、workspace/temp roots、workspace access、域名 allow/deny、网络开关、提权和远程执行标识等有效权限摘要，并按真实 session 持久化到 `agent_behavior_sessions.permission`。解析器已适配 Codex、Claude Code、OpenClaw、Hermes、Zcode 的产品边界：Claude 的 `bypassPermissions` 不会覆盖仍启用的原生沙箱，OpenClaw 的 Docker/Podman workspaceAccess/network/elevated、Hermes 的本地无隔离与容器/远端后端、Zcode 的确认模式分别使用独立语义。`bypassPermissions`/`danger-full-access`/Full Access 归类为 `full_access`，不生成逃逸 finding；明确 `no_isolation` 或无远端 sensor 的 `remote_unobservable` 也不生成 finding；其余受限模式只评估产品快照定义的目录、网络、确认和独立进程边界规则，并要求 Hook 工具调用与 eBPF PID + `start_ticks` 关联。
+
+拒绝的越界请求归类为 `policy_violation_attempt`（可疑），成功执行且关联完整归类为 `confirmed_escape`（逃逸）；授权扩展、权限未知、无 Hook 关联或 PID 复用均不生成逃逸 finding。`/proc`/cgroup 不再作为逃逸成立条件或前端主链路，前端按 session 展示权限标签，并以“有效权限 → Hook 工具/命令 → 进程 PID/start_ticks → eBPF 执行结果 → 判定动作”竖向展示。
+
+旧的 `agent_isolation_drift`、`leave_expected_cgroup` 和 `escape:v1:*` 不再进入新逃逸 finding；内置逃逸目录改为 AGE-BUILTIN-101 至 AGE-BUILTIN-107 的产品语义规则（目录、网络、运行时 socket、进程边界、确认绕过、Hermes 安全根、OpenClaw 提权）。行为检测仍可复用 Hook/eBPF 原始证据，但规则匹配、入库和策略目录完全独立。
 
 已验证：
 

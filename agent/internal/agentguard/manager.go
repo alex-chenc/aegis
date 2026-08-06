@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,8 @@ type Manager struct {
 	actions        *ActionExecutor
 	toolAdapter    *TrustedToolAdapter
 	toolAdapterMu  sync.RWMutex
+	permissionMu   sync.RWMutex
+	permissions    map[string]EscapePermissionContext
 	toolIngress    *ToolHookReceiver
 	toolIngressMu  sync.Mutex
 	kernelPolicyMu sync.RWMutex
@@ -87,13 +90,11 @@ type Manager struct {
 
 	statusMu                  sync.Mutex
 	lifecycleMu               sync.Mutex
-	isolationMu               sync.Mutex
 	pendingStatus             []*pb.RuntimeEvent
 	started                   map[string]bool
 	startedUnits              map[string]bool
 	startedSessions           map[string]bool
 	lastHeartbeat             map[string]time.Time
-	lastDrift                 map[string]string
 	runtimeSettingsSet        atomic.Bool
 	runtimeToolAdapterEnabled atomic.Bool
 	runtimeSessionHookEnabled atomic.Bool
@@ -149,8 +150,8 @@ func NewManager(cfg ManagerConfig, scanner ProcessScanner, reporter RuntimeRepor
 		lastHeartbeat:         make(map[string]time.Time),
 		reconcileReset:        make(chan time.Duration, 1),
 		capabilities:          capabilities,
-		lastDrift:             make(map[string]string),
 		toolAdapter:           cfg.ToolAdapter,
+		permissions:           make(map[string]EscapePermissionContext),
 		hookProvisioner:       cfg.HookProvisioner,
 		hookRemover:           cfg.HookRemover,
 		hookStates:            make(map[string]bool),
@@ -189,6 +190,79 @@ func (m *Manager) currentToolAdapter() *TrustedToolAdapter {
 	m.toolAdapterMu.RLock()
 	defer m.toolAdapterMu.RUnlock()
 	return m.toolAdapter
+}
+
+func escapePermissionFromToolEvent(input TrustedToolEvent) EscapePermissionContext {
+	return NormalizeAgentPermission(AgentPermissionInput{
+		AgentType: input.AgentType, Backend: input.Backend, PermissionMode: input.PermissionMode,
+		SandboxMode: input.SandboxMode, ApprovalPolicy: input.ApprovalPolicy, ApprovalStatus: input.ApprovalStatus,
+		CWD: input.CWD, WorkspaceRoots: input.WorkspaceRoots, TempRoots: input.TempRoots, NetworkAccess: input.NetworkAccess,
+		SandboxEnabled: input.SandboxEnabled, WorkspaceAccess: input.WorkspaceAccess, AllowedDomains: input.AllowedDomains,
+		DeniedDomains: input.DeniedDomains, Elevated: input.Elevated, ApprovalRequired: input.ApprovalRequired,
+		SafeWriteRoot: input.SafeWriteRoot, RemoteExecutionID: input.RemoteExecutionID, Source: input.SourceID,
+	})
+}
+
+func escapePermissionFromSessionEvent(input TrustedSessionEvent) EscapePermissionContext {
+	return NormalizeAgentPermission(AgentPermissionInput{
+		AgentType: input.AgentType, Backend: input.Backend, PermissionMode: input.PermissionMode,
+		SandboxMode: input.SandboxMode, ApprovalPolicy: input.ApprovalPolicy, ApprovalStatus: input.ApprovalStatus,
+		CWD: input.CWD, WorkspaceRoots: input.WorkspaceRoots, TempRoots: input.TempRoots, NetworkAccess: input.NetworkAccess,
+		SandboxEnabled: input.SandboxEnabled, WorkspaceAccess: input.WorkspaceAccess, AllowedDomains: input.AllowedDomains,
+		DeniedDomains: input.DeniedDomains, Elevated: input.Elevated, ApprovalRequired: input.ApprovalRequired,
+		SafeWriteRoot: input.SafeWriteRoot, RemoteExecutionID: input.RemoteExecutionID, Source: input.SourceID,
+	})
+}
+
+func (m *Manager) setPermissionPolicy(sessionID string, policy EscapePermissionContext) bool {
+	if m == nil || sessionID == "" || policy.Class == PermissionUnknown {
+		return false
+	}
+	changed := false
+	if unit, ok := m.tracker.Unit(stableID("unit", sessionID, string(IsolationLocalProcessTree))); ok {
+		m.permissionMu.Lock()
+		previous, existed := m.permissions[sessionID]
+		changed = !existed || !reflect.DeepEqual(previous, policy)
+		m.permissions[sessionID] = policy
+		m.permissions[unit.UnitID] = policy
+		m.permissionMu.Unlock()
+		logger.Info("agent_guard_permission_snapshot_applied",
+			zap.String("host_id", m.cfg.HostID), zap.String("session_id", stableID("session", sessionID)),
+			zap.String("execution_unit_id", unit.UnitID), zap.String("permission_class", string(policy.Class)),
+			zap.Bool("complete", policy.Complete), zap.String("agent_type", policy.AgentType),
+			zap.String("backend", policy.Backend), zap.String("boundary", policy.Boundary), zap.String("source", policy.Source))
+	}
+	return changed
+}
+
+func (m *Manager) clearPermissionPolicy(sessionID string) {
+	if m == nil || sessionID == "" {
+		return
+	}
+	m.permissionMu.Lock()
+	delete(m.permissions, sessionID)
+	delete(m.permissions, stableID("unit", sessionID, string(IsolationLocalProcessTree)))
+	m.permissionMu.Unlock()
+}
+
+func (m *Manager) permissionPolicy(unitID string) EscapePermissionContext {
+	if m == nil || unitID == "" {
+		return EscapePermissionContext{Class: PermissionUnknown}
+	}
+	m.permissionMu.RLock()
+	policy, ok := m.permissions[unitID]
+	m.permissionMu.RUnlock()
+	if !ok {
+		if unit, unitOK := m.tracker.Unit(unitID); unitOK {
+			m.permissionMu.RLock()
+			policy, ok = m.permissions[unit.SessionID]
+			m.permissionMu.RUnlock()
+		}
+	}
+	if !ok {
+		return EscapePermissionContext{Class: PermissionUnknown}
+	}
+	return policy
 }
 
 func (m *Manager) replaceToolAdapter(adapter *TrustedToolAdapter) {
@@ -840,7 +914,11 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 		)
 		return BehaviorEvent{}, errors.New("agent_guard_tool_session_unavailable")
 	}
-	m.queueTrustedSessionStatus(session, sessionChanged)
+	permissionChanged := false
+	if policy := escapePermissionFromToolEvent(input); policy.Class != PermissionUnknown {
+		permissionChanged = m.setPermissionPolicy(session.SessionID, policy)
+	}
+	m.queueTrustedSessionStatus(session, sessionChanged || permissionChanged)
 	parentEventID := ""
 	evidence, evidenceMatched := adapter.Evidence(input.ToolCallID)
 	if evidenceMatched && evidence.Link.CorrelationHash != verified.CorrelationHash {
@@ -855,7 +933,10 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 			process = candidate
 		}
 	}
-	attributes := map[string]any{"tool_call_id": input.ToolCallID}
+	attributes := map[string]any{"tool_call_id": input.ToolCallID, "tool_name": input.ToolName}
+	if input.CWD != "" {
+		attributes["cwd"] = input.CWD
+	}
 	if input.TurnID != "" {
 		attributes["turn_id"] = input.TurnID
 	}
@@ -921,6 +1002,7 @@ func (m *Manager) ObserveTrustedToolPayload(payload []byte) (BehaviorEvent, erro
 			"trusted_proof":          verified.Proof,
 			"correlation_token_hash": verified.CorrelationHash,
 			"remote_coverage":        remoteCoverage,
+			"permission":             escapePermissionFromToolEvent(input),
 		},
 	})
 	if !accepted {
@@ -1015,6 +1097,7 @@ func (m *Manager) ObserveTrustedSessionPayload(payload []byte) (BehaviorEvent, e
 			return BehaviorEvent{}, endErr
 		}
 		if changed {
+			m.clearPermissionPolicy(session.SessionID)
 			m.queueExecutionUnitStatus(unit, "agent_execution_unit_stopped")
 			m.queueSessionStatus(session, "agent_behavior_session_stopped")
 			m.syncKernelSubjects()
@@ -1046,6 +1129,9 @@ func (m *Manager) ObserveTrustedSessionPayload(payload []byte) (BehaviorEvent, e
 	)
 	if err != nil {
 		return BehaviorEvent{}, err
+	}
+	if policy := escapePermissionFromSessionEvent(input); policy.Class != PermissionUnknown {
+		m.setPermissionPolicy(session.SessionID, policy)
 	}
 	m.queueTrustedSessionStarted(session, unit, changed)
 	m.syncKernelSubjects()
@@ -1327,7 +1413,7 @@ func (m *Manager) ObserveEventMap(eventMap map[string]any) bool {
 	if !accepted {
 		return false
 	}
-	if category == CategoryFile {
+	if category == CategoryFile || category == CategoryNetwork {
 		m.observeEscapeViolation(GuardAttempt{
 			EventID: normalized.EventID, Category: category, Operation: operation,
 			Target: resource.Identity, ReturnCode: numberValue(eventMap["return_code"]),
@@ -1541,6 +1627,10 @@ func (m *Manager) observeEscapeViolation(
 	if attempt.Actual.CapturedAt.IsZero() {
 		attempt.Actual = unit.IsolationActual
 	}
+	permission := m.permissionPolicy(unit.UnitID)
+	if permission.Class == PermissionUnknown {
+		return false
+	}
 	if attempt.Operation == "ptrace" && attempt.TargetPID > 0 {
 		target, err := m.scanner.ReadPID(attempt.TargetPID)
 		if err == nil {
@@ -1551,20 +1641,36 @@ func (m *Manager) observeEscapeViolation(
 		}
 	}
 	attempt.EvidenceEventIDs = []string{parent.EventID}
-	violation, detected := DetectEscapeAttempt(attempt)
-	if !detected {
+	attempt.Outcome = parent.Outcome
+	if adapter := m.currentToolAdapter(); adapter != nil {
+		if link, linked := adapter.LookupForProcess(process.Identity, process); linked {
+			attempt.HookMatched = true
+			attempt.ProcessMatched = link.CorrelationHash != ""
+			attempt.ToolCallID = link.ToolCallID
+			attempt.HookEventID = link.ToolEventID
+		}
+	}
+	if attempt.HookEventID == "" {
 		return false
 	}
+	attempt.EvidenceEventIDs = append(attempt.EvidenceEventIDs, attempt.HookEventID)
+	evaluation, report := EvaluateEscapeAttempt(attempt, permission)
+	if !report {
+		return false
+	}
+	violation := evaluation.Violation
 	evidence := map[string]any{
 		"rule":               violation.Rule,
 		"operation":          violation.Operation,
 		"target":             violation.Target,
-		"baseline":           violation.Baseline,
-		"actual":             violation.Actual,
-		"diff":               violation.Diff,
-		"state_changed":      violation.StateChanged,
 		"return_code":        violation.ReturnCode,
 		"evidence_event_ids": violation.EvidenceEventIDs,
+		"classification":     evaluation.Classification,
+		"reason":             evaluation.Reason,
+		"permission":         evaluation.Permission,
+		"hook_event_id":      attempt.HookEventID,
+		"tool_call_id":       attempt.ToolCallID,
+		"hook_pid_matched":   attempt.ProcessMatched,
 	}
 	_, accepted := m.observeRawEvent(RawBehavior{
 		OccurredAt: time.Now().UTC(), Category: attempt.Category,
@@ -1578,20 +1684,20 @@ func (m *Manager) observeEscapeViolation(
 		Visibility: parent.Collection.Visibility,
 		EventType:  "agent_sandbox_violation", Decision: violation.Decision,
 		Severity: violation.Severity, RuleID: violation.Rule,
-		Isolation: map[string]any{
-			"unit_type": unit.Type, "baseline": violation.Baseline,
-			"actual": violation.Actual, "diff": violation.Diff,
-			"completeness": violation.Actual.Completeness(),
-		},
-		Evidence: evidence,
+		// Escape evidence is permission and execution based. Isolation snapshots
+		// are intentionally not attached to avoid reviving the legacy
+		// /proc/cgroup re-verification path.
+		Isolation: nil,
+		Evidence:  evidence,
 	})
 	if accepted {
-		logger.Warn("agent_guard_escape_would_deny",
+		logger.Warn("agent_guard_escape_classified",
 			zap.String("host_id", m.cfg.HostID),
 			zap.String("instance_id", subject.InstanceID),
 			zap.String("execution_unit_id", subject.UnitID),
 			zap.String("rule_id", violation.Rule),
 			zap.String("decision", string(violation.Decision)),
+			zap.String("classification", evaluation.Classification),
 			zap.Bool("state_changed", violation.StateChanged))
 	}
 	return accepted
@@ -1691,101 +1797,16 @@ func (m *Manager) reconcileIsolation(processes []ProcessSnapshot) {
 			actual = unavailableIsolationState("representative_state_missing")
 		}
 		previous, _ := m.tracker.Unit(unitID)
-		updated, hadBaseline := m.tracker.UpdateUnitIsolation(unitID, actual, m.capabilities)
+		updated, _ := m.tracker.UpdateUnitIsolation(unitID, actual, m.capabilities)
 		stateChanged := previous.IsolationActual.Fingerprint() != updated.IsolationActual.Fingerprint()
-		if hadBaseline && stateChanged {
+		if stateChanged {
 			m.lifecycleMu.Lock()
 			if m.startedUnits[unitID] {
 				m.queueExecutionUnitStatus(updated, "agent_execution_unit_updated")
 			}
 			m.lifecycleMu.Unlock()
 		}
-		if hadBaseline && updated.IsolationDiff.StateChanged {
-			m.emitIsolationDrift(process, updated)
-		} else if !updated.IsolationDiff.StateChanged {
-			m.isolationMu.Lock()
-			delete(m.lastDrift, unitID)
-			m.isolationMu.Unlock()
-		}
 	}
-}
-
-func (m *Manager) emitIsolationDrift(process ProcessSnapshot, unit ExecutionUnit) {
-	data, _ := json.Marshal(unit.IsolationDiff)
-	digest := stableID("drift", unit.UnitID, string(data))
-	m.isolationMu.Lock()
-	if m.lastDrift[unit.UnitID] == digest {
-		m.isolationMu.Unlock()
-		return
-	}
-	m.lastDrift[unit.UnitID] = digest
-	m.isolationMu.Unlock()
-	decision := DecisionWouldDeny
-	severity := "high"
-	if unit.Coverage == CoverageNoIsolation || !dangerousIsolationDrift(unit) {
-		decision = DecisionAudit
-		severity = "medium"
-	}
-	_, accepted := m.observeRawEvent(RawBehavior{
-		OccurredAt: time.Now().UTC(), Category: CategoryIsolation,
-		Operation: "isolation_drift", Outcome: OutcomeUnknown,
-		Process: process, Argv: process.Argv,
-		Resource: Resource{
-			Type: "execution_unit", Identity: unit.UnitID,
-			Classification: EscapeRuleIsolationDrift,
-		},
-		Source: "procfs", Sensor: "isolation_reconciler",
-		Visibility: visibilityFromCompleteness(unit.Completeness), EventType: "agent_isolation_drift",
-		Decision: decision, Severity: severity, RuleID: EscapeRuleIsolationDrift,
-		Isolation: map[string]any{
-			"unit_type": unit.Type, "baseline": unit.IsolationBaseline,
-			"actual": unit.IsolationActual, "diff": unit.IsolationDiff,
-			"completeness": unit.Completeness,
-		},
-		Evidence: map[string]any{
-			"rule": EscapeRuleIsolationDrift, "baseline": unit.IsolationBaseline,
-			"actual": unit.IsolationActual, "diff": unit.IsolationDiff,
-			"state_changed": unit.IsolationDiff.StateChanged,
-		},
-	})
-	if accepted {
-		logger.Warn("agent_guard_isolation_drift_observed",
-			zap.String("host_id", m.cfg.HostID),
-			zap.String("instance_id", unit.InstanceID),
-			zap.String("execution_unit_id", unit.UnitID),
-			zap.String("decision", string(decision)),
-			zap.Int("changed_dimension_count", len(unit.IsolationDiff.Changes)))
-	}
-}
-
-func visibilityFromCompleteness(completeness string) string {
-	switch completeness {
-	case "complete":
-		return "complete"
-	case "unavailable":
-		return "unobservable"
-	default:
-		return "partial"
-	}
-}
-
-func dangerousIsolationDrift(unit ExecutionUnit) bool {
-	for key := range unit.IsolationDiff.Changes {
-		if strings.HasPrefix(key, "namespace.") || key == "cgroup_path" ||
-			key == "root_mount" || key == "capabilities.effective_added" {
-			return true
-		}
-	}
-	if change, ok := unit.IsolationDiff.Changes["no_new_privs"]; ok &&
-		change.Before == true && change.After == false {
-		return true
-	}
-	if change, ok := unit.IsolationDiff.Changes["seccomp_mode"]; ok {
-		before, beforeOK := change.Before.(int)
-		after, afterOK := change.After.(int)
-		return beforeOK && afterOK && after < before
-	}
-	return false
 }
 
 func unavailableIsolationState(reason string) IsolationState {
@@ -2066,6 +2087,11 @@ func (m *Manager) queueSessionStatus(session BehaviorSession, eventType string) 
 		"started_at":             session.FirstSeenAt,
 		"last_seen_at":           session.LastSeenAt,
 		"occurred_at":            time.Now().UTC(),
+	}
+	if executionUnitID := unitIDForSession(m.tracker.Units(), session.SessionID); executionUnitID != "" {
+		if policy := m.permissionPolicy(executionUnitID); policy.IsKnown() {
+			body["permission"] = policy
+		}
 	}
 	m.queueStatusEvent(eventType, body, "info")
 }

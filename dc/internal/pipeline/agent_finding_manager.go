@@ -280,6 +280,9 @@ func (e *AgentRuleEngine) ProcessGuardEvent(
 	if err != nil {
 		return result, err
 	}
+	if finding == nil {
+		return result, nil
+	}
 	result.HitCount = 1
 	if !options.FindingsEnabled || e == nil || e.store == nil {
 		return result, nil

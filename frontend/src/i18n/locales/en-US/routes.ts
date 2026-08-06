@@ -33,6 +33,7 @@ export default {
   detectionPackageEdit: 'Edit Detection Package',
   agentGuardEvents: 'Agent Event Visibility & Protection',
   agentGuardEscape: 'Agent Escape Protection',
+  agentGuardConfigurations: 'Agent Configuration Detection',
   weakPassword: 'Intelligent Weak Password Detection',
   weakPasswordTaskDetail: 'Weak Password Task Details',
   weakPasswordDictionaries: 'Weak Password Dictionaries',

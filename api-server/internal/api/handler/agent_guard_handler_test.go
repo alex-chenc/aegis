@@ -968,17 +968,17 @@ func TestAgentGuardFindingDetailDoesNotExposeRuntimeProcessTree(t *testing.T) {
 	}
 }
 
-func TestAgentGuardEscapeFindingDetailBuildsHookAndProcEvidenceChain(t *testing.T) {
+func TestAgentGuardEscapeFindingDetailBuildsHookProcessAndExecutionEvidenceChain(t *testing.T) {
 	hostID, instanceID := uuid.New(), uuid.New()
 	findingID := uuid.New()
 	runtimeEvent := model.RuntimeEvent{
 		ID: uuid.New(), EventID: "escape-runtime-hit", HostID: hostID,
 		EventType: "agent_sandbox_violation",
 		EventData: fmt.Sprintf(`{
-			"category":"isolation","operation":"connect_unix","outcome":"success",
+			"category":"escape","operation":"connect_unix","outcome":"success",
 			"decision":"would_deny","instance_id":"%s",
 			"actor":{"pid":200,"ppid":100,"start_ticks":"200","exe":"/bin/sh","argv":["/bin/sh","-c","touch /var/run/docker.sock"]},
-			"evidence":{"actual":{"cgroup_path":"/agent.slice","cgroup_version":2},"baseline":{"cgroup_path":"/agent.slice","cgroup_version":2},"diff":{"state_changed":false}}}`, instanceID),
+			"evidence":{"permission":{"class":"restricted","complete":true},"rule":"access_container_runtime_socket","operation":"connect_unix","hook_pid_matched":true}}`, instanceID),
 		PID: 200, CommandLine: "/bin/sh -c touch /var/run/docker.sock", CreatedAt: time.Now().UTC(),
 	}
 	query := &fakeAgentGuardQuery{
@@ -1003,8 +1003,9 @@ func TestAgentGuardEscapeFindingDetailBuildsHookAndProcEvidenceChain(t *testing.
 					Command  string `json:"command"`
 					PID      int    `json:"pid"`
 				} `json:"hook_events"`
-				ProcessEvidence    []map[string]any `json:"process_evidence"`
-				ProcCgroupEvidence []map[string]any `json:"proc_cgroup_evidence"`
+				ProcessEvidence   []map[string]any `json:"process_evidence"`
+				ExecutionEvidence []map[string]any `json:"execution_evidence"`
+				Permission        map[string]any   `json:"permission"`
 			} `json:"escape_chain"`
 		} `json:"data"`
 	}
@@ -1014,7 +1015,8 @@ func TestAgentGuardEscapeFindingDetailBuildsHookAndProcEvidenceChain(t *testing.
 	chain := body.Data.EscapeChain
 	if len(chain.HookEvents) != 1 || chain.HookEvents[0].ToolName != "sh" ||
 		chain.HookEvents[0].Command != "/bin/sh -c touch /var/run/docker.sock" || chain.HookEvents[0].PID != 200 ||
-		len(chain.ProcessEvidence) == 0 || len(chain.ProcCgroupEvidence) != 1 {
+		len(chain.ProcessEvidence) == 0 || len(chain.ExecutionEvidence) != 1 ||
+		chain.Permission["class"] != "restricted" {
 		t.Fatalf("unexpected escape evidence chain: %s", response.Body.String())
 	}
 }

@@ -85,6 +85,10 @@ type agentGuardRuntimeSettingsWriter interface {
 	Update(context.Context, model.AgentGuardRuntimeSettings, string) (*model.AgentGuardRuntimeSettings, error)
 }
 
+type agentConfigSecurityScanner interface {
+	Scan(context.Context, string) (*service.AgentConfigScanResult, error)
+}
+
 type agentGuardFindingDetail struct {
 	model.AgentSecurityFinding
 	EvidenceCompleteness map[string]any                 `json:"evidence_completeness"`
@@ -95,12 +99,13 @@ type agentGuardFindingDetail struct {
 }
 
 type agentGuardEscapeEvidenceChain struct {
-	HookEventIDs       []string                    `json:"hook_event_ids"`
-	HookEvents         []agentGuardEscapeHookEvent `json:"hook_events,omitempty"`
-	ProcessEvidence    []map[string]any            `json:"process_evidence"`
-	ProcCgroupEvidence []map[string]any            `json:"proc_cgroup_evidence"`
-	Reverification     string                      `json:"reverification"`
-	Gaps               []string                    `json:"gaps,omitempty"`
+	HookEventIDs      []string                    `json:"hook_event_ids"`
+	HookEvents        []agentGuardEscapeHookEvent `json:"hook_events,omitempty"`
+	ProcessEvidence   []map[string]any            `json:"process_evidence"`
+	ExecutionEvidence []map[string]any            `json:"execution_evidence,omitempty"`
+	Permission        map[string]any              `json:"permission,omitempty"`
+	Classification    string                      `json:"classification,omitempty"`
+	Gaps              []string                    `json:"gaps,omitempty"`
 }
 
 type agentGuardEscapeHookEvent struct {
@@ -132,6 +137,7 @@ type AgentGuardHandler struct {
 	actions               agentGuardActionRequester
 	runtimeSettingsReader agentGuardRuntimeSettingsReader
 	runtimeSettingsWriter agentGuardRuntimeSettingsWriter
+	configScanner         agentConfigSecurityScanner
 	scopeSigner           *service.AgentGuardScopeSigner
 	logger                *zap.Logger
 }
@@ -174,6 +180,10 @@ func (h *AgentGuardHandler) SetRuntimeSettingsService(settings agentGuardRuntime
 	h.runtimeSettingsWriter = writer
 }
 
+func (h *AgentGuardHandler) SetConfigScanner(scanner agentConfigSecurityScanner) {
+	h.configScanner = scanner
+}
+
 // RegisterRoutes keeps the permission boundary visible next to every route.
 // The caller supplies the existing role middleware so tests can assert that
 // policy publish cannot inherit the less privileged draft-write permission.
@@ -201,6 +211,9 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	guard.GET("/coverage", read, h.GetCoverage)
 	guard.GET("/hosts/:host_id/status", read, h.GetHostStatus)
 	guard.GET("/agents", read, h.ListAgents)
+	if h.configScanner != nil {
+		guard.GET("/configurations", read, h.ListConfigurations)
+	}
 
 	guard.GET("/profiles", read, h.ListProfiles)
 	guard.GET("/profiles/:id", read, h.GetProfile)
@@ -245,6 +258,23 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	guard.GET("/analyses/:analysis_id", analysisRead, h.GetAnalysis)
 	guard.GET("/actions", read, h.ListActions)
 	guard.GET("/actions/:id", read, h.GetAction)
+}
+
+// ListConfigurations performs a bounded, read-only configuration scan on one
+// connected host. The Agent owns path discovery; the API owns policy scoring.
+func (h *AgentGuardHandler) ListConfigurations(c *gin.Context) {
+	hostID := strings.TrimSpace(c.Query("host_id"))
+	if hostID == "" {
+		agentGuardError(c, http.StatusBadRequest, "agent_config_host_required", "host_id is required", nil)
+		return
+	}
+	result, err := h.configScanner.Scan(c.Request.Context(), hostID)
+	if err != nil {
+		h.logger.Warn("agent_configuration_scan_failed", zap.String("host_id", hostID), zap.Error(err))
+		agentGuardError(c, http.StatusBadGateway, "agent_config_scan_failed", "Agent configuration scan failed", nil)
+		return
+	}
+	agentGuardSuccess(c, result)
 }
 
 // ListEscapeRules serves the immutable isolation-boundary catalog. It is a
@@ -804,10 +834,10 @@ func (h *AgentGuardHandler) ListFindings(c *gin.Context) {
 		agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "finding_domain is invalid", nil)
 		return
 	}
-	// Tool findings are session-scoped because they represent a tool-call
-	// conversation. Escape findings deliberately are not: escape analysis is
-	// keyed by host/asset/Agent scope and must remain usable without sessions.
-	if query.FindingDomain == model.AgentSecurityFindingDomainTool && query.SessionID == "" {
+	// Both domains are session-scoped. Escape rules are evaluated from the
+	// permission snapshot of one Hook session; host-wide legacy rows are not a
+	// valid detail scope anymore.
+	if (query.FindingDomain == model.AgentSecurityFindingDomainTool || query.FindingDomain == model.AgentSecurityFindingDomainEscape) && query.SessionID == "" {
 		agentGuardError(c, http.StatusBadRequest, "agent_guard_request_invalid", "session_id is required with finding_domain", nil)
 		return
 	}
@@ -892,6 +922,16 @@ func (h *AgentGuardHandler) GetFinding(c *gin.Context) {
 	}
 	if isEscapeFinding(item) {
 		detail.EscapeChain = h.buildEscapeEvidenceChain(c.Request.Context(), item, detail.MatchedRules)
+		if item.SessionID != nil {
+			if session, sessionErr := h.query.GetSession(c.Request.Context(), *item.SessionID); sessionErr == nil {
+				if len(detail.EscapeChain.Permission) == 0 {
+					var permission map[string]any
+					if json.Unmarshal(session.Permission, &permission) == nil && len(permission) > 0 {
+						detail.EscapeChain.Permission = permission
+					}
+				}
+			}
+		}
 	}
 	agentGuardSuccess(c, detail)
 }
@@ -917,7 +957,7 @@ func isEscapeRuleKey(key string) bool {
 		return true
 	}
 	switch key {
-	case "access_container_runtime_socket", "join_external_namespace", "mount_host_path", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift", "leave_expected_cgroup":
+	case "access_container_runtime_socket", "access_outside_workspace", "network_boundary_violation", "process_boundary_operation":
 		return true
 	default:
 		return false
@@ -925,7 +965,7 @@ func isEscapeRuleKey(key string) bool {
 }
 
 func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *model.AgentSecurityFinding, rules []agentGuardFindingRuleDetail) *agentGuardEscapeEvidenceChain {
-	chain := &agentGuardEscapeEvidenceChain{HookEventIDs: uniqueStrings(decodeAgentGuardJSONStrings(item.EvidenceEventIDs)), HookEvents: []agentGuardEscapeHookEvent{}, ProcessEvidence: []map[string]any{}, ProcCgroupEvidence: []map[string]any{}, Reverification: "inconclusive", Gaps: []string{}}
+	chain := &agentGuardEscapeEvidenceChain{HookEventIDs: uniqueStrings(decodeAgentGuardJSONStrings(item.EvidenceEventIDs)), HookEvents: []agentGuardEscapeHookEvent{}, ProcessEvidence: []map[string]any{}, ExecutionEvidence: []map[string]any{}, Gaps: []string{}}
 	for _, rule := range rules {
 		for _, process := range rule.ProcessTree {
 			chain.ProcessEvidence = append(chain.ProcessEvidence, map[string]any{"pid": process.PID, "ppid": process.PPID, "start_ticks": process.ProcessStartTicks, "name": process.ProcessName, "exe": process.ProcessExe, "status": process.ProcessStatus})
@@ -944,8 +984,13 @@ func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *
 			continue
 		}
 		actor := escapeEvidenceMap(payload["actor"])
+		resource := escapeEvidenceMap(payload["resource"])
+		resourceAttributes := escapeEvidenceMap(resource["attributes"])
 		argv := escapeEvidenceStrings(actor["argv"])
 		commandLine := strings.TrimSpace(raw.CommandLine)
+		if commandLine == "" {
+			commandLine = firstNonEmpty(escapeEvidenceString(resourceAttributes["command"]), escapeEvidenceCommand(resourceAttributes["tool_input"]))
+		}
 		if commandLine == "" {
 			commandLine = strings.Join(argv, " ")
 		}
@@ -956,6 +1001,7 @@ func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *
 			}
 		}
 		processName = firstNonEmpty(processName, escapeRuntimeCommandName(raw.CommandLine), raw.EventType)
+		processName = firstNonEmpty(escapeEvidenceString(resourceAttributes["tool_name"]), processName)
 		processExe := escapeEvidenceString(actor["exe"])
 		pid := escapeEvidenceInt(actor["pid"])
 		if pid == 0 {
@@ -979,30 +1025,17 @@ func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *
 			})
 		}
 		evidence := escapeEvidenceMap(payload["evidence"])
-		procEvidence := map[string]any{"event_id": eventID, "event_type": raw.EventType, "decision": hook.Decision, "outcome": hook.Outcome}
-		for _, key := range []string{"actual", "baseline", "diff", "unavailable"} {
-			if value, ok := evidence[key]; ok && value != nil {
-				procEvidence[key] = value
-			}
+		if chain.Permission == nil {
+			chain.Permission = escapeEvidenceMap(evidence["permission"])
 		}
-		if len(procEvidence) > 4 {
-			chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, procEvidence)
+		if chain.Classification == "" {
+			chain.Classification = escapeEvidenceString(evidence["classification"])
 		}
-	}
-	var graph map[string]any
-	if json.Unmarshal(item.EvidenceGraph, &graph) == nil {
-		if nodes, ok := graph["nodes"].([]any); ok {
-			for _, raw := range nodes {
-				if node, ok := raw.(map[string]any); ok && hasProcCgroupEvidence(node) {
-					chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, node)
-				}
-			}
-		}
-		for _, key := range []string{"proc", "procfs", "cgroup", "reverification", "proc_cgroup"} {
-			if value, ok := graph[key].(map[string]any); ok {
-				chain.ProcCgroupEvidence = append(chain.ProcCgroupEvidence, value)
-			}
-		}
+		chain.ExecutionEvidence = append(chain.ExecutionEvidence, map[string]any{
+			"event_id": eventID, "operation": hook.EventType, "outcome": hook.Outcome,
+			"return_code": evidence["return_code"], "hook_pid_matched": evidence["hook_pid_matched"],
+			"tool_call_id": evidence["tool_call_id"], "reason": evidence["reason"],
+		})
 	}
 	if len(chain.HookEventIDs) == 0 {
 		chain.Gaps = append(chain.Gaps, "hook_event_missing")
@@ -1010,15 +1043,23 @@ func (h *AgentGuardHandler) buildEscapeEvidenceChain(ctx context.Context, item *
 	if len(chain.ProcessEvidence) == 0 {
 		chain.Gaps = append(chain.Gaps, "process_identity_missing")
 	}
-	if len(chain.ProcCgroupEvidence) == 0 {
-		chain.Gaps = append(chain.Gaps, "proc_cgroup_reverification_missing")
-	}
-	if len(chain.Gaps) == 0 {
-		chain.Reverification = "complete"
-	} else if len(chain.HookEventIDs) > 0 && len(chain.ProcessEvidence) > 0 {
-		chain.Reverification = "partial"
-	}
 	return chain
+}
+
+func escapeEvidenceCommand(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text := escapeEvidenceString(value); text != "" {
+		return text
+	}
+	object := escapeEvidenceMap(value)
+	for _, key := range []string{"command", "cmd", "command_line", "script"} {
+		if text := escapeEvidenceString(object[key]); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func escapeEvidenceMap(value any) map[string]any {
@@ -1069,15 +1110,6 @@ func escapeRuntimeCommandName(commandLine string) string {
 		return ""
 	}
 	return filepath.Base(fields[0])
-}
-
-func hasProcCgroupEvidence(node map[string]any) bool {
-	for key := range node {
-		if strings.Contains(strings.ToLower(key), "proc") || strings.Contains(strings.ToLower(key), "cgroup") || strings.Contains(strings.ToLower(key), "namespace") {
-			return true
-		}
-	}
-	return false
 }
 
 func (h *AgentGuardHandler) AnalyzeFinding(c *gin.Context) {

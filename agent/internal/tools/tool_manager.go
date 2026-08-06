@@ -187,6 +187,10 @@ func (m *ToolManager) Execute(tool string, params map[string]interface{}) (inter
 			}
 		}
 		return m.collectProcessSnapshot(hostID, offset, limit, includeListenPorts, maxProcessCount)
+	case "AgentConfigScan":
+		hostID, _ := params["host_id"].(string)
+		collector := assets.NewAgentConfigCollector(m.logger)
+		return collector.Collect(context.Background(), hostID), nil
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", tool)
 	}

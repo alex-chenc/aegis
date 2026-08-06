@@ -136,24 +136,25 @@ type BehaviorSession struct {
 }
 
 type ExecutionUnit struct {
-	UnitID            string            `json:"unit_id"`
-	InstanceID        string            `json:"instance_id"`
-	SessionID         string            `json:"session_id"`
-	Type              IsolationType     `json:"type"`
-	RootProcess       ProcessIdentity   `json:"root_process"`
-	CgroupPath        string            `json:"cgroup_path,omitempty"`
-	ContainerID       string            `json:"container_id,omitempty"`
-	ContainerRuntime  string            `json:"container_runtime,omitempty"`
-	RemoteExecutionID string            `json:"remote_execution_id,omitempty"`
-	Coverage          CoverageLevel     `json:"coverage"`
-	Capabilities      GuardCapabilities `json:"capabilities"`
-	IsolationBaseline IsolationState    `json:"isolation_baseline"`
-	IsolationActual   IsolationState    `json:"isolation_actual"`
-	IsolationDiff     IsolationDiff     `json:"isolation_diff"`
-	Completeness      string            `json:"completeness"`
-	Status            string            `json:"status"`
-	FirstSeenAt       time.Time         `json:"first_seen_at"`
-	LastSeenAt        time.Time         `json:"last_seen_at"`
+	UnitID            string                  `json:"unit_id"`
+	InstanceID        string                  `json:"instance_id"`
+	SessionID         string                  `json:"session_id"`
+	Type              IsolationType           `json:"type"`
+	RootProcess       ProcessIdentity         `json:"root_process"`
+	CgroupPath        string                  `json:"cgroup_path,omitempty"`
+	ContainerID       string                  `json:"container_id,omitempty"`
+	ContainerRuntime  string                  `json:"container_runtime,omitempty"`
+	RemoteExecutionID string                  `json:"remote_execution_id,omitempty"`
+	Coverage          CoverageLevel           `json:"coverage"`
+	Capabilities      GuardCapabilities       `json:"capabilities"`
+	IsolationBaseline IsolationState          `json:"isolation_baseline"`
+	IsolationActual   IsolationState          `json:"isolation_actual"`
+	IsolationDiff     IsolationDiff           `json:"isolation_diff"`
+	Completeness      string                  `json:"completeness"`
+	Status            string                  `json:"status"`
+	Permission        EscapePermissionContext `json:"permission,omitempty"`
+	FirstSeenAt       time.Time               `json:"first_seen_at"`
+	LastSeenAt        time.Time               `json:"last_seen_at"`
 }
 
 type GuardSubject struct {
@@ -362,6 +363,13 @@ type GuardAttempt struct {
 	Baseline         IsolationState
 	Actual           IsolationState
 	EvidenceEventIDs []string
+	ToolCallID       string
+	HookEventID      string
+	ApprovalStatus   string
+	HookMatched      bool
+	ProcessMatched   bool
+	ProcReverified   bool
+	Outcome          Outcome
 }
 
 type SandboxViolation struct {

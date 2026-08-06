@@ -6,16 +6,14 @@ import (
 )
 
 const (
-	EscapeRuleJoinExternalNamespace  = "join_external_namespace"
-	EscapeRuleLeaveExpectedCgroup    = "leave_expected_cgroup"
 	EscapeRuleAccessRuntimeSocket    = "access_container_runtime_socket"
-	EscapeRuleAccessHostProcRoot     = "access_host_proc_root"
-	EscapeRuleWriteCgroupFS          = "write_cgroupfs"
-	EscapeRuleMountHostSensitivePath = "mount_host_sensitive_path"
-	EscapeRulePtraceExternalProcess  = "ptrace_external_process"
-	EscapeRuleLoadBPFOrModule        = "load_bpf_or_module"
-	EscapeRuleCapabilityEscalation   = "capability_escalation"
-	EscapeRuleIsolationDrift         = "isolation_baseline_drift"
+	EscapeRuleProcessBoundary        = "process_boundary_operation"
+	EscapeRuleAccessOutsideWorkspace = "access_outside_workspace"
+	EscapeRuleNetworkBoundary        = "network_boundary_violation"
+	EscapeRuleApprovalBoundary       = "approval_boundary_violation"
+	EscapeRuleProtectedPathWrite     = "protected_path_write"
+	EscapeRuleUnsandboxedExecution   = "unsandboxed_execution"
+	EscapeRuleHostExecutionBypass    = "host_execution_bypass"
 )
 
 var runtimeSocketPaths = []string{
@@ -27,31 +25,25 @@ var runtimeSocketPaths = []string{
 }
 
 func DetectEscapeAttempt(attempt GuardAttempt) (SandboxViolation, bool) {
-	diff := DiffIsolationState(attempt.Baseline, attempt.Actual)
 	rule := ""
 	target := filepath.Clean(attempt.Target)
 	switch {
-	case attempt.Operation == "setns" && namespaceTargetOutsideBaseline(attempt.TargetNamespace, attempt.Target, attempt.Baseline):
-		rule = EscapeRuleJoinExternalNamespace
+	case attempt.Operation == "setns", attempt.Operation == "unshare":
+		rule = EscapeRuleProcessBoundary
 	case isRuntimeSocket(target) && (attempt.Operation == "connect_unix" || attempt.Category == CategoryFile):
 		rule = EscapeRuleAccessRuntimeSocket
-	case strings.HasPrefix(target, "/proc/1/root"):
-		rule = EscapeRuleAccessHostProcRoot
-	case isCgroupWrite(attempt.Operation, target):
-		rule = EscapeRuleWriteCgroupFS
 	case isSensitiveMount(attempt):
-		rule = EscapeRuleMountHostSensitivePath
+		rule = EscapeRuleProcessBoundary
 	case attempt.Operation == "ptrace" && attempt.TargetPID > 0:
-		rule = EscapeRulePtraceExternalProcess
+		rule = EscapeRuleProcessBoundary
 	case isKernelLoadOperation(attempt.Operation):
-		rule = EscapeRuleLoadBPFOrModule
+		rule = EscapeRuleProcessBoundary
 	case attempt.Operation == "setuid" && target == "argument:0" &&
 		attempt.BeforeUIDVisible && attempt.BeforeUID > 0:
-		rule = EscapeRuleCapabilityEscalation
-	case diff.Changes["capabilities.effective_added"].Before != nil:
-		rule = EscapeRuleCapabilityEscalation
-	case diff.Changes["cgroup_path"].Before != nil:
-		rule = EscapeRuleLeaveExpectedCgroup
+		rule = EscapeRuleProcessBoundary
+	case attempt.Operation == "capset" || attempt.Operation == "setgid" ||
+		attempt.Operation == "setresuid" || attempt.Operation == "setresgid":
+		rule = EscapeRuleProcessBoundary
 	}
 	if rule == "" {
 		return SandboxViolation{}, false
@@ -62,23 +54,10 @@ func DetectEscapeAttempt(attempt GuardAttempt) (SandboxViolation, bool) {
 	}
 	return SandboxViolation{
 		Rule: rule, Operation: attempt.Operation, Target: RedactString(attempt.Target),
-		Baseline: attempt.Baseline, Actual: attempt.Actual, Diff: diff,
-		StateChanged: diff.StateChanged, ReturnCode: attempt.ReturnCode,
-		Decision: DecisionWouldDeny, Severity: violationSeverity(rule),
+		ReturnCode: attempt.ReturnCode,
+		Decision:   DecisionWouldDeny, Severity: violationSeverity(rule),
 		EvidenceEventIDs: evidenceIDs,
 	}, true
-}
-
-func namespaceTargetOutsideBaseline(kind, target string, baseline IsolationState) bool {
-	parsedKind, inode, ok := parseNamespaceIdentity(target)
-	if !ok {
-		return false
-	}
-	if kind == "" {
-		kind = parsedKind
-	}
-	expected, visible := baseline.NamespaceInodes[kind]
-	return visible && expected != 0 && inode != expected
 }
 
 func isRuntimeSocket(target string) bool {
@@ -88,18 +67,6 @@ func isRuntimeSocket(target string) bool {
 		}
 	}
 	return false
-}
-
-func isCgroupWrite(operation, target string) bool {
-	if !strings.HasPrefix(target, "/sys/fs/cgroup") {
-		return false
-	}
-	switch operation {
-	case "write", "open_write", "create", "truncate":
-		return true
-	default:
-		return false
-	}
 }
 
 func isSensitiveMount(attempt GuardAttempt) bool {
@@ -128,8 +95,7 @@ func isKernelLoadOperation(operation string) bool {
 
 func violationSeverity(rule string) string {
 	switch rule {
-	case EscapeRuleJoinExternalNamespace, EscapeRuleAccessRuntimeSocket,
-		EscapeRuleMountHostSensitivePath, EscapeRuleCapabilityEscalation:
+	case EscapeRuleAccessRuntimeSocket, EscapeRuleProcessBoundary:
 		return "critical"
 	default:
 		return "high"

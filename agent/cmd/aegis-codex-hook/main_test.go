@@ -31,10 +31,13 @@ func TestSessionStateNameDoesNotExposeSessionID(t *testing.T) {
 }
 
 func TestPreToolUseHookInputAllowsOfficialExtensionFields(t *testing.T) {
-	input := `{"session_id":"thr_123","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call_1","tool_input":{"command":"true"},"cwd":"/workspace","model":"gpt"}`
+	input := `{"session_id":"thr_123","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call_1","tool_input":{"command":"true"},"cwd":"/workspace","permission_mode":"default","sandbox_mode":"workspace-write","network_access":false,"model":"gpt"}`
 	var decoded codexHookInput
 	if err := json.Unmarshal([]byte(input), &decoded); err != nil || decoded.SessionID != "thr_123" || decoded.HookEventName != "PreToolUse" {
 		t.Fatalf("official extended input rejected: decoded=%#v err=%v", decoded, err)
+	}
+	if decoded.PermissionMode != "default" || decoded.SandboxMode != "workspace-write" || decoded.NetworkAccess == nil || *decoded.NetworkAccess {
+		t.Fatalf("permission snapshot fields lost: %#v", decoded)
 	}
 }
 

@@ -83,7 +83,7 @@ var kernelOperationBits = map[string]uint32{
 
 var kernelEscapeRules = map[string]struct{}{
 	"access_container_runtime_socket": {},
-	"load_bpf_or_module":              {},
+	"process_boundary_operation":      {},
 }
 
 var kernelAgentTypes = map[string]struct{}{

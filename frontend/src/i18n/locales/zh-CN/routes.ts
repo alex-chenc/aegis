@@ -33,6 +33,7 @@ export default {
   detectionPackageEdit: '编辑检测包',
   agentGuardEvents: '智能体事件感知与防护',
   agentGuardEscape: '智能体逃逸防护',
+  agentGuardConfigurations: '智能体配置检测',
   weakPassword: '智能弱密码检测',
   weakPasswordTaskDetail: '智能弱密码任务详情',
   weakPasswordDictionaries: '弱密码字典',

@@ -125,10 +125,10 @@ func TestProfileDoesNotClaimOrdinaryShell(t *testing.T) {
 
 func TestP4BuiltinProfilesMatchCanonicalControlPlaneDefinitions(t *testing.T) {
 	expected := map[string]string{
-		"claude-code-linux": "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
-		"opencode-linux":    "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
-		"gemini-cli-linux":  "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
-		"zcode-linux":       "sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c",
+		"claude-code-linux": "sha256:94eb603baadec817c6e03857064fbe809aa5da42d612d9dd7e8b486f66cb63a7",
+		"opencode-linux":    "sha256:b0fff61d935a97de75d5e90c658248201117608d256cd9be3f9a30d1ee3a34c2",
+		"gemini-cli-linux":  "sha256:300f72f233925ac36203a8a6d6ad4d8aa3247b93cf03474e8cede761315f5f66",
+		"zcode-linux":       "sha256:dd1e0a0d89bf1fdb6152ce92c57ef7cf460c9f49f1402b503348bba407ff8c2f",
 	}
 	registry := NewBuiltinProfileRegistry()
 	for key, expectedDigest := range expected {
@@ -149,8 +149,8 @@ func TestP4BuiltinProfilesMatchCanonicalControlPlaneDefinitions(t *testing.T) {
 			t.Fatalf("%s local detector drifted: %#v", key, profile.BackendDetectors)
 		}
 		if !slices.Equal(profile.DefaultEscapeRules, []string{
-			"access_container_runtime_socket", "join_external_namespace", "write_cgroupfs",
-			"credential_or_capability_gain", "isolation_baseline_drift",
+			"access_outside_workspace", "network_boundary_violation",
+			"access_container_runtime_socket", "process_boundary_operation",
 		}) {
 			t.Fatalf("%s escape rules drifted: %#v", key, profile.DefaultEscapeRules)
 		}

@@ -12,6 +12,62 @@ export type AgentGuardCoverage =
 export type AgentGuardMode = 'behavior' | 'escape'
 export type AgentGuardDetailTab = 'panorama' | 'analysis'
 
+export type AgentConfigFindingSeverity = 'critical' | 'high' | 'medium' | 'low' | string
+
+export interface AgentConfigFinding {
+  rule_id: string
+  severity: AgentConfigFindingSeverity
+  field_path: string
+  value?: string
+  title: string
+  reason: string
+  remediation: string
+}
+
+export interface AgentConfigFile {
+  path: string
+  format: string
+  status: string
+  size?: number
+  mode?: string
+  modified_at?: string
+  sha256?: string
+  content?: string
+  error?: string
+  findings: AgentConfigFinding[]
+}
+
+export interface AgentConfigHook {
+  file_path: string
+  field_path: string
+  event: string
+  command: string
+  executor?: string
+  findings: AgentConfigFinding[]
+}
+
+export interface AgentConfigAgent {
+  agent_type: string
+  display_name: string
+  files: AgentConfigFile[]
+  hooks: AgentConfigHook[]
+  finding_count: number
+}
+
+export interface AgentConfigScanError {
+  stage: string
+  message: string
+}
+
+export interface AgentConfigScanResult {
+  host_id: string
+  hostname?: string
+  scanned_at: string
+  agents: AgentConfigAgent[]
+  errors?: AgentConfigScanError[]
+  finding_count: number
+}
+
 export type AgentRuntimeStatus = 'running' | 'stale' | 'stopped' | 'unknown'
 
 export type AgentGuardRuntimeDispatchStatus =
@@ -126,6 +182,29 @@ export interface AgentBehaviorSession {
   finding_count?: number
   started_at: string
   last_seen_at: string
+  permission?: {
+    agent_type?: string
+    backend?: string
+    boundary?: 'enforced' | 'none' | 'no_isolation' | 'remote_unobservable' | string
+    class?: 'full_access' | 'restricted' | 'unknown' | string
+    permission_mode?: string
+    sandbox_mode?: string
+    approval_policy?: string
+    approval_status?: string
+    cwd?: string
+    workspace_roots?: string[]
+    temp_roots?: string[]
+    network_access?: boolean
+    sandbox_enabled?: boolean
+    workspace_access?: 'none' | 'ro' | 'rw' | string
+    allowed_domains?: string[]
+    denied_domains?: string[]
+    elevated?: boolean
+    approval_required?: boolean
+    safe_write_root?: string
+    remote_execution_id?: string
+    complete?: boolean
+  }
 }
 
 export interface AgentExecutionUnit {
@@ -316,8 +395,31 @@ export interface AgentSecurityFindingSummary {
       target?: string
     }>
     process_evidence?: Array<Record<string, unknown>>
-    proc_cgroup_evidence?: Array<Record<string, unknown>>
-    reverification?: 'complete' | 'partial' | 'inconclusive' | string
+    execution_evidence?: Array<Record<string, unknown>>
+    permission?: {
+      agent_type?: string
+      backend?: string
+      boundary?: string
+      class?: 'full_access' | 'restricted' | 'unknown' | string
+      permission_mode?: string
+      sandbox_mode?: string
+      approval_policy?: string
+      approval_status?: string
+      cwd?: string
+      workspace_roots?: string[]
+      temp_roots?: string[]
+      network_access?: boolean
+      sandbox_enabled?: boolean
+      workspace_access?: string
+      allowed_domains?: string[]
+      denied_domains?: string[]
+      elevated?: boolean
+      approval_required?: boolean
+      safe_write_root?: string
+      remote_execution_id?: string
+      complete?: boolean
+    }
+    classification?: 'policy_violation_attempt' | 'confirmed_escape' | 'authorized_boundary_expansion' | 'not_applicable' | 'evidence_insufficient' | string
     gaps?: string[]
   }
   attack_stages?: Array<string | Record<string, unknown>>
@@ -443,6 +545,9 @@ export interface BuiltinAgentEscapeRuleSummary {
   description?: string
   hook_points?: string[]
   required_evidence?: string[]
+  agent_types?: string[]
+  backends?: string[]
+  boundary_semantics?: string[]
   default_enabled?: boolean
   enabled?: boolean
   default_severity?: string

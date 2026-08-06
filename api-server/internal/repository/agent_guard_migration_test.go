@@ -108,7 +108,7 @@ func TestAgentGuardMigrationSeedsMatchBuiltinManifest(t *testing.T) {
 	assertProfileManifestMatches(t, sqlProfiles, baseProfiles)
 	followUp := readZcodeProfileMigration(t)
 	if !strings.Contains(followUp, `'zcode-linux'`) ||
-		!strings.Contains(followUp, `sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c`) {
+		!strings.Contains(followUp, `sha256:dd1e0a0d89bf1fdb6152ce92c57ef7cf460c9f49f1402b503348bba407ff8c2f`) {
 		t.Fatal("Zcode follow-up migration does not contain the immutable profile seed")
 	}
 

@@ -44,22 +44,18 @@ type agentGuardEscapeEnvelope struct {
 }
 
 var allowedEscapeRules = map[string]struct{}{
-	"join_external_namespace":         {},
-	"leave_expected_cgroup":           {},
+	"access_outside_workspace":        {},
+	"network_boundary_violation":      {},
 	"access_container_runtime_socket": {},
-	"access_host_proc_root":           {},
-	"write_cgroupfs":                  {},
-	"mount_host_sensitive_path":       {},
-	"ptrace_external_process":         {},
-	"ptrace_aegis_agent":              {},
-	"load_bpf_or_module":              {},
-	"capability_escalation":           {},
-	"credential_or_capability_gain":   {},
-	"isolation_baseline_drift":        {},
+	"process_boundary_operation":      {},
+	"approval_boundary_violation":     {},
+	"protected_path_write":            {},
+	"unsandboxed_execution":           {},
+	"host_execution_bypass":           {},
 }
 
 func NormalizeAgentGuardEscapeFinding(event *model.RuntimeEvent) (*model.AgentSecurityFinding, error) {
-	if event == nil || !allowedValue(event.EventType, "agent_sandbox_violation", "agent_isolation_drift") ||
+	if event == nil || event.EventType != "agent_sandbox_violation" ||
 		len(event.EventData) > maxAgentGuardEvent {
 		return nil, fmt.Errorf("%w: escape event type or size", ErrAgentBehaviorInvalidContract)
 	}
@@ -93,9 +89,6 @@ func NormalizeAgentGuardEscapeFinding(event *model.RuntimeEvent) (*model.AgentSe
 		strings.TrimSpace(envelope.RuleID),
 		stringValueAny(envelope.Evidence["rule"]),
 	)
-	if event.EventType == "agent_isolation_drift" && rule == "" {
-		rule = "isolation_baseline_drift"
-	}
 	if _, exists := allowedEscapeRules[rule]; !exists {
 		return nil, fmt.Errorf("%w: escape rule", ErrAgentBehaviorInvalidContract)
 	}
@@ -111,7 +104,7 @@ func NormalizeAgentGuardEscapeFinding(event *model.RuntimeEvent) (*model.AgentSe
 	if decision == "" {
 		decision = "audit"
 	}
-	if !allowedValue(decision, "audit", "would_deny", "enforcement_unavailable") {
+	if !allowedValue(decision, "audit", "alert", "would_deny", "enforcement_unavailable") {
 		return nil, ErrAgentBehaviorActiveDecision
 	}
 	severity := firstString(envelope.Violation.Severity, envelope.Severity)
@@ -130,22 +123,60 @@ func NormalizeAgentGuardEscapeFinding(event *model.RuntimeEvent) (*model.AgentSe
 			return nil, fmt.Errorf("%w: escape evidence ID", ErrAgentBehaviorInvalidContract)
 		}
 	}
-	if !validIsolationEvidence(envelope) {
-		return nil, fmt.Errorf("%w: escape isolation evidence", ErrAgentBehaviorInvalidContract)
+	permissionMap, _ := envelope.Evidence["permission"].(map[string]any)
+	permissionClass := strings.ToLower(strings.TrimSpace(stringValueAny(permissionMap["class"])))
+	if permissionClass == "full_access" {
+		return nil, nil
+	}
+	if permissionClass != "restricted" || permissionMap["complete"] != true {
+		// Unknown and legacy sessions are not safe escape scopes. Do not create
+		// a finding until a complete restricted-session snapshot is present.
+		return nil, nil
+	}
+	boundary := strings.ToLower(strings.TrimSpace(stringValueAny(permissionMap["boundary"])))
+	if boundary == "no_isolation" || boundary == "remote_unobservable" {
+		return nil, nil
+	}
+	// DC never turns a rule-shaped signal into a finding by itself. The Agent
+	// must prove the trusted Hook-to-process link and provide at least the
+	// Hook event plus the eBPF event in the evidence chain.
+	if !boolValue(envelope.Evidence["hook_pid_matched"]) ||
+		stringValueAny(envelope.Evidence["hook_event_id"]) == "" ||
+		stringValueAny(envelope.Evidence["tool_call_id"]) == "" || len(evidenceIDs) < 2 {
+		return nil, nil
+	}
+	classification := firstString(
+		stringValueAny(envelope.Evidence["classification"]),
+		stringValueAny(envelope.Evidence["escape_classification"]),
+	)
+	if classification == "" && envelope.Decision == "would_deny" {
+		// Accept pre-refactor events as policy attempts for replay/backfill only.
+		classification = "policy_violation_attempt"
+	}
+	switch classification {
+	case "not_applicable", "authorized_boundary_expansion", "evidence_insufficient":
+		return nil, nil
+	case "", "policy_violation_attempt", "confirmed_escape":
+	default:
+		return nil, fmt.Errorf("%w: escape classification", ErrAgentBehaviorInvalidContract)
 	}
 	stateChanged := envelope.Violation.StateChanged || boolValue(envelope.Evidence["state_changed"])
-	findingKey := "escape:v1:" + event.EventType + ":" + event.EventID
+	findingKey := "escape:v2:" + sessionID.String() + ":" + rule + ":" + event.EventID
 	verdict := "suspicious"
 	confidence := 0.90
+	if classification == "confirmed_escape" {
+		verdict, confidence = "malicious", 0.98
+	}
 	if decision == "enforcement_unavailable" {
 		verdict, confidence = "inconclusive", 0.62
 	}
 	ruleHit := map[string]any{
-		"rule_key":      rule,
-		"event_id":      event.EventID,
-		"operation":     truncateLimit(operation, 64),
-		"state_changed": stateChanged,
-		"decision":      decision,
+		"rule_key":       rule,
+		"event_id":       event.EventID,
+		"operation":      truncateLimit(operation, 64),
+		"state_changed":  stateChanged,
+		"decision":       decision,
+		"classification": classification,
 	}
 	return &model.AgentSecurityFinding{
 		ID:                  stableFindingID(findingKey),
@@ -154,18 +185,18 @@ func NormalizeAgentGuardEscapeFinding(event *model.RuntimeEvent) (*model.AgentSe
 		InstanceID:          instanceID,
 		SessionID:           sessionID,
 		ExecutionUnitID:     unitID,
-		Title:               escapeTitle(event.EventType, rule),
+		Title:               escapeTitle(event.EventType, rule, stringValueAny(permissionMap["agent_type"])),
 		Severity:            severity,
 		Verdict:             verdict,
 		Confidence:          confidence,
 		Status:              "open",
-		DecisionSources:     mustJSON([]string{"agent_guard_rule", decision}, []string{}),
+		DecisionSources:     mustJSON([]string{"escape_permission_rule", "ebpf"}, []string{}),
 		RuleHits:            mustJSON([]map[string]any{ruleHit}, []map[string]any{}),
 		EvidenceEventIDs:    mustJSON(evidenceIDs, []string{}),
 		EvidenceGraph:       evidenceGraph(evidenceIDs, nil, rule),
 		AttackStages:        mustJSON([]string{"privilege_escalation", "defense_evasion"}, []string{}),
-		Summary:             "Agent Guard observed a sandbox violation or isolation drift signal.",
-		RecommendedAction:   "alert",
+		Summary:             escapeSummary(stringValueAny(permissionMap["agent_type"]), rule),
+		RecommendedAction:   map[string]string{"confirmed_escape": "contain", "policy_violation_attempt": "alert"}[classification],
 		FirstObservedAt:     occurredAt,
 		LastObservedAt:      occurredAt,
 		EvidenceSourceTable: "agent_guard_events",
@@ -203,21 +234,6 @@ func escapeScope(envelope agentGuardEscapeEnvelope) (*uuid.UUID, *uuid.UUID, *uu
 	return instanceID, unitID, sessionID, nil
 }
 
-func validIsolationEvidence(envelope agentGuardEscapeEnvelope) bool {
-	if envelope.Isolation == nil || envelope.Evidence == nil {
-		return false
-	}
-	for _, key := range []string{"baseline", "actual", "diff"} {
-		if _, ok := envelope.Isolation[key].(map[string]any); ok {
-			continue
-		}
-		if _, ok := envelope.Evidence[key].(map[string]any); !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func stringSliceAny(value any) []string {
 	switch typed := value.(type) {
 	case []string:
@@ -236,21 +252,61 @@ func stringSliceAny(value any) []string {
 }
 
 func escapeSeverity(rule, eventType string) string {
-	if eventType == "agent_isolation_drift" {
-		return "high"
-	}
 	switch rule {
-	case "join_external_namespace", "access_container_runtime_socket",
-		"mount_host_sensitive_path", "capability_escalation", "credential_or_capability_gain":
+	case "access_container_runtime_socket", "process_boundary_operation", "host_execution_bypass":
 		return "critical"
+	case "access_outside_workspace", "network_boundary_violation", "approval_boundary_violation", "protected_path_write":
+		return "medium"
 	default:
 		return "high"
 	}
 }
 
-func escapeTitle(eventType, rule string) string {
-	if eventType == "agent_isolation_drift" {
-		return "Agent isolation drift: " + rule
+func escapeTitle(eventType, rule, agentType string) string {
+	name := escapeRuleDisplayName(rule)
+	if name == "" {
+		name = rule
 	}
-	return "Agent sandbox violation: " + rule
+	if agentType != "" {
+		return agentDisplayName(agentType) + "逃逸：" + name
+	}
+	return "智能体逃逸：" + name
+}
+
+func escapeRuleDisplayName(rule string) string {
+	return map[string]string{
+		"access_outside_workspace":        "访问工作区外路径",
+		"network_boundary_violation":      "越过网络访问边界",
+		"access_container_runtime_socket": "访问容器运行时接口",
+		"process_boundary_operation":      "执行进程边界操作",
+		"approval_boundary_violation":     "绕过操作确认边界",
+		"protected_path_write":            "写入受保护路径",
+		"unsandboxed_execution":           "未受沙箱约束的执行",
+		"host_execution_bypass":           "绕过 OpenClaw 沙箱执行",
+	}[rule]
+}
+
+func agentDisplayName(agentType string) string {
+	switch strings.ToLower(strings.TrimSpace(agentType)) {
+	case "claude", "claude-code":
+		return "Claude Code"
+	case "openclaw":
+		return "OpenClaw"
+	case "hermes":
+		return "Hermes"
+	case "zcode":
+		return "Zcode"
+	case "codex":
+		return "Codex"
+	default:
+		return "智能体"
+	}
+}
+
+func escapeSummary(agentType, rule string) string {
+	name := escapeRuleDisplayName(rule)
+	if name == "" {
+		name = rule
+	}
+	return agentDisplayName(agentType) + " 会话触发了“" + name + "”规则，且 Hook、进程 PID/start_ticks 与 eBPF 实际执行结果已完成关联。"
 }

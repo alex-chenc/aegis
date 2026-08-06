@@ -96,8 +96,8 @@ func TestManagerCreatesNamespaceUnitBaselineAndReportsDrift(t *testing.T) {
 			}
 		}
 	}
-	if !lifecycleHasBaseline || !driftFound {
-		t.Fatalf("baseline/drift missing: lifecycle=%v drift=%v", lifecycleHasBaseline, driftFound)
+	if !lifecycleHasBaseline || driftFound {
+		t.Fatalf("unhooked isolation drift must not become an escape finding: lifecycle=%v drift=%v", lifecycleHasBaseline, driftFound)
 	}
 }
 
@@ -179,9 +179,6 @@ func TestManagerMapsIdentityKernelIsolationAttemptsAndEscapeEvidence(t *testing.
 		}
 		if event.EventType == "agent_sandbox_violation" {
 			violations++
-			if body["decision"] != "would_deny" {
-				t.Fatalf("escape decision=%v, want would_deny", body["decision"])
-			}
 		}
 	}
 	for _, category := range []string{"identity", "kernel", "isolation"} {
@@ -189,8 +186,8 @@ func TestManagerMapsIdentityKernelIsolationAttemptsAndEscapeEvidence(t *testing.
 			t.Fatalf("missing %s behavior: %#v", category, categories)
 		}
 	}
-	if violations < 2 {
-		t.Fatalf("expected kernel and namespace violations, got %d", violations)
+	if violations != 0 {
+		t.Fatalf("escape signal without a signed Hook/PID chain was reported: %d", violations)
 	}
 }
 

@@ -11,6 +11,7 @@ import {
   listAgentExecutionUnitTimeline,
   createAgentGuardPolicy,
   listAgentGuardAgents,
+  scanAgentConfigurations,
   listAgentGuardInstances,
   listAgentGuardSessions,
   listAgentGuardPolicies,
@@ -62,6 +63,16 @@ describe('Agent Guard API', () => {
         page: 2,
         page_size: 20,
       },
+    })
+  })
+
+  it('scans a selected host through the configuration endpoint', async () => {
+    getMock.mockResolvedValue({ agents: [], errors: [], finding_count: 0 })
+
+    await scanAgentConfigurations('host-1')
+
+    expect(getMock).toHaveBeenCalledWith('/agent-guard/configurations', {
+      params: { host_id: 'host-1' },
     })
   })
 

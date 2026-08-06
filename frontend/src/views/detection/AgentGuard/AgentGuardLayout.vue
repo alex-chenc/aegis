@@ -473,7 +473,7 @@ watch(detailFingerprint, async () => {
     selectedSessionIds.value = []
     if (detail.assetId || detail.scopeKey || detail.instanceId) {
       await store.fetchInstances(buildAgentGuardDetailInstanceQuery(detail))
-      if (store.instances.length && props.mode === 'behavior') {
+      if (store.instances.length) {
         if (detail.instanceId) {
           await store.fetchSessions(detail.instanceId)
         } else {
@@ -482,7 +482,7 @@ watch(detailFingerprint, async () => {
       }
     }
 
-	if (props.mode === 'behavior' && (detail.assetId || detail.scopeKey) && !detail.instanceId && store.instances.length) {
+	if ((detail.assetId || detail.scopeKey) && !detail.instanceId && store.instances.length) {
 		const preferred = selectPreferredAgentGuardInstance(store.instances, store.sessions)
 		if (!preferred) return
 		await changeInstance(preferred.id)
@@ -545,6 +545,7 @@ async function loadDetailTab(tab: AgentGuardDetailTab) {
   // process tree and never requests the scoped finding list.
   if (tab === 'analysis') {
     if (props.mode === 'escape') {
+      if (!(await ensureCurrentSessionForAnalysis())) return
       await loadFindingPage(1)
       await store.fetchEscapeRules()
       return
@@ -632,7 +633,7 @@ function openAgent(agent: AgentGuardAgentSummary) {
       // the same drawer. Legacy asset-id deep links remain supported.
       assetId: undefined,
       scopeKey: agent.agent_scope_key,
-      tab: 'panorama',
+      tab: props.mode === 'escape' ? 'analysis' : 'panorama',
     }),
   })
 }
@@ -780,7 +781,7 @@ function findingScopeParams() {
 
 async function loadFindingPage(page: number, preserveSelection = false) {
   const scope = findingScopeParams()
-  if (props.mode === 'behavior' && !scope.session_id) return
+  if (!scope.session_id) return
   if (!scope.instance_id && !scope.session_id && !scope.agent_scope_key && !scope.asset_id) return
   await store.fetchFindings({
     ...scope,

@@ -6,6 +6,7 @@ RELEASE_SCRIPT="${ROOT_DIR}/scripts/build_release_package.sh"
 ROOT_COMPOSE="${ROOT_DIR}/docker-compose.yml"
 ENV_EXAMPLE="${ROOT_DIR}/.env.example"
 V62_MIGRATION="${ROOT_DIR}/migrations/029_v6.2_agent_guard.sql"
+ESCAPE_MIGRATION="${ROOT_DIR}/migrations/031_v6.2_agent_escape_permission_first.sql"
 AGENT_INSTALLER="${ROOT_DIR}/server/internal/handler/agent_handler.go"
 
 fail() {
@@ -100,7 +101,7 @@ assert_db_migrate_only_runs_v62() {
       print
     }
   ' "${file}" |
-    grep -F -v -- '029_v6.2_agent_guard.sql' |
+    grep -F -v -e '029_v6.2_agent_guard.sql' -e '030_v6.2_zcode_agent_guard_profile.sql' -e '031_v6.2_agent_escape_permission_first.sql' |
     grep -E -- 'migrations/[0-9]{3}[^/]*\.sql' >/dev/null; then
     fail "${file} db-migrate service references a historical migration"
   fi
@@ -110,9 +111,16 @@ assert_contains "${RELEASE_SCRIPT}" 'VERSION="${1:-}"'
 if [ -e "${V62_MIGRATION}" ] && [ -z "$(find "${V62_MIGRATION}" -maxdepth 0 -perm -004 -print -quit)" ]; then
   fail "${V62_MIGRATION} must be readable by the PostgreSQL container user"
 fi
+if [ -e "${ESCAPE_MIGRATION}" ] && [ -z "$(find "${ESCAPE_MIGRATION}" -maxdepth 0 -perm -004 -print -quit)" ]; then
+  fail "${ESCAPE_MIGRATION} must be readable by the PostgreSQL container user"
+fi
 assert_contains "${RELEASE_SCRIPT}" 'LC_ALL=C sort'
 assert_contains "${RELEASE_SCRIPT}" 'migrations/029_v6.2_agent_guard.sql'
 assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/029_v6.2_agent_guard.sql'
+assert_contains "${RELEASE_SCRIPT}" 'migrations/030_v6.2_zcode_agent_guard_profile.sql'
+assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/030_v6.2_zcode_agent_guard_profile.sql'
+assert_contains "${RELEASE_SCRIPT}" 'migrations/031_v6.2_agent_escape_permission_first.sql'
+assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/031_v6.2_agent_escape_permission_first.sql'
 assert_min_count "${RELEASE_SCRIPT}" 'copy_release_migration' 2
 assert_contains "${RELEASE_SCRIPT}" 'db-migrate:'
 assert_contains "${RELEASE_SCRIPT}" 'condition: service_completed_successfully'
@@ -125,12 +133,14 @@ if grep -F -- './migrations/001_init.sql:/docker-entrypoint-initdb.d/01-init.sql
   fail "${ROOT_COMPOSE} fresh database initialization would skip prerequisite migrations"
 fi
 assert_contains "${ROOT_COMPOSE}" './migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro'
+assert_contains "${ROOT_COMPOSE}" './migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro'
 assert_min_count "${ROOT_COMPOSE}" 'condition: service_completed_successfully' 3
 
 for compose_contract in "${RELEASE_SCRIPT}" "${ROOT_COMPOSE}"; do
   assert_service_contains "${compose_contract}" "db-migrate" 'condition: service_healthy'
   assert_service_contains "${compose_contract}" "db-migrate" 'ON_ERROR_STOP=1'
   assert_service_contains "${compose_contract}" "db-migrate" '/migrations/029_v6.2_agent_guard.sql'
+  assert_service_contains "${compose_contract}" "db-migrate" '/migrations/031_v6.2_agent_escape_permission_first.sql'
   assert_service_not_contains "${compose_contract}" "db-migrate" '/migrations/001'
   assert_service_not_contains "${compose_contract}" "db-migrate" 'backend/scripts/init.sql'
   assert_db_migrate_only_runs_v62 "${compose_contract}"

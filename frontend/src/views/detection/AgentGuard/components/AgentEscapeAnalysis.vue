@@ -5,7 +5,7 @@
         <header class="panel-header">
           <div>
             <h3>{{ t('agentGuard.drawer.escapeAnalysisDetail.alertList') }}</h3>
-            <p>{{ t('agentGuard.drawer.escapeAnalysisDetail.alertListHint') }}</p>
+            <p>{{ t('agentGuard.drawer.escapeAnalysisDetail.permissionHint') }}</p>
           </div>
           <el-tag size="small" effect="plain">{{ findingCount }}</el-tag>
         </header>
@@ -76,6 +76,30 @@
           </div>
           <p v-if="activeFinding.summary" class="finding-summary">{{ activeFinding.summary }}</p>
 
+          <article class="detail-section permission-section">
+            <header class="detail-section-header">
+              <div>
+                <h4>{{ t('agentGuard.drawer.escapeAnalysisDetail.permission') }}</h4>
+                <p>{{ t('agentGuard.drawer.escapeAnalysisDetail.permissionHint') }}</p>
+              </div>
+              <el-tag size="small" :type="permissionTagType" effect="plain">{{ permissionLabel }}</el-tag>
+            </header>
+            <div class="permission-grid">
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.agentType') }}</span><strong>{{ agentLabel }}</strong></div>
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.backend') }}</span><code>{{ permission?.backend || '-' }}</code></div>
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.permissionClass') }}</span><strong>{{ permissionClassLabel }}</strong></div>
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.boundary') }}</span><strong>{{ boundaryLabel }}</strong></div>
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.sandboxMode') }}</span><code>{{ permission?.sandbox_mode || '-' }}</code></div>
+              <div class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.networkAccess') }}</span><strong>{{ networkLabel }}</strong></div>
+              <div v-if="permission?.workspace_access" class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.workspaceAccess') }}</span><strong>{{ permission.workspace_access }}</strong></div>
+              <div v-if="permission?.safe_write_root" class="field field-wide"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.safeWriteRoot') }}</span><code>{{ permission.safe_write_root }}</code></div>
+              <div v-if="permission?.allowed_domains?.length" class="field field-wide"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.allowedDomains') }}</span><code>{{ permission.allowed_domains.join(', ') }}</code></div>
+              <div v-if="permission?.elevated" class="field"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.elevated') }}</span><strong>{{ locale === 'zh-CN' ? '是' : 'yes' }}</strong></div>
+              <div class="field field-wide"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.workspaceRoots') }}</span><code>{{ rootsLabel(permission?.workspace_roots) }}</code></div>
+              <div class="field field-wide"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.tempRoots') }}</span><code>{{ rootsLabel(permission?.temp_roots) }}</code></div>
+            </div>
+          </article>
+
           <article class="detail-section">
             <header class="detail-section-header">
               <div>
@@ -127,24 +151,20 @@
           <article class="detail-section">
             <header class="detail-section-header">
               <div>
-                <h4>{{ t('agentGuard.drawer.escapeAnalysisDetail.proc') }}</h4>
-                <p>{{ t('agentGuard.drawer.escapeAnalysisDetail.procHint') }}</p>
+                <h4>{{ t('agentGuard.drawer.escapeAnalysisDetail.execution') }}</h4>
+                <p>{{ t('agentGuard.drawer.escapeAnalysisDetail.executionHint') }}</p>
               </div>
-              <el-tag size="small" :type="procEvidence.length ? 'success' : 'warning'" effect="plain">
-                {{ procEvidence.length ? t('agentGuard.drawer.escapeAnalysisDetail.evidenceFound') : t('agentGuard.drawer.escapeAnalysisDetail.evidenceMissing') }}
+              <el-tag size="small" :type="executionEvidence.length ? 'success' : 'warning'" effect="plain">
+                {{ executionEvidence.length ? t('agentGuard.drawer.escapeAnalysisDetail.evidenceFound') : t('agentGuard.drawer.escapeAnalysisDetail.evidenceMissing') }}
               </el-tag>
             </header>
-            <div v-if="procRows.length" class="evidence-list">
-              <div v-for="row in procRows" :key="`${row.key}-${row.value}`" class="evidence-row">
-                <span>{{ prettyEvidenceKey(row.key) }}</span>
-                <code>{{ row.value }}</code>
+            <div v-if="executionEvidence.length" class="evidence-list">
+              <div v-for="(row, index) in executionEvidence" :key="`${row.event_id || 'execution'}-${index}`" class="evidence-row">
+                <span>{{ row.operation || t('agentGuard.drawer.escapeAnalysisDetail.execution') }}</span>
+                <code>{{ formatValue(row) }}</code>
               </div>
             </div>
-            <p v-else class="detail-empty">{{ t('agentGuard.drawer.escapeAnalysisDetail.noProcEvidence') }}</p>
-            <div class="compliance-summary" :class="`compliance-${procCompliance.type}`">
-              <strong>{{ procCompliance.label }}</strong>
-              <span>{{ procCompliance.reason }}</span>
-            </div>
+            <p v-else class="detail-empty">{{ t('agentGuard.drawer.escapeAnalysisDetail.noExecutionEvidence') }}</p>
             <div v-if="allGaps.length" class="reason-box">
               <strong>{{ t('agentGuard.drawer.escapeAnalysisDetail.reason') }}</strong>
               <span v-for="reason in allGaps" :key="reason">{{ reason }}</span>
@@ -160,8 +180,8 @@
               <el-tag :type="severityType(activeFinding.severity)" effect="plain">{{ activeFinding.severity || 'info' }}</el-tag>
             </header>
             <div class="decision-list">
+              <div class="decision-row"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.classification') }}</span><strong>{{ classificationLabel }}</strong></div>
               <div class="decision-row"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.verdict') }}</span><strong>{{ verdictLabel(activeFinding.verdict) }}</strong></div>
-              <div class="decision-row"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.reverification') }}</span><strong>{{ reverificationLabel(reverification) }}</strong></div>
               <div class="decision-row"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.findingStatus') }}</span><strong>{{ statusLabel(activeFinding.status) }}</strong></div>
               <div class="decision-row"><span>{{ t('agentGuard.drawer.escapeAnalysisDetail.recommendedAction') }}</span><strong>{{ actionLabel(activeFinding.recommended_action) }}</strong></div>
             </div>
@@ -176,6 +196,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
+  AgentBehaviorSession,
   AgentSecurityFindingProcessNode,
   AgentSecurityFindingSummary,
   AgentSecurityFindingToolCall,
@@ -184,6 +205,7 @@ import type {
 const props = withDefaults(defineProps<{
   findings?: AgentSecurityFindingSummary[]
   finding?: AgentSecurityFindingSummary | null
+  session?: AgentBehaviorSession | null
   selectedFindingId?: string
   findingTotal?: number
   findingPage?: number
@@ -191,6 +213,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   findings: () => [],
   finding: null,
+  session: null,
   selectedFindingId: '',
   findingTotal: 0,
   findingPage: 1,
@@ -206,24 +229,51 @@ const { t, te, locale } = useI18n()
 
 const activeFinding = computed(() => props.finding || props.findings.find(item => item.id === props.selectedFindingId) || props.findings[0] || null)
 const findingCount = computed(() => props.findingTotal || props.findings.length)
-const reverification = computed(() => activeFinding.value?.escape_chain?.reverification || 'inconclusive')
-const isBaselineDrift = computed(() => activeFinding.value?.rule_hits?.some(hit => hit.rule_key === 'isolation_baseline_drift') || activeFinding.value?.matched_rules?.some(rule => rule.rule_key === 'isolation_baseline_drift'))
+const permission = computed(() => activeFinding.value?.escape_chain?.permission || props.session?.permission)
+const permissionClass = computed(() => permission.value?.class || 'unknown')
+const agentLabel = computed(() => {
+  const value = permission.value?.agent_type || props.session?.source || '-'
+  const names: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', zcode: 'Zcode' }
+  return names[value] || value
+})
+const boundaryLabel = computed(() => {
+  const value = permission.value?.boundary || '-'
+  const names: Record<string, string> = { enforced: locale.value === 'zh-CN' ? '已执行边界' : 'enforced', none: locale.value === 'zh-CN' ? '无边界' : 'none', no_isolation: locale.value === 'zh-CN' ? '明确无隔离' : 'no isolation', remote_unobservable: locale.value === 'zh-CN' ? '远端不可观测' : 'remote unobservable' }
+  return names[value] || value
+})
+const permissionLabel = computed(() => {
+  if (permissionClass.value === 'full_access') return t('agentGuard.drawer.escapeAnalysisDetail.fullAccess')
+  if (permissionClass.value === 'restricted') return t('agentGuard.drawer.escapeAnalysisDetail.restricted')
+  return t('agentGuard.drawer.escapeAnalysisDetail.unknownPermission')
+})
+const permissionClassLabel = computed(() => {
+  if (permissionClass.value === 'full_access') return t('agentGuard.drawer.escapeAnalysisDetail.fullAccess')
+  if (permissionClass.value === 'restricted' && !permission.value?.permission_mode) return t('agentGuard.drawer.escapeAnalysisDetail.restricted')
+  if (permissionClass.value === 'unknown') return t('agentGuard.drawer.escapeAnalysisDetail.unknownPermission')
+  return permission.value?.permission_mode || permissionClass.value
+})
+const permissionTagType = computed(() => permissionClass.value === 'full_access' ? 'info' : permissionClass.value === 'restricted' ? 'warning' : 'danger')
+const networkLabel = computed(() => permission.value?.network_access === true ? 'enabled' : permission.value?.network_access === false ? 'disabled' : '-')
+const classification = computed(() => activeFinding.value?.escape_chain?.classification || 'policy_violation_attempt')
+const classificationLabel = computed(() => {
+  if (classification.value === 'confirmed_escape') return t('agentGuard.drawer.escapeAnalysisDetail.confirmedEscape')
+  if (classification.value === 'authorized_boundary_expansion') return t('agentGuard.drawer.escapeAnalysisDetail.authorizedExpansion')
+  return t('agentGuard.drawer.escapeAnalysisDetail.policyViolationAttempt')
+})
+const executionEvidence = computed(() => activeFinding.value?.escape_chain?.execution_evidence || [])
 const alertType = computed(() => {
   if (activeFinding.value?.verdict === 'malicious' || activeFinding.value?.severity === 'critical' || activeFinding.value?.severity === 'high') return 'error'
-  return reverification.value === 'complete' ? 'success' : 'warning'
+  return classification.value === 'confirmed_escape' ? 'error' : 'warning'
 })
 const warningTitle = computed(() => {
-  if (reverification.value === 'complete') return t('agentGuard.drawer.escapeAnalysisDetail.warningCompleteTitle')
-  return isBaselineDrift.value
-    ? t('agentGuard.drawer.escapeAnalysisDetail.warningTitle')
-    : t('agentGuard.drawer.escapeAnalysisDetail.warningSignalTitle')
+  if (classification.value === 'confirmed_escape') return t('agentGuard.drawer.escapeAnalysisDetail.confirmedEscape')
+  if (permissionClass.value === 'unknown') return t('agentGuard.drawer.escapeAnalysisDetail.unknownPermission')
+  return t('agentGuard.drawer.escapeAnalysisDetail.policyViolationAttempt')
 })
 const warningDescription = computed(() => {
-  if (reverification.value === 'complete') return t('agentGuard.drawer.escapeAnalysisDetail.warningComplete')
-  if (reverification.value === 'partial') return t('agentGuard.drawer.escapeAnalysisDetail.warningPartial')
-  return t(isBaselineDrift.value
-    ? 'agentGuard.drawer.escapeAnalysisDetail.warningInconclusive'
-    : 'agentGuard.drawer.escapeAnalysisDetail.warningSignalInconclusive')
+  if (classification.value === 'confirmed_escape') return t('agentGuard.drawer.escapeAnalysisDetail.warningConfirmed')
+  if (permissionClass.value === 'unknown') return t('agentGuard.drawer.escapeAnalysisDetail.warningUnknown')
+  return t('agentGuard.drawer.escapeAnalysisDetail.warningRestricted')
 })
 
 const allGaps = computed(() => unique([
@@ -277,41 +327,6 @@ const processRows = computed(() => {
   return uniqueRows
 })
 
-const procEvidence = computed(() => activeFinding.value?.escape_chain?.proc_cgroup_evidence || [])
-const procRows = computed(() => {
-  const rows: EvidenceRow[] = []
-  for (const item of procEvidence.value) {
-    flattenEvidence(item, '', rows)
-  }
-  return uniqueBy(rows, row => `${row.key}|${row.value}`)
-})
-const procCompliance = computed<ComplianceSummary>(() => {
-  const evidence = procEvidence.value[0] || {}
-  const actual = evidence.actual as Record<string, unknown> | undefined
-  const baseline = evidence.baseline as Record<string, unknown> | undefined
-  const actualCgroup = valueString(actual?.cgroup_path)
-  const baselineCgroup = valueString(baseline?.cgroup_path)
-  if (!actualCgroup || !baselineCgroup) {
-    return {
-      type: 'unknown',
-      label: t('agentGuard.drawer.escapeAnalysisDetail.complianceUnknown'),
-      reason: t('agentGuard.drawer.escapeAnalysisDetail.complianceUnknownReason'),
-    }
-  }
-  if (actualCgroup === baselineCgroup) {
-    return {
-      type: 'compliant',
-      label: t('agentGuard.drawer.escapeAnalysisDetail.compliant'),
-      reason: t('agentGuard.drawer.escapeAnalysisDetail.compliantReason', { path: actualCgroup }),
-    }
-  }
-  return {
-    type: 'not-compliant',
-    label: t('agentGuard.drawer.escapeAnalysisDetail.notCompliant'),
-    reason: t('agentGuard.drawer.escapeAnalysisDetail.notCompliantReason', { expected: baselineCgroup, observed: actualCgroup }),
-  }
-})
-
 interface ProcessRow {
   instance?: string
   pid?: string
@@ -323,24 +338,25 @@ interface ProcessRow {
   status?: string
 }
 
-interface EvidenceRow { key: string; value: string }
-interface ComplianceSummary { type: 'compliant' | 'not-compliant' | 'unknown'; label: string; reason: string }
-
 function normalizeProcess(process: Record<string, unknown> | AgentSecurityFindingProcessNode): ProcessRow {
   const raw = process as Record<string, unknown>
   return {
     instance: valueString(raw.instance),
-    pid: valueString(process.pid), ppid: valueString(process.ppid),
-    startTicks: valueString(process.start_ticks ?? process.process_start_ticks),
-    name: valueString(process.name ?? process.process_name),
-    exe: valueString(process.exe ?? process.process_exe),
-    cmdline: valueString(process.cmdline ?? process.command_line),
-    status: valueString(process.status ?? process.process_status),
+    pid: valueString(raw.pid), ppid: valueString(raw.ppid),
+    startTicks: valueString(raw.start_ticks ?? raw.process_start_ticks),
+    name: valueString(raw.name ?? raw.process_name),
+    exe: valueString(raw.exe ?? raw.process_exe),
+    cmdline: valueString(raw.cmdline ?? raw.command_line),
+    status: valueString(raw.status ?? raw.process_status),
   }
 }
 
 function toolCommand(call: AgentSecurityFindingToolCall) {
   return call.command || call.command_line || extractCommand(call.tool_input) || '-'
+}
+
+function rootsLabel(roots?: string[]) {
+  return roots?.length ? roots.join(', ') : '-'
 }
 
 function extractCommand(input: unknown): string {
@@ -370,22 +386,6 @@ function prettyEvidenceKey(key: string) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1)
 }
 
-function flattenEvidence(value: unknown, prefix: string, rows: EvidenceRow[], depth = 0) {
-  if (value === undefined || value === null || value === '') return
-  if (depth >= 3 || typeof value !== 'object') {
-    rows.push({ key: prefix || 'evidence', value: formatValue(value) })
-    return
-  }
-  if (Array.isArray(value)) {
-    const shown = value.length > 8 ? `${formatValue(value.slice(0, 8))} … (+${value.length - 8})` : formatValue(value)
-    rows.push({ key: prefix || 'evidence', value: shown })
-    return
-  }
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    flattenEvidence(child, prefix ? `${prefix}.${key}` : key, rows, depth + 1)
-  }
-}
-
 function uniqueBy<T>(items: T[], keyOf: (item: T) => string): T[] {
   const seen = new Set<string>()
   return items.filter(item => {
@@ -407,12 +407,6 @@ function verdictLabel(verdict?: string) {
   if (!verdict) return t('agentGuard.drawer.escapeAnalysisDetail.unknownVerdict')
   const path = `agentGuard.drawer.escapeAnalysisDetail.verdicts.${verdict}`
   return te(path) ? t(path) : verdict
-}
-
-function reverificationLabel(value?: string) {
-  if (!value) return t('agentGuard.drawer.escapeAnalysisDetail.unknownVerdict')
-  const path = `agentGuard.drawer.escapeAnalysisDetail.reverificationStates.${value}`
-  return te(path) ? t(path) : value
 }
 
 function statusLabel(value?: string) {
@@ -447,26 +441,28 @@ function unique(items: string[]) { return [...new Set(items.filter(Boolean))] }
 <style scoped>
 .escape-analysis, .analysis-workspace, .finding-list, .finding-detail, .detail-section { box-sizing: border-box; min-width: 0; width: 100%; max-width: 100%; }
 .escape-analysis { display: grid; gap: 18px; overflow-x: hidden; }
-.analysis-workspace { display: grid; min-width: 0; grid-template-columns: minmax(320px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.analysis-workspace { display: grid; min-width: 0; grid-template-columns: minmax(280px, 2fr) minmax(520px, 5fr); gap: 14px; align-items: start; }
 .finding-list, .finding-detail { box-sizing: border-box; min-width: 0; max-width: 100%; padding: 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; background: var(--el-fill-color-blank); }
-.finding-list { display: grid; gap: 8px; overflow: hidden; }
+.finding-list { display: flex; flex-direction: column; gap: 8px; overflow: visible; }
 .panel-header, .finding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .panel-header > div, .finding-heading > div { min-width: 0; }
 .panel-header h3, .finding-heading h3 { margin: 0; color: var(--aegis-text); font-size: 16px; }
 .panel-header p, .finding-heading p, .finding-summary { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.finding-row { box-sizing: border-box; display: flex; width: 100%; max-width: 100%; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; overflow: hidden; }
+.finding-row { box-sizing: border-box; display: flex; width: 100%; max-width: 100%; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 11px; border: 1px solid var(--aegis-border); border-radius: 10px; background: var(--el-fill-color-blank); color: inherit; text-align: left; cursor: pointer; overflow: visible; }
 .finding-row:hover, .finding-row.selected { border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
-.finding-row-main { flex: 1 1 auto; width: 0; min-width: 0; display: grid; gap: 3px; }
+.finding-row-main { display: flex; flex: 1 1 auto; width: auto; min-width: 0; flex-direction: column; gap: 4px; }
 .finding-row strong, .finding-row small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .finding-row strong { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .finding-row small { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
 .finding-row .finding-row-title { display: -webkit-box; white-space: normal; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; }
-.finding-risk { display: grid; flex: 0 0 auto; min-width: 0; max-width: 40%; justify-items: end; gap: 3px; }
-.finding-risk small { color: var(--el-text-color-secondary); font-size: 11px; }
+.finding-risk { display: flex; flex: 0 0 auto; min-width: 66px; flex-direction: column; align-items: flex-end; gap: 3px; white-space: nowrap; }
+.finding-risk small { max-width: 100%; color: var(--el-text-color-secondary); font-size: 11px; overflow-wrap: anywhere; text-align: right; }
 .finding-pagination { margin-top: 4px; }
 .finding-detail { display: grid; max-height: calc(100vh - 230px); gap: 14px; overflow: auto; }
 .finding-summary { margin: -4px 0 0; font-size: 13px; }
 .detail-section { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; background: var(--el-fill-color-blank); }
+.permission-section { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
+.permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
 .detail-section-header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--el-border-color-lighter); }
 .detail-section-header > div { min-width: 0; }
 .detail-section-header h4 { margin: 0; color: var(--aegis-text); font-size: 16px; }
@@ -498,5 +494,5 @@ function unique(items: string[]) { return [...new Set(items.filter(Boolean))] }
 :deep(.el-alert__icon) { flex: 0 0 auto; }
 :deep(.el-tag) { max-width: 100%; }
 @media (max-width: 1100px) { .analysis-workspace { grid-template-columns: 1fr; } .finding-detail { max-height: none; } }
-@media (max-width: 640px) { .field-grid, .evidence-row, .decision-row { grid-template-columns: 1fr; gap: 4px; } }
+@media (max-width: 640px) { .field-grid, .permission-grid, .evidence-row, .decision-row { grid-template-columns: 1fr; gap: 4px; } }
 </style>

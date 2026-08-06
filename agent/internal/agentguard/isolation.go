@@ -313,26 +313,53 @@ func DiffIsolationState(before, after IsolationState) IsolationDiff {
 	for key := range after.NamespaceInodes {
 		namespaceKeys[key] = struct{}{}
 	}
-	for key := range namespaceKeys {
-		if before.NamespaceInodes[key] != after.NamespaceInodes[key] {
-			diff.Changes["namespace."+key] = StateDifference{
-				Before: before.NamespaceInodes[key], After: after.NamespaceInodes[key],
+	if isolationDimensionAvailable(before, "namespaces") && isolationDimensionAvailable(after, "namespaces") {
+		for key := range namespaceKeys {
+			// A missing namespace inode is an evidence gap, not a namespace
+			// transition. Do not turn an unreadable /proc entry into an escape.
+			if before.NamespaceInodes[key] == 0 || after.NamespaceInodes[key] == 0 {
+				continue
+			}
+			if before.NamespaceInodes[key] != after.NamespaceInodes[key] {
+				diff.Changes["namespace."+key] = StateDifference{
+					Before: before.NamespaceInodes[key], After: after.NamespaceInodes[key],
+				}
 			}
 		}
 	}
-	addStringDifference(diff.Changes, "cgroup_path", before.CgroupPath, after.CgroupPath)
-	addStringDifference(diff.Changes, "root_mount", before.RootMount, after.RootMount)
-	addStringDifference(diff.Changes, "mount_info_digest", before.MountInfoDigest, after.MountInfoDigest)
-	addPointerDifference(diff.Changes, "no_new_privs", before.NoNewPrivileges, after.NoNewPrivileges)
-	addPointerDifference(diff.Changes, "seccomp_mode", before.SeccompMode, after.SeccompMode)
-	added := addedCapabilityMask(before.Capabilities.Effective, after.Capabilities.Effective)
-	if added != "" && added != "0x0000000000000000" {
-		diff.Changes["capabilities.effective_added"] = StateDifference{
-			Before: before.Capabilities.Effective, After: after.Capabilities.Effective,
+	if isolationDimensionAvailable(before, "cgroup") && isolationDimensionAvailable(after, "cgroup") &&
+		before.CgroupPath != "" && after.CgroupPath != "" {
+		addStringDifference(diff.Changes, "cgroup_path", before.CgroupPath, after.CgroupPath)
+	}
+	if isolationDimensionAvailable(before, "root_mount") && isolationDimensionAvailable(after, "root_mount") &&
+		before.RootMount != "" && after.RootMount != "" {
+		addStringDifference(diff.Changes, "root_mount", before.RootMount, after.RootMount)
+	}
+	if isolationDimensionAvailable(before, "mountinfo") && isolationDimensionAvailable(after, "mountinfo") &&
+		before.MountInfoDigest != "" && after.MountInfoDigest != "" {
+		addStringDifference(diff.Changes, "mount_info_digest", before.MountInfoDigest, after.MountInfoDigest)
+	}
+	if isolationDimensionAvailable(before, "no_new_privs") && isolationDimensionAvailable(after, "no_new_privs") {
+		addPointerDifference(diff.Changes, "no_new_privs", before.NoNewPrivileges, after.NoNewPrivileges)
+	}
+	if isolationDimensionAvailable(before, "seccomp") && isolationDimensionAvailable(after, "seccomp") {
+		addPointerDifference(diff.Changes, "seccomp_mode", before.SeccompMode, after.SeccompMode)
+	}
+	if isolationDimensionAvailable(before, "capabilities") && isolationDimensionAvailable(after, "capabilities") {
+		added := addedCapabilityMask(before.Capabilities.Effective, after.Capabilities.Effective)
+		if added != "" && added != "0x0000000000000000" {
+			diff.Changes["capabilities.effective_added"] = StateDifference{
+				Before: before.Capabilities.Effective, After: after.Capabilities.Effective,
+			}
 		}
 	}
 	diff.StateChanged = len(diff.Changes) > 0
 	return diff
+}
+
+func isolationDimensionAvailable(state IsolationState, dimension string) bool {
+	status, ok := state.Availability[dimension]
+	return ok && status.Available
 }
 
 func addStringDifference(changes map[string]StateDifference, key, before, after string) {

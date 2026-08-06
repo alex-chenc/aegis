@@ -28,7 +28,7 @@ func TestP3BundleRequiresLocalCapabilityGatesAndCompilesOnlyAtomicRules(t *testi
 		}},
 		"escape_rules": []any{map[string]any{
 			"rule_id":  "fb469091-818c-42c3-86d8-01b9312fca09",
-			"rule":     "load_bpf_or_module",
+			"rule":     "process_boundary_operation",
 			"action":   "deny_and_freeze",
 			"severity": "critical",
 			"enabled":  true,

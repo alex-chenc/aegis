@@ -43,7 +43,7 @@
         </template>
       </el-alert>
       <AgentRuntimeSelector
-        v-if="mode === 'behavior' && !loading.instances && !errors.instances"
+        v-if="!loading.instances && !errors.instances && (mode === 'behavior' || mode === 'escape')"
         :sessions="sessions"
         :total="sessionTotal"
         :page="sessionPage"
@@ -115,6 +115,7 @@
               v-if="mode === 'escape'"
               :findings="findings"
               :finding="selectedFinding"
+              :session="selectedEscapeSession"
               :selected-finding-id="selectedFinding?.id || detailReferenceId || ''"
               :finding-total="findingTotal"
               :finding-page="findingPage"
@@ -313,6 +314,7 @@ const analysisLabel = computed(() => props.mode === 'behavior'
   ? t('agentGuard.drawer.securityAnalysis')
   : t('agentGuard.drawer.escapeAnalysis', { count: props.findingTotal }))
 const effectiveDetailTab = computed<AgentGuardDetailTab>(() => props.mode === 'escape' ? 'analysis' : props.detailTab)
+const selectedEscapeSession = computed(() => props.sessions.find(session => session.id === props.selectedSessionId) || null)
 
 function changeTab(value: string | number) {
 	if (props.mode === 'escape') {

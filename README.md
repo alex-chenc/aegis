@@ -1,14 +1,46 @@
-# aegis智能主机安全系统
+# Aegis 智能主机安全系统（V6.2）
 
 中文 | [English](README_EN.md)
 
-![AI分析](docs/screenshots/ui-refresh/ai_analysis.png)
-
-![AI溯源图](docs/screenshots/ui-refresh/ai_trace.png)
-
 ## 项目概述
 
-Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台。系统深度集成大模型技术，以自然语言智能助手统一编排基线、漏洞、资产、告警与弱口令等安全运营闭环，实现主机配置、漏洞与弱口令的动态审计管理。通过 AI 持续降噪与自动化研判，构建起从精准防护到自动化响应的闭环。我们致力于通过"模型对抗模型"的前瞻技术，为运维与安全工程师打造极简、智能的主机安全。
+Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台。系统深度集成大模型技术，以自然语言智能助手统一编排基线、漏洞、资产、告警与弱口令等安全运营闭环，实现主机配置、漏洞与弱口令的动态审计管理。V6.2 新增智能体运行防护，覆盖 AI Agent 的行为感知、隔离逃逸检测与配置安全检测，通过确定性规则、主机侧传感器和可追溯证据构建从精准防护到自动化响应的闭环。
+
+## 智能体防护（V6.2）
+
+V6.2 面向 Codex、Claude Code、OpenClaw、Hermes、Zcode 等 AI Agent，新增三项智能体防护能力，帮助安全人员回答“哪个智能体、哪个会话、哪个执行进程做了什么，以及是否突破了预期边界”。
+
+### 智能体事件感知与防护
+
+- 按主机、智能体运行实例、session 和执行单元建立归属关系，追踪控制进程及其实际执行的 shell、脚本、编译器和容器进程
+- 采集进程/命令、文件、网络、身份权限、持久化、内核与隔离控制等安全行为，形成可回溯的操作链和行为全景
+- 内置敏感目录访问、外部网络连接、文件生成、敏感命令执行、提权行为等规则，支持 Finding、安全分析和证据关联
+- 支持 Native Hook 采集真实 session 生命周期和工具调用事件；没有可信 Hook 时仍保留可证明的操作系统行为，并标记工具语义不可观测
+- 规则命中和智能分析以真实事件、工具输入及 PID/PPID 关联证据为依据，AI 结论不能替代主机侧确定性安全事实
+
+![智能体事件感知与防护：行为全景](docs/screenshots/ui-refresh/ai_agent_tools.png)
+
+![智能体事件感知与防护：安全分析](docs/screenshots/ui-refresh/ai_agent_tools2.png)
+
+### 智能体逃逸防护
+
+- 采用权限优先模型：按真实 session 保存智能体的有效权限、沙箱模式、工作区/临时目录、网络 allow/deny、确认状态和执行后端
+- 针对 Codex、Claude Code、OpenClaw、Hermes、Zcode 使用不同权限语义：Claude 的 `bypassPermissions` 不等于关闭原生沙箱，Codex的 Full Access 不进入逃逸检测，OpenClaw 的 `elevated` 和 Hermes 的安全写入根单独评估
+- 只有受限权限、可信 Hook 工具调用、进程 PID + `start_ticks` 以及 eBPF 实际执行结果完整关联时，才生成逃逸发现；权限未知、Hook 缺失、PID 复用、明确无隔离或远端不可观测时不生成逃逸结论
+- 将越界请求区分为 `policy_violation_attempt`（请求被拒绝，可疑）和 `confirmed_escape`（越界操作已成功，确认逃逸）；授权边界扩展与 Full Access 归为不适用，仍可保留独立行为审计
+- 内置 AGE-BUILTIN-101～107 权限边界规则，覆盖工作区外路径、受限网络、容器运行时接口、进程边界、操作确认、Hermes 受保护路径和 OpenClaw 提权绕过
+- 逃逸详情按“有效权限 → Hook 工具/命令 → 进程 PID/start_ticks → eBPF 执行结果 → 判定”展示；旧的隔离漂移不会单独生成新逃逸发现，监控/告警与本地内核阻断能力分别展示
+
+![智能体逃逸防护](docs/screenshots/ui-refresh/ai_agent_tools3.png)
+
+### 智能体配置安全检测
+
+- 以主机为范围读取 Codex、Claude Code、OpenClaw、OpenCode、Hermes 等智能体的固定白名单配置文件，不接受前端传入任意路径
+- 检测 `approval_policy=never`、`danger-full-access`、沙箱关闭、Shell/工具全量放行、无限制网络和高风险 Hook 等配置
+- 展示配置文件、脱敏内容、Hook 点、字段路径、风险等级、命中规则和修复建议；Token、密码、私钥等敏感值始终掩码
+- 采用只读采集、路径白名单、文件大小限制和超时控制，配置扫描失败不会影响智能体正常运行，也不自动修改配置
+
+![智能体配置安全检测](docs/screenshots/ui-refresh/ai_agent_tools4.png)
 
 ## 核心功能
 

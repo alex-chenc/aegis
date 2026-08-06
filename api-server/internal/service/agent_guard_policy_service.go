@@ -166,8 +166,9 @@ func (s *AgentGuardPolicyService) Validate(
 	}
 
 	allowedEscapeRules := stringSet(
-		"join_external_namespace", "escape_cgroup", "write_host_namespace",
-		"mount_host_filesystem", "unexpected_privilege_gain",
+		"access_outside_workspace", "network_boundary_violation",
+		"access_container_runtime_socket", "process_boundary_operation",
+		"approval_boundary_violation", "protected_path_write", "unsandboxed_execution", "host_execution_bypass",
 	)
 	for index, rule := range request.EscapeRules {
 		field := fmt.Sprintf("escape_rules[%d]", index)

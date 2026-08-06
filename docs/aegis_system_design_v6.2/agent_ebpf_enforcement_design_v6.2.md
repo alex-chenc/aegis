@@ -2,11 +2,14 @@
 
 **版本**：6.2  
 **日期**：2026-08-06
-**状态**：Agent OS 事实、PID/PPID 关联和本地逃逸决策设计；Agent Guard 工具命令规则由 api-server 匹配
+**状态**：Agent OS 事实、PID/PPID 关联和权限优先逃逸决策设计；Agent Guard 工具命令规则由 api-server 匹配
 
 > 当前实现基线见 [current_implementation_baseline_2026-08-06.md](current_implementation_baseline_2026-08-06.md)。
 > eBPF/`/proc` 不再负责创建 Agent Guard 工具命中；它只提供 OS 事实以及工具事件到
 > 实际 PID/PPID/start_ticks/cmdline 的关联。
+> 逃逸专项当前以 [agent_escape_permission_first_refactor_v6.2.md](agent_escape_permission_first_refactor_v6.2.md)
+> 为准：权限快照先于规则判断，Full Access/明确无隔离/远端不可观测/证据不完整不生成
+> escape finding；`/proc`/cgroup 隔离漂移不会单独生成新的逃逸发现。
 
 ## 1. 设计目标
 
@@ -18,7 +21,7 @@ Agent 侧是 V6.2 的实时安全边界，负责：
 4. 将内核事件规范化、脱敏、关联和聚合为统一 `AgentBehaviorEvent`；可信 Native Hook
    工具事件作为独立输入转发，不在 Agent 内进行工具命令规则匹配。
 5. 执行服务端下发的原子行为策略和资源策略。
-6. 建立执行单元隔离基线，检测逃逸行为和状态漂移。
+6. 按真实 session 保存有效权限快照，基于产品边界、Hook/PID 关联和 eBPF 执行结果检测逃逸行为；隔离基线仅作为独立运行事实和覆盖度信息。
 7. 在本机内核能力允许时提前返回 `EPERM`。
 8. 对有明确规则证据的高危执行单元执行 freeze/resume/kill。
 9. 上报结构化行为，但不上传文件内容、环境变量值或网络内容。
@@ -648,24 +651,32 @@ AGB-BUILTIN-004；Agent 只通过 PID/start_ticks/时间/correlation 解析实�
 
 具体 Hook 名称以目标内核 BTF 和 libbpf 支持为准；构建时不能假设所有内核都有相同 LSM Hook。
 
-### 10.2 行为与状态双重验证
+### 10.2 权限、Hook 与执行结果验证
 
-syscall attempt 只说明尝试，不一定成功。Agent 同时进行：
+syscall 或文件/网络行为只说明操作事实，不自动说明逃逸。Agent 必须同时具备：
 
-- syscall/LSM 行为记录。
-- syscall 返回值（可用时）。
-- 后续 `/proc` namespace/cgroup/capability 状态校验。
+- 当前真实 session 的完整权限快照。
+- Native Hook 工具调用与实际进程 PID + `start_ticks` 的关联。
+- eBPF 操作目标、返回值/执行结果和事件完整性。
+- 仅在需要展示主机状态时读取 `/proc`/cgroup；它们不是当前 escape finding 的成立条件。
 
 事件证据：
 
 ```json
 {
-  "rule": "join_external_namespace",
-  "syscall": "setns",
-  "target_namespace_inode": 4026531840,
-  "baseline_namespace_inode": 4026532901,
-  "return_code": -1,
-  "state_changed": false
+  "rule": "access_outside_workspace",
+  "operation": "open_read",
+  "permission": {
+    "class": "restricted",
+    "boundary": "enforced",
+    "workspace_roots": ["/workspace"],
+    "complete": true
+  },
+  "hook_event_id": "hook-event-id",
+  "tool_call_id": "tool-call-id",
+  "hook_pid_matched": true,
+  "return_code": 0,
+  "classification": "confirmed_escape"
 }
 ```
 
@@ -684,22 +695,21 @@ syscall attempt 只说明尝试，不一定成功。Agent 同时进行：
 
 未声明行为按策略处理，默认 audit/alert，不默认 freeze。
 
-### 10.4 关键高危规则
+### 10.4 当前关键逃逸规则
 
-第一批可配置规则：
+控制面展示 AGE-BUILTIN-101～107 的只读规则目录，运行时使用独立的内部语义键：
 
 | 规则 | 典型证据 | 推荐默认动作 |
 | --- | --- | --- |
-| `join_external_namespace` | setns 目标不属于执行单元 | deny_and_freeze |
-| `leave_expected_cgroup` | 成员 cgroup 与 baseline 不一致 | alert/deny_and_freeze |
-| `access_container_runtime_socket` | docker/containerd/CRI socket | deny_and_freeze |
-| `access_host_proc_root` | `/proc/1/root` 或外部 pid root | deny |
-| `write_cgroupfs` | 修改 cgroup 配置/迁移进程 | deny |
-| `mount_host_sensitive_path` | 新增宿主机敏感 bind mount | deny_and_freeze |
-| `ptrace_external_process` | ptrace 非本 unit 进程 | deny |
-| `ptrace_aegis_agent` | ptrace Aegis Agent | deny_and_freeze |
-| `load_bpf_or_module` | bpf/module load | deny |
-| `capability_escalation` | capability 超出 baseline/profile | deny_and_freeze |
+| `AGE-BUILTIN-101 / access_outside_workspace` | 工作区、临时目录或安全写入根之外的访问 | alert |
+| `AGE-BUILTIN-102 / network_boundary_violation` | 网络关闭、allowlist/denylist 越界 | alert |
+| `AGE-BUILTIN-103 / access_container_runtime_socket` | Docker/containerd/CRI-O/Podman socket | alert；可按 kernel coverage 编译 |
+| `AGE-BUILTIN-104 / process_boundary_operation` | setns、mount、ptrace、内核加载、身份/capability 变更 | alert；可按 kernel coverage 编译 |
+| `AGE-BUILTIN-105 / approval_boundary_violation` | 未确认即实际执行命令、文件或网络操作 | alert |
+| `AGE-BUILTIN-106 / protected_path_write` | Hermes 安全写入根之外的实际写入 | alert |
+| `AGE-BUILTIN-107 / host_execution_bypass` | OpenClaw `elevated` 绕过沙箱执行 | alert |
+
+只有 `restricted` session 且 Hook/PID/eBPF 证据完整时才进入这些规则的 finding 链路；旧的 `join_external_namespace`、`leave_expected_cgroup`、`isolation_baseline_drift` 等隔离漂移规则不再由当前代码写入 escape finding。
 
 ## 11. 本地决策引擎
 
@@ -917,20 +927,19 @@ freeze_timeout_seconds
   "execution_unit": {},
   "process": {},
   "violation": {
-    "rule": "join_external_namespace",
-    "operation": "setns",
-    "target": "/proc/1/ns/mnt",
-    "baseline": {},
-    "actual": {},
-    "state_changed": false,
-    "return_code": -1
+    "rule": "network_boundary_violation",
+    "operation": "connect",
+    "target": "example.invalid:443",
+    "return_code": 0
   },
-  "decision": "deny_and_freeze",
-  "evidence_event_ids": ["attempt-event-id", "drift-event-id"],
-  "action": {
-    "action_id": "uuid",
-    "type": "freeze_execution_unit",
-    "status": "success"
+  "decision": "alert",
+  "evidence": {
+    "permission": {"class": "restricted", "boundary": "enforced", "complete": true},
+    "hook_event_id": "hook-event-id",
+    "tool_call_id": "tool-call-id",
+    "hook_pid_matched": true,
+    "classification": "confirmed_escape",
+    "evidence_event_ids": ["ebpf-event-id", "hook-event-id"]
   }
 }
 ```

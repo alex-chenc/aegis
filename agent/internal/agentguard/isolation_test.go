@@ -118,6 +118,31 @@ func TestDiffIsolationStateReportsBeforeAfterAndUnavailableEvidence(t *testing.T
 	}
 }
 
+func TestDiffIsolationStateDoesNotTreatUnavailableCgroupAsChange(t *testing.T) {
+	before := newIsolationState()
+	before.CgroupPath = "/user.slice/agent.scope"
+	before.Availability["cgroup"] = EvidenceAvailability{Available: true}
+
+	after := before
+	after.CgroupPath = ""
+	after.Availability = cloneAvailability(before.Availability)
+	after.Availability["cgroup"] = EvidenceAvailability{
+		Available: false,
+		Reason:    "proc_cgroup_read_failed",
+	}
+
+	diff := DiffIsolationState(before, after)
+	if _, changed := diff.Changes["cgroup_path"]; changed {
+		t.Fatalf("unavailable cgroup evidence must not be treated as a cgroup change: %#v", diff)
+	}
+	if diff.StateChanged {
+		t.Fatalf("missing cgroup evidence must not produce a state change: %#v", diff)
+	}
+	if !containsString(diff.Unavailable, "cgroup:proc_cgroup_read_failed") {
+		t.Fatalf("unavailable cgroup reason missing: %#v", diff.Unavailable)
+	}
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {

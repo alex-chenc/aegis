@@ -231,7 +231,7 @@ func validAgentGuardPolicyRequest() model.AgentGuardPolicyDraftRequest {
 		},
 		EscapeRules: []model.AgentGuardEscapeRule{{
 			RuleID:     "ESCAPE-001",
-			Rule:       "join_external_namespace",
+			Rule:       "access_outside_workspace",
 			Action:     "deny_and_freeze",
 			Severity:   "critical",
 			Enabled:    true,

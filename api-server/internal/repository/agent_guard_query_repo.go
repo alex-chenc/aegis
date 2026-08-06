@@ -705,7 +705,9 @@ func (r *AgentGuardQueryRepository) ListFindings(
 		// historical DC single-event findings.
 		db = db.Where("finding_key LIKE ?", "tool-command:v1:%")
 	case model.AgentSecurityFindingDomainEscape:
-		db = db.Where("finding_key LIKE ?", "escape:v1:%")
+		// Escape findings are permission-scoped v2 records. Legacy v1 rows are
+		// removed by the v6.2 migration and must never leak into the new detail.
+		db = db.Where("finding_key LIKE ?", "escape:v2:%")
 	}
 	if query.AssetID != "" || query.AgentType != "" || query.ProfileKey != "" {
 		instanceScope := r.db.WithContext(ctx).

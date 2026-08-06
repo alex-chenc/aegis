@@ -7,34 +7,23 @@ import (
 	"time"
 )
 
-func TestEscapeDetectorEmitsOnlyMonitorDecisionsWithStateEvidence(t *testing.T) {
-	baseline := newIsolationState()
-	baseline.NamespaceInodes = map[string]uint64{"mnt": 100, "pid": 101}
-	baseline.Availability["namespaces"] = EvidenceAvailability{Available: true}
-	actual := baseline
-	actual.NamespaceInodes = map[string]uint64{"mnt": 100, "pid": 101}
-	actual.Availability = cloneAvailability(baseline.Availability)
-
+func TestEscapeDetectorEmitsPermissionBoundaryRuleWithoutProcEvidence(t *testing.T) {
 	attempt := GuardAttempt{
 		EventID:    "attempt-1",
 		Operation:  "setns",
 		Target:     "mnt:[999]",
 		ReturnCode: -1,
-		Baseline:   baseline,
-		Actual:     actual,
 	}
 	violation, ok := DetectEscapeAttempt(attempt)
 	if !ok {
 		t.Fatal("external setns was not detected")
 	}
-	if violation.Rule != EscapeRuleJoinExternalNamespace ||
+	if violation.Rule != EscapeRuleProcessBoundary ||
 		violation.Decision != DecisionWouldDeny ||
-		violation.StateChanged {
+		violation.StateChanged || len(violation.Baseline.NamespaceInodes) != 0 || len(violation.Diff.Changes) != 0 {
 		t.Fatalf("unexpected violation: %#v", violation)
 	}
-	if violation.Baseline.NamespaceInodes["mnt"] != 100 ||
-		violation.Actual.NamespaceInodes["mnt"] != 100 ||
-		violation.EvidenceEventIDs[0] != "attempt-1" {
+	if len(violation.EvidenceEventIDs) != 1 || violation.EvidenceEventIDs[0] != "attempt-1" {
 		t.Fatalf("missing evidence: %#v", violation)
 	}
 	if violation.Decision == Decision("deny") || violation.Decision == Decision("deny_and_freeze") {
@@ -42,7 +31,7 @@ func TestEscapeDetectorEmitsOnlyMonitorDecisionsWithStateEvidence(t *testing.T) 
 	}
 }
 
-func TestEscapeDetectorCoversRuntimeProcCgroupKernelAndCapabilitySignals(t *testing.T) {
+func TestEscapeDetectorCoversPermissionBoundarySignals(t *testing.T) {
 	tests := []struct {
 		name string
 		in   GuardAttempt
@@ -54,24 +43,14 @@ func TestEscapeDetectorCoversRuntimeProcCgroupKernelAndCapabilitySignals(t *test
 			rule: EscapeRuleAccessRuntimeSocket,
 		},
 		{
-			name: "host proc root",
-			in:   GuardAttempt{Operation: "open", Category: CategoryFile, Target: "/proc/1/root/etc/shadow"},
-			rule: EscapeRuleAccessHostProcRoot,
-		},
-		{
-			name: "cgroup write",
-			in:   GuardAttempt{Operation: "write", Category: CategoryFile, Target: "/sys/fs/cgroup/cgroup.procs"},
-			rule: EscapeRuleWriteCgroupFS,
-		},
-		{
 			name: "bpf load",
 			in:   GuardAttempt{Operation: "bpf", Category: CategoryKernel},
-			rule: EscapeRuleLoadBPFOrModule,
+			rule: EscapeRuleProcessBoundary,
 		},
 		{
 			name: "module load",
 			in:   GuardAttempt{Operation: "finit_module", Category: CategoryKernel},
-			rule: EscapeRuleLoadBPFOrModule,
+			rule: EscapeRuleProcessBoundary,
 		},
 	}
 	for _, tt := range tests {
@@ -83,17 +62,34 @@ func TestEscapeDetectorCoversRuntimeProcCgroupKernelAndCapabilitySignals(t *test
 		})
 	}
 
-	before := newIsolationState()
-	before.Capabilities = CapabilityState{Visible: true, Effective: "0x0000000000000001"}
-	before.Availability["capabilities"] = EvidenceAvailability{Available: true}
-	after := before
-	after.Capabilities.Effective = "0x0000000000000003"
-	after.Availability = cloneAvailability(before.Availability)
 	got, ok := DetectEscapeAttempt(GuardAttempt{
-		Operation: "capset", Category: CategoryIdentity, Baseline: before, Actual: after,
+		Operation: "capset", Category: CategoryIdentity,
 	})
-	if !ok || got.Rule != EscapeRuleCapabilityEscalation || !got.StateChanged {
+	if !ok || got.Rule != EscapeRuleProcessBoundary || got.StateChanged {
 		t.Fatalf("capability escalation not detected: %#v %v", got, ok)
+	}
+}
+
+func TestEscapeDetectorIgnoresCgroupDriftWhenEvidenceIsUnavailable(t *testing.T) {
+	baseline := newIsolationState()
+	baseline.CgroupPath = "/user.slice/agent.scope"
+	baseline.Availability["cgroup"] = EvidenceAvailability{Available: true}
+
+	actual := baseline
+	actual.CgroupPath = ""
+	actual.Availability = cloneAvailability(baseline.Availability)
+	actual.Availability["cgroup"] = EvidenceAvailability{
+		Available: false,
+		Reason:    "proc_cgroup_read_failed",
+	}
+
+	if violation, ok := DetectEscapeAttempt(GuardAttempt{
+		Operation: "open_read",
+		Target:    "/etc/ld.so.cache",
+		Baseline:  baseline,
+		Actual:    actual,
+	}); ok {
+		t.Fatalf("unavailable cgroup evidence must not create an escape violation: %#v", violation)
 	}
 }
 

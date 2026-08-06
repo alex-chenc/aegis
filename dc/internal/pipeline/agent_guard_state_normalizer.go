@@ -72,6 +72,7 @@ type sessionStateEnvelope struct {
 	StartedAt            string         `json:"started_at"`
 	LastSeenAt           string         `json:"last_seen_at"`
 	Completeness         map[string]any `json:"completeness"`
+	Permission           map[string]any `json:"permission"`
 }
 
 type deliveryStateEnvelope struct {
@@ -379,6 +380,7 @@ func normalizeSessionState(eventType string, hostID uuid.UUID, raw string) (*mod
 		CorrelationTokenHash: correlationTokenHash,
 		Status:               envelope.Status,
 		Completeness:         mustJSON(sanitizeValue(envelope.Completeness, ""), map[string]any{}),
+		Permission:           mustJSON(sanitizeValue(envelope.Permission, ""), map[string]any{}),
 		StartedAt:            startedAt,
 		LastSeenAt:           lastSeen,
 		EndedAt:              endedAt,

@@ -214,10 +214,20 @@ write_init_sql() {
 copy_release_migration() {
   local source_migration="${ROOT_DIR}/migrations/029_v6.2_agent_guard.sql"
   local release_migration="${RELEASE_DIR}/backend/migrations/029_v6.2_agent_guard.sql"
+  local source_profile_migration="${ROOT_DIR}/migrations/030_v6.2_zcode_agent_guard_profile.sql"
+  local release_profile_migration="${RELEASE_DIR}/backend/migrations/030_v6.2_zcode_agent_guard_profile.sql"
+  local source_escape_migration="${ROOT_DIR}/migrations/031_v6.2_agent_escape_permission_first.sql"
+  local release_escape_migration="${RELEASE_DIR}/backend/migrations/031_v6.2_agent_escape_permission_first.sql"
 
   test -s "${source_migration}" || die "missing required V6.2 migration: ${source_migration}"
   cp "${source_migration}" "${release_migration}"
   chmod 0644 "${release_migration}"
+  test -s "${source_profile_migration}" || die "missing required profile migration: ${source_profile_migration}"
+  cp "${source_profile_migration}" "${release_profile_migration}"
+  chmod 0644 "${release_profile_migration}"
+  test -s "${source_escape_migration}" || die "missing required V6.2 escape migration: ${source_escape_migration}"
+  cp "${source_escape_migration}" "${release_escape_migration}"
+  chmod 0644 "${release_escape_migration}"
 }
 
 write_release_compose() {
@@ -280,6 +290,8 @@ services:
       PGPASSWORD: ${DB_PASSWORD:-a_strong_db_password}
     volumes:
       - ./backend/migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
+      - ./backend/migrations/030_v6.2_zcode_agent_guard_profile.sql:/migrations/030_v6.2_zcode_agent_guard_profile.sql:ro
+      - ./backend/migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro
     command:
       - "psql"
       - "-v"
@@ -292,6 +304,10 @@ services:
       - "aegis_db"
       - "-f"
       - "/migrations/029_v6.2_agent_guard.sql"
+      - "-f"
+      - "/migrations/030_v6.2_zcode_agent_guard_profile.sql"
+      - "-f"
+      - "/migrations/031_v6.2_agent_escape_permission_first.sql"
     networks:
       - aegis-network
 

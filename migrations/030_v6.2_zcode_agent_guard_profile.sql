@@ -28,8 +28,8 @@ VALUES (
       "local":{"coverage":"no_isolation"},
       "ssh":{"family":"remote_sandbox","coverage_without_sensor":"remote_unobservable"}
     }'::jsonb,
-    '["access_container_runtime_socket","join_external_namespace","write_cgroupfs","credential_or_capability_gain","isolation_baseline_drift"]'::jsonb,
-    'sha256:bcb65be77f138f3f0f5d6de4ac2d017b43876f9cd98a0d0a7c55bd0f8dd5389c',
+    '["access_outside_workspace","network_boundary_violation","access_container_runtime_socket","process_boundary_operation"]'::jsonb,
+    'sha256:dd1e0a0d89bf1fdb6152ce92c57ef7cf460c9f49f1402b503348bba407ff8c2f',
     TRUE
 )
 ON CONFLICT (profile_key, profile_version) DO NOTHING;

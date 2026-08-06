@@ -135,6 +135,10 @@
             <el-icon><Warning /></el-icon>
             <span>{{ t('app.menu.agentGuardEscape') }}</span>
           </el-menu-item>
+          <el-menu-item index="/detection/agent-guard/configurations">
+            <el-icon><Setting /></el-icon>
+            <span>{{ t('app.menu.agentGuardConfigurations') }}</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/risk/weak-password">

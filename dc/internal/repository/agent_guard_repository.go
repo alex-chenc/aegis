@@ -336,6 +336,7 @@ func (r *AgentGuardStateRepository) UpsertWithContext(
 				"confidence":             gorm.Expr("EXCLUDED.confidence"),
 				"correlation_token_hash": gorm.Expr("EXCLUDED.correlation_token_hash"),
 				"completeness":           gorm.Expr("EXCLUDED.completeness"),
+				"permission":             gorm.Expr("EXCLUDED.permission"),
 				"status": gorm.Expr(
 					"CASE WHEN EXCLUDED.last_seen_at >= agent_behavior_sessions.last_seen_at THEN EXCLUDED.status ELSE agent_behavior_sessions.status END",
 				),

@@ -46,6 +46,7 @@ export default {
     agentGuard: 'Agent Protection',
     agentGuardEvents: 'Agent Event Visibility & Protection',
     agentGuardEscape: 'Agent Escape Protection',
+    agentGuardConfigurations: 'Agent Configuration Detection',
     weakPassword: 'Intelligent Weak Password Detection',
     settings: 'System Settings',
     modelSettings: 'Model Settings',

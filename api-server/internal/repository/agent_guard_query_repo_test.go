@@ -180,7 +180,7 @@ func TestListFindingsFiltersByFindingDomain(t *testing.T) {
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	for _, key := range []string{
 		"tool-command:v1:AGB-BUILTIN-004:session:call-1",
-		"escape:v1:agent_sandbox_violation:event-1",
+		"escape:v2:" + sessionID.String() + ":access_outside_workspace:event-1",
 		"single:v1:AGB-BUILTIN-004:event-2",
 	} {
 		if err := db.Exec(insert, uuid.New(), key, hostID, instanceID, sessionID, unitID,
@@ -204,7 +204,7 @@ func TestListFindingsFiltersByFindingDomain(t *testing.T) {
 		SessionID:           sessionID.String(),
 		FindingDomain:       model.AgentSecurityFindingDomainEscape,
 	})
-	if err != nil || escapeTotal != 1 || len(escapeFindings) != 1 || escapeFindings[0].FindingKey[:len("escape:v1:")] != "escape:v1:" {
+	if err != nil || escapeTotal != 1 || len(escapeFindings) != 1 || escapeFindings[0].FindingKey[:len("escape:v2:")] != "escape:v2:" {
 		t.Fatalf("escape findings total=%d items=%#v err=%v", escapeTotal, escapeFindings, err)
 	}
 }

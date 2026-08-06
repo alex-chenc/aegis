@@ -1,14 +1,46 @@
-# Aegis Intelligent Host Security System
+# Aegis Intelligent Host Security System (V6.2)
 
 [中文](README.md) | English
 
-![AI Analysis](docs/screenshots/ui-refresh/ai_analysis.png)
-
-![AI Trace](docs/screenshots/ui-refresh/ai_trace.png)
-
 ## Overview
 
-Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology, using a natural-language AI assistant to orchestrate end-to-end security operations across baselines, vulnerabilities, assets, alerts, and weak passwords, achieving dynamic audit management of host configurations, vulnerabilities, and weak passwords. Through continuous AI noise reduction and automated judgment, it builds a closed loop from precise protection to automated response. We are committed to creating a minimalist, intelligent server baseline automation management platform for DevOps and security engineers through the forward-looking technology of "model against model".
+Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology, using a natural-language AI assistant to orchestrate end-to-end security operations across baselines, vulnerabilities, assets, alerts, and weak passwords, achieving dynamic audit management of host configurations, vulnerabilities, and weak passwords. V6.2 adds AI Agent runtime protection across behavior awareness, sandbox-escape detection, and configuration security checks, using deterministic rules, host-side sensors, and traceable evidence to close the loop from precise protection to automated response.
+
+## AI Agent Protection (V6.2)
+
+V6.2 adds three protection capabilities for AI Agents such as Codex, Claude Code, OpenClaw, Hermes, and Zcode. They help security teams answer which Agent, session, and execution process performed an operation, and whether it crossed its effective boundary.
+
+### AI Agent Event Awareness and Protection
+
+- Establishes ownership across hosts, Agent runtime instances, sessions, and execution units, tracking controller processes and the shell, script, compiler, and container processes they actually launch
+- Collects process/command, file, network, identity, persistence, kernel, and isolation-control behavior into traceable operation chains and behavior panoramas
+- Includes built-in rules for sensitive directory access, external network connections, file creation, sensitive command execution, and privilege escalation, with Findings, security analysis, and evidence correlation
+- Uses Native Hooks to collect real session lifecycle and tool-call events; without a trusted Hook, observable OS behavior is retained and tool semantics are marked unobservable
+- Binds rule hits and AI analysis to real events, tool inputs, and PID/PPID evidence; AI conclusions never replace deterministic host-side security facts
+
+![AI Agent event awareness and protection: behavior panorama](docs/screenshots/ui-refresh/ai_agent_tools.png)
+
+![AI Agent event awareness and protection: security analysis](docs/screenshots/ui-refresh/ai_agent_tools2.png)
+
+### AI Agent Escape Protection
+
+- Uses a permission-first model, storing each real session's effective permission, sandbox mode, workspace/temp roots, network allow/deny rules, approval state, and execution backend
+- Applies product-specific semantics: Claude Code `bypassPermissions` does not disable an active native sandbox; Zcode Full Access is outside escape detection; OpenClaw `elevated` and the Hermes safe-write root are evaluated independently
+- Creates an escape finding only when a restricted session has a trusted Hook tool call, process PID + `start_ticks`, and a complete eBPF execution result; unknown permissions, missing Hooks, PID reuse, explicit no-isolation, and remote-unobservable sessions do not produce escape conclusions
+- Distinguishes `policy_violation_attempt` (the boundary request was rejected and is suspicious) from `confirmed_escape` (the boundary operation succeeded); authorized boundary expansion and Full Access are not treated as escapes, while independent behavior auditing continues
+- Provides immutable AGE-BUILTIN-101 through AGE-BUILTIN-107 rules for paths outside the workspace, restricted network access, container runtime sockets, process-boundary operations, approval bypass, Hermes protected paths, and OpenClaw host-execution bypass
+- The detail view presents effective permission -> Hook tool/command -> process PID/`start_ticks` -> eBPF execution result -> classification; legacy isolation drift does not create a new escape finding, and monitoring/alerting is shown separately from local kernel enforcement
+
+![AI Agent escape protection](docs/screenshots/ui-refresh/ai_agent_tools3.png)
+
+### AI Agent Configuration Security Detection
+
+- Reads fixed allowlisted configuration files for Codex, Claude Code, OpenClaw, OpenCode, and Hermes by host scope; the frontend cannot provide arbitrary paths
+- Detects `approval_policy=never`, `danger-full-access`, disabled sandboxes, unrestricted Shell/tool permissions, unrestricted network access, and risky Hooks
+- Shows configuration files, redacted content, Hook points, field paths, severity, matched rules, and remediation guidance; tokens, passwords, private keys, and other secrets remain masked
+- Uses read-only collection, path allowlists, file-size limits, and timeouts; a failed configuration scan does not affect Agent execution and never modifies configuration automatically
+
+![AI Agent configuration security detection](docs/screenshots/ui-refresh/ai_agent_tools4.png)
 
 ## Core Features
 

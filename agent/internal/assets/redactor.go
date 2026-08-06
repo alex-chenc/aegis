@@ -63,16 +63,27 @@ var configPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(private_key\s*[=:]\s*)[^\s;}\n]+`),
 }
 
+var sensitiveConfigValuePattern = regexp.MustCompile(`(?i)(["']?(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|cookie)["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'[^']*'|[^,;\n}\r]+)`)
+
 // RedactConfigSummary 对配置内容进行脱敏
 func RedactConfigSummary(content string) string {
 	if content == "" {
 		return content
 	}
-
-	result := content
-	for _, pattern := range configPatterns {
-		result = pattern.ReplaceAllString(result, "${1}***")
-	}
-
-	return result
+	return sensitiveConfigValuePattern.ReplaceAllStringFunc(content, func(match string) string {
+		parts := sensitiveConfigValuePattern.FindStringSubmatchIndex(match)
+		if len(parts) < 6 {
+			return match
+		}
+		prefix := match[parts[2]:parts[3]]
+		value := strings.TrimSpace(match[parts[4]:parts[5]])
+		if strings.HasPrefix(value, "\"") {
+			value = "\"***\""
+		} else if strings.HasPrefix(value, "'") {
+			value = "'***'"
+		} else {
+			value = "***"
+		}
+		return prefix + value
+	})
 }

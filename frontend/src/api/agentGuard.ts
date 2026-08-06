@@ -19,6 +19,7 @@ import type {
   AgentGuardPolicyPublishResult,
   AgentGuardPolicyValidation,
   AgentGuardRuntimeSettings,
+  AgentConfigScanResult,
   AgentPanoramaResponse,
   AgentBehaviorSession,
   AgentExecutionUnit,
@@ -60,6 +61,10 @@ export function listAgentGuardAgents(
   params: AgentGuardAgentQuery,
 ): Promise<PageResult<AgentGuardAgentSummary>> {
   return request.get('/agent-guard/agents', { params })
+}
+
+export function scanAgentConfigurations(hostId: string): Promise<AgentConfigScanResult> {
+  return request.get('/agent-guard/configurations', { params: { host_id: hostId } })
 }
 
 export function listAgentGuardInstances(

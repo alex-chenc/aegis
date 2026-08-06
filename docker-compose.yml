@@ -77,6 +77,7 @@ services:
     volumes:
       - ./migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
       - ./migrations/030_v6.2_zcode_agent_guard_profile.sql:/migrations/030_v6.2_zcode_agent_guard_profile.sql:ro
+      - ./migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro
     command:
       - "psql"
       - "-v"
@@ -91,6 +92,8 @@ services:
       - "/migrations/029_v6.2_agent_guard.sql"
       - "-f"
       - "/migrations/030_v6.2_zcode_agent_guard_profile.sql"
+      - "-f"
+      - "/migrations/031_v6.2_agent_escape_permission_first.sql"
     networks:
       - aegis-network
 

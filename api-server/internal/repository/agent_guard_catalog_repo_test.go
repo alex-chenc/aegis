@@ -47,7 +47,7 @@ func TestAgentGuardCatalogRepositoryListsAndVerifiesBuiltinManifest(t *testing.T
 		t.Fatalf("ListProfiles P4 catalog: %v", err)
 	}
 	if total != 1 || len(profiles) != 1 || profiles[0].ProfileKey != model.AgentGuardProfileKeyClaudeCodeLinux ||
-		profiles[0].Digest != "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1" {
+		profiles[0].Digest != "sha256:94eb603baadec817c6e03857064fbe809aa5da42d612d9dd7e8b486f66cb63a7" {
 		t.Fatalf("unexpected Claude Code catalog result: total=%d profiles=%#v", total, profiles)
 	}
 

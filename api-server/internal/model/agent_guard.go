@@ -250,6 +250,7 @@ type AgentBehaviorSession struct {
 	BehaviorCount        int64          `gorm:"not null;default:0" json:"behavior_count"`
 	FindingCount         int64          `gorm:"not null;default:0" json:"finding_count"`
 	Completeness         datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"completeness"`
+	Permission           datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"permission"`
 	StartedAt            time.Time      `gorm:"not null;index" json:"started_at"`
 	LastSeenAt           time.Time      `gorm:"not null" json:"last_seen_at"`
 	EndedAt              *time.Time     `json:"ended_at,omitempty"`

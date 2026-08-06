@@ -31,7 +31,16 @@
           :class="{ active: selectedSessionId === session.id }"
           @click="emit('select', session.id)"
         >
-          {{ session.external_session_id || session.id }}
+          <span class="runtime-option-content">
+            <strong>{{ session.external_session_id || session.id }}</strong>
+            <el-tag
+              size="small"
+              effect="plain"
+              :type="permissionTagType(session.permission?.class || 'unknown')"
+            >
+              {{ permissionLabel(session.permission?.class || 'unknown') }}
+            </el-tag>
+          </span>
         </button>
       </div>
     </div>
@@ -86,6 +95,18 @@ function toggleSession(sessionId: string) {
     ? props.selectedSessionIds.filter(id => id !== sessionId)
     : [...props.selectedSessionIds, sessionId]
   emit('selection-change', next)
+}
+
+function permissionLabel(value?: string) {
+  if (value === 'full_access') return 'Full Access'
+  if (value === 'restricted') return t('agentGuard.drawer.escapeAnalysisDetail.restricted')
+  return t('agentGuard.drawer.escapeAnalysisDetail.unknownPermission')
+}
+
+function permissionTagType(value?: string) {
+  if (value === 'full_access') return 'info'
+  if (value === 'restricted') return 'warning'
+  return 'danger'
 }
 </script>
 
@@ -145,6 +166,21 @@ function toggleSession(sessionId: string) {
   color: #334155;
   background: #fff;
   cursor: pointer;
+}
+
+.runtime-option-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.runtime-option-content strong {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .runtime-option.active {

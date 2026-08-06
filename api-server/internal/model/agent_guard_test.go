@@ -41,15 +41,15 @@ func TestP4BuiltinAgentProfilesAreStableAndRemoteFailsClosed(t *testing.T) {
 	}{
 		AgentGuardProfileKeyClaudeCodeLinux: {
 			id: AgentGuardProfileIDClaudeCodeLinux, agentType: "claude-code", executable: "claude",
-			configPath: ".claude/settings.json", digest: "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
+			configPath: ".claude/settings.json", digest: "sha256:94eb603baadec817c6e03857064fbe809aa5da42d612d9dd7e8b486f66cb63a7",
 		},
 		AgentGuardProfileKeyOpenCodeLinux: {
 			id: AgentGuardProfileIDOpenCodeLinux, agentType: "opencode", executable: "opencode",
-			configPath: ".config/opencode/opencode.json", digest: "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
+			configPath: ".config/opencode/opencode.json", digest: "sha256:b0fff61d935a97de75d5e90c658248201117608d256cd9be3f9a30d1ee3a34c2",
 		},
 		AgentGuardProfileKeyGeminiCLILinux: {
 			id: AgentGuardProfileIDGeminiCLILinux, agentType: "gemini-cli", executable: "gemini",
-			configPath: ".gemini/settings.json", digest: "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
+			configPath: ".gemini/settings.json", digest: "sha256:300f72f233925ac36203a8a6d6ad4d8aa3247b93cf03474e8cede761315f5f66",
 		},
 	}
 

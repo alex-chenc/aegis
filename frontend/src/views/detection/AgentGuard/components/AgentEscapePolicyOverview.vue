@@ -10,7 +10,6 @@
     </div>
     <div class="strategy-grid">
       <article v-for="item in strategies" :key="item.key" class="strategy-card">
-        <div class="strategy-icon">{{ item.index }}</div>
         <div>
           <h3>{{ item.title }}</h3>
           <p>{{ item.description }}</p>
@@ -22,7 +21,7 @@
     </div>
     <div class="chain-row">
       <span v-for="(stage, index) in chain" :key="stage" class="chain-stage">
-        <strong>{{ index + 1 }}</strong>{{ stage }}<i v-if="index < chain.length - 1">→</i>
+        {{ stage }}<i v-if="index < chain.length - 1">→</i>
       </span>
     </div>
   </section>
@@ -34,14 +33,15 @@ import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 const strategies = computed(() => [
-  { key: 'namespace', index: '01', title: t('agentGuard.escapeOverview.namespaceTitle'), description: t('agentGuard.escapeOverview.namespaceDescription'), tags: ['setns', 'unshare', 'mount'] },
-  { key: 'runtime', index: '02', title: t('agentGuard.escapeOverview.runtimeTitle'), description: t('agentGuard.escapeOverview.runtimeDescription'), tags: ['cgroupfs', '/proc', 'runtime socket'] },
-  { key: 'identity', index: '03', title: t('agentGuard.escapeOverview.identityTitle'), description: t('agentGuard.escapeOverview.identityDescription'), tags: ['ptrace', 'capset', 'BPF LSM'] },
+  { key: 'permission', title: t('agentGuard.escapeOverview.permissionTitle'), description: t('agentGuard.escapeOverview.permissionDescription'), tags: ['Codex', 'Claude Code', 'OpenClaw', 'Hermes', 'Zcode'] },
+  { key: 'directory', title: t('agentGuard.escapeOverview.directoryTitle'), description: t('agentGuard.escapeOverview.directoryDescription'), tags: ['workspaceAccess', 'safe root', 'temp roots'] },
+  { key: 'network', title: t('agentGuard.escapeOverview.networkTitle'), description: t('agentGuard.escapeOverview.networkDescription'), tags: ['curl', 'allowlist', 'elevated'] },
 ])
 const chain = computed(() => [
+  t('agentGuard.escapeOverview.permission'),
   t('agentGuard.escapeOverview.hook'),
   t('agentGuard.escapeOverview.process'),
-  t('agentGuard.escapeOverview.procCgroup'),
+  t('agentGuard.escapeOverview.execution'),
   t('agentGuard.escapeOverview.verdict'),
 ])
 </script>

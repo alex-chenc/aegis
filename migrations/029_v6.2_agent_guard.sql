@@ -932,8 +932,8 @@ $agent_guard_profiles$
       "seccomp": "profile_or_filter",
       "controller_outside_worker_namespace": true
     },
-    "default_escape_rules": ["join_external_namespace", "mount_host_path", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:ac7f7259e1ea26729377e4535cbdbb2a1e2c17befdeb3965a924388acb0c2384",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:5e2058f4656ea4d7540ac1a662b4806edcc46aa9a860ac38ca65c1bb27deb629",
     "enabled": true
   },
   {
@@ -964,8 +964,8 @@ $agent_guard_profiles$
       "ssh": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"},
       "openshell": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"}
     },
-    "default_escape_rules": ["access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:56804a5b02e48827bb944959412ee8f19d46e333257f068e0197d81245e71c4d",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:e6f916a2eb9b4fab6efd72f539efa7d7c9d51ab2f2d14255a55689249b9cfb79",
     "enabled": true
   },
   {
@@ -1000,8 +1000,8 @@ $agent_guard_profiles$
       "remote": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"},
       "whole_process_wrapper": {"family": "whole_process_container"}
     },
-    "default_escape_rules": ["access_container_runtime_socket", "join_external_namespace", "mount_host_path", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:0bf30bb4daff9b86ccf4fd4fad7bc515f3fb3ed760a7b7ce6ca98f5783889524",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:eccaf4fdc6287ff8cfb74e03c3c15aa86304d32d2f2401794d7f31b6fbfb9166",
     "enabled": true
   },
   {
@@ -1027,8 +1027,8 @@ $agent_guard_profiles$
       "local": {"coverage": "no_isolation"},
       "ssh": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"}
     },
-    "default_escape_rules": ["access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:e4158634ff61db23c9fa930507e5d91bb79840e94508e7ec9d4d5cd76f0e01e1",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:94eb603baadec817c6e03857064fbe809aa5da42d612d9dd7e8b486f66cb63a7",
     "enabled": true
   },
   {
@@ -1054,8 +1054,8 @@ $agent_guard_profiles$
       "local": {"coverage": "no_isolation"},
       "ssh": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"}
     },
-    "default_escape_rules": ["access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:c02f7b4117b237dda288bb3eaf5611770f0efa0b42cb5970f916126472ecb7b1",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:b0fff61d935a97de75d5e90c658248201117608d256cd9be3f9a30d1ee3a34c2",
     "enabled": true
   },
   {
@@ -1081,8 +1081,8 @@ $agent_guard_profiles$
       "local": {"coverage": "no_isolation"},
       "ssh": {"family": "remote_sandbox", "coverage_without_sensor": "remote_unobservable"}
     },
-    "default_escape_rules": ["access_container_runtime_socket", "join_external_namespace", "write_cgroupfs", "credential_or_capability_gain", "isolation_baseline_drift"],
-    "digest": "sha256:7038eb7b2a4799747ebd3ec4b29b37f40c0ec44db72b362277915aa7b92141d7",
+    "default_escape_rules": ["access_outside_workspace", "network_boundary_violation", "access_container_runtime_socket", "process_boundary_operation"],
+    "digest": "sha256:300f72f233925ac36203a8a6d6ad4d8aa3247b93cf03474e8cede761315f5f66",
     "enabled": true
   }
 ]

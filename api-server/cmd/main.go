@@ -441,6 +441,7 @@ func main() {
 	)
 	agentGuardHandler.SetBundleService(agentGuardBundleService)
 	agentGuardHandler.SetRuntimeSettingsService(agentGuardRuntimeSettingsService, agentGuardRuntimeSettingsService)
+	agentGuardHandler.SetConfigScanner(service.NewAgentConfigSecurityService(serverClient, logger.Get().Named("agent_config_security")))
 	agentGuardHandler.SetAnalysisService(agentGuardAnalysisService)
 	agentGuardHandler.SetActionService(agentGuardActionService)
 	logger.Info("Weak password detection module initialized")

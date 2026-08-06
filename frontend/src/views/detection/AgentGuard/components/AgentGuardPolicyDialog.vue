@@ -14,11 +14,16 @@
     />
 
     <section v-if="mode === 'escape'" class="catalog-section">
-      <div class="section-heading"><div><h3>{{ t('agentGuard.policy.escapePolicies') }}</h3><p>{{ t('agentGuard.policy.escapePoliciesHint') }}</p></div><el-tag type="danger">Hook → PID → /proc/cgroup</el-tag></div>
+      <div class="section-heading"><div><h3>{{ t('agentGuard.policy.escapePolicies') }}</h3><p>{{ t('agentGuard.policy.escapePoliciesHint') }}</p></div><el-tag type="danger">权限 → Hook → PID → eBPF</el-tag></div>
       <div class="builtin-rule-list">
         <article v-for="rule in sortedEscapeRules" :key="`${rule.rule_key}:${rule.rule_version}`" class="builtin-rule-card">
           <div class="rule-card-heading"><div><h4>{{ rule.name }}</h4><span class="rule-key">{{ rule.rule_key }} · v{{ rule.rule_version }}</span></div><el-tag type="danger">{{ ruleAction(rule) }}</el-tag></div>
           <p class="rule-description">{{ rule.description }}</p>
+          <div v-if="rule.agent_types?.length || rule.backends?.length" class="rule-scope-tags">
+            <el-tag v-for="agent in rule.agent_types || []" :key="`agent-${agent}`" size="small">{{ agentDisplayName(agent) }}</el-tag>
+            <el-tag v-for="backend in rule.backends || []" :key="`backend-${backend}`" size="small" type="info">{{ backend }}</el-tag>
+            <el-tag v-for="semantic in rule.boundary_semantics || []" :key="`semantic-${semantic}`" size="small" type="warning">{{ semantic }}</el-tag>
+          </div>
           <div class="rule-detail-grid"><div><span class="meta-label">{{ t('agentGuard.policy.hookPoints') }}</span><div class="detail-list"><code v-for="item in rule.hook_points || []" :key="item">{{ item }}</code></div></div><div><span class="meta-label">{{ t('agentGuard.policy.requiredEvidence') }}</span><div class="detail-list"><code v-for="item in rule.required_evidence || []" :key="item">{{ item }}</code></div></div><div><span class="meta-label">{{ t('agentGuard.policy.defaultState') }}</span><span>{{ rule.default_enabled === false ? t('agentGuard.policy.disabled') : t('agentGuard.policy.enabled') }}</span></div><div><span class="meta-label">{{ t('agentGuard.policy.digest') }}</span><code class="digest">{{ rule.digest || '-' }}</code></div></div>
         </article>
       </div>
@@ -211,6 +216,11 @@ function categoryLabel(category: string): string {
   const key = `agentGuard.policy.categoryNames.${category}`
   const translated = t(key)
   return translated === key ? category : translated
+}
+
+function agentDisplayName(agent: string): string {
+  const names: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code', openclaw: 'OpenClaw', hermes: 'Hermes', zcode: 'Zcode' }
+  return names[agent] || agent
 }
 
 function severityLabel(severity: string): string {
