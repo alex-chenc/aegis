@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
 	"go.uber.org/zap"
 )
 
@@ -23,16 +26,18 @@ type MCPCollector struct {
 
 // MCPConfig mcp.json 配置结构
 type MCPConfig struct {
-	MCPServers map[string]MCPServerDef `json:"mcpServers"`
+	MCPServers map[string]MCPServerDef `json:"mcpServers" toml:"mcp_servers"`
 }
 
 // MCPServerDef 单个 MCP Server 定义
 type MCPServerDef struct {
-	Command   string            `json:"command"`
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env"`
-	URL       string            `json:"url"`
-	Transport string            `json:"transport"`
+	Command           string         `json:"command" toml:"command"`
+	Args              []string       `json:"args" toml:"args"`
+	Env               map[string]any `json:"env" toml:"env"`
+	URL               string         `json:"url" toml:"url"`
+	Transport         string         `json:"transport" toml:"transport"`
+	Enabled           *bool          `json:"enabled" toml:"enabled"`
+	BearerTokenEnvVar string         `json:"bearer_token_env_var" toml:"bearer_token_env_var"`
 }
 
 // mcpScanTarget MCP 配置文件扫描目标
@@ -114,6 +119,43 @@ func (c *MCPCollector) Collect(ctx context.Context) []AIAsset {
 					zap.String("config", fullPath))
 			}
 		}
+
+		codexPath := codexMCPConfigPath(homeDir)
+		if pathExists(codexPath) {
+			config, err := c.parseCodexMCPConfig(codexPath)
+			if err != nil {
+				c.logger.Debug("Failed to parse Codex MCP config",
+					zap.String("path", codexPath),
+					zap.Error(err))
+			} else {
+				for serverName, serverDef := range config.MCPServers {
+					key := "codex:" + serverName + ":" + codexPath
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+
+					extra := c.buildMCPExtra("codex", codexPath, serverDef, map[string]string{
+						"home_dir": homeDir,
+						"format":   "toml",
+					})
+					asset := AIAsset{
+						Category:    "mcp_server",
+						Name:        serverName,
+						DisplayName: serverName,
+						Source:      "config",
+						ConfigPath:  codexPath,
+						Extra:       extra,
+					}
+					results = append(results, asset)
+					c.logger.Info("MCP server detected",
+						zap.String("server", serverName),
+						zap.String("agent", "codex"),
+						zap.String("transport", extra["transport"]),
+						zap.String("config", codexPath))
+				}
+			}
+		}
 	}
 
 	for _, asset := range c.ScanProjectMCPConfigs(ctx, c.projectDirs) {
@@ -153,11 +195,33 @@ func (c *MCPCollector) parseMCPConfig(path string) (*MCPConfig, error) {
 	return &config, nil
 }
 
+// parseCodexMCPConfig 解析 Codex 的 ~/.codex/config.toml。
+// Codex 使用 mcp_servers 表，并且 env 的值可能是字符串、布尔值或数字；
+// 采集阶段只保留环境变量名，避免把凭证写入资产数据。
+func (c *MCPCollector) parseCodexMCPConfig(path string) (*MCPConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var config MCPConfig
+	if err := toml.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	if config.MCPServers == nil {
+		config.MCPServers = make(map[string]MCPServerDef)
+	}
+	return &config, nil
+}
+
 func (c *MCPCollector) buildMCPExtra(agentName, configPath string, serverDef MCPServerDef, extra map[string]string) map[string]string {
 	transport := serverDef.Transport
 	if transport == "" {
 		if serverDef.URL != "" {
 			transport = "sse"
+			if agentName == "codex" {
+				transport = "streamable_http"
+			}
 		} else {
 			transport = "stdio"
 		}
@@ -169,16 +233,34 @@ func (c *MCPCollector) buildMCPExtra(agentName, configPath string, serverDef MCP
 	extra["agent"] = agentName
 	extra["transport"] = transport
 	extra["config"] = configPath
+	if serverDef.Enabled != nil {
+		extra["enabled"] = strconv.FormatBool(*serverDef.Enabled)
+	}
+	if serverDef.BearerTokenEnvVar != "" {
+		extra["bearer_token_env_var"] = serverDef.BearerTokenEnvVar
+	}
+	if len(serverDef.Env) > 0 {
+		envKeys := make([]string, 0, len(serverDef.Env))
+		for key := range serverDef.Env {
+			envKeys = append(envKeys, key)
+		}
+		sort.Strings(envKeys)
+		extra["env_keys"] = strings.Join(envKeys, ",")
+	}
 	if serverDef.Command != "" {
-		extra["command"] = serverDef.Command
+		extra["command"] = RedactCmdline(serverDef.Command)
 	}
 	if len(serverDef.Args) > 0 {
-		extra["command_line"] = strings.TrimSpace(serverDef.Command + " " + strings.Join(serverDef.Args, " "))
+		extra["command_line"] = RedactCmdline(strings.TrimSpace(serverDef.Command + " " + strings.Join(serverDef.Args, " ")))
 	}
 	if serverDef.URL != "" {
-		extra["url"] = serverDef.URL
+		extra["url"] = RedactCmdline(serverDef.URL)
 	}
 	return extra
+}
+
+func codexMCPConfigPath(homeDir string) string {
+	return filepath.Join(resolveCodexHome(homeDir), "config.toml")
 }
 
 // mcpScanTargets 返回 MCP 配置文件扫描目标

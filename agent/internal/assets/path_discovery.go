@@ -44,6 +44,18 @@ func discoverProjectDirs() []string {
 	return uniqueExistingDirs(candidates)
 }
 
+// resolveCodexHome returns the Codex configuration directory for a discovered
+// home. CODEX_HOME is process-scoped, so it is only applied to the current
+// user's home; other discovered users retain their own ~/.codex directory.
+func resolveCodexHome(homeDir string) string {
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	currentHome, _ := os.UserHomeDir()
+	if homeDir == currentHome && filepath.IsAbs(codexHome) {
+		return filepath.Clean(codexHome)
+	}
+	return filepath.Join(homeDir, ".codex")
+}
+
 func splitPathList(value string) []string {
 	var result []string
 	for _, item := range strings.Split(value, ",") {

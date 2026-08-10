@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -102,6 +103,69 @@ func TestMCPCollectorScansHomeAndProjectConfigs(t *testing.T) {
 	}
 	if browser.Extra["transport"] != "sse" {
 		t.Fatalf("expected sse transport, got %q", browser.Extra["transport"])
+	}
+}
+
+func TestMCPCollectorScansCodexConfigTOMLAndRedactsSecrets(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	mustMkdir(t, filepath.Join(home, ".codex"))
+	mustWriteFile(t, filepath.Join(home, ".codex", "config.toml"), `[mcp_servers."aegis-hosts"]
+command = "python3"
+args = ["/opt/aegis-mcp.py", "--token", "super-secret"]
+bearer_token_env_var = "AEGIS_MCP_TOKEN"
+
+[mcp_servers."aegis-hosts".env]
+AEGIS_API_TOKEN_FILE = "/root/.config/aegis/mcp-token"
+
+[mcp_servers.remote]
+url = "https://user:password@example.test/mcp?token=secret-value"
+enabled = false
+`)
+
+	collector := &MCPCollector{
+		logger:      zap.NewNop(),
+		homeDirs:    []string{home},
+		projectDirs: nil,
+	}
+
+	assets := collector.Collect(context.Background())
+	byName := aiAssetsByName(assets)
+
+	aegisHosts := byName["aegis-hosts"]
+	if aegisHosts == nil {
+		t.Fatalf("expected Codex MCP server asset, got %#v", assets)
+	}
+	if aegisHosts.Extra["agent"] != "codex" {
+		t.Fatalf("expected codex agent, got %q", aegisHosts.Extra["agent"])
+	}
+	if aegisHosts.Extra["transport"] != "stdio" {
+		t.Fatalf("expected stdio transport, got %q", aegisHosts.Extra["transport"])
+	}
+	if aegisHosts.Extra["env_keys"] != "AEGIS_API_TOKEN_FILE" {
+		t.Fatalf("expected only environment variable names, got %q", aegisHosts.Extra["env_keys"])
+	}
+	if aegisHosts.Extra["bearer_token_env_var"] != "AEGIS_MCP_TOKEN" {
+		t.Fatalf("expected bearer token environment variable name, got %q", aegisHosts.Extra["bearer_token_env_var"])
+	}
+	if strings.Contains(aegisHosts.Extra["command_line"], "super-secret") {
+		t.Fatalf("command line leaked a token: %q", aegisHosts.Extra["command_line"])
+	}
+
+	remote := byName["remote"]
+	if remote == nil {
+		t.Fatalf("expected Codex remote MCP server asset, got %#v", assets)
+	}
+	if remote.Extra["transport"] != "streamable_http" {
+		t.Fatalf("expected streamable_http transport, got %q", remote.Extra["transport"])
+	}
+	if remote.Extra["enabled"] != "false" {
+		t.Fatalf("expected disabled state to be captured, got %q", remote.Extra["enabled"])
+	}
+	if strings.Contains(remote.Extra["url"], "password") || strings.Contains(remote.Extra["url"], "secret-value") {
+		t.Fatalf("URL leaked credentials: %q", remote.Extra["url"])
 	}
 }
 

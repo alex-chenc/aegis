@@ -121,11 +121,7 @@ func (c *AgentConfigCollector) Collect(ctx context.Context, hostID string) *Agen
 func (c *AgentConfigCollector) candidates() []agentConfigCandidate {
 	var result []agentConfigCandidate
 	for _, home := range c.homeDirs {
-		codexHome := os.Getenv("CODEX_HOME")
-		currentHome, _ := os.UserHomeDir()
-		if home != currentHome || codexHome == "" || !filepath.IsAbs(codexHome) {
-			codexHome = filepath.Join(home, ".codex")
-		}
+		codexHome := resolveCodexHome(home)
 		result = append(result,
 			agentConfigCandidate{"codex", "Codex", filepath.Join(codexHome, "config.toml"), "toml"},
 			agentConfigCandidate{"codex", "Codex", filepath.Join(codexHome, "hooks.json"), "json"},
