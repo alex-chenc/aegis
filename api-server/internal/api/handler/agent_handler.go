@@ -138,6 +138,10 @@ AgentGuardFreezeEnabled = false
 AgentGuardStateDir = "/var/lib/aegis/agent-guard"
 AgentGuardSpoolCapacity = 4096
 AgentGuardReconcileSeconds = 30
+AgentSessionEnabled = true
+AgentSessionScanSeconds = 30
+AgentSessionInitialLookbackDays = 14
+AgentSessionMaxFiles = 2000
 EOF
 chmod 600 /etc/aegis-agent/config.toml
 # 安装目录只保留兼容入口，避免修改未生效的配置副本。

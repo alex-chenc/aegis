@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"aegis-agent/internal/asset"
 
 	"aegis-agent/internal/agentguard"
+	"aegis-agent/internal/agentsession"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/checker"
 	"aegis-agent/internal/client"
@@ -161,6 +163,57 @@ func main() {
 
 	c := client.NewClient(cfg, exec, toolManager, ruleLoader, blockerInst)
 
+	// V6.3 session awareness reads only static Claude/Codex JSONL files. It
+	// does not install a Hook or watch the filesystem.
+	homeDir := resolveAgentHomeDir()
+	claudeRoot := cfg.AgentSessionClaudeRoot
+	if claudeRoot == "" && homeDir != "" {
+		claudeRoot = filepath.Join(homeDir, ".claude", "projects")
+	}
+	codexRoot := cfg.AgentSessionCodexRoot
+	if codexRoot == "" && homeDir != "" {
+		codexRoot = filepath.Join(homeDir, ".codex", "sessions")
+	}
+	if homeDir == "" && (claudeRoot == "" || codexRoot == "") {
+		logger.Warn("agent_session_home_unavailable",
+			zap.String("error_code", "agent_session_home_unavailable"),
+			zap.String("configured_claude_root", claudeRoot),
+			zap.String("configured_codex_root", codexRoot))
+	}
+	cursorStore, cursorErr := agentsession.NewJSONCursorStore(filepath.Join(cfg.AgentSessionStateDir, "cursors.json"))
+	if cursorErr != nil {
+		logger.Warn("agent_session_cursor_store_unavailable",
+			zap.String("error_code", "agent_session_cursor_store_unavailable"),
+			zap.Error(cursorErr))
+	}
+	sessionManager := agentsession.NewManager(agentsession.ManagerConfig{
+		Enabled: cfg.AgentSessionEnabled,
+		ScanConfig: agentsession.ScanConfig{
+			Roots: []agentsession.SourceRoot{
+				{Source: agentsession.SourceClaude, Root: claudeRoot, UID: cfg.AgentSessionSourceUID},
+				{Source: agentsession.SourceCodex, Root: codexRoot, UID: cfg.AgentSessionSourceUID},
+			},
+			InitialLookback: time.Duration(cfg.AgentSessionInitialLookbackDays) * 24 * time.Hour,
+			MaxFiles:        cfg.AgentSessionMaxFiles,
+			ScanInterval:    time.Duration(cfg.AgentSessionScanSeconds) * time.Second,
+		},
+		CursorStore:   cursorStore,
+		SpoolPath:     filepath.Join(cfg.AgentSessionStateDir, "spool.json"),
+		SpoolCapacity: 128,
+	}, c)
+	c.ConfigManager().SetAgentSessionScanHandler(func(payload string) error {
+		// The stream receiver must remain responsive while a bounded scan and
+		// upload are in progress. The payload is metadata only; source paths and
+		// session content never arrive through this control message.
+		logger.Info("agent_session_collection_requested", zap.Int("payload_len", len(payload)))
+		go func() {
+			if err := sessionManager.ScanNow(context.Background()); err != nil {
+				logger.Warn("agent_session_collection_failed", zap.Error(err))
+			}
+		}()
+		return nil
+	})
+
 	dynpkgManager.SetAlertCallback(func(alert interface{}) {
 		corrAlert, ok := alert.(correlation.CorrelationAlert)
 		if !ok {
@@ -285,6 +338,8 @@ func main() {
 	c.SetAgentGuardActionHandler(guardManager)
 	var guardStartOnce sync.Once
 	var guardStartErr error
+	var sessionStartOnce sync.Once
+	var sessionStartErr error
 	c.SetRegisteredHandler(func(hostID string) error {
 		guardStartOnce.Do(func() {
 			if err := guardManager.RebindHostID(hostID); err != nil {
@@ -293,7 +348,13 @@ func main() {
 			}
 			guardStartErr = guardManager.Start(context.Background())
 		})
-		return guardStartErr
+		if guardStartErr != nil {
+			return guardStartErr
+		}
+		sessionStartOnce.Do(func() {
+			sessionStartErr = sessionManager.Start(context.Background())
+		})
+		return sessionStartErr
 	})
 
 	collector := ebpf.NewCollectorWithOptions(cfg.HostID, cfg.EventBufferSize, ebpf.LoaderOptions{
@@ -329,6 +390,7 @@ func main() {
 	<-sigChan
 
 	logger.Info("Shutting down...")
+	sessionManager.Stop()
 	guardManager.Stop()
 	close(pipelineDone)
 	collector.Stop()

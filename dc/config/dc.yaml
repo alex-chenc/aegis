@@ -45,3 +45,6 @@ agent_guard:
   deny_enabled: false
   freeze_enabled: false
   action_publish_enabled: false
+
+agent_session:
+  enabled: true

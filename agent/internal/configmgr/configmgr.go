@@ -49,6 +49,7 @@ type ConfigManager struct {
 	onAllowlistUpdate           func(payload string) error
 	onAgentGuardBundle          func(payload string) error
 	onAgentGuardRuntimeSettings func(payload string) error
+	onAgentSessionScan          func(payload string) error
 }
 
 func NewConfigManager() *ConfigManager {
@@ -90,6 +91,16 @@ func (m *ConfigManager) SetAgentGuardRuntimeSettingsHandler(fn func(payload stri
 	m.onAgentGuardRuntimeSettings = fn
 }
 
+// SetAgentSessionScanHandler installs the callback for an explicit static
+// session collection request. The callback is deliberately separate from the
+// regular periodic scanner so the control plane can provide a one-click
+// refresh without introducing a hook or filesystem watcher.
+func (m *ConfigManager) SetAgentSessionScanHandler(fn func(payload string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAgentSessionScan = fn
+}
+
 func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 	if sync == nil {
 		return fmt.Errorf("config sync is nil")
@@ -128,6 +139,14 @@ func (m *ConfigManager) ApplyConfigSync(sync *pb.ConfigSync) error {
 			return fmt.Errorf("agent_guard_runtime_settings handler is not configured")
 		}
 		return m.onAgentGuardRuntimeSettings(sync.Payload)
+	case "agent_session_collect":
+		if sync.Action != "collect" && sync.Action != "full_sync" {
+			return fmt.Errorf("agent_session_collect only supports collect")
+		}
+		if m.onAgentSessionScan == nil {
+			return fmt.Errorf("agent_session_collect handler is not configured")
+		}
+		return m.onAgentSessionScan(sync.Payload)
 	default:
 		return fmt.Errorf("unknown config type: %s", sync.ConfigType)
 	}

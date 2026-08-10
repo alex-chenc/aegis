@@ -95,6 +95,8 @@ export default {
     serverError: 'Internal server error',
     unauthorized: 'Unauthorized',
     forbidden: 'Access denied',
+    agentNotConnected: 'Agent is not connected; sessions cannot be collected',
+    agentSessionCollectionFailed: 'Session collection request failed',
     operationFailedRetry: 'Operation failed. Please try again.',
     uploadFailed: 'Upload failed',
   },

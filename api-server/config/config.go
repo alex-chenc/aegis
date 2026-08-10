@@ -8,16 +8,17 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	Database    DatabaseConfig    `mapstructure:"database"`
-	Redis       RedisConfig       `mapstructure:"redis"`
-	MinIO       MinIOConfig       `mapstructure:"minio"`
-	LLM         LLMConfig         `mapstructure:"llm"`
-	Agent       AgentConfig       `mapstructure:"agent"`
-	AgentGuard  AgentGuardConfig  `mapstructure:"agent_guard"`
-	SelfHealing SelfHealingConfig `mapstructure:"self_healing"`
-	Kafka       KafkaConfig       `mapstructure:"kafka"`
-	GRPC        GRPCConfig        `mapstructure:"grpc"`
+	Server       ServerConfig       `mapstructure:"server"`
+	Database     DatabaseConfig     `mapstructure:"database"`
+	Redis        RedisConfig        `mapstructure:"redis"`
+	MinIO        MinIOConfig        `mapstructure:"minio"`
+	LLM          LLMConfig          `mapstructure:"llm"`
+	Agent        AgentConfig        `mapstructure:"agent"`
+	AgentGuard   AgentGuardConfig   `mapstructure:"agent_guard"`
+	AgentSession AgentSessionConfig `mapstructure:"agent_session"`
+	SelfHealing  SelfHealingConfig  `mapstructure:"self_healing"`
+	Kafka        KafkaConfig        `mapstructure:"kafka"`
+	GRPC         GRPCConfig         `mapstructure:"grpc"`
 }
 
 type ServerConfig struct {
@@ -93,6 +94,10 @@ type AgentGuardConfig struct {
 	ActionEnabled      bool   `mapstructure:"action_enabled"`
 	ToolAdapterEnabled bool   `mapstructure:"tool_adapter_enabled"`
 	ScopeSigningKey    string `mapstructure:"scope_signing_key"`
+}
+
+type AgentSessionConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 type SelfHealingConfig struct {
@@ -185,6 +190,9 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if enabled, ok := getEnvBool("AGENT_GUARD_ENABLED"); ok {
 		cfg.AgentGuard.Enabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_SESSION_ENABLED"); ok {
+		cfg.AgentSession.Enabled = enabled
 	}
 	if enabled, ok := getEnvBool("AGENT_GUARD_POLICY_WRITE_ENABLED"); ok {
 		cfg.AgentGuard.PolicyWriteEnabled = enabled

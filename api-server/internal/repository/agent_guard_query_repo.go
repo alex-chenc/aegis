@@ -40,13 +40,14 @@ type AgentGuardQueryRepository struct {
 }
 
 type agentGuardScopeRow struct {
-	AssetID     *uuid.UUID
-	HostID      uuid.UUID
-	AgentType   string
-	ProfileKey  string
-	DisplayName string
-	Hostname    string
-	IPAddress   string
+	AssetID          *uuid.UUID
+	AssetCollectedAt *time.Time
+	HostID           uuid.UUID
+	AgentType        string
+	ProfileKey       string
+	DisplayName      string
+	Hostname         string
+	IPAddress        string
 }
 
 func NewAgentGuardQueryRepository(db *gorm.DB) *AgentGuardQueryRepository {
@@ -128,6 +129,8 @@ func (r *AgentGuardQueryRepository) ListAgents(
 				}
 				assetRows[index].AssetID = &asset.ID
 				assetRows[index].DisplayName = asset.DisplayName
+				lastSeen := asset.LastSeenAt
+				assetRows[index].AssetCollectedAt = &lastSeen
 			}
 			rows = append(rows, assetRows...)
 			remaining -= len(assetRows)
@@ -1025,17 +1028,19 @@ func (r *AgentGuardQueryRepository) enrichAgentGuardScope(
 	row agentGuardScopeRow,
 ) (model.AgentGuardAgentSummary, error) {
 	item := model.AgentGuardAgentSummary{
-		AssetID:         row.AssetID,
-		Host:            model.AgentGuardHostSummary{ID: row.HostID, Hostname: row.Hostname, IP: row.IPAddress},
-		AgentType:       normalizeAgentGuardType(row.AgentType),
-		DisplayName:     row.DisplayName,
-		ProfileKey:      row.ProfileKey,
-		ControllerPIDs:  []int{},
-		IsolationTypes:  []string{},
-		CoverageLevel:   model.AgentGuardCoverageUnsupportedProfile,
-		CoverageReasons: []string{"no_confirmed_runtime"},
-		RuntimeStatus:   "stopped",
-		ActionStatus:    "none",
+		AssetID:          row.AssetID,
+		Host:             model.AgentGuardHostSummary{ID: row.HostID, Hostname: row.Hostname, IP: row.IPAddress},
+		AgentType:        normalizeAgentGuardType(row.AgentType),
+		DisplayName:      row.DisplayName,
+		ProfileKey:       row.ProfileKey,
+		ControllerPIDs:   []int{},
+		IsolationTypes:   []string{},
+		CoverageLevel:    model.AgentGuardCoverageUnsupportedProfile,
+		CoverageReasons:  []string{"no_confirmed_runtime"},
+		RuntimeStatus:    "stopped",
+		AssetStatus:      "stopped",
+		AssetCollectedAt: row.AssetCollectedAt,
+		ActionStatus:     "none",
 	}
 	if profileKey := builtinAgentGuardProfileKey(item.AgentType); profileKey != "" {
 		item.ProfileKey = profileKey
@@ -1091,6 +1096,7 @@ func (r *AgentGuardQueryRepository) enrichAgentGuardScope(
 	}
 	sort.Ints(item.ControllerPIDs)
 	item.CoverageLevel = coverage
+	item.AssetStatus = normalizeSessionAgentStatus(item.RuntimeStatus)
 	for reason := range reasons {
 		item.CoverageReasons = append(item.CoverageReasons, reason)
 	}
@@ -1135,6 +1141,14 @@ func (r *AgentGuardQueryRepository) enrichAgentGuardScope(
 		return item, fmt.Errorf("load agent scope latest action: %w", err)
 	}
 	return item, nil
+}
+
+func normalizeSessionAgentStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "running" {
+		return "running"
+	}
+	return "stopped"
 }
 
 func normalizeAgentGuardType(value string) string {

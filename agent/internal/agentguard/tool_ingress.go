@@ -42,9 +42,12 @@ func StartToolHookReceiver(
 		return nil, errors.New("agent_guard_tool_hook_socket_path_invalid")
 	}
 	parent := filepath.Dir(path)
-	info, err := os.Lstat(parent)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 || !ownedByEUID(info) {
+	if created, err := ensureTrustedSocketParent(parent); err != nil {
 		return nil, errors.New("agent_guard_tool_hook_socket_parent_untrusted")
+	} else if created {
+		logger.Info("agent_guard_tool_hook_parent_created",
+			zap.String("parent_path", parent),
+			zap.Int("mode", 0o700))
 	}
 	if existing, err := os.Lstat(path); err == nil {
 		if existing.Mode()&os.ModeSocket == 0 || !ownedByEUID(existing) {
@@ -78,6 +81,38 @@ func StartToolHookReceiver(
 	receiver.wg.Add(1)
 	go receiver.run()
 	return receiver, nil
+}
+
+// ensureTrustedSocketParent makes the normal systemd/runtime-directory case
+// self-healing without weakening the socket trust boundary. A missing parent
+// is created only below an existing directory owned by the Agent user that is
+// not writable by group/other. Existing parents still have to pass the same
+// ownership and permission checks.
+func ensureTrustedSocketParent(parent string) (bool, error) {
+	info, err := os.Lstat(parent)
+	if err == nil {
+		if !info.IsDir() || info.Mode().Perm()&0o022 != 0 || !ownedByEUID(info) {
+			return false, errors.New("socket parent is not trusted")
+		}
+		return false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+
+	grandparent := filepath.Dir(parent)
+	grandparentInfo, grandparentErr := os.Lstat(grandparent)
+	if grandparentErr != nil || !grandparentInfo.IsDir() || grandparentInfo.Mode().Perm()&0o022 != 0 || !ownedByEUID(grandparentInfo) {
+		return false, errors.New("socket grandparent is not trusted")
+	}
+	if err := os.Mkdir(parent, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return false, err
+	}
+	info, err = os.Lstat(parent)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 || !ownedByEUID(info) {
+		return false, errors.New("created socket parent is not trusted")
+	}
+	return true, nil
 }
 
 func (r *ToolHookReceiver) run() {

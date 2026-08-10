@@ -5,7 +5,10 @@
         <h1>{{ t('agentGuard.config.title') }}</h1>
         <p>{{ t('agentGuard.config.description') }}</p>
       </div>
-      <el-tag type="info" effect="plain">{{ t('agentGuard.config.readOnly') }}</el-tag>
+      <div class="hero-actions">
+        <el-button type="primary" plain @click="configRulesVisible = true">内置安全规则</el-button>
+        <el-tag type="info" effect="plain">{{ t('agentGuard.config.readOnly') }}</el-tag>
+      </div>
     </section>
 
     <el-alert
@@ -116,6 +119,15 @@
         </el-table>
       </el-card>
     </template>
+
+    <BuiltinRuleCatalogDialog
+      :visible="configRulesVisible"
+      title="配置检测内置规则"
+      description="配置检测使用系统内置的只读规则目录，对 Claude Code 与 OpenAI Codex CLI 的本地配置进行静态安全评估。"
+      :rules="configRules"
+      :loading="configRulesLoading"
+      @close="configRulesVisible = false"
+    />
 
     <el-drawer
       class="agent-config-detail-drawer"
@@ -276,10 +288,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { formatDateTime } from '@/i18n/formatters'
-import { scanAgentConfigurations } from '@/api/agentGuard'
+import { listAgentConfigurationRules, scanAgentConfigurations } from '@/api/agentGuard'
 import { getHosts } from '@/api/hosts'
 import type { Host } from '@/types'
 import type { AgentConfigAgent, AgentConfigFile, AgentConfigHook, AgentConfigScanResult } from '@/types/agentGuard'
+import type { AgentSessionRule } from '@/types/agentSession'
+import BuiltinRuleCatalogDialog from './components/BuiltinRuleCatalogDialog.vue'
 
 const { t } = useI18n()
 const hosts = ref<Host[]>([])
@@ -293,6 +307,9 @@ const detailTab = ref('files')
 const hostsLoading = ref(false)
 const hostsError = ref(false)
 const scanning = ref(false)
+const configRules = ref<AgentSessionRule[]>([])
+const configRulesLoading = ref(false)
+const configRulesVisible = ref(false)
 
 const fileCount = computed(() => result.value?.agents.reduce((count, agent) => count + agent.files.length, 0) || 0)
 const hookCount = computed(() => result.value?.agents.reduce((count, agent) => count + agent.hooks.length, 0) || 0)
@@ -322,6 +339,15 @@ async function loadHosts() {
     hostsError.value = true
   } finally {
     hostsLoading.value = false
+  }
+}
+
+async function loadConfigRules() {
+  configRulesLoading.value = true
+  try {
+    configRules.value = (await listAgentConfigurationRules()).items || []
+  } finally {
+    configRulesLoading.value = false
   }
 }
 
@@ -377,7 +403,10 @@ function formatBytes(value?: number) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
-onMounted(loadHosts)
+onMounted(() => {
+  void loadHosts()
+  void loadConfigRules()
+})
 </script>
 
 <script lang="ts">
@@ -415,6 +444,7 @@ export default { components: { FindingTable } }
 <style scoped>
 .agent-config-page { display: flex; flex-direction: column; gap: 16px; }
 .page-hero, .list-header, .drawer-header, .content-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.hero-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .scan-card { padding-bottom: 0; }
 .host-select { width: 360px; }
 .metric-grid, .detail-metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

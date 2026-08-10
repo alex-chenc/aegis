@@ -36,7 +36,7 @@ type SecurityEventMetadata struct {
 
 // NewKafkaProducer creates a new Kafka producer with writers for all required topics
 func NewKafkaProducer(brokers []string, logger *zap.Logger) *KafkaProducer {
-	topics := []string{"aegis.security.events", "aegis.block.commands", "aegis.rule.updates"}
+	topics := []string{"aegis.security.events", "aegis.block.commands", "aegis.rule.updates", "aegis.agent.sessions.v1"}
 	writers := make(map[string]kafkaMessageWriter)
 
 	for _, topic := range topics {

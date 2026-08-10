@@ -63,6 +63,10 @@ agent_guard:
   tool_adapter_enabled: false
   scope_signing_key: ""
 
+# V6.3 consumes normalized static Claude/Codex session batches from Server.
+agent_session:
+  enabled: true
+
 # Self Healing Configuration
 self_healing:
   max_retries: 3

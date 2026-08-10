@@ -683,14 +683,19 @@ type AgentGuardAgentSummary struct {
 	RunningInstanceCount int                   `json:"running_instance_count"`
 	ControllerPIDs       []int                 `json:"controller_pids"`
 	RuntimeStatus        string                `json:"runtime_status"`
-	IsolationTypes       []string              `json:"isolation_types"`
-	CoverageLevel        string                `json:"coverage_level"`
-	CoverageReasons      []string              `json:"coverage_reasons"`
-	HighRiskFindingCount int64                 `json:"high_risk_finding_count"`
-	EscapeFindingCount   int64                 `json:"escape_finding_count"`
-	ActionStatus         string                `json:"action_status"`
-	LastSeenAt           *time.Time            `json:"last_seen_at,omitempty"`
-	ScopeIdentity        string                `json:"-"`
+	// AssetStatus is the normalized Claude Code/Codex state exposed by the
+	// session-awareness page. It is intentionally limited to running/stopped;
+	// Aegis Agent Guard heartbeat states such as stale never cross this DTO.
+	AssetStatus          string     `json:"asset_status"`
+	AssetCollectedAt     *time.Time `json:"asset_collected_at,omitempty"`
+	IsolationTypes       []string   `json:"isolation_types"`
+	CoverageLevel        string     `json:"coverage_level"`
+	CoverageReasons      []string   `json:"coverage_reasons"`
+	HighRiskFindingCount int64      `json:"high_risk_finding_count"`
+	EscapeFindingCount   int64      `json:"escape_finding_count"`
+	ActionStatus         string     `json:"action_status"`
+	LastSeenAt           *time.Time `json:"last_seen_at,omitempty"`
+	ScopeIdentity        string     `json:"-"`
 }
 
 type AgentGuardOverview struct {

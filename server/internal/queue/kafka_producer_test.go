@@ -16,7 +16,7 @@ func TestNewKafkaProducer(t *testing.T) {
 	}
 
 	// Verify all topics have writers
-	expectedTopics := []string{"aegis.security.events", "aegis.block.commands", "aegis.rule.updates"}
+	expectedTopics := []string{"aegis.security.events", "aegis.block.commands", "aegis.rule.updates", "aegis.agent.sessions.v1"}
 	for _, topic := range expectedTopics {
 		if _, ok := producer.writers[topic]; !ok {
 			t.Errorf("missing writer for topic: %s", topic)

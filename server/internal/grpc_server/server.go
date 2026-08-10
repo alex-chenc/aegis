@@ -35,8 +35,13 @@ type runtimeEventKafkaProducer interface {
 	SendRawEventWithContext(context.Context, queue.SecurityEventMetadata, interface{}) error
 }
 
+type agentSessionKafkaProducer interface {
+	SendMessage(context.Context, string, string, interface{}) error
+}
+
 type GRPCServer struct {
 	pb.UnimplementedAgentServiceServer
+	pb.UnimplementedAgentSessionServiceServer
 	server                    *grpc.Server
 	hostRepo                  *repository.HostRepository
 	taskLogRepo               *repository.TaskLogRepository
@@ -184,6 +189,7 @@ func (s *GRPCServer) Start() error {
 
 	s.server = grpc.NewServer()
 	pb.RegisterAgentServiceServer(s.server, s)
+	pb.RegisterAgentSessionServiceServer(s.server, s)
 
 	logger.Info("gRPC server starting",
 		zap.Int("port", s.port),
@@ -644,6 +650,55 @@ func (s *GRPCServer) ReportEvent(ctx context.Context, req *pb.ReportEventRequest
 		Success:       kafkaFailures == 0,
 		ReceivedCount: int32(acceptedCount),
 	}, nil
+}
+
+// ReportAgentSessionBatch accepts only normalized static-file session data and
+// publishes it to the dedicated session topic. It never enters RuntimeEvent.
+func (s *GRPCServer) ReportAgentSessionBatch(ctx context.Context, req *pb.AgentSessionBatchRequest) (*pb.AgentSessionBatchResponse, error) {
+	if req == nil || req.Schema != "aegis.agent_session_batch.v1" {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_schema_unsupported", Retryable: false}, nil
+	}
+	if _, err := uuid.Parse(req.HostId); err != nil || req.AgentType != "claude-code" && req.AgentType != "codex" {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_source_invalid", Retryable: false}, nil
+	}
+	if req.SourceMode != "static_scan" && req.SourceMode != "static_backfill" {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_source_mode_invalid", Retryable: false}, nil
+	}
+	if req.SourceAttestation != "versioned_static_parser" || req.SourceSessionId == "" || req.SourceSubjectUid < 0 || len(req.Items) == 0 || len(req.Items) > 100 {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_batch_invalid", Retryable: false}, nil
+	}
+	if req.FirstSequence == 0 || req.FirstSequence > req.LastSequence {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_sequence_invalid", Retryable: false}, nil
+	}
+	previous := uint64(0)
+	for _, item := range req.Items {
+		if item == nil || item.ItemId == "" || item.SourceDigest == "" || len(item.NormalizedJson) == 0 || len(item.NormalizedJson) > 256<<10 || item.SourceSequence < req.FirstSequence || item.SourceSequence > req.LastSequence {
+			return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_item_invalid", Retryable: false}, nil
+		}
+		if previous > 0 && item.SourceSequence < previous {
+			return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_sequence_invalid", Retryable: false}, nil
+		}
+		previous = item.SourceSequence
+	}
+	producer, ok := s.kafkaProducer.(agentSessionKafkaProducer)
+	if !ok || producer == nil {
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_ingest_unavailable", Retryable: true}, nil
+	}
+	key := strings.Join([]string{req.HostId, req.AgentType, fmt.Sprintf("%d", req.SourceSubjectUid), req.SourceSessionId}, ":")
+	if err := producer.SendMessage(ctx, "aegis.agent.sessions.v1", key, req); err != nil {
+		logger.Warn("agent_session_batch_publish_failed",
+			zap.String("error_code", "agent_session_kafka_unavailable"),
+			zap.String("host_id", req.HostId),
+			zap.Int("item_count", len(req.Items)),
+			zap.Error(err))
+		return &pb.AgentSessionBatchResponse{Success: false, ErrorCode: "agent_session_kafka_unavailable", Retryable: true}, nil
+	}
+	logger.Info("agent_session_batch_published",
+		zap.String("host_id", req.HostId),
+		zap.String("agent_type", req.AgentType),
+		zap.Int("item_count", len(req.Items)),
+		zap.Uint64("last_sequence", req.LastSequence))
+	return &pb.AgentSessionBatchResponse{Success: true, AcceptedThroughSequence: req.LastSequence}, nil
 }
 
 func (s *GRPCServer) createAlertFromEvent(hostIDStr string, event *pb.RuntimeEvent) {

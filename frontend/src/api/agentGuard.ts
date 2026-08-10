@@ -31,6 +31,7 @@ import type {
   PanoramaTreeNode,
   PageResult,
 } from '@/types/agentGuard'
+import type { AgentSessionRule } from '@/types/agentSession'
 
 export function getAgentGuardRuntimeSettings(hostId: string): Promise<AgentGuardRuntimeSettings> {
   return request.get('/agent-guard/runtime-settings', { params: { host_id: hostId } })
@@ -65,6 +66,14 @@ export function listAgentGuardAgents(
 
 export function scanAgentConfigurations(hostId: string): Promise<AgentConfigScanResult> {
   return request.get('/agent-guard/configurations', { params: { host_id: hostId } })
+}
+
+export function listAgentConfigurationRules(
+  params: { page?: number; page_size?: number; keyword?: string } = {},
+): Promise<PageResult<AgentSessionRule>> {
+  return request.get('/agent-guard/configuration-rules', {
+    params: { page: 1, page_size: 100, ...params },
+  })
 }
 
 export function listAgentGuardInstances(

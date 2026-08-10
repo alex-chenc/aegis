@@ -31,6 +31,14 @@ type Config struct {
 	AgentGuardStateDir               string `toml:"AgentGuardStateDir"`
 	AgentGuardSpoolCapacity          int    `toml:"AgentGuardSpoolCapacity"`
 	AgentGuardReconcileSeconds       int    `toml:"AgentGuardReconcileSeconds"`
+	AgentSessionEnabled              bool   `toml:"AgentSessionEnabled"`
+	AgentSessionSourceUID            int    `toml:"AgentSessionSourceUID"`
+	AgentSessionClaudeRoot           string `toml:"AgentSessionClaudeRoot"`
+	AgentSessionCodexRoot            string `toml:"AgentSessionCodexRoot"`
+	AgentSessionStateDir             string `toml:"AgentSessionStateDir"`
+	AgentSessionScanSeconds          int    `toml:"AgentSessionScanSeconds"`
+	AgentSessionInitialLookbackDays  int    `toml:"AgentSessionInitialLookbackDays"`
+	AgentSessionMaxFiles             int    `toml:"AgentSessionMaxFiles"`
 }
 
 const configPath = "/etc/aegis-agent/config.toml"
@@ -90,6 +98,27 @@ func LoadConfig() (*Config, error) {
 
 	if cfg.AgentGuardReconcileSeconds <= 0 {
 		cfg.AgentGuardReconcileSeconds = 30
+		updated = true
+	}
+
+	if cfg.AgentSessionSourceUID == 0 {
+		cfg.AgentSessionSourceUID = os.Getuid()
+		updated = true
+	}
+	if cfg.AgentSessionStateDir == "" {
+		cfg.AgentSessionStateDir = "/var/lib/aegis/agent-session"
+		updated = true
+	}
+	if cfg.AgentSessionScanSeconds <= 0 {
+		cfg.AgentSessionScanSeconds = 30
+		updated = true
+	}
+	if cfg.AgentSessionInitialLookbackDays <= 0 {
+		cfg.AgentSessionInitialLookbackDays = 14
+		updated = true
+	}
+	if cfg.AgentSessionMaxFiles <= 0 {
+		cfg.AgentSessionMaxFiles = 2000
 		updated = true
 	}
 

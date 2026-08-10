@@ -141,8 +141,12 @@ export interface AgentGuardAgentSummary {
   display_name: string
   profile_key?: string
   running_instance_count: number
+  /** Number of statically collected Claude/Codex sessions for this host/type. */
+  session_count?: number
   controller_pids: number[]
   runtime_status: AgentRuntimeStatus
+  asset_status?: 'running' | 'stopped' | string
+  asset_collected_at?: string
   isolation_types: ExecutionUnitType[]
   coverage_level: AgentGuardCoverage
   coverage_reasons: string[]

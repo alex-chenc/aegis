@@ -139,6 +139,10 @@
             <el-icon><Setting /></el-icon>
             <span>{{ t('app.menu.agentGuardConfigurations') }}</span>
           </el-menu-item>
+          <el-menu-item index="/detection/agent-guard/session-awareness">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>{{ t('app.menu.agentSessionAwareness') }}</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/risk/weak-password">
@@ -595,7 +599,16 @@ watch([() => route.fullPath, locale], () => {
     radial-gradient(circle at 92% 0%, rgba(37, 99, 235, 0.1), transparent 22%),
     linear-gradient(135deg, rgba(241, 247, 253, 0.96), rgba(248, 250, 252, 0.94));
   padding: 24px;
+  min-width: 0;
+  max-width: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app-container > .el-container {
+  min-width: 0;
+  width: 0;
+  flex: 1 1 auto;
 }
 
 .app-main.assistant-main {

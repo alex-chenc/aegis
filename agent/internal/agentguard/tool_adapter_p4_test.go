@@ -125,6 +125,32 @@ func TestToolHookExplicitGroupSocketAndPinnedPeerCredentials(t *testing.T) {
 	}
 }
 
+func TestToolHookCreatesMissingTrustedParent(t *testing.T) {
+	grandparent := t.TempDir()
+	socketPath := filepath.Join(grandparent, "runtime", "agent-guard.sock")
+	fixture := newToolAdapterFixture(t)
+
+	receiver, err := StartToolHookReceiver(
+		socketPath, fixture.adapter.SocketPolicy(), fixture.adapter.AuthorizePeer,
+		func([]byte) (BehaviorEvent, error) { return BehaviorEvent{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("start socket with missing parent: %v", err)
+	}
+	defer receiver.Stop()
+
+	parentInfo, err := os.Lstat(filepath.Dir(socketPath))
+	if err != nil {
+		t.Fatalf("created socket parent missing: %v", err)
+	}
+	if !parentInfo.IsDir() || parentInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("created socket parent is not private: mode=%o info=%v", parentInfo.Mode().Perm(), parentInfo)
+	}
+	if _, err := os.Lstat(socketPath); err != nil {
+		t.Fatalf("socket was not created: %v", err)
+	}
+}
+
 func (f toolAdapterFixture) event(process ProcessSnapshot, operation string) TrustedToolEvent {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	event := TrustedToolEvent{

@@ -64,7 +64,7 @@ services:
       retries: 5
       start_period: 30s
 
-  # V6.2 Agent Guard schema upgrade. This service intentionally runs only the
+  # V6.2/V6.3 Agent Guard and session schema upgrade. This service intentionally runs only the
   # idempotent V6.2 migration and never replays historical migrations.
   db-migrate:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
@@ -78,6 +78,7 @@ services:
       - ./migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro
       - ./migrations/030_v6.2_zcode_agent_guard_profile.sql:/migrations/030_v6.2_zcode_agent_guard_profile.sql:ro
       - ./migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro
+      - ./migrations/032_v6.3_agent_session_awareness.sql:/migrations/032_v6.3_agent_session_awareness.sql:ro
     command:
       - "psql"
       - "-v"
@@ -94,6 +95,8 @@ services:
       - "/migrations/030_v6.2_zcode_agent_guard_profile.sql"
       - "-f"
       - "/migrations/031_v6.2_agent_escape_permission_first.sql"
+      - "-f"
+      - "/migrations/032_v6.3_agent_session_awareness.sql"
     networks:
       - aegis-network
 

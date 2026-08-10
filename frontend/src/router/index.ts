@@ -246,6 +246,16 @@ const routes = [
     meta: { titleKey: 'routes.agentGuardConfigurations', permission: 'agent_guard:read' }
   },
   {
+    path: '/detection/agent-sessions',
+    redirect: '/detection/agent-guard/session-awareness'
+  },
+  {
+    path: '/detection/agent-guard/session-awareness',
+    name: 'AgentSessionAwareness',
+    component: () => import('../views/detection/AgentSessionAwareness.vue'),
+    meta: { titleKey: 'routes.agentSessionAwareness', permission: 'agent_guard:read' }
+  },
+  {
     path: '/risk/weak-password',
     name: 'WeakPassword',
     component: WeakPasswordIndex,

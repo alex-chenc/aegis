@@ -8,13 +8,14 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	Database    DatabaseConfig    `mapstructure:"database"`
-	Kafka       KafkaConfig       `mapstructure:"kafka"`
-	LLM         LLMConfig         `mapstructure:"llm"`
-	Aggregation AggregationConfig `mapstructure:"aggregation"`
-	Alert       AlertConfig       `mapstructure:"alert"`
-	AgentGuard  AgentGuardConfig  `mapstructure:"agent_guard"`
+	Server       ServerConfig       `mapstructure:"server"`
+	Database     DatabaseConfig     `mapstructure:"database"`
+	Kafka        KafkaConfig        `mapstructure:"kafka"`
+	LLM          LLMConfig          `mapstructure:"llm"`
+	Aggregation  AggregationConfig  `mapstructure:"aggregation"`
+	Alert        AlertConfig        `mapstructure:"alert"`
+	AgentGuard   AgentGuardConfig   `mapstructure:"agent_guard"`
+	AgentSession AgentSessionConfig `mapstructure:"agent_session"`
 }
 
 type ServerConfig struct {
@@ -67,6 +68,10 @@ type AgentGuardConfig struct {
 	DenyEnabled            bool `mapstructure:"deny_enabled"`
 	FreezeEnabled          bool `mapstructure:"freeze_enabled"`
 	ActionPublishEnabled   bool `mapstructure:"action_publish_enabled"`
+}
+
+type AgentSessionConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 var globalConfig *Config
@@ -142,6 +147,9 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if enabled, ok := getEnvBool("AGENT_GUARD_PROJECTION_ENABLED"); ok {
 		cfg.AgentGuard.ProjectionEnabled = enabled
+	}
+	if enabled, ok := getEnvBool("AGENT_SESSION_ENABLED"); ok {
+		cfg.AgentSession.Enabled = enabled
 	}
 	if enabled, ok := getEnvBool("AGENT_BEHAVIOR_RULES_ENABLED"); ok {
 		cfg.AgentGuard.RulesEnabled = enabled

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package agent_session_comm.v1;
+
+option go_package = "server/pkg/api/v1;pb";
+
+message AgentSessionSourceUsage {
+  optional int64 input_tokens = 1;
+  optional int64 output_tokens = 2;
+  optional int64 cache_creation_input_tokens = 3;
+  optional int64 cache_read_input_tokens = 4;
+  string coverage = 5; // none|partial|complete
+}
+
+message AgentSessionItem {
+  string item_id = 1;
+  string source_message_id = 2;
+  string source_part_id = 3;
+  string source_revision = 4;
+  uint64 source_sequence = 5;
+  string turn_id = 6;
+  string parent_item_id = 7;
+  string item_type = 8;
+  string role = 9;
+  int64 occurred_at_unix_nano = 10;
+  bytes normalized_json = 11;
+  string content_digest = 12;
+  string source_digest = 13;
+  string previous_item_digest = 14;
+  AgentSessionSourceUsage source_usage = 15;
+}
+
+message AgentSessionBatchRequest {
+  string schema = 1; // aegis.agent_session_batch.v1
+  string batch_id = 2;
+  string host_id = 3;
+  string agent_type = 4; // claude-code|codex
+  int64 source_subject_uid = 5;
+  string source_storage_namespace_hash = 6;
+  string source_session_id = 7;
+  string source_version = 8;
+  string source_mode = 9; // static_scan|static_backfill
+  string source_attestation = 10; // versioned_static_parser
+  uint64 first_sequence = 11;
+  uint64 last_sequence = 12;
+  repeated AgentSessionItem items = 13;
+  string compression = 14;
+  string batch_digest = 15;
+  string collection_coverage = 16;
+  bytes session_metadata_json = 17;
+}
+
+message AgentSessionBatchResponse {
+  bool success = 1;
+  uint64 accepted_through_sequence = 2;
+  string error_code = 3;
+  string message = 4;
+  bool retryable = 5;
+}
+
+service AgentSessionService {
+  rpc ReportAgentSessionBatch(AgentSessionBatchRequest) returns (AgentSessionBatchResponse);
+}

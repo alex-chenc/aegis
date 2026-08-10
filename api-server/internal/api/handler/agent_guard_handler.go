@@ -214,6 +214,7 @@ func (h *AgentGuardHandler) RegisterRoutes(
 	if h.configScanner != nil {
 		guard.GET("/configurations", read, h.ListConfigurations)
 	}
+	guard.GET("/configuration-rules", read, h.ListConfigurationRules)
 
 	guard.GET("/profiles", read, h.ListProfiles)
 	guard.GET("/profiles/:id", read, h.GetProfile)
@@ -275,6 +276,31 @@ func (h *AgentGuardHandler) ListConfigurations(c *gin.Context) {
 		return
 	}
 	agentGuardSuccess(c, result)
+}
+
+func (h *AgentGuardHandler) ListConfigurationRules(c *gin.Context) {
+	rules := service.BuiltinAgentConfigRules()
+	keyword := strings.ToLower(strings.TrimSpace(c.Query("keyword")))
+	filtered := make([]service.AgentConfigRuleDefinition, 0, len(rules))
+	for _, rule := range rules {
+		if keyword != "" && !strings.Contains(strings.ToLower(rule.RuleKey+" "+rule.Name+" "+rule.Description), keyword) {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	page, pageSize, valid := agentGuardPageParamsFromContext(c)
+	if !valid {
+		return
+	}
+	start := (page - 1) * pageSize
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	agentGuardSuccess(c, gin.H{"items": filtered[start:end], "total": len(filtered)})
 }
 
 // ListEscapeRules serves the immutable isolation-boundary catalog. It is a

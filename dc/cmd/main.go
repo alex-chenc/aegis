@@ -18,6 +18,7 @@ import (
 	"dc/internal/pipeline"
 	"dc/internal/repository"
 	"dc/internal/server"
+	"dc/internal/sessionaudit"
 	"dc/pkg/logger"
 
 	"go.uber.org/zap"
@@ -134,6 +135,18 @@ func main() {
 		logger.Fatal("Failed to create Kafka consumer", zap.Error(err))
 	}
 	defer consumer.Close()
+	var sessionConsumer *sessionaudit.Consumer
+	if cfg.AgentSession.Enabled {
+		sessionProjector := sessionaudit.NewProjector(db, logger.Get().Named("agent_session_projection"))
+		sessionConsumer = sessionaudit.NewConsumer(cfg.Kafka.Brokers, cfg.Kafka.GroupID, sessionProjector, logger.Get().Named("agent_session_consumer"))
+		go func() {
+			if err := sessionConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("agent_session_consumer_stopped", zap.Error(err))
+			}
+		}()
+		defer sessionConsumer.Close()
+		logger.Info("agent_session_projection_configured", zap.String("topic", sessionaudit.Topic))
+	}
 
 	logger.Info("agent_guard_projection_configured",
 		zap.Bool("projection_enabled", cfg.AgentGuard.ProjectionEnabled),

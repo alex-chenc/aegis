@@ -35,6 +35,7 @@ type Router struct {
 	weakPasswordHandler    *handler.WeakPasswordHandler
 	assistantHandler       *handler.AssistantHandler
 	agentGuardHandler      *handler.AgentGuardHandler
+	agentSessionHandler    *handler.AgentSessionHandler
 }
 
 func NewRouter(
@@ -60,6 +61,7 @@ func NewRouter(
 	weakPasswordHandler *handler.WeakPasswordHandler,
 	assistantHandler *handler.AssistantHandler,
 	agentGuardHandler *handler.AgentGuardHandler,
+	agentSessionHandler *handler.AgentSessionHandler,
 ) *Router {
 	return &Router{
 		roleRepo:               roleRepo,
@@ -84,6 +86,7 @@ func NewRouter(
 		weakPasswordHandler:    weakPasswordHandler,
 		assistantHandler:       assistantHandler,
 		agentGuardHandler:      agentGuardHandler,
+		agentSessionHandler:    agentSessionHandler,
 	}
 }
 
@@ -176,6 +179,14 @@ func (r *Router) Setup() {
 				r.roleMiddleware(repository.PermissionAgentGuardActionResume),
 				r.roleMiddleware(repository.PermissionAgentGuardActionKill),
 				r.roleMiddleware(repository.PermissionAgentGuardSettings),
+			)
+		}
+		if r.agentSessionHandler != nil {
+			r.agentSessionHandler.RegisterRoutes(
+				v1,
+				r.roleMiddleware(repository.PermissionAgentGuardRead),
+				r.roleMiddleware(repository.PermissionAgentGuardEvidenceRead),
+				r.roleMiddleware(repository.PermissionAgentGuardAnalysisRun),
 			)
 		}
 

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -73,6 +75,61 @@ type AgentConfigFinding struct {
 	Title       string `json:"title"`
 	Reason      string `json:"reason"`
 	Remediation string `json:"remediation"`
+}
+
+// AgentConfigRuleDefinition is the immutable catalog entry used by the
+// configuration scanner. Keeping this catalog explicit makes the rules shown
+// in the UI auditable and keeps them aligned with the event-awareness catalog.
+type AgentConfigRuleDefinition struct {
+	RuleKey           string   `json:"rule_key"`
+	RuleVersion       int64    `json:"rule_version"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	Source            string   `json:"source"`
+	Engine            string   `json:"engine"`
+	Categories        []string `json:"categories"`
+	DefaultEnabled    bool     `json:"default_enabled"`
+	DefaultSeverity   string   `json:"default_severity"`
+	DefaultAction     string   `json:"default_action"`
+	RecommendedAction string   `json:"recommended_action"`
+	Immutable         bool     `json:"immutable"`
+	Digest            string   `json:"digest"`
+}
+
+var builtinAgentConfigRules = []AgentConfigRuleDefinition{
+	{RuleKey: "AGC-001", Name: "自动放行或跳过审批", Description: "检测智能体可在没有人工确认的情况下执行高风险操作。", Categories: []string{"permission"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-002", Name: "无限制沙箱配置", Description: "检测配置是否允许智能体脱离预期隔离边界。", Categories: []string{"sandbox"}, DefaultSeverity: "critical"},
+	{RuleKey: "AGC-003", Name: "全量工具权限放行", Description: "检测通配或全量 allow，避免智能体绕过最小权限边界。", Categories: []string{"permission"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-004", Name: "OpenCode 全量权限规则", Description: "检测 action 或 resource 为通配符的 OpenCode 权限规则。", Categories: []string{"permission"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-005", Name: "不受限网络访问", Description: "检测智能体是否可以访问任意外部网络资源。", Categories: []string{"network"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-006", Name: "敏感凭据字段", Description: "检测配置中可能包含 Token、密钥、密码或私钥的字段。", Categories: []string{"secret"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-007", Name: "未知或不可解析配置", Description: "检测配置文件读取失败、格式错误或权限模式无法确认的情况。", Categories: []string{"integrity"}, DefaultSeverity: "medium"},
+	{RuleKey: "AGC-008", Name: "Hook 执行边界过宽", Description: "检测 Hook 使用 Shell、相对路径、可写目录或通配事件导致的执行边界扩大。", Categories: []string{"hook"}, DefaultSeverity: "high"},
+	{RuleKey: "AGC-009", Name: "高风险 Hook 缺少保护", Description: "检测工具或会话 Hook 是否缺少失败策略、审批或来源校验。", Categories: []string{"hook"}, DefaultSeverity: "medium"},
+}
+
+func BuiltinAgentConfigRules() []AgentConfigRuleDefinition {
+	result := make([]AgentConfigRuleDefinition, 0, len(builtinAgentConfigRules))
+	for _, rule := range builtinAgentConfigRules {
+		rule.RuleVersion = 1
+		rule.Source = "builtin"
+		rule.Engine = "api_config_static"
+		rule.DefaultAction = "alert"
+		rule.RecommendedAction = "alert"
+		rule.DefaultEnabled = true
+		rule.Immutable = true
+		payload, _ := json.Marshal(struct {
+			RuleKey string `json:"rule_key"`
+			Version int64  `json:"rule_version"`
+			Name    string `json:"name"`
+			Desc    string `json:"description"`
+			Engine  string `json:"engine"`
+		}{rule.RuleKey, rule.RuleVersion, rule.Name, rule.Description, rule.Engine})
+		digest := sha256.Sum256(payload)
+		rule.Digest = "sha256:" + hex.EncodeToString(digest[:])
+		result = append(result, rule)
+	}
+	return result
 }
 
 type AgentConfigScanError struct {

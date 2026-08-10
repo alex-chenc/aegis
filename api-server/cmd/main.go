@@ -151,6 +151,7 @@ func main() {
 	agentGuardAnalysisRepo := repository.NewAgentGuardAnalysisRepository(db)
 	agentGuardActionRepo := repository.NewAgentGuardActionRepository(db)
 	agentGuardToolFindingRepo := repository.NewAgentGuardToolFindingRepository(db)
+	agentSessionRepo := repository.NewAgentSessionRepository(db)
 
 	if err := agentGuardCatalogRepo.VerifyBuiltinManifest(context.Background()); err != nil {
 		if cfg.AgentGuard.Enabled {
@@ -262,6 +263,7 @@ func main() {
 
 	var agentGuardWSConsumer *queue.KafkaConsumer
 	var agentGuardToolRuleConsumer *queue.KafkaConsumer
+	var agentSessionConsumer *queue.KafkaConsumer
 	if cfg.AgentGuard.Enabled {
 		groupID := strings.TrimSpace(cfg.Kafka.GroupID)
 		if groupID == "" {
@@ -313,7 +315,6 @@ func main() {
 			zap.String("rule_owner", "api-server"),
 		)
 	}
-
 	templateService.StartWorkers(ctx)
 	scriptGenService.StartWorkers(ctx)
 	selfHealingService.StartWorkers(ctx)
@@ -431,6 +432,23 @@ func main() {
 		logger.Get().Named("agent_guard_analysis"),
 	)
 	agentGuardAnalysisService.Start(ctx)
+	agentSessionAI := service.NewConfiguredAgentSessionAIClient(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
+	agentSessionService := service.NewAgentSessionService(agentSessionRepo, agentSessionAI, logger.Get().Named("agent_session"))
+	agentSessionService.SetCollectionDispatcher(serverClient)
+	agentSessionHandler := handler.NewAgentSessionHandler(agentSessionService, logger.Get().Named("agent_session_handler"))
+	if cfg.AgentSession.Enabled {
+		groupID := strings.TrimSpace(cfg.Kafka.GroupID)
+		if groupID == "" {
+			groupID = "aegis-api-server"
+		}
+		agentSessionConsumer = queue.NewKafkaConsumer(kafkaBrokers, "aegis.agent.sessions.v1", groupID+"-agent-sessions", agentSessionService.HandleKafkaMessage, logger.Get().Named("agent_session_consumer"))
+		go func() {
+			if err := agentSessionConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("agent_session_consumer_failed", zap.Error(err))
+			}
+		}()
+		logger.Info("agent_session_consumer_started", zap.String("topic", "aegis.agent.sessions.v1"), zap.String("group_id", groupID+"-agent-sessions"))
+	}
 	agentGuardHandler := handler.NewAgentGuardHandler(
 		agentGuardCatalogRepo,
 		agentGuardPolicyRepo,
@@ -683,7 +701,7 @@ func main() {
 	}
 
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler, agentGuardHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler, agentGuardHandler, agentSessionHandler)
 	router.Setup()
 
 	// Start HTTP server
@@ -723,6 +741,11 @@ func main() {
 	if agentGuardToolRuleConsumer != nil {
 		if err := agentGuardToolRuleConsumer.Close(); err != nil {
 			logger.Warn("agent_guard_tool_rule_consumer_close_failed", zap.Error(err))
+		}
+	}
+	if agentSessionConsumer != nil {
+		if err := agentSessionConsumer.Close(); err != nil {
+			logger.Warn("agent_session_consumer_close_failed", zap.Error(err))
 		}
 	}
 	time.Sleep(2 * time.Second)

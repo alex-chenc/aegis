@@ -84,6 +84,8 @@ const ERROR_MESSAGE_KEYS: Record<string, string> = {
   RESOURCE_NOT_FOUND: 'common.messages.resourceNotFound',
   UNAUTHORIZED: 'common.messages.unauthorized',
   FORBIDDEN: 'common.messages.forbidden',
+  AGENT_NOT_CONNECTED: 'common.messages.agentNotConnected',
+  AGENT_SESSION_COLLECTION_FAILED: 'common.messages.agentSessionCollectionFailed',
 }
 
 export function localizeAPIError(

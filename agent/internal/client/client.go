@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"aegis-agent/internal/agentguard"
+	"aegis-agent/internal/agentsession"
 	"aegis-agent/internal/asset"
 	"aegis-agent/internal/blocker"
 	"aegis-agent/internal/config"
@@ -21,6 +24,7 @@ import (
 	"aegis-agent/internal/tools"
 	pb "aegis-agent/pkg/api/v1"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,6 +32,8 @@ import (
 )
 
 const CallbackPort = 19095 // Port for Server to call back to Agent
+
+const maxAgentSessionBatchItems = 100
 
 type Client struct {
 	pb.UnimplementedAgentServiceServer // Must embed for forward compatibility
@@ -665,6 +671,106 @@ func (c *Client) ReportEvents(events []*pb.RuntimeEvent) error {
 	}
 	logger.Debug("Events reported", zap.Int("sent", len(events)), zap.Int32("received", resp.ReceivedCount))
 
+	return nil
+}
+
+// ReportSessionDeltas sends normalized static-file session items through the
+// additive AgentSession RPC. The request contains only redacted JSON fields.
+func (c *Client) ReportSessionDeltas(ctx context.Context, deltas []agentsession.SessionDelta) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+	c.connMu.RLock()
+	conn := c.conn
+	connCtx := c.ctx
+	c.connMu.RUnlock()
+	if conn == nil {
+		return errors.New("agent session transport is not connected")
+	}
+	client := pb.NewAgentSessionServiceClient(conn)
+	if ctx == nil {
+		ctx = connCtx
+	}
+	for _, delta := range deltas {
+		if delta.SessionID == "" || len(delta.Items) == 0 {
+			continue
+		}
+		items := make([]*pb.AgentSessionItem, 0, len(delta.Items))
+		for _, item := range delta.Items {
+			normalized, err := json.Marshal(struct {
+				Content        string         `json:"content,omitempty"`
+				Metadata       map[string]any `json:"metadata,omitempty"`
+				RedactionState string         `json:"redaction_state"`
+				Visibility     string         `json:"visibility"`
+			}{item.Content, item.Metadata, item.RedactionState, item.Visibility})
+			if err != nil {
+				return fmt.Errorf("marshal session item: %w", err)
+			}
+			items = append(items, &pb.AgentSessionItem{
+				ItemId:             item.SourceDigest,
+				SourceMessageId:    item.SourceMessageID,
+				SourcePartId:       item.SourcePartID,
+				SourceRevision:     item.SourceRevision,
+				SourceSequence:     item.SourceSequence,
+				TurnId:             item.TurnID,
+				ItemType:           string(item.ItemType),
+				Role:               item.Role,
+				OccurredAtUnixNano: item.OccurredAt.UnixNano(),
+				NormalizedJson:     normalized,
+				ContentDigest:      item.ContentDigest,
+				SourceDigest:       item.SourceDigest,
+			})
+		}
+		if len(items) == 0 {
+			continue
+		}
+		projectDigest := sha256.Sum256([]byte(delta.ProjectPath))
+		sessionMetadata, err := json.Marshal(map[string]string{
+			"project_root_hash": "sha256:" + hex.EncodeToString(projectDigest[:]),
+			"model":             delta.Model,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal session metadata: %w", err)
+		}
+		for start := 0; start < len(items); start += maxAgentSessionBatchItems {
+			end := start + maxAgentSessionBatchItems
+			if end > len(items) {
+				end = len(items)
+			}
+			batchItems := items[start:end]
+			request := &pb.AgentSessionBatchRequest{
+				Schema:              "aegis.agent_session_batch.v1",
+				BatchId:             uuid.NewString(),
+				HostId:              c.hostID,
+				AgentType:           string(delta.Source),
+				SourceSubjectUid:    int64(c.runtimeConfig.AgentSessionSourceUID),
+				SourceSessionId:     delta.SessionID,
+				SourceVersion:       delta.SourceVersion,
+				SourceMode:          "static_scan",
+				SourceAttestation:   "versioned_static_parser",
+				FirstSequence:       batchItems[0].SourceSequence,
+				LastSequence:        batchItems[len(batchItems)-1].SourceSequence,
+				Items:               batchItems,
+				CollectionCoverage:  "complete",
+				SessionMetadataJson: sessionMetadata,
+			}
+			response, err := client.ReportAgentSessionBatch(ctx, request)
+			if err != nil {
+				return fmt.Errorf("report session batch: %w", err)
+			}
+			if response == nil || !response.Success {
+				if response == nil {
+					return errors.New("report session batch returned empty response")
+				}
+				return fmt.Errorf("report session batch rejected: %s", response.ErrorCode)
+			}
+			logger.Debug("agent_session_batch_acked",
+				zap.String("session_id", delta.SessionID),
+				zap.Uint64("accepted_through_sequence", response.AcceptedThroughSequence),
+				zap.Int("item_count", len(batchItems)),
+				zap.Int("batch_offset", start))
+		}
+	}
 	return nil
 }
 

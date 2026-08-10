@@ -59,3 +59,20 @@ func TestAgentConfigSecurityServiceUsesEmptyArraysForNoFindings(t *testing.T) {
 		t.Fatalf("expected non-nil response arrays: %+v", result)
 	}
 }
+
+func TestBuiltinAgentConfigRulesExposeReadOnlyRuleCatalog(t *testing.T) {
+	rules := BuiltinAgentConfigRules()
+	if len(rules) != 9 {
+		t.Fatalf("expected nine builtin configuration rules, got %d", len(rules))
+	}
+	seen := make(map[string]bool, len(rules))
+	for _, rule := range rules {
+		if rule.RuleKey == "" || rule.Name == "" || rule.Description == "" || rule.RuleVersion != 1 || rule.Source != "builtin" || rule.Engine != "api_config_static" || !rule.DefaultEnabled || !rule.Immutable || rule.Digest == "" {
+			t.Fatalf("invalid builtin configuration rule: %+v", rule)
+		}
+		if seen[rule.RuleKey] {
+			t.Fatalf("duplicate builtin configuration rule: %s", rule.RuleKey)
+		}
+		seen[rule.RuleKey] = true
+	}
+}

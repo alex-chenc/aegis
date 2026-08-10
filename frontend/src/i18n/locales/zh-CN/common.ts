@@ -95,6 +95,8 @@ export default {
     serverError: '服务器内部错误',
     unauthorized: '未授权',
     forbidden: '禁止访问',
+    agentNotConnected: 'Agent 未连接，无法采集会话',
+    agentSessionCollectionFailed: '会话采集请求失败',
     operationFailedRetry: '操作失败，请重试',
     uploadFailed: '上传失败',
   },

@@ -34,6 +34,7 @@ export default {
   agentGuardEvents: '智能体事件感知与防护',
   agentGuardEscape: '智能体逃逸防护',
   agentGuardConfigurations: '智能体配置检测',
+  agentSessionAwareness: '智能体会话感知',
   weakPassword: '智能弱密码检测',
   weakPasswordTaskDetail: '智能弱密码任务详情',
   weakPasswordDictionaries: '弱密码字典',
