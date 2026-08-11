@@ -86,6 +86,22 @@ func TestExplicitWorkflowRequirementsKeepScanBeforeDetectionPackage(t *testing.T
 	}
 }
 
+func TestExplicitWorkflowRequirementsRouteManagedMCPQueries(t *testing.T) {
+	got := explicitWorkflowRequirements("查询当前已授权的 MCP 工具目录并调用只读工具")
+	if len(got) != 1 || got[0] != MCPAggregationQueryWorkflowID {
+		t.Fatalf("required workflows = %#v, want [%s]", got, MCPAggregationQueryWorkflowID)
+	}
+}
+
+func TestMCPAggregationQueryRequestDoesNotMatchOnboardingOrConceptualQuestions(t *testing.T) {
+	if mcpAggregationQueryRequest("把这个接入到远程 MCP") {
+		t.Fatal("MCP onboarding must be handled by the control-plane guard")
+	}
+	if mcpAggregationQueryRequest("解释当前系统内的 MCP 聚合方案") {
+		t.Fatal("a conceptual MCP question must not force a query workflow")
+	}
+}
+
 func TestExplicitWorkflowRequirementsRouteCodexSecurityQuestionsToAgentGuard(t *testing.T) {
 	got := explicitWorkflowRequirements("分析一下，目前 Codex 智能体有哪些安全问题")
 	if len(got) != 1 || got[0] != agentGuardObservationWorkflowID {

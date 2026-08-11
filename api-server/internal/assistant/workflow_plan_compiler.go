@@ -18,6 +18,11 @@ const (
 	agentGuardControlWorkflowID         = "agent_guard_control"
 )
 
+// MCPAggregationQueryWorkflowID is the V6.3 managed MCP workflow. It is
+// exported because the fixed MCP facade tools live in the tools subpackage and
+// must bind their exposure policy to the same closed workflow contract.
+const MCPAggregationQueryWorkflowID = "mcp_aggregation_query"
+
 var exactCVEIDPattern = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]{4,}\b`)
 
 // ArgValueKind classifies how a bound argument value must be typed so the

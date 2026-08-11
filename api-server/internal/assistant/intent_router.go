@@ -296,6 +296,17 @@ func explicitWorkflowRequirements(query string) []string {
 	); index >= 0 {
 		requirements = append(requirements, requirement{workflowID: detectionPackageLifecycleWorkflowID, index: index})
 	}
+	if mcpAggregationQueryRequest(normalized) {
+		index := firstExplicitPhraseIndex(normalized,
+			"mcp", "远程模型上下文协议", "聚合",
+			"mcp catalog", "mcp tool", "mcp query", "mcp invocation",
+			"mcp目录", "mcp工具", "mcp查询", "mcp调用",
+		)
+		if index < 0 {
+			index = 0
+		}
+		requirements = append(requirements, requirement{workflowID: MCPAggregationQueryWorkflowID, index: index})
+	}
 	if agentGuardSecurityQuery(normalized) {
 		index := firstExplicitPhraseIndex(normalized,
 			"codex", "claude code", "claude", "智能体", "agent",
@@ -324,6 +335,16 @@ func explicitWorkflowRequirements(query string) []string {
 		ids = append(ids, item.workflowID)
 	}
 	return dedupeStrings(ids)
+}
+
+func mcpAggregationQueryRequest(query string) bool {
+	if !containsAnyFold(query, "mcp", "远程模型上下文协议", "聚合") {
+		return false
+	}
+	return containsAnyFold(query,
+		"查询", "查看", "列出", "工具", "目录", "调用", "状态", "证据",
+		"query", "list", "tool", "catalog", "call", "invocation", "status", "evidence",
+	)
 }
 
 func agentGuardSecurityQuery(query string) bool {

@@ -74,6 +74,25 @@ func TestWorkflowRegistryIncludesAgentGuardObservationAndControlContracts(t *tes
 	}
 }
 
+func TestWorkflowRegistryIncludesManagedMCPAggregationContract(t *testing.T) {
+	workflow, err := NewWorkflowRegistry().Resolve([]string{MCPAggregationQueryWorkflowID})
+	if err != nil || len(workflow) != 1 {
+		t.Fatalf("managed MCP workflow = %#v, err=%v", workflow, err)
+	}
+	if workflow[0].Version != "6.3" || workflow[0].Domain != DomainExternalMCP {
+		t.Fatalf("managed MCP workflow metadata = %#v", workflow[0])
+	}
+	want := []string{"list_mcp_catalogs", "list_mcp_tools", "query_aggregated_mcp", "get_mcp_invocation"}
+	if len(workflow[0].ExposedCapabilities) != len(want) {
+		t.Fatalf("managed MCP capabilities = %#v, want %#v", workflow[0].ExposedCapabilities, want)
+	}
+	for _, capability := range want {
+		if !containsExactString(workflow[0].ExposedCapabilities, capability) {
+			t.Fatalf("managed MCP capability %q missing from %#v", capability, workflow[0].ExposedCapabilities)
+		}
+	}
+}
+
 func TestCapabilityCatalogUsesClosedSelectedWorkflowAllowlist(t *testing.T) {
 	toolRegistry := NewToolRegistry()
 	for _, tool := range []*ToolSpec{

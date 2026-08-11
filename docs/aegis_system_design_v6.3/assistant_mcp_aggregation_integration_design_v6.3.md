@@ -171,6 +171,10 @@ Assistant MCP Client
 | `MCP.Aggregated.Query` | `query_aggregated_mcp` | primary/contextual | medium | 调用已授权的只读 Tool，返回脱敏证据 |
 | `MCP.Aggregated.Invocation.Get` | `get_mcp_invocation` | companion/contextual | readonly | 查询调用状态、规则结果和证据引用 |
 
+以上四个能力统一挂在 V6.3 工作流 `mcp_aggregation_query` 下。该工作流是
+Assistant 第一层意图卡和第二层闭合 Capability Catalog 的唯一入口；旧的
+`external_evidence` 仅保留给 V6.0 兼容链路，不能替代新的 MCP 聚合工作流。
+
 ### 5.1 `MCP.Aggregated.Query` 参数原则
 
 ```json
