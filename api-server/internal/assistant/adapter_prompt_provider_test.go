@@ -89,6 +89,11 @@ func TestAssistantSummarizePromptRequiresEvidenceGroundedResult(t *testing.T) {
 		"descriptor validation failure",
 		"arguments validation failure",
 		"must not be described as a missing platform capability",
+		"Specific high-risk items",
+		"enumerate every evidenced high-risk object",
+		"exact affected object or stable ID",
+		"prioritized P0/P1/P2 actions",
+		"does not prove a concrete risk category",
 	} {
 		if !strings.Contains(bundle.SystemPrompt, want) {
 			t.Fatalf("summarize prompt missing %q\n%s", want, bundle.SystemPrompt)

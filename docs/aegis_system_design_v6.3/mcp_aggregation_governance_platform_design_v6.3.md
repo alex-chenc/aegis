@@ -87,17 +87,19 @@ Server 必须完成登记、发现、测试、安全评估、审批和发布；C
   “待准入候选”，command 类型只展示资产，不进入 V6.3 纳管；
 - `tools/aegis-mcp` 已证明 Aegis 能作为本地只读 MCP Server 暴露内部能力。
 
-### 4.2 不能宣称已具备的能力
+### 4.2 迁移基线与当前落地状态
 
-- 当前连接测试使用 `/ping` 占位，不是 MCP `server/discover`/`tools/list` 协议验证；
-- 当前 `ListTools`、`Query` 和 Source Service `Query` 返回空结果；
-- 没有面向外部 Client 的远程 MCP Gateway；
-- 没有 Server/工具 Revision、发布目录、Client Grant、漂移审批和调用审批绑定；
-- `external_mcp_query_logs` 只保存查询摘要，不能表达完整请求/响应四阶段证据；
-- 没有 MCP 调用专用同步策略、跨调用规则或逐调用 AI verdict；
+以下是旧 v6.0 骨架与当前 v6.3 实现的边界，不能混为同一事实源：
+
+- 旧连接测试使用 `/ping` 占位，不能作为 v6.3 MCP 协议发现结果；
+- v6.3 已提供远程 MCP Gateway、Server/Tool Revision、发布目录、Client Grant 和运行时 allowlist；
+- v6.3 `RuntimeCall` 已执行同步 pre/post 规则并生成 rule hit/verdict；
+- 旧 `external_mcp_query_logs` 只保存查询摘要，不能回溯生成 v6.3 四阶段规则证据；
+- v6.3 当前尚未完成完整四阶段 payload 持久化、跨调用 Activity 规则和 durable AI；
 - `tools/aegis-mcp` 已提供远程 Streamable HTTP 和 `2025-11-25` 握手，可作为 dev 环境的普通远程 Server 接入；stdio 仅保留开发兼容模式。
 
-因此 V6.3 采用增量迁移，不把旧骨架原地改名后直接发布。
+因此 V6.3 采用增量迁移：新调用走 Gateway 和运行时规则链，历史旧记录只读保留，不对缺失
+上下文进行猜测性补全。
 
 ## 5. 关键术语
 
@@ -575,6 +577,17 @@ quarantine_result
 “完整记录”是指除强制抑制的认证秘密外，能够重建四阶段逻辑消息；不等于在应用日志中打印
 原始 JSON。
 
+### 15.3 当前实现校准：上下文可用性与历史记录
+
+当前 P0/P1/P2 实现已经在 `RuntimeCall` 生命周期内取得 Client、Grant、Tool、参数、上游
+结果/错误、调用状态和 digest，并将这些上下文交给同步规则引擎。新调用的命中会写入
+`mcp_rule_hits`，安全判定通过规则命中表关联返回真实规则名称。
+
+规则上线前的旧 Invocation 只有元数据和 digest，没有可供规则引擎重放的参数/结果上下文。
+这类记录只能显示 `historical_payload_unavailable` 历史投影，不能回溯判定为命中或未命中。
+后续补齐完整上下文时，必须采用“内存实时评估、PostgreSQL 脱敏摘要、MinIO 加密受限正文”
+三层模型，并保存截断、抑制字段和证据完整性状态。
+
 ## 16. 安全规则分析
 
 ### 16.1 分层
@@ -604,6 +617,12 @@ quarantine_result
 
 规则命中必须引用 invocation/event/payload offset，不只保存自然语言摘要。规则版本、参数、
 Policy bundle digest 和评估耗时必须可追溯。
+
+当前已落地的同步规则使用 `mcp_rule_definitions` 中的 `definition.matcher` 执行：
+`tool_risk_at_least`、`sensitive_input_keys`、`input_patterns`、`sensitive_output_keys`、
+`output_patterns`、`response_size_bytes` 和 `call_failed`。规则匹配失败不代表上下文完整；
+若上下文缺失，应使用 `partial`/`historical_payload_unavailable` 证据状态，不能将缺证据显示
+为绿色安全。
 
 ## 17. AI 安全分析
 

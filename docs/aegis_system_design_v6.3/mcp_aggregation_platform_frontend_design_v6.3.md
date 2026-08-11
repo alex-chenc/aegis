@@ -87,7 +87,7 @@ mcpAggregation.*
 | Client 授权 | `clients` | Client、Grant、Scope、配额和有效期 | `mcp:client:read` |
 | 审批中心 | `approvals` | 准入审批、发布审批、调用审批 | `mcp:approval:read` |
 | 调用审计 | `invocations` | 调用列表、四阶段证据和 Trace | `mcp:invocation:read` |
-| 安全分析 | `security` | 规则、AI Verdict、Activity 和告警 | `mcp:security:read` |
+| 安全分析 | `security` | 规则抽屉、调用命中规则、确定性风险和安全判定 | `mcp:security:read` |
 
 无某个内部标签权限时不渲染该标签，也不发起其 API 请求。用户拥有入口权限但没有任何
 附加域权限时，只能查看“远程服务”。
@@ -294,12 +294,13 @@ Client 列表展示：名称、Client 类型、目标 Catalog、授权工具数�
 
 ### 9.1 列表
 
-筛选项：时间、Client、用户、Server、Tool、Catalog/Release、执行状态、规则风险、AI 状态、
-Trace ID。列表显示 invocation ID、调用方、工具、风险、审批、上游结果、交付结果、规则、
-AI、耗时和时间。
+筛选项：时间、Client、用户、Server、Tool、Catalog/Release、执行状态、规则风险、Trace ID。
+列表显示 invocation ID、调用方、工具、风险、审批、上游结果、交付结果、命中规则、耗时和时间。
+AI verdict 可以作为后端兼容字段保留，但不作为当前 MCP 聚合管控页面的展示列。
 
-规则风险和 AI Verdict 使用两个独立列。`analysis_pending`、`degraded`、`unknown` 使用灰/橙色，
-绝不能使用绿色安全标签。
+当前调用审计页面不展示 AI Verdict 列；命中规则、确定性风险和综合风险来自同步规则判定。
+后续 AI 页面恢复后，规则风险和 AI Verdict 仍必须保持独立，`analysis_pending`、`degraded`、
+`unknown` 使用灰/橙色，绝不能使用绿色安全标签。
 
 ### 9.2 四阶段证据抽屉
 
@@ -319,16 +320,19 @@ JSON/Schema 查看器只渲染纯文本和结构树，不执行 HTML、Markdown�
 
 ## 10. 安全分析标签
 
-页面把确定性规则和 AI 分析明确拆开：
+页面把确定性规则和 AI 分析明确拆开。当前 MCP 聚合管控的安全分析交互为：
 
-- 顶部：综合风险分布、规则高危数、AI 高危数、分析待处理/降级数；
-- 左侧：规则命中趋势、规则类型、phase、严重度；
-- 右侧：AI Verdict 趋势、模型/版本、置信度、待处理时长；
-- 下方：高危 Invocation/Activity 列表，可跳转到调用证据；
-- 详情：综合结论如何由规则和 AI 证据得出，并标明谁不能覆盖谁。
+- 页面只显示“查看安全规则”按钮，不直接展开规则表；
+- 点击按钮后从右侧抽屉展示完整规则表、执行阶段、检测条件、风险、防护动作、启停状态和分页；
+- 抽屉关闭后，主页面直接显示调用安全判定；
+- 调用安全判定按服务、工具、Client 展示命中规则、确定性风险、综合风险、判定依据和最近调用时间；
+- 不显示 AI 状态列。后端 `ai_verdict` 仅作为兼容字段保留，不能替代确定性规则结论。
 
 AI 只提供安全分析，不展示“AI 批准调用”按钮。AI 不可用时规则结果仍正常显示，综合状态为
 “AI 分析降级/待处理”，不能将其解释为安全。
+
+调用安全判定必须区分两种空命中状态：新调用无规则命中显示“未命中规则”；历史调用没有可用
+参数/结果上下文时显示“历史调用投影（无正文）”，不得将后者伪装成规则已经评估完成。
 
 ## 11. 前端数据与组件设计
 
@@ -422,7 +426,7 @@ server_id, client_id, invocation_id, time_range
 | `mcp:approval:read` / `mcp:approval:decide` | 查看/处理审批 |
 | `mcp:invocation:read` | 查看调用摘要和四阶段元数据 |
 | `mcp:audit:payload:read` | 发起受审计的 payload reveal |
-| `mcp:security:read` | 查看规则、AI、Activity 和告警 |
+| `mcp:security:read` | 查看安全规则抽屉、规则命中和安全判定 |
 
 登录会话需要由后端返回 `capabilities` 或通过 `/me/capabilities` 获取；前端提供统一 `can()`，
 路由、菜单、标签和按钮使用同一事实源。Capability 过期或后端返回 403 时立即撤销本地可见写
@@ -479,7 +483,7 @@ server_id, client_id, invocation_id, time_range
 6. 创建 Catalog Release、查看 Diff、审批、发布、回滚均显示正确不可变版本；
 7. Client Grant 撤销后网关拒绝调用，前端展示生效证据；
 8. L3/L4 运行时审批绑定参数和 digest，修改参数后原审批失效；
-9. 一次调用能从列表进入四阶段证据，并分别查看规则和 AI 结果；
+9. 一次调用能从列表查看命中规则和规则证据；具备上下文时再进入四阶段证据，历史无正文记录必须明确标记证据缺口；
 10. MinIO、AI、Gateway、控制面分别降级时，UI 符合失败矩阵且不伪报安全/成功；
 11. 普通只读用户无法看到写按钮、payload 或其他 tenant 数据；
 12. 中英文、窄屏、键盘导航、超大 JSON 响应通过可用性测试。
@@ -490,7 +494,7 @@ server_id, client_id, invocation_id, time_range
 2. 页面默认进入“远程服务”，主操作可一键创建远程 MCP 接入任务；
 3. 接入 UI 和接口不接受 stdio、本地 command 或 Runner；
 4. 用户能在同一页面完成 Server 接入、工具发布、Client 授权、审批、审计和安全分析；
-5. 所有重要状态区分准入、审批、发布、调用、规则和 AI，不把中间态显示为成功；
+5. 所有重要状态区分准入、审批、发布、调用和规则，不把中间态或缺证据显示为成功；AI 字段可兼容返回但不作为当前页面列；
 6. 每次调用可以在前端追溯四阶段证据，默认只展示脱敏摘要；
 7. secret、上游 credential、原始 payload 不进入 URL、浏览器持久化、console、埋点和通知；
 8. 页面、标签、按钮和 API 均受 capability 控制，后端继续执行最终权限判定；

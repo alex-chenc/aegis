@@ -108,7 +108,7 @@ func TestAgentConversationQueryPutsPaginationMetadataBeforeCompactItems(t *testi
 		t.Fatalf("marshal query result: %v", err)
 	}
 	encoded := string(payload)
-	metadata := `{"page":1,"page_size":50,"returned_count":2,"total":51,"total_pages":2,"has_next_page":true,"has_previous_page":false`
+	metadata := `{"page":1,"page_size":50,"returned_count":2,"total":51,"total_pages":2,"has_next_page":true,"has_previous_page":false,"risk_summary":{"high_risk_count":1,"active_high_risk_count":1,"unknown_risk_count":0,"risk_types_available":false,"high_risk_sessions":[{"id":"` + firstID.String() + `","state":"active_inferred","rule_hit_count":7,"item_count":339}]}`
 	if !strings.HasPrefix(encoded, metadata) {
 		t.Fatalf("pagination metadata must be first, got %s", encoded[:minTestStringLen(len(encoded), 220)])
 	}

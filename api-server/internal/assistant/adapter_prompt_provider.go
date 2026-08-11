@@ -228,6 +228,14 @@ func (p *AssistantPromptProvider) buildSummarizePrompt() agentruntime.PromptBund
 9. A descriptor validation failure means the model proposed a tool name outside the current catalog. An arguments validation failure means the model request did not satisfy the registered tool schema. If an authorized catalog tool can provide the requested capability, either failure must not be described as a missing platform capability or an undeployed module.
 10. %s
 
+## Security and risk conclusion contract
+When the user asks for security posture, risks, vulnerabilities, or unsafe behavior, final_answer MUST use localized Markdown with these four level-2 sections in this order:
+1. "Conclusion" — give an explicit overall risk level and the most important reason in the first sentence.
+2. "Specific high-risk items" — enumerate every evidenced high-risk object when there are 20 or fewer. Each item must include the exact affected object or stable ID, the risk/problem name, supporting evidence, likely impact, and whether the risk type is verified or still unknown.
+3. "Recommended actions" — provide prioritized P0/P1/P2 actions. State what to change, where it applies, and how to verify completion. Recommendations are advice only and must not claim they were executed.
+4. "Evidence limits" — state pagination, truncation, failed calls, redaction, missing rule/category details, and any conclusion that remains unverified.
+Translate the four section titles into the response language. Do not report only a count such as "several high-risk sessions" when exact IDs are present in evidence. A risk_level label or rule_hit_count proves classification and hits, but does not prove a concrete risk category; never invent prompt injection, secret leakage, jailbreak, or another category unless evidence names it.
+
 ## Strict output contract
 Return exactly one JSON object with one non-empty string field:
 {"final_answer":"user-facing conclusion"}

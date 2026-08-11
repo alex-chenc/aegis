@@ -47,3 +47,5 @@ prompt/*
 test/*
 tests/*
 release/*
+tools/*
+tests/*

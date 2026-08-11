@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMCPClientEndpoint, createMCPOnboardingJob, decideMCPApproval, getMCPOverview, listMCPClientEndpoints, listMCPServers, listMCPTools, updateMCPClientEndpointTools } from './mcpAggregation'
+import { createMCPClientEndpoint, createMCPOnboardingJob, decideMCPApproval, deleteMCPClientEndpoint, deleteMCPServer, disableMCPInvocationTool, getMCPOverview, listMCPClientEndpoints, listMCPServers, listMCPSecurityRules, listMCPTools, setMCPSecurityRuleEnabled, updateMCPClientEndpointTools } from './mcpAggregation'
 
-const { getMock, postMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn() }))
+const { deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({ deleteMock: vi.fn(), getMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn() }))
 
-vi.mock('./index', () => ({ default: { get: getMock, post: postMock, put: putMock } }))
+vi.mock('./index', () => ({ default: { delete: deleteMock, get: getMock, post: postMock, put: putMock } }))
 
 describe('MCP aggregation API', () => {
   beforeEach(() => { vi.clearAllMocks() })
@@ -18,6 +18,12 @@ describe('MCP aggregation API', () => {
     getMock.mockResolvedValueOnce({ items: [], total: 0 })
     await listMCPServers({ page: 1, status: 'published' })
     expect(getMock).toHaveBeenCalledWith('/mcp-platform/servers', { params: { page: 1, status: 'published' } })
+  })
+
+  it('retires a remote service through the delete endpoint', async () => {
+    deleteMock.mockResolvedValueOnce({ id: 'server-1', lifecycle_status: 'retired' })
+    await deleteMCPServer('server-1')
+    expect(deleteMock).toHaveBeenCalledWith('/mcp-platform/servers/server-1')
   })
 
   it('loads tool revisions for the tool list', async () => {
@@ -51,10 +57,15 @@ describe('MCP aggregation API', () => {
     )
   })
 
-  it('creates a client-specific endpoint with a tool allowlist', async () => {
+  it('creates a client-specific endpoint by selecting one service', async () => {
     postMock.mockResolvedValueOnce({ client_id: 'client-1', token: 'one-time-token' })
-    await createMCPClientEndpoint({ client_key: 'codex-aegis', display_name: 'Codex', client_type: 'service', server_id: 'server-1', tool_allowlist: ['list_hosts'] })
-    expect(postMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints', expect.objectContaining({ server_id: 'server-1', tool_allowlist: ['list_hosts'] }))
+    await createMCPClientEndpoint({ client_key: 'codex-aegis', display_name: 'Codex', client_type: 'service', server_id: 'server-1' })
+    expect(postMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints', {
+      client_key: 'codex-aegis',
+      display_name: 'Codex',
+      client_type: 'service',
+      server_id: 'server-1',
+    })
   })
 
   it('updates a client endpoint tool switch', async () => {
@@ -63,9 +74,30 @@ describe('MCP aggregation API', () => {
     expect(putMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints/grant-1/tools', { tool_allowlist: [] })
   })
 
+  it('revokes a Client authorization through the delete endpoint', async () => {
+    deleteMock.mockResolvedValueOnce({ client_id: 'client-1', revoked: true })
+    await deleteMCPClientEndpoint('client-1')
+    expect(deleteMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints/client-1')
+  })
+
   it('loads endpoint records separately from legacy client records', async () => {
     getMock.mockResolvedValueOnce({ items: [], total: 0 })
-    await listMCPClientEndpoints()
-    expect(getMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints')
+    await listMCPClientEndpoints({ page: 2, page_size: 10 })
+    expect(getMock).toHaveBeenCalledWith('/mcp-platform/client-endpoints', { params: { page: 2, page_size: 10 } })
+  })
+
+  it('disables a calling Client tool from its audit record', async () => {
+    postMock.mockResolvedValueOnce({ invocation_id: 'invocation-1', disabled: true })
+    await disableMCPInvocationTool('invocation-1')
+    expect(postMock).toHaveBeenCalledWith('/mcp-platform/invocations/invocation-1/disable-tool')
+  })
+
+  it('lists and toggles deterministic security rules', async () => {
+    getMock.mockResolvedValueOnce({ items: [], total: 0 })
+    putMock.mockResolvedValueOnce({ id: 'rule-1', enabled: false })
+    await listMCPSecurityRules({ page: 1, page_size: 10 })
+    await setMCPSecurityRuleEnabled('rule-1', false)
+    expect(getMock).toHaveBeenCalledWith('/mcp-platform/security-rules', { params: { page: 1, page_size: 10 } })
+    expect(putMock).toHaveBeenCalledWith('/mcp-platform/security-rules/rule-1/enabled', { enabled: false })
   })
 })

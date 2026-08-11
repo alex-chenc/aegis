@@ -30,6 +30,10 @@ python3 /code/aegis/tools/aegis-mcp/aegis_mcp.py --transport stdio
 如果希望保护 MCP 入口，可配置 `AEGIS_MCP_ACCESS_TOKEN`；服务端会要求
 `Authorization: Bearer <token>`，不会在日志中打印 Token。
 
+使用 Docker Compose 时，通过 `AEGIS_API_TOKEN_FILE` 指定宿主机上的 Aegis API
+Token 文件路径。Compose 会以只读方式挂载该文件，容器启动时读取后降权运行，
+不会将 Token 写入镜像。
+
 ## 接入 Aegis 聚合平台
 
 开发环境使用以下远程地址：

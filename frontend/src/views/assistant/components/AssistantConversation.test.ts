@@ -49,6 +49,91 @@ function mountConversation(messages: AssistantMessage[]) {
 }
 
 describe('AssistantConversation', () => {
+  it('把安全分析结论渲染为明确的风险、处置和证据分区', () => {
+    const messages: AssistantMessage[] = [{
+      id: 'msg-risk-report',
+      session_id: 'session-1',
+      message_id: 'msg-risk-report',
+      role: 'assistant',
+      content: [
+        '## 结论',
+        '**风险等级：高。** Codex 存在未阻断的高风险活动。',
+        '## 具体高风险',
+        '1. **防护缺口**：`monitor_only`，影响主机 host-1。',
+        '2. **高风险会话**：会话 `session-risk-1`，规则命中 7 次。',
+        '## 处置建议',
+        '1. **P0**：核验并隔离会话 `session-risk-1`。',
+        '## 证据边界',
+        '- 当前证据没有返回规则类别，不能认定为提示词注入。',
+      ].join('\n'),
+      created_at: '2026-08-11T00:00:00Z',
+    }]
+
+    const wrapper = mountConversation(messages)
+    const report = wrapper.find('.assistant-conclusion')
+
+    expect(report.exists()).toBe(true)
+    expect(report.attributes('data-risk')).toBe('high')
+    expect(report.findAll('.conclusion-section')).toHaveLength(4)
+    expect(report.text()).toContain('具体高风险')
+    expect(report.text()).toContain('session-risk-1')
+    expect(report.text()).toContain('P0')
+    expect(report.text()).toContain('不能认定为提示词注入')
+  })
+
+  it('兼容历史长段落安全结论并转成可读分区', () => {
+    const messages: AssistantMessage[] = [{
+      id: 'msg-legacy-risk',
+      session_id: 'session-1',
+      message_id: 'msg-legacy-risk',
+      role: 'assistant',
+      content: '当前主机的智能体防护态势存在实际安全风险：Codex 有 3 个运行实例，但防护覆盖级别仅为 monitor_only。会话查询显示多个高风险会话，规则命中数最高为 7。建议优先提升防护等级并核验高风险会话。说明：会话内容已脱敏，无法确认具体风险类别。',
+      created_at: '2026-08-11T00:00:00Z',
+    }]
+
+    const wrapper = mountConversation(messages)
+
+    expect(wrapper.find('.assistant-conclusion').exists()).toBe(true)
+    expect(wrapper.text()).toContain('具体高风险')
+    expect(wrapper.text()).toContain('处置建议')
+    expect(wrapper.text()).toContain('证据边界')
+  })
+
+  it('不会把 IP 地址中的点误判为结论句号', () => {
+    const messages: AssistantMessage[] = [{
+      id: 'msg-ip-risk',
+      session_id: 'session-1',
+      message_id: 'msg-ip-risk',
+      role: 'assistant',
+      content: '当前主机（chenc-VMware-Virtual-Platform, 192.168.152.159）的智能体防护态势存在实际安全风险：Codex 有 3 个运行实例，但防护覆盖级别仅为 monitor_only，未启用阻断/处置动作。建议优先提升防护等级并核验高风险会话。说明：会话内容已脱敏，无法进一步确认具体风险行为细节。',
+      created_at: '2026-08-11T00:00:00Z',
+    }]
+
+    const wrapper = mountConversation(messages)
+    const report = wrapper.find('.assistant-conclusion')
+
+    expect(report.find('.conclusion-title').text()).toContain('192.168.152.159')
+    expect(report.find('.conclusion-section').text()).toContain('192.168.152.159')
+    expect(report.findAll('.section-item').some(item => item.text().trim().startsWith('168.152.159）的智能体'))).toBe(false)
+  })
+
+  it('渲染模型文本前转义 HTML', () => {
+    const messages: AssistantMessage[] = [{
+      id: 'msg-html',
+      session_id: 'session-1',
+      message_id: 'msg-html',
+      role: 'assistant',
+      content: '<img src=x onerror="alert(1)"> **安全文本**',
+      created_at: '2026-08-11T00:00:00Z',
+    }]
+
+    const wrapper = mountConversation(messages)
+
+    expect(wrapper.find('.message-content img').exists()).toBe(false)
+    expect(wrapper.find('.message-content').html()).toContain('&lt;img')
+    expect(wrapper.find('.message-content strong').text()).toBe('安全文本')
+  })
+
   it('为 assistant 消息内的每个展示框渲染独立头像', () => {
     const messages: AssistantMessage[] = [{
       id: 'msg-segments',

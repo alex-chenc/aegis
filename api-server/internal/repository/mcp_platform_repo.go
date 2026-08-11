@@ -28,6 +28,47 @@ type MCPOnboardingJobQuery struct {
 	PageSize int
 }
 
+// MCPInvocationAuditRow contains only invocation metadata plus the service and
+// Client identities needed by the governance UI. It deliberately excludes raw
+// request and response payloads.
+type MCPInvocationAuditRow struct {
+	ID             uuid.UUID  `gorm:"column:id"`
+	ClientID       *uuid.UUID `gorm:"column:client_id"`
+	ToolRevisionID *uuid.UUID `gorm:"column:tool_revision_id"`
+	ToolAlias      string     `gorm:"column:tool_alias"`
+	Status         string     `gorm:"column:status"`
+	PolicyDecision string     `gorm:"column:policy_decision"`
+	CreatedAt      time.Time  `gorm:"column:created_at"`
+	CompletedAt    *time.Time `gorm:"column:completed_at"`
+	ClientKey      string     `gorm:"column:client_key"`
+	ClientName     string     `gorm:"column:client_name"`
+	ServerID       *uuid.UUID `gorm:"column:server_id"`
+	ServerName     string     `gorm:"column:server_name"`
+}
+
+type MCPToolAuditRow struct {
+	model.MCPToolRevision
+	ServerID   uuid.UUID `gorm:"column:server_id"`
+	ServerName string    `gorm:"column:server_name"`
+}
+
+type MCPSecurityVerdictAuditRow struct {
+	model.MCPSecurityVerdict
+	ClientID   *uuid.UUID `gorm:"column:client_id"`
+	ClientKey  string     `gorm:"column:client_key"`
+	ClientName string     `gorm:"column:client_name"`
+	ServerID   *uuid.UUID `gorm:"column:server_id"`
+	ServerName string     `gorm:"column:server_name"`
+	ToolAlias  string     `gorm:"column:tool_alias"`
+	Status     string     `gorm:"column:invocation_status"`
+	CreatedAt  time.Time  `gorm:"column:invocation_created_at"`
+}
+
+type MCPRuleMatchRow struct {
+	InvocationID uuid.UUID `gorm:"column:invocation_id"`
+	RuleName     string    `gorm:"column:rule_name"`
+}
+
 type MCPPlatformRepository struct{ db *gorm.DB }
 
 func NewMCPPlatformRepository(db *gorm.DB) *MCPPlatformRepository {
@@ -118,6 +159,11 @@ func (r *MCPPlatformRepository) ListServers(ctx context.Context, q MCPServerQuer
 	}
 	if q.Status != "" {
 		tx = tx.Where("lifecycle_status = ?", q.Status)
+	} else {
+		// Retired servers remain queryable by ID and by an explicit status
+		// filter for audit/history, but must not reappear in the default
+		// operational list after a reversible delete.
+		tx = tx.Where("lifecycle_status <> ?", model.MCPPlatformServerRetired)
 	}
 	if q.RiskTier != "" {
 		tx = tx.Where("risk_tier = ?", q.RiskTier)
@@ -133,6 +179,62 @@ func (r *MCPPlatformRepository) ListServers(ctx context.Context, q MCPServerQuer
 func (r *MCPPlatformRepository) UpdateServer(ctx context.Context, server *model.MCPServer) error {
 	server.UpdatedAt = time.Now().UTC()
 	return r.db.WithContext(ctx).Save(server).Error
+}
+
+// RetireServer disables a remote service without deleting its immutable
+// revisions, catalog releases, grants, credentials, or invocation history.
+// Client endpoints bound to the service are revoked in the same transaction so
+// no credential remains usable after the service is retired.
+func (r *MCPPlatformRepository) RetireServer(ctx context.Context, serverID uuid.UUID) (int64, error) {
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	rollback := func(err error) (int64, error) {
+		_ = tx.Rollback()
+		return 0, err
+	}
+
+	result := tx.Model(&model.MCPServer{}).
+		Where("id = ?", serverID).
+		Updates(map[string]interface{}{"lifecycle_status": model.MCPPlatformServerRetired, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return rollback(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return rollback(ErrMCPPlatformNotFound)
+	}
+
+	clientIDs := tx.Table("mcp_client_grants AS grant_row").
+		Select("DISTINCT grant_row.client_id").
+		Joins("JOIN mcp_catalog_releases AS release ON release.catalog_id = grant_row.catalog_id").
+		Joins("JOIN mcp_server_revisions AS revision ON revision.id = release.server_revision_id").
+		Where("revision.server_id = ?", serverID)
+	if err := tx.Model(&model.MCPClientGrant{}).
+		Where("client_id IN (?)", clientIDs).
+		Where("status <> ?", "revoked").
+		Updates(map[string]interface{}{"status": "revoked", "updated_at": time.Now().UTC()}).Error; err != nil {
+		return rollback(err)
+	}
+	if err := tx.Model(&model.MCPClientCredential{}).
+		Where("client_id IN (?)", clientIDs).
+		Where("status <> ?", "revoked").
+		Updates(map[string]interface{}{"status": "revoked", "updated_at": time.Now().UTC()}).Error; err != nil {
+		return rollback(err)
+	}
+	var revokedClients int64
+	clientResult := tx.Model(&model.MCPClient{}).
+		Where("id IN (?)", clientIDs).
+		Where("status <> ?", "revoked").
+		Updates(map[string]interface{}{"status": "revoked", "updated_at": time.Now().UTC()})
+	if clientResult.Error != nil {
+		return rollback(clientResult.Error)
+	}
+	revokedClients = clientResult.RowsAffected
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return revokedClients, nil
 }
 
 func (r *MCPPlatformRepository) CreateServerRevision(ctx context.Context, revision *model.MCPServerRevision) error {
@@ -158,6 +260,39 @@ func (r *MCPPlatformRepository) ListToolRevisions(ctx context.Context, serverRev
 	}
 	var items []model.MCPToolRevision
 	return items, tx.Find(&items).Error
+}
+
+func (r *MCPPlatformRepository) ListToolAuditRows(ctx context.Context, serverRevisionID *uuid.UUID, page, pageSize int) ([]MCPToolAuditRow, int64, error) {
+	var items []MCPToolAuditRow
+	var total int64
+	tx := r.db.WithContext(ctx).Table("mcp_tool_revisions AS tool").
+		Joins("JOIN mcp_server_revisions AS revision ON revision.id = tool.server_revision_id").
+		Joins("JOIN mcp_servers AS server ON server.id = revision.server_id")
+	// Tool revisions are immutable history, but the operational tool catalog
+	// must follow the service lifecycle and hide tools of retired services.
+	tx = tx.Where("server.lifecycle_status <> ?", model.MCPPlatformServerRetired)
+	if serverRevisionID != nil {
+		tx = tx.Where("tool.server_revision_id = ?", *serverRevisionID)
+	}
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	p, s := normalizePage(page, pageSize)
+	err := tx.Select("tool.*, server.id AS server_id, server.display_name AS server_name").
+		Order("server.display_name ASC, tool.alias ASC").Offset((p - 1) * s).Limit(s).Scan(&items).Error
+	return items, total, err
+}
+
+func (r *MCPPlatformRepository) GetToolRevision(ctx context.Context, id uuid.UUID) (*model.MCPToolRevision, error) {
+	var item model.MCPToolRevision
+	err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrMCPPlatformNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 func (r *MCPPlatformRepository) GetCatalog(ctx context.Context, id uuid.UUID) (*model.MCPCatalog, error) {
@@ -296,6 +431,33 @@ func (r *MCPPlatformRepository) CountByTable(ctx context.Context, table string, 
 	return count, err
 }
 
+func (r *MCPPlatformRepository) CountOperationalServers(ctx context.Context) (int64, error) {
+	return r.CountByTable(ctx, "mcp_servers", "lifecycle_status <> ?", model.MCPPlatformServerRetired)
+}
+
+func (r *MCPPlatformRepository) CountOperationalPublishedTools(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Table("mcp_catalog_release_tools AS release_tool").
+		Joins("JOIN mcp_catalog_releases AS release ON release.id = release_tool.release_id").
+		Joins("JOIN mcp_server_revisions AS revision ON revision.id = release.server_revision_id").
+		Joins("JOIN mcp_servers AS server ON server.id = revision.server_id").
+		Where("release_tool.status = ? AND server.lifecycle_status <> ?", "active", model.MCPPlatformServerRetired).
+		Count(&count).Error
+	return count, err
+}
+
+func (r *MCPPlatformRepository) CountRecentOperationalHighRiskCalls(ctx context.Context, since time.Time) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Table("mcp_security_verdicts AS verdict").
+		Joins("JOIN mcp_invocations AS invocation ON invocation.id = verdict.invocation_id").
+		Joins("JOIN mcp_tool_revisions AS tool ON tool.id = invocation.tool_revision_id").
+		Joins("JOIN mcp_server_revisions AS revision ON revision.id = tool.server_revision_id").
+		Joins("JOIN mcp_servers AS server ON server.id = revision.server_id").
+		Where("verdict.overall_risk IN ? AND invocation.created_at >= ? AND server.lifecycle_status <> ?", []string{"high", "critical"}, since, model.MCPPlatformServerRetired).
+		Count(&count).Error
+	return count, err
+}
+
 func (r *MCPPlatformRepository) ListCatalogs(ctx context.Context, page, pageSize int) ([]model.MCPCatalog, int64, error) {
 	var items []model.MCPCatalog
 	var total int64
@@ -381,6 +543,41 @@ func (r *MCPPlatformRepository) UpdateGrant(ctx context.Context, item *model.MCP
 	return r.db.WithContext(ctx).Save(item).Error
 }
 
+// RevokeClientEndpoint revokes every grant and credential for one Client while
+// retaining the records for audit and historical invocation joins.
+func (r *MCPPlatformRepository) RevokeClientEndpoint(ctx context.Context, clientID uuid.UUID) (int64, error) {
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	rollback := func(err error) (int64, error) {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	var client model.MCPClient
+	if err := tx.First(&client, "id = ?", clientID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return rollback(ErrMCPPlatformNotFound)
+		}
+		return rollback(err)
+	}
+	now := time.Now().UTC()
+	if err := tx.Model(&model.MCPClientGrant{}).Where("client_id = ? AND status <> ?", clientID, "revoked").Updates(map[string]interface{}{"status": "revoked", "updated_at": now}).Error; err != nil {
+		return rollback(err)
+	}
+	if err := tx.Model(&model.MCPClientCredential{}).Where("client_id = ? AND status <> ?", clientID, "revoked").Updates(map[string]interface{}{"status": "revoked", "updated_at": now}).Error; err != nil {
+		return rollback(err)
+	}
+	clientResult := tx.Model(&model.MCPClient{}).Where("id = ? AND status <> ?", clientID, "revoked").Updates(map[string]interface{}{"status": "revoked", "updated_at": now})
+	if clientResult.Error != nil {
+		return rollback(clientResult.Error)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return clientResult.RowsAffected, nil
+}
+
 func (r *MCPPlatformRepository) CreateClientCredential(ctx context.Context, item *model.MCPClientCredential) error {
 	return r.db.WithContext(ctx).Create(item).Error
 }
@@ -403,6 +600,18 @@ func (r *MCPPlatformRepository) TouchClientCredential(ctx context.Context, id uu
 
 func (r *MCPPlatformRepository) CreateInvocation(ctx context.Context, item *model.MCPInvocation) error {
 	return r.db.WithContext(ctx).Create(item).Error
+}
+
+func (r *MCPPlatformRepository) GetInvocation(ctx context.Context, id uuid.UUID) (*model.MCPInvocation, error) {
+	var item model.MCPInvocation
+	err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrMCPPlatformNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 func (r *MCPPlatformRepository) UpdateInvocation(ctx context.Context, id uuid.UUID, status, resultDigest string, completedAt *time.Time) error {
@@ -428,15 +637,26 @@ func (r *MCPPlatformRepository) ListApprovals(ctx context.Context, status string
 	return items, total, err
 }
 
-func (r *MCPPlatformRepository) ListInvocations(ctx context.Context, page, pageSize int) ([]model.MCPInvocation, int64, error) {
-	var items []model.MCPInvocation
+func (r *MCPPlatformRepository) ListInvocations(ctx context.Context, page, pageSize int) ([]MCPInvocationAuditRow, int64, error) {
+	var items []MCPInvocationAuditRow
 	var total int64
-	tx := r.db.WithContext(ctx).Model(&model.MCPInvocation{})
+	tx := r.db.WithContext(ctx).Table("mcp_invocations AS invocation")
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	p, s := normalizePage(page, pageSize)
-	err := tx.Order("created_at DESC").Offset((p - 1) * s).Limit(s).Find(&items).Error
+	err := tx.Select(`invocation.id, invocation.client_id, invocation.tool_revision_id,
+		invocation.tool_alias, invocation.status, invocation.policy_decision,
+		invocation.created_at, invocation.completed_at,
+		COALESCE(client.client_key, '') AS client_key,
+		COALESCE(client.display_name, '') AS client_name,
+		server.id AS server_id,
+		COALESCE(server.display_name, '') AS server_name`).
+		Joins("LEFT JOIN mcp_clients AS client ON client.id = invocation.client_id").
+		Joins("LEFT JOIN mcp_tool_revisions AS tool ON tool.id = invocation.tool_revision_id").
+		Joins("LEFT JOIN mcp_server_revisions AS revision ON revision.id = tool.server_revision_id").
+		Joins("LEFT JOIN mcp_servers AS server ON server.id = revision.server_id").
+		Order("invocation.created_at DESC").Offset((p - 1) * s).Limit(s).Scan(&items).Error
 	return items, total, err
 }
 
@@ -450,6 +670,105 @@ func (r *MCPPlatformRepository) ListSecurityVerdicts(ctx context.Context, page, 
 	p, s := normalizePage(page, pageSize)
 	err := tx.Order("updated_at DESC").Offset((p - 1) * s).Limit(s).Find(&items).Error
 	return items, total, err
+}
+
+func (r *MCPPlatformRepository) ListSecurityVerdictAuditRows(ctx context.Context, page, pageSize int) ([]MCPSecurityVerdictAuditRow, int64, error) {
+	var items []MCPSecurityVerdictAuditRow
+	var total int64
+	tx := r.db.WithContext(ctx).Table("mcp_security_verdicts AS verdict")
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	p, s := normalizePage(page, pageSize)
+	err := tx.Select(`verdict.*,
+		invocation.client_id, invocation.tool_alias, invocation.status AS invocation_status,
+		invocation.created_at AS invocation_created_at,
+		COALESCE(client.client_key, '') AS client_key,
+		COALESCE(client.display_name, '') AS client_name,
+		server.id AS server_id, COALESCE(server.display_name, '') AS server_name`).
+		Joins("JOIN mcp_invocations AS invocation ON invocation.id = verdict.invocation_id").
+		Joins("LEFT JOIN mcp_clients AS client ON client.id = invocation.client_id").
+		Joins("LEFT JOIN mcp_tool_revisions AS tool ON tool.id = invocation.tool_revision_id").
+		Joins("LEFT JOIN mcp_server_revisions AS revision ON revision.id = tool.server_revision_id").
+		Joins("LEFT JOIN mcp_servers AS server ON server.id = revision.server_id").
+		Order("verdict.updated_at DESC").Offset((p - 1) * s).Limit(s).Scan(&items).Error
+	return items, total, err
+}
+
+func (r *MCPPlatformRepository) ListSecurityRules(ctx context.Context, page, pageSize int) ([]model.MCPRuleDefinition, int64, error) {
+	var items []model.MCPRuleDefinition
+	var total int64
+	tx := r.db.WithContext(ctx).Model(&model.MCPRuleDefinition{})
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	p, s := normalizePage(page, pageSize)
+	err := tx.Order("phase ASC, severity DESC, rule_key ASC").Offset((p - 1) * s).Limit(s).Find(&items).Error
+	return items, total, err
+}
+
+func (r *MCPPlatformRepository) ListSecurityRuleMatchNames(ctx context.Context, invocationIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := make(map[uuid.UUID][]string)
+	if len(invocationIDs) == 0 {
+		return result, nil
+	}
+	var rows []MCPRuleMatchRow
+	err := r.db.WithContext(ctx).Table("mcp_rule_hits AS hit").
+		Select("hit.invocation_id, rule.name AS rule_name").
+		Joins("JOIN mcp_rule_definitions AS rule ON rule.id = hit.rule_definition_id").
+		Where("hit.invocation_id IN ?", invocationIDs).
+		Order("hit.created_at ASC, rule.name ASC").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]map[string]struct{})
+	for _, row := range rows {
+		if _, ok := seen[row.InvocationID]; !ok {
+			seen[row.InvocationID] = make(map[string]struct{})
+		}
+		if _, ok := seen[row.InvocationID][row.RuleName]; ok {
+			continue
+		}
+		seen[row.InvocationID][row.RuleName] = struct{}{}
+		result[row.InvocationID] = append(result[row.InvocationID], row.RuleName)
+	}
+	return result, nil
+}
+
+func (r *MCPPlatformRepository) ListEnabledSecurityRules(ctx context.Context, phase string) ([]model.MCPRuleDefinition, error) {
+	var items []model.MCPRuleDefinition
+	err := r.db.WithContext(ctx).Where("enabled = ? AND phase = ?", true, phase).Order("severity DESC, rule_key ASC").Find(&items).Error
+	return items, err
+}
+
+func (r *MCPPlatformRepository) SetSecurityRuleEnabled(ctx context.Context, id uuid.UUID, enabled bool) (*model.MCPRuleDefinition, error) {
+	result := r.db.WithContext(ctx).Model(&model.MCPRuleDefinition{}).Where("id = ?", id).Update("enabled", enabled)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, ErrMCPPlatformNotFound
+	}
+	var item model.MCPRuleDefinition
+	if err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *MCPPlatformRepository) SaveSecurityEvaluation(ctx context.Context, invocationID uuid.UUID, invocationStatus, ruleStatus, aiStatus, resultDigest string, completedAt time.Time, hits []model.MCPRuleHit, verdict *model.MCPSecurityVerdict) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updates := map[string]interface{}{"status": invocationStatus, "rule_status": ruleStatus, "ai_status": aiStatus, "result_digest": resultDigest, "completed_at": completedAt}
+		if err := tx.Model(&model.MCPInvocation{}).Where("id = ?", invocationID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if len(hits) > 0 {
+			if err := tx.Create(&hits).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("invocation_id = ?", invocationID).Assign(*verdict).FirstOrCreate(verdict).Error
+	})
 }
 
 func normalizePage(page, pageSize int) (int, int) {

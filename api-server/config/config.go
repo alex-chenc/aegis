@@ -102,13 +102,16 @@ type AgentSessionConfig struct {
 }
 
 type MCPPlatformConfig struct {
-	GatewayBaseURL       string `mapstructure:"gateway_base_url"`
-	PublicGatewayBaseURL string `mapstructure:"public_gateway_base_url"`
-	RuntimeSharedSecret  string `mapstructure:"runtime_shared_secret"`
-	MaxRequestBytes      int64  `mapstructure:"max_request_bytes"`
-	MaxResponseBytes     int64  `mapstructure:"max_response_bytes"`
-	UpstreamTimeoutSec   int    `mapstructure:"upstream_timeout_seconds"`
-	CatalogSigningKey    string `mapstructure:"catalog_signing_key"`
+	GatewayBaseURL          string `mapstructure:"gateway_base_url"`
+	PublicGatewayBaseURL    string `mapstructure:"public_gateway_base_url"`
+	RuntimeSharedSecret     string `mapstructure:"runtime_shared_secret"`
+	AssistantMCPEnabled     bool   `mapstructure:"assistant_mcp_enabled"`
+	AssistantMCPClientKey   string `mapstructure:"assistant_mcp_client_key"`
+	AssistantMCPClientToken string `mapstructure:"assistant_mcp_client_token"`
+	MaxRequestBytes         int64  `mapstructure:"max_request_bytes"`
+	MaxResponseBytes        int64  `mapstructure:"max_response_bytes"`
+	UpstreamTimeoutSec      int    `mapstructure:"upstream_timeout_seconds"`
+	CatalogSigningKey       string `mapstructure:"catalog_signing_key"`
 }
 
 type SelfHealingConfig struct {
@@ -213,6 +216,15 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if runtimeSharedSecret := getEnv("MCP_GATEWAY_RUNTIME_SECRET"); runtimeSharedSecret != "" {
 		cfg.MCPPlatform.RuntimeSharedSecret = runtimeSharedSecret
+	}
+	if enabled, ok := getEnvBool("MCP_ASSISTANT_ENABLED"); ok {
+		cfg.MCPPlatform.AssistantMCPEnabled = enabled
+	}
+	if clientKey := getEnv("MCP_ASSISTANT_CLIENT_KEY"); clientKey != "" {
+		cfg.MCPPlatform.AssistantMCPClientKey = clientKey
+	}
+	if clientToken := getEnv("MCP_ASSISTANT_CLIENT_TOKEN"); clientToken != "" {
+		cfg.MCPPlatform.AssistantMCPClientToken = clientToken
 	}
 	if signingKey := getEnv("MCP_CATALOG_SIGNING_KEY"); signingKey != "" {
 		cfg.MCPPlatform.CatalogSigningKey = signingKey

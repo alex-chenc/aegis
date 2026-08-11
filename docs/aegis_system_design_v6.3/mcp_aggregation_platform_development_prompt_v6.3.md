@@ -121,6 +121,10 @@ P0-P5 分阶段开发，每阶段单独评审和验证；只有全部阶段满�
 23. MCP 聚合管控不设置全局 feature flag，控制面、Gateway、DC 投影和前端入口默认可用；按 Server/Catalog/Client/Tool 的审批、Grant、Policy、发布和隔离状态完成安全停用。
 24. 不删除历史 Revision、Release、Invocation、Approval、Rule、AI 或审计证据完成回滚。
 25. 资产发现只能生成 candidate/finding，不能自动连接、读取 credential 或发布工具。
+26. 运行时规则评估必须直接接收本次 MCP 调用上下文：Client/Grant、Tool、脱敏参数、上游结果或错误、调用状态和 digest；不得只根据工具名称或历史摘要推断命中。
+27. 新调用的规则命中写入 `mcp_rule_hits`，安全判定通过规则定义关联返回 `matched_rules`；没有命中返回 `no_rule_matched`，上下文缺失返回 `historical_payload_unavailable`，禁止伪造历史命中。
+28. 上下文分为实时内存、PostgreSQL 脱敏摘要和 MinIO 加密受限正文三层；Token、Authorization、密码、私钥、API key 的值不得进入普通日志、Kafka、前端状态或 AI 输入。
+29. MCP 聚合管控安全分析页面只显示“查看安全规则”按钮；完整规则表在抽屉中展示，调用安全判定位于其下方，不展示 AI 状态列。
 
 五、目标组件边界
 
@@ -274,7 +278,13 @@ digest、状态、classification 和 opaque ref。
 
 首批确定性规则至少覆盖：secret/credential、prompt injection、SQL/shell/path/header 注入、
 危险资源范围、私密读取后外发、审批绕过、Schema/Revision drift、异常结果类型和高危工具序列。
-pre-call deny 也必须形成 Invocation、审计和 AI 状态，不能无记录丢弃。
+pre-call deny 也必须形成 Invocation、规则命中和安全判定，不能无记录丢弃。当前实现的 AI 字段
+可以保留为 `not_run` 兼容值，但前端不展示 AI 状态，确定性规则不能依赖 AI。
+
+规则评估器必须直接使用本次调用上下文：Client/Grant、Tool、脱敏参数、上游结果或错误、调用
+状态和 digest。新调用未命中时返回 `matched_rules=[]` 与 `no_rule_matched`；历史调用没有参数/
+结果上下文时返回 `matched_rules=[]` 与 `historical_payload_unavailable`，不得对历史摘要猜测性
+重放。Token、Authorization、密码、私钥和 API key 的值不得进入日志、Kafka、前端或 AI 输入。
 
 AI 输入只包含经授权、脱敏、限界、带 evidence ID 的结构化数据。工具结果始终是 untrusted data，
 明确与 system instruction 隔离。AI worker 的网络权限只允许已配置的 LLM provider endpoint，禁止
@@ -331,8 +341,10 @@ delivery handle 或状态，普通 JSON 不回显 secret。payload reveal、cred
 “等待审批”、“已审批”和“已发布”，不得乐观伪造 active。
 
 所有标签具备 loading、empty、error、permission denied、degraded 和 stale 状态；Server/Tool/Catalog/Grant 的停用状态必须明确展示。
-规则和 AI 分列展示；analysis pending/degraded/unknown 不使用绿色。Server、Tool、Release、Grant、
-Approval 和 Invocation 详情均显示稳定 ID、版本/digest 和准确状态。
+安全分析页不直接平铺规则表，只显示一个“查看安全规则”按钮；点击后使用右侧抽屉展示完整规则
+表、匹配条件、阶段、风险、防护动作、启停状态和分页。抽屉下方显示调用安全判定，按服务、工具、
+Client、命中规则、确定性风险、综合风险、判定依据和时间展示，不显示 AI 状态列。Server、Tool、
+Release、Grant、Approval 和 Invocation 详情均显示稳定 ID、版本/digest 和准确状态。
 
 调用审计详情按四阶段展示，默认只有脱敏摘要。raw payload reveal 要求专门权限、purpose、二次认证
 和短期内存查看器；secret、endpoint、arguments、result、payload、审批理由不得进入 URL、Pinia

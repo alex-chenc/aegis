@@ -2,7 +2,7 @@
 
 - **版本**：V6.3 方案版
 - **日期**：2026-08-11
-- **状态**：会话感知已有代码基线；Agent Guard 智能体高层工具第一阶段已实现；MCP 聚合治理平台已落地 P0/P1 核心闭环，P2/P3/P4/P5 仍在开发
+- **状态**：会话感知已有代码基线；Agent Guard 智能体高层工具第一阶段已实现；MCP 聚合治理平台已落地 P0/P1 及 P2 运行时确定性规则闭环，完整四阶段上下文持久化、跨调用 Activity、durable AI 和规模化发布仍在开发
 - **首批会话感知产品**：Claude Code、OpenAI Codex CLI
 - **主题**：智能体会话感知；智能体模式集成 V6.2 Agent Guard 全能力；MCP 聚合治理平台
 
@@ -86,11 +86,13 @@ Claude Code / Codex CLI
 | [development_prompt_v6.3.md](development_prompt_v6.3.md) | 可直接交给开发智能体的主提示词 |
 | [assistant_agent_guard_integration_design_v6.3.md](assistant_agent_guard_integration_design_v6.3.md) | `/assistant` 集成 V6.2 Agent Guard 全能力的范围、架构、工具目录、RBAC、审批和验收 |
 | [assistant_agent_guard_development_design_v6.3.md](assistant_agent_guard_development_design_v6.3.md) | 文件级实施、共享应用服务、工具契约、测试、日志、灰度和回滚 |
+| [assistant_mcp_aggregation_integration_design_v6.3.md](assistant_mcp_aggregation_integration_design_v6.3.md) | V6.1 智能体模式接入 V6.3 MCP 聚合管控的 Client、Gateway、工具契约、权限、迁移和灰度设计 |
 | [mcp_aggregation_governance_platform_design_v6.3.md](mcp_aggregation_governance_platform_design_v6.3.md) | MCP 聚合平台目标、准入准则、Gateway、Catalog、工具控制、完整审计、规则和 AI 安全分析 |
 | [mcp_aggregation_platform_api_database_design_v6.3.md](mcp_aggregation_platform_api_database_design_v6.3.md) | MCP 控制面/协议/API、数据库、Kafka、RBAC 和 v6.0 迁移 |
 | [mcp_aggregation_platform_frontend_design_v6.3.md](mcp_aggregation_platform_frontend_design_v6.3.md) | “MCP 聚合管控”单一菜单入口、远程 Server 一键接入、页面标签、权限、状态、安全交互和前端验收 |
 | [mcp_aggregation_platform_implementation_test_rollout_v6.3.md](mcp_aggregation_platform_implementation_test_rollout_v6.3.md) | MCP 平台分阶段实施、测试、日志、指标、灰度、停止条件和回滚 |
 | [mcp_aggregation_platform_development_prompt_v6.3.md](mcp_aggregation_platform_development_prompt_v6.3.md) | 可直接交给开发智能体的 MCP 聚合管控全模块主提示词和 P0-P5 分阶段任务入口 |
+| [fix/mcp_context_and_rule_matching_alignment_v6.3.md](fix/mcp_context_and_rule_matching_alignment_v6.3.md) | MCP 上下文采集边界、实时规则匹配、历史记录限制和安全分析最终交互校准 |
 
 ## 4. V6.3 核心决策
 
@@ -122,6 +124,9 @@ Claude Code / Codex CLI
 | V63-D24 | 上游 annotations 是不可信提示，工具控制使用平台 verified metadata 和 Policy |
 | V63-D25 | v6.0 外部 MCP 与 Assistant 迁入新平台；`tools/aegis-mcp` 以远程 HTTP 形态按普通 Server 接入，stdio 仅作开发兼容 |
 | V63-D26 | 前端仅在“系统配置”新增一个“MCP 聚合管控”入口，所有治理工作区使用同页内部标签 |
+| V63-D27 | 安全规则主页面只保留“查看安全规则”按钮；完整规则表在抽屉中展示，调用安全判定位于其下方且不展示 AI 状态 |
+| V63-D28 | 新 MCP 调用使用运行时上下文执行确定性 pre/post 规则并写入 rule hit；历史调用缺少上下文时只能标记历史投影，不回溯伪造命中 |
+| V63-D29 | MCP 上下文采用内存实时评估、PostgreSQL 脱敏摘要、MinIO 加密受限正文的分层策略；敏感值不得进入日志、Kafka、前端或 AI 输入 |
 
 ## 5. 完成标准
 

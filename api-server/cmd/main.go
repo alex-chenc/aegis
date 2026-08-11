@@ -628,18 +628,38 @@ func main() {
 	mcpClientFactory := assistant.NewExternalMCPClientFactory(assistantLogger)
 	mcpQueryPlanner := assistant.NewExternalMCPQueryPlanner(mcpSvc, mcpPromptProvider, assistantLogger)
 
-	// Register MCP tools
-	if err := assistantTools.RegisterExternalMCPTools(toolRegistry, assistantTools.ExternalMCPToolDeps{
-		SourceService:  mcpSvc,
-		QueryPlanner:   mcpQueryPlanner,
-		Normalizer:     mcpNormalizer,
-		Redactor:       mcpRedactor,
-		PromptProvider: mcpPromptProvider,
-		Logger:         assistantLogger,
-	}); err != nil {
-		logger.Warn("failed to register external MCP tools", zap.Error(err))
+	// Register MCP tools. V6.3 uses a fixed, read-only Assistant facade over a
+	// pre-authorized Client endpoint. The legacy V6.0 source tools remain
+	// available only while the managed facade is disabled for migration.
+	if cfg.MCPPlatform.AssistantMCPEnabled {
+		gatewayClient, gatewayErr := assistant.NewMCPGatewayClient(assistant.MCPGatewayClientConfig{
+			BaseURL:              cfg.MCPPlatform.GatewayBaseURL,
+			ClientKey:            cfg.MCPPlatform.AssistantMCPClientKey,
+			Token:                cfg.MCPPlatform.AssistantMCPClientToken,
+			ContextSigningSecret: cfg.MCPPlatform.RuntimeSharedSecret,
+			Timeout:              time.Duration(cfg.MCPPlatform.UpstreamTimeoutSec) * time.Second,
+			Logger:               assistantLogger,
+		})
+		if gatewayErr != nil {
+			logger.Error("managed MCP Assistant disabled because Client authorization is invalid", zap.Error(gatewayErr))
+		} else if err := assistantTools.RegisterMCPAggregationTools(toolRegistry, assistantTools.MCPAggregationToolDeps{Gateway: gatewayClient, Invocations: mcpPlatformService, Logger: assistantLogger}); err != nil {
+			logger.Error("failed to register managed MCP Assistant tools", zap.Error(err))
+		} else {
+			logger.Info("managed MCP Assistant tools registered", zap.Bool("client_authorization_configured", true))
+		}
 	}
-
+	if !cfg.MCPPlatform.AssistantMCPEnabled {
+		if err := assistantTools.RegisterExternalMCPTools(toolRegistry, assistantTools.ExternalMCPToolDeps{
+			SourceService:  mcpSvc,
+			QueryPlanner:   mcpQueryPlanner,
+			Normalizer:     mcpNormalizer,
+			Redactor:       mcpRedactor,
+			PromptProvider: mcpPromptProvider,
+			Logger:         assistantLogger,
+		}); err != nil {
+			logger.Warn("failed to register external MCP tools", zap.Error(err))
+		}
+	}
 	// Register remaining assistant tools (require services initialized above)
 	// Agent tools
 	if err := assistantTools.RegisterAgentTools(toolRegistry, assistantTools.AgentToolDeps{ServerClient: serverClient}); err != nil {

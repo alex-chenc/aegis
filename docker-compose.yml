@@ -82,6 +82,7 @@ services:
       - ./migrations/033_v6.3_mcp_platform_control_plane.sql:/migrations/033_v6.3_mcp_platform_control_plane.sql:ro
       - ./migrations/034_v6.3_mcp_platform_audit_analysis.sql:/migrations/034_v6.3_mcp_platform_audit_analysis.sql:ro
       - ./migrations/035_v6.3_mcp_client_endpoints.sql:/migrations/035_v6.3_mcp_client_endpoints.sql:ro
+      - ./migrations/036_v6.3_mcp_security_rules.sql:/migrations/036_v6.3_mcp_security_rules.sql:ro
     command:
       - "psql"
       - "-v"
@@ -106,6 +107,8 @@ services:
       - "/migrations/034_v6.3_mcp_platform_audit_analysis.sql"
       - "-f"
       - "/migrations/035_v6.3_mcp_client_endpoints.sql"
+      - "-f"
+      - "/migrations/036_v6.3_mcp_security_rules.sql"
     networks:
       - aegis-network
 
@@ -313,6 +316,9 @@ services:
       MCP_GATEWAY_PUBLIC_BASE_URL: ${MCP_GATEWAY_PUBLIC_BASE_URL:-http://localhost:8084}
       MCP_CATALOG_SIGNING_KEY: ${MCP_CATALOG_SIGNING_KEY:-}
       MCP_GATEWAY_RUNTIME_SECRET: ${MCP_GATEWAY_RUNTIME_SECRET:-change-me-mcp-gateway-runtime}
+      MCP_ASSISTANT_ENABLED: ${MCP_ASSISTANT_ENABLED:-false}
+      MCP_ASSISTANT_CLIENT_KEY: ${MCP_ASSISTANT_CLIENT_KEY:-}
+      MCP_ASSISTANT_CLIENT_TOKEN: ${MCP_ASSISTANT_CLIENT_TOKEN:-}
     ports:
       - "8082:8082"
       - "19093:19093"
@@ -359,9 +365,14 @@ services:
     restart: unless-stopped
     environment:
       AEGIS_API_URL: http://api-server:8082
+      # The entrypoint copies this read-only host secret into the container's
+      # ephemeral filesystem and then drops to the unprivileged aegis user.
+      AEGIS_API_TOKEN_FILE: /run/secrets/aegis_api_token
       AEGIS_MCP_HOST: 0.0.0.0
       AEGIS_MCP_PORT: 8085
       AEGIS_MCP_LOG_LEVEL: ${AEGIS_MCP_LOG_LEVEL:-INFO}
+    volumes:
+      - ${AEGIS_API_TOKEN_FILE:-/root/.config/aegis/mcp-token}:/run/secrets/aegis_api_token:ro
     depends_on:
       api-server:
         condition: service_healthy

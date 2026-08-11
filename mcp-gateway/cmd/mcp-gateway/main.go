@@ -282,6 +282,13 @@ func (g *gateway) runtimeRequest(incoming *http.Request, clientKey, authorizatio
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("X-Aegis-MCP-Gateway-Secret", g.runtimeSecret)
 	req.Header.Set("X-MCP-Client-Key", clientKey)
+	// Forward only the signed Assistant audit context. The api-server validates
+	// the signature; the Gateway never treats these headers as authorization.
+	for _, header := range []string{"X-Aegis-MCP-Assistant-Context", "X-Aegis-MCP-Assistant-Signature"} {
+		if value := strings.TrimSpace(incoming.Header.Get(header)); value != "" {
+			req.Header.Set(header, value)
+		}
+	}
 	resp, err := g.runtimeHTTP.Do(req)
 	if err != nil {
 		return err
@@ -310,7 +317,10 @@ func (g *gateway) runtimeRequest(incoming *http.Request, clientKey, authorizatio
 func (g *gateway) writeRuntimeRPCError(w http.ResponseWriter, id interface{}, err error) {
 	message := "MCP runtime request failed"
 	code := -32002
-	if strings.Contains(err.Error(), "not allowed") || strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "rejected (403)") {
+	if strings.Contains(err.Error(), "security policy") {
+		code = -32004
+		message = "tool call blocked by security policy"
+	} else if strings.Contains(err.Error(), "not allowed") || strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "rejected (403)") {
 		code = -32003
 		message = "tool is not allowed for this client"
 	}

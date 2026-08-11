@@ -67,6 +67,8 @@ export interface MCPServer {
 
 export interface MCPToolRevision {
   id: string
+  server_id: string
+  server_name: string
   server_revision_id: string
   upstream_name: string
   alias: string
@@ -116,6 +118,15 @@ export interface MCPClientEndpointCreated extends MCPClientEndpoint {
   token: string
 }
 
+export interface MCPClientEndpointRevokeResult {
+  client_id: string
+  client_key: string
+  grant_id?: string
+  status: string
+  revoked: boolean
+  changed: boolean
+}
+
 export interface MCPCatalog {
   id: string
   catalog_key: string
@@ -139,22 +150,59 @@ export interface MCPApprovalRequest {
 
 export interface MCPInvocation {
   id: string
+  client_id?: string
+  client_key: string
+  client_name: string
+  server_id: string
+  server_name: string
+  tool_revision_id?: string
   tool_alias: string
+  tool_enabled: boolean
   status: string
   policy_decision?: string
-  rule_status?: string
-  ai_status?: string
   created_at: string
+  completed_at?: string
+}
+
+export interface MCPInvocationToolDisableResult {
+  invocation_id: string
+  client_id: string
+  grant_id: string
+  server_id: string
+  tool_alias: string
+  disabled: boolean
+  changed: boolean
 }
 
 export interface MCPSecurityVerdict {
   id: string
   invocation_id: string
+  client_id?: string
+  client_key: string
+  client_name: string
+  server_id: string
+  server_name: string
+  tool_alias: string
+  invocation_status: string
+  invocation_created_at: string
   deterministic_severity: string
-  ai_verdict?: string
+  matched_rules: string[]
   overall_risk: string
   evidence: unknown[]
   updated_at: string
+}
+
+export interface MCPSecurityRule {
+  id: string
+  rule_key: string
+  version: number
+  name: string
+  phase: 'pre' | 'post'
+  severity: string
+  definition: Record<string, unknown>
+  digest: string
+  enabled: boolean
+  created_at: string
 }
 
 export interface MCPPage<T> {

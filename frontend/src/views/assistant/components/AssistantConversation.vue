@@ -26,7 +26,10 @@
             <div class="message-avatar">
               <el-icon><Monitor /></el-icon>
             </div>
-            <div class="message-body">
+            <div
+              class="message-body"
+              :class="{ 'message-body-report': segment.type === 'content' && isSecurityConclusionContent(segment.content) }"
+            >
               <!-- 思考步骤 -->
               <div v-if="segment.type === 'thinking'" class="thinking-block">
                 <div class="thinking-header">
@@ -45,9 +48,15 @@
               </div>
 
               <!-- 消息内容（思考后的结果） -->
-              <div v-else-if="segment.type === 'content'" class="message-bubble">
-                <div class="message-content" v-html="formatContent(segment.content)"></div>
-              </div>
+              <template v-else-if="segment.type === 'content'">
+                <AssistantConclusionCard
+                  v-if="isSecurityConclusionContent(segment.content)"
+                  :content="segment.content"
+                />
+                <div v-else class="message-bubble">
+                  <div class="message-content" v-html="formatContent(segment.content)"></div>
+                </div>
+              </template>
 
               <!-- 工具调用和执行结果放在同一个框内 -->
               <div v-else-if="segment.type === 'tool'" class="tool-calls">
@@ -131,6 +140,7 @@ import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { User, Monitor, InfoFilled, CircleCheck, CircleClose, RemoveFilled, Refresh } from '@element-plus/icons-vue'
 import { gsap } from 'gsap'
 import AssistantApprovalCard from './AssistantApprovalCard.vue'
+import AssistantConclusionCard from './AssistantConclusionCard.vue'
 import AssistantResultRenderer from './AssistantResultRenderer.vue'
 import AssistantToolResultCard from './AssistantToolResultCard.vue'
 import type { AssistantMessage, AssistantToolCall, AssistantApproval, AssistantResultCard } from '@/api/assistant'
@@ -284,8 +294,10 @@ function isToolCallDisplaySettled(toolCall: AssistantToolCall): boolean {
 
 function getStepResults(msg: AssistantMessage): StepResult[] {
   if (!shouldRenderStepResults(msg)) return []
+  const plan = msg.plan
+  if (!plan) return []
   const terminalStatuses: string[] = ['completed', 'failed', 'skipped', 'retrying']
-  return msg.plan.steps
+  return plan.steps
     .filter(step => step.result_summary || terminalStatuses.includes(step.status))
     .map(step => {
       const status = (terminalStatuses.includes(step.status) ? step.status : 'completed') as StepResultStatus
@@ -460,10 +472,26 @@ function getAssistantSegments(msg: AssistantMessage): AssistantSegment[] {
 }
 
 function formatContent(content: string): string {
-  return content
+  return escapeHtml(content)
     .replace(/\n/g, '<br>')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`(.*?)`/g, '<code>$1</code>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+}
+
+function isSecurityConclusionContent(content: string): boolean {
+  const normalized = String(content || '')
+  const structuredHeadings = normalized.match(/^#{2,3}\s+(?:结论|具体高风险|高风险项|处置建议|证据边界|Conclusion|Specific high-risk items|Recommended actions|Evidence limits)/gim)
+  if ((structuredHeadings?.length || 0) >= 2) return true
+  return normalized.length >= 100 && /(?:安全风险|高风险|risk)/i.test(normalized) && /(?:建议|recommend)/i.test(normalized)
+}
+
+function escapeHtml(content: string): string {
+  return content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function animateNewContent() {
@@ -588,6 +616,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.message-body.message-body-report {
+  max-width: min(92%, 920px);
+  width: min(92%, 920px);
 }
 
 .message-bubble {

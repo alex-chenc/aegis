@@ -4,12 +4,15 @@ import type {
   MCPClient,
   MCPClientEndpoint,
   MCPClientEndpointCreated,
+  MCPClientEndpointRevokeResult,
   MCPCatalog,
   MCPInvocation,
+  MCPInvocationToolDisableResult,
   MCPOnboardingJob,
   MCPOnboardingPayload,
   MCPOverview,
   MCPPage,
+  MCPSecurityRule,
   MCPSecurityVerdict,
   MCPServer,
   MCPToolRevision,
@@ -21,6 +24,10 @@ export function getMCPOverview(): Promise<MCPOverview> {
 
 export function listMCPServers(params: Record<string, unknown> = {}): Promise<MCPPage<MCPServer>> {
   return request.get('/mcp-platform/servers', { params })
+}
+
+export function deleteMCPServer(id: string): Promise<MCPServer> {
+  return request.delete(`/mcp-platform/servers/${id}`)
 }
 
 export function listMCPOnboardingJobs(params: Record<string, unknown> = {}): Promise<MCPPage<MCPOnboardingJob>> {
@@ -55,12 +62,16 @@ export function listMCPClients(params: Record<string, unknown> = {}): Promise<MC
   return request.get('/mcp-platform/clients', { params })
 }
 
-export function listMCPClientEndpoints(): Promise<MCPPage<MCPClientEndpoint>> {
-  return request.get('/mcp-platform/client-endpoints')
+export function listMCPClientEndpoints(params: Record<string, unknown> = {}): Promise<MCPPage<MCPClientEndpoint>> {
+  return request.get('/mcp-platform/client-endpoints', { params })
 }
 
-export function createMCPClientEndpoint(payload: { client_key: string; display_name: string; client_type: string; server_id: string; tool_allowlist?: string[] }): Promise<MCPClientEndpointCreated> {
+export function createMCPClientEndpoint(payload: { client_key: string; display_name: string; client_type: string; server_id: string }): Promise<MCPClientEndpointCreated> {
   return request.post('/mcp-platform/client-endpoints', payload)
+}
+
+export function deleteMCPClientEndpoint(clientId: string): Promise<MCPClientEndpointRevokeResult> {
+  return request.delete(`/mcp-platform/client-endpoints/${clientId}`)
 }
 
 export function updateMCPClientEndpointTools(grantId: string, toolAllowlist: string[]): Promise<MCPClientEndpoint> {
@@ -90,6 +101,18 @@ export function listMCPInvocations(params: Record<string, unknown> = {}): Promis
   return request.get('/mcp-platform/invocations', { params })
 }
 
+export function disableMCPInvocationTool(invocationId: string): Promise<MCPInvocationToolDisableResult> {
+  return request.post(`/mcp-platform/invocations/${invocationId}/disable-tool`)
+}
+
 export function listMCPSecurityVerdicts(params: Record<string, unknown> = {}): Promise<MCPPage<MCPSecurityVerdict>> {
   return request.get('/mcp-platform/security-verdicts', { params })
+}
+
+export function listMCPSecurityRules(params: Record<string, unknown> = {}): Promise<MCPPage<MCPSecurityRule>> {
+  return request.get('/mcp-platform/security-rules', { params })
+}
+
+export function setMCPSecurityRuleEnabled(id: string, enabled: boolean): Promise<MCPSecurityRule> {
+  return request.put(`/mcp-platform/security-rules/${id}/enabled`, { enabled })
 }

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -47,6 +49,7 @@ func (h *MCPPlatformHandler) RegisterRoutes(api *gin.RouterGroup, permissions fu
 	group.POST("/onboarding-jobs/:id/cancel", permissions(repository.PermissionMCPOnboardingOperate), h.CancelOnboardingJob)
 	group.GET("/servers", permissions(repository.PermissionMCPServerRead), h.ListServers)
 	group.GET("/servers/:id", permissions(repository.PermissionMCPServerRead), h.GetServer)
+	group.DELETE("/servers/:id", permissions(repository.PermissionMCPServerWrite), h.DeleteServer)
 	group.GET("/tools", permissions(repository.PermissionMCPCatalogRead), h.ListTools)
 	group.GET("/catalogs", permissions(repository.PermissionMCPCatalogRead), h.ListCatalogs)
 	group.POST("/catalogs", permissions(repository.PermissionMCPCatalogWrite), h.CreateCatalog)
@@ -56,12 +59,16 @@ func (h *MCPPlatformHandler) RegisterRoutes(api *gin.RouterGroup, permissions fu
 	group.POST("/grants", permissions(repository.PermissionMCPGrantWrite), h.CreateGrant)
 	group.GET("/client-endpoints", permissions(repository.PermissionMCPClientRead), h.ListClientEndpoints)
 	group.POST("/client-endpoints", permissions(repository.PermissionMCPClientWrite), h.CreateClientEndpoint)
+	group.DELETE("/client-endpoints/:client_id", permissions(repository.PermissionMCPClientWrite), h.DeleteClientEndpoint)
 	group.PUT("/client-endpoints/:grant_id/tools", permissions(repository.PermissionMCPGrantWrite), h.UpdateClientEndpointTools)
 	group.GET("/approvals", permissions(repository.PermissionMCPApprovalRead), h.ListApprovals)
 	group.POST("/approvals/:id/approve", permissions(repository.PermissionMCPApprovalDecide), h.Approve)
 	group.POST("/approvals/:id/reject", permissions(repository.PermissionMCPApprovalDecide), h.Reject)
 	group.GET("/invocations", permissions(repository.PermissionMCPInvocationRead), h.ListInvocations)
+	group.POST("/invocations/:id/disable-tool", permissions(repository.PermissionMCPGrantWrite), h.DisableInvocationTool)
 	group.GET("/security-verdicts", permissions(repository.PermissionMCPSecurityRead), h.ListSecurityVerdicts)
+	group.GET("/security-rules", permissions(repository.PermissionMCPPolicyRead), h.ListSecurityRules)
+	group.PUT("/security-rules/:id/enabled", permissions(repository.PermissionMCPPolicyWrite), h.SetSecurityRuleEnabled)
 }
 
 // RegisterRuntimeRoutes exposes only the gateway-to-api-server data plane.
@@ -177,7 +184,22 @@ func (h *MCPPlatformHandler) GetServer(c *gin.Context) {
 	h.success(c, server)
 }
 
+func (h *MCPPlatformHandler) DeleteServer(c *gin.Context) {
+	id, err := parseMCPID(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_server_id", err)
+		return
+	}
+	server, err := h.service.RetireServer(c.Request.Context(), id, authOperator(c))
+	if err != nil {
+		h.notFoundOrError(c, "server_delete_failed", err)
+		return
+	}
+	h.success(c, server)
+}
+
 func (h *MCPPlatformHandler) ListTools(c *gin.Context) {
+	page, size := mcpPageParams(c)
 	var revisionID *uuid.UUID
 	if raw := strings.TrimSpace(c.Query("server_revision_id")); raw != "" {
 		id, err := uuid.Parse(raw)
@@ -187,12 +209,12 @@ func (h *MCPPlatformHandler) ListTools(c *gin.Context) {
 		}
 		revisionID = &id
 	}
-	items, err := h.service.ListTools(c.Request.Context(), revisionID)
+	items, total, err := h.service.ListTools(c.Request.Context(), revisionID, page, size)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "tool_list_failed", err)
 		return
 	}
-	h.success(c, gin.H{"items": items, "total": len(items)})
+	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
 }
 
 func (h *MCPPlatformHandler) ListCatalogs(c *gin.Context) {
@@ -271,12 +293,13 @@ func (h *MCPPlatformHandler) CreateGrant(c *gin.Context) {
 }
 
 func (h *MCPPlatformHandler) ListClientEndpoints(c *gin.Context) {
-	items, err := h.service.ListClientEndpoints(c.Request.Context(), h.publicGatewayBaseURL(c))
+	page, size := mcpPageParams(c)
+	items, total, err := h.service.ListClientEndpoints(c.Request.Context(), h.publicGatewayBaseURL(c), page, size)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "client_endpoint_list_failed", err)
 		return
 	}
-	h.success(c, gin.H{"items": items, "total": len(items)})
+	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
 }
 
 func (h *MCPPlatformHandler) CreateClientEndpoint(c *gin.Context) {
@@ -293,8 +316,22 @@ func (h *MCPPlatformHandler) CreateClientEndpoint(c *gin.Context) {
 	h.successStatus(c, http.StatusCreated, item)
 }
 
+func (h *MCPPlatformHandler) DeleteClientEndpoint(c *gin.Context) {
+	clientID, err := parseMCPID(c.Param("client_id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_client_id", err)
+		return
+	}
+	item, err := h.service.RevokeClientEndpoint(c.Request.Context(), clientID, authOperator(c))
+	if err != nil {
+		h.notFoundOrError(c, "client_endpoint_delete_failed", err)
+		return
+	}
+	h.success(c, item)
+}
+
 type mcpClientEndpointToolsRequest struct {
-	ToolAllowlist []string `json:"tool_allowlist"`
+	ToolAllowlist *[]string `json:"tool_allowlist" binding:"required"`
 }
 
 func (h *MCPPlatformHandler) UpdateClientEndpointTools(c *gin.Context) {
@@ -308,7 +345,7 @@ func (h *MCPPlatformHandler) UpdateClientEndpointTools(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "invalid_tool_allowlist", err)
 		return
 	}
-	item, err := h.service.UpdateClientEndpointTools(c.Request.Context(), grantID, req.ToolAllowlist)
+	item, err := h.service.UpdateClientEndpointTools(c.Request.Context(), grantID, *req.ToolAllowlist, authOperator(c), h.publicGatewayBaseURL(c))
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) {
@@ -346,12 +383,45 @@ func (h *MCPPlatformHandler) RuntimeCall(c *gin.Context) {
 		h.runtimeJSONError(c, http.StatusBadRequest, "invalid runtime call")
 		return
 	}
-	result, err := h.service.RuntimeCall(c.Request.Context(), runtimeBearer(c), c.GetHeader("X-MCP-Client-Key"), strings.TrimSpace(req.ToolAlias), req.Arguments)
+	result, err := h.service.RuntimeCallAs(c.Request.Context(), runtimeBearer(c), c.GetHeader("X-MCP-Client-Key"), strings.TrimSpace(req.ToolAlias), req.Arguments, h.validRuntimeActor(c))
 	if err != nil {
 		h.runtimeError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"result": result})
+}
+
+// validRuntimeActor accepts only the Assistant context signed with the same
+// secret that authenticates the Gateway-to-api-server hop. Client credentials
+// remain the authorization boundary; this context is audit metadata only.
+func (h *MCPPlatformHandler) validRuntimeActor(c *gin.Context) string {
+	payload := strings.TrimSpace(c.GetHeader("X-Aegis-MCP-Assistant-Context"))
+	signature := strings.TrimSpace(c.GetHeader("X-Aegis-MCP-Assistant-Signature"))
+	if payload == "" || signature == "" || h.runtimeSecret == "" {
+		return ""
+	}
+	digest := hmac.New(sha256.New, []byte(h.runtimeSecret))
+	_, _ = digest.Write([]byte(payload))
+	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(fmtHex(digest.Sum(nil)))) {
+		return ""
+	}
+	var context struct {
+		Operator string `json:"operator"`
+	}
+	if err := json.Unmarshal([]byte(payload), &context); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(context.Operator)
+}
+
+func fmtHex(value []byte) string {
+	const hexChars = "0123456789abcdef"
+	result := make([]byte, len(value)*2)
+	for i, item := range value {
+		result[i*2] = hexChars[item>>4]
+		result[i*2+1] = hexChars[item&0x0f]
+	}
+	return string(result)
 }
 
 func (h *MCPPlatformHandler) validRuntimeRequest(c *gin.Context) bool {
@@ -364,7 +434,7 @@ func (h *MCPPlatformHandler) validRuntimeRequest(c *gin.Context) bool {
 
 func (h *MCPPlatformHandler) runtimeError(c *gin.Context, err error) {
 	status := http.StatusForbidden
-	if !errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) && !errors.Is(err, service.ErrMCPPlatformToolNotAllowed) {
+	if !errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) && !errors.Is(err, service.ErrMCPPlatformToolNotAllowed) && !errors.Is(err, service.ErrMCPPlatformSecurityBlocked) {
 		status = http.StatusBadGateway
 	}
 	h.runtimeJSONError(c, status, safeHandlerError(err))
@@ -444,6 +514,25 @@ func (h *MCPPlatformHandler) ListInvocations(c *gin.Context) {
 	}
 	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
 }
+func (h *MCPPlatformHandler) DisableInvocationTool(c *gin.Context) {
+	invocationID, err := parseMCPID(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_invocation_id", err)
+		return
+	}
+	item, err := h.service.DisableInvocationTool(c.Request.Context(), invocationID, authOperator(c))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrMCPPlatformNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) {
+			status = http.StatusForbidden
+		}
+		h.writeError(c, status, "invocation_tool_disable_failed", err)
+		return
+	}
+	h.success(c, item)
+}
 func (h *MCPPlatformHandler) ListSecurityVerdicts(c *gin.Context) {
 	page, size := mcpPageParams(c)
 	items, total, err := h.service.ListSecurityVerdicts(c.Request.Context(), page, size)
@@ -452,6 +541,38 @@ func (h *MCPPlatformHandler) ListSecurityVerdicts(c *gin.Context) {
 		return
 	}
 	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+}
+func (h *MCPPlatformHandler) ListSecurityRules(c *gin.Context) {
+	page, size := mcpPageParams(c)
+	items, total, err := h.service.ListSecurityRules(c.Request.Context(), page, size)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "security_rule_list_failed", err)
+		return
+	}
+	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+}
+
+type mcpSecurityRuleEnabledRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
+}
+
+func (h *MCPPlatformHandler) SetSecurityRuleEnabled(c *gin.Context) {
+	ruleID, err := parseMCPID(c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_security_rule_id", err)
+		return
+	}
+	var req mcpSecurityRuleEnabledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_security_rule_state", err)
+		return
+	}
+	item, err := h.service.SetSecurityRuleEnabled(c.Request.Context(), ruleID, *req.Enabled, authOperator(c))
+	if err != nil {
+		h.notFoundOrError(c, "security_rule_update_failed", err)
+		return
+	}
+	h.success(c, item)
 }
 
 func (h *MCPPlatformHandler) success(c *gin.Context, data interface{}) {

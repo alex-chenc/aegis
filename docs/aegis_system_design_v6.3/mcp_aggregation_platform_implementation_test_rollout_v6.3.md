@@ -6,6 +6,10 @@
   - [MCP 聚合管控前端设计](mcp_aggregation_platform_frontend_design_v6.3.md)
 - **状态**：开发中；已落地 P0/P1 核心纵向闭环，P2 Gateway 只读快照和 P4 DC 规则投影为受控骨架；P2 调用审计、P3 写工具审批、P4 durable AI、P5 迁移/规模化/离线发布尚未完成。
 
+> 会话校准（2026-08-11）：P2 运行时调用、确定性 pre/post 规则和安全判定已经可验证；完整
+> MCP 四阶段 payload 持久化、跨调用 Activity 和 durable AI 仍属于后续范围。历史调用若只
+> 保留 digest，不得回溯伪造规则命中。详见 [MCP 上下文采集与安全规则匹配校准](fix/mcp_context_and_rule_matching_alignment_v6.3.md)。
+
 ## 1. 实施原则
 
 1. 先建立不可绕过的身份、发布快照和审计链，再开放真实工具调用。
@@ -77,6 +81,8 @@
 - 工具 alias、Header/Body 一致性、输入/输出 Schema、timeout/cancel；
 - 四阶段 payload、PostgreSQL 元数据、MinIO 加密对象和 Kafka outbox；
 - Assistant 作为首个内置 Client 以只读 Catalog 灰度接入。
+- RuntimeCall 在调用生命周期内取得 Client/Grant/Tool/参数/上游结果上下文，并执行确定性
+  pre/post 规则；命中写入 `mcp_rule_hits` 和 `mcp_security_verdicts`。
 
 验收：
 
@@ -87,6 +93,10 @@
 - 四阶段 payload/digest 对账率 100%；
 - MinIO/Kafka/outbox 不可保证审计时 Gateway 不返回虚假成功；
 - Gateway 多实例随机路由不依赖黏性会话。
+- 敏感输入字段、注入型输入、L4、敏感输出、提示词注入、超大结果和上游失败规则有单元/集成
+  测试；规则证据只记录字段路径、模式、大小和状态，不记录敏感值。
+- 新调用的安全判定返回真实 `matched_rules`；无命中返回 `no_rule_matched`；旧调用无上下文
+  返回 `historical_payload_unavailable`。
 
 ### P3：写工具、调用审批和策略控制
 
@@ -117,6 +127,9 @@
 - chunk、结构化输出、证据 ID 校验、risk reducer；
 - 告警、WebSocket 元数据、前端规则/AI/Activity 页面；
 - AI backlog、成本和模型失败降级。
+
+当前实现先完成确定性规则和页面展示，AI 状态字段仍可在后端兼容返回，但前端安全分析不再
+展示 AI 状态列。完整异步 AI 只有在脱敏上下文、证据引用、权限和失败状态契约完成后再启用。
 
 验收：
 

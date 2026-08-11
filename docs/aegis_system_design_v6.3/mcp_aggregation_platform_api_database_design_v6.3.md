@@ -316,6 +316,19 @@ Gateway 只加载 `published` 且签名有效的 bundle。
 `idempotency_key` 不能全局唯一；使用 `UNIQUE(client_id, user_or_service, tool_revision_id,
 idempotency_key)` 并设置时间窗/归档策略。
 
+#### 4.1.1 当前实现字段边界与上下文状态
+
+当前已落地的 MCP 运行时先保存 invocation 元数据、`request_digest`、`result_digest`、状态和
+完成时间；参数与上游结果对象只在本次调用生命周期内提供给同步规则评估器。新调用的规则
+证据写入 `mcp_rule_hits.evidence`，安全判定通过规则定义关联返回 `matched_rules`。
+
+历史 invocation 如果没有四阶段上下文或脱敏 payload ref，API 必须返回空的 `matched_rules`，
+并从 verdict evidence 读取 `historical_payload_unavailable`。不得使用规则当前版本对历史摘要
+进行猜测性重放。
+
+后续上下文增强可以复用 `mcp_invocation_payload_refs`，建议为每个阶段增加脱敏摘要、大小、
+截断/抑制字段和保留状态；完整正文只进入受限加密对象，不能直接扩展列表 API 返回正文。
+
 ### 4.2 `mcp_invocation_events`
 
 Append-only 事件：
@@ -355,6 +368,18 @@ verdict_reduced
 
 `UNIQUE(invocation_id, stage, view)`。写 object、写 payload ref、发 outbox 需要可恢复的 saga；
 不能先向 Client 返回成功再完全不留审计证据。
+
+上下文阶段与 MCP 协议的对应关系如下：
+
+| 阶段 | 最小可审计字段 | 规则用途 |
+| --- | --- | --- |
+| `received_request` | protocol version、method、tool alias、脱敏参数摘要、request digest | pre 参数和授权规则 |
+| `effective_request` | 上游工具名、策略变换摘要、上游身份引用、digest | 证明实际发送内容 |
+| `upstream_result` | 成功/错误状态、结果大小、脱敏结果摘要、result digest | post 输出和失败规则 |
+| `delivered_result` | 交付状态、隔离/裁剪标志、交付 digest | 证明 Client 实际收到的内容 |
+
+Token、Authorization、密码、私钥和 API key 的值必须在进入持久化、Kafka、日志、前端或 AI
+输入前抑制。上下文缺失时记录证据缺口，不把缺失解释为安全。
 
 ### 4.4 `mcp_approval_requests`
 

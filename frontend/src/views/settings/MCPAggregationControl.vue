@@ -28,7 +28,7 @@
         <el-tabs v-model="activeTab" class="platform-tabs" @tab-change="onTabChange">
           <el-tab-pane name="servers" :label="t('app.mcpAggregation.servers')">
             <div class="filter-bar">
-              <el-input v-model="filters.keyword" :placeholder="t('app.mcpAggregation.search')" clearable @keyup.enter="load" />
+              <el-input v-model="filters.keyword" :placeholder="t('app.mcpAggregation.search')" clearable @keyup.enter="queryServers" />
               <el-select v-model="filters.environment" :placeholder="t('app.mcpAggregation.environment')" clearable>
                 <el-option value="dev" :label="t('app.mcpAggregation.dev')" />
                 <el-option value="test" :label="t('app.mcpAggregation.test')" />
@@ -46,7 +46,7 @@
                 <el-option value="l3" label="L3" />
                 <el-option value="l4" label="L4" />
               </el-select>
-              <el-button type="primary" :loading="store.loading" @click="load">{{ t('app.mcpAggregation.query') }}</el-button>
+              <el-button type="primary" :loading="store.loading" @click="queryServers">{{ t('app.mcpAggregation.query') }}</el-button>
               <el-button @click="resetFilters">{{ t('app.mcpAggregation.reset') }}</el-button>
             </div>
 
@@ -67,39 +67,46 @@
               <el-table-column :label="t('app.mcpAggregation.status')" width="135">
                 <template #default="{ row }"><el-tag :type="statusTag(row.lifecycle_status)" size="small">{{ statusLabel(row.lifecycle_status) }}</el-tag></template>
               </el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.actions')" width="105" fixed="right">
-                <template #default="{ row }"><el-button link type="primary" @click="selectedServer = row">{{ t('app.mcpAggregation.detail') }}</el-button></template>
+              <el-table-column :label="t('app.mcpAggregation.actions')" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="selectedServer = row">{{ t('app.mcpAggregation.detail') }}</el-button>
+                  <el-button link type="danger" :icon="Delete" :disabled="row.lifecycle_status === 'retired'" @click="retireServer(row)">{{ t('app.mcpAggregation.delete') }}</el-button>
+                </template>
               </el-table-column>
               <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
             </el-table>
+            <ListPagination :page="pagination.servers.page" :page-size="pagination.servers.pageSize" :total="store.serverTotal" @change="changePage('servers', $event)" />
 
           </el-tab-pane>
           <el-tab-pane name="tools" :label="t('app.mcpAggregation.toolList')">
-            <el-table v-loading="store.loading" :data="toolRows" row-key="id" class="mcp-table tool-table">
-              <el-table-column :label="t('app.mcpAggregation.server')" min-width="180">
-                <template #default="{ row }">
-                  <div class="tool-service">{{ row.serverName }}</div>
-                  <small class="tool-revision">{{ row.serverRevisionId }}</small>
-                </template>
-              </el-table-column>
-              <el-table-column prop="alias" :label="t('app.mcpAggregation.alias')" min-width="180" />
-              <el-table-column :label="t('app.mcpAggregation.toolName')" min-width="180">
-                <template #default="{ row }">{{ row.title || row.upstream_name }}</template>
-              </el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.toolDescription')" min-width="320" show-overflow-tooltip>
-                <template #default="{ row }">{{ row.description || '—' }}</template>
-              </el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.inputSchema')" min-width="220" show-overflow-tooltip>
-                <template #default="{ row }">{{ formatSchema(row.input_schema) }}</template>
-              </el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.risk')" width="80">
-                <template #default="{ row }"><el-tag :type="riskTag(row.risk_tier)" size="small">{{ row.risk_tier.toUpperCase() }}</el-tag></template>
-              </el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.status')" width="110">
-                <template #default="{ row }"><el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
-              </el-table-column>
-              <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
-            </el-table>
+            <div v-loading="store.loading" class="tool-service-list">
+              <section v-for="service in toolGroups" :key="service.serverId" class="tool-service-card">
+                <header class="tool-service-header">
+                  <div><small>{{ t('app.mcpAggregation.server') }}</small><h3>{{ service.serverName }}</h3></div>
+                  <el-tag type="primary" effect="plain">{{ service.tools.length }} {{ t('app.mcpAggregation.tools') }}</el-tag>
+                </header>
+                <el-table :data="service.tools" row-key="id" class="mcp-table tool-table">
+                  <el-table-column prop="alias" :label="t('app.mcpAggregation.alias')" min-width="170" />
+                  <el-table-column :label="t('app.mcpAggregation.toolName')" min-width="170">
+                    <template #default="{ row }">{{ row.title || row.upstream_name }}</template>
+                  </el-table-column>
+                  <el-table-column :label="t('app.mcpAggregation.toolDescription')" min-width="300" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.description || '—' }}</template>
+                  </el-table-column>
+                  <el-table-column :label="t('app.mcpAggregation.inputSchema')" min-width="220" show-overflow-tooltip>
+                    <template #default="{ row }">{{ formatSchema(row.input_schema) }}</template>
+                  </el-table-column>
+                  <el-table-column :label="t('app.mcpAggregation.risk')" width="80">
+                    <template #default="{ row }"><el-tag :type="riskTag(row.risk_tier)" size="small">{{ row.risk_tier.toUpperCase() }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column :label="t('app.mcpAggregation.status')" width="110">
+                    <template #default="{ row }"><el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
+                  </el-table-column>
+                </el-table>
+              </section>
+              <el-empty v-if="!store.loading && toolGroups.length === 0" :description="t('app.mcpAggregation.empty')" />
+            </div>
+            <ListPagination :page="pagination.tools.page" :page-size="pagination.tools.pageSize" :total="store.toolTotal" @change="changePage('tools', $event)" />
           </el-tab-pane>
           <el-tab-pane name="clients" :label="t('app.mcpAggregation.clients')">
             <div class="client-endpoint-toolbar">
@@ -115,17 +122,10 @@
               </el-table-column>
               <el-table-column :label="t('app.mcpAggregation.tools')" width="110"><template #default="{ row }">{{ enabledToolCount(row) }} / {{ row.tools.length }}</template></el-table-column>
               <el-table-column :label="t('app.mcpAggregation.status')" width="110"><template #default="{ row }"><el-tag type="success" size="small">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-              <el-table-column :label="t('app.mcpAggregation.actions')" width="130" fixed="right"><template #default="{ row }"><el-button link type="primary" :icon="Setting" @click="openEndpointTools(row)">{{ t('app.mcpAggregation.toolControl') }}</el-button></template></el-table-column>
+              <el-table-column :label="t('app.mcpAggregation.actions')" width="210" fixed="right"><template #default="{ row }"><el-button link type="primary" :icon="Setting" @click="openEndpointTools(row)">{{ t('app.mcpAggregation.toolControl') }}</el-button><el-button link type="danger" :icon="Delete" @click="revokeClientEndpoint(row)">{{ t('app.mcpAggregation.delete') }}</el-button></template></el-table-column>
               <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
             </el-table>
-            <el-divider />
-            <el-table v-loading="store.loading" :data="store.clients" row-key="id" class="mcp-table">
-              <el-table-column prop="client_key" :label="t('app.mcpAggregation.client')" />
-              <el-table-column prop="display_name" :label="t('app.mcpAggregation.serviceName')" />
-              <el-table-column prop="client_type" :label="t('app.mcpAggregation.authType')" />
-              <el-table-column :label="t('app.mcpAggregation.status')"><template #default="{ row }">{{ statusLabel(row.status) }}</template></el-table-column>
-              <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
-            </el-table>
+            <ListPagination :page="pagination.clients.page" :page-size="pagination.clients.pageSize" :total="store.clientEndpointTotal" @change="changePage('clients', $event)" />
           </el-tab-pane>
           <el-tab-pane name="approvals" :label="t('app.mcpAggregation.approvals')">
             <el-table v-loading="store.loading" :data="store.approvals" row-key="id" class="mcp-table">
@@ -156,24 +156,68 @@
               </el-table-column>
               <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
             </el-table>
+            <ListPagination :page="pagination.approvals.page" :page-size="pagination.approvals.pageSize" :total="store.approvalTotal" @change="changePage('approvals', $event)" />
           </el-tab-pane>
           <el-tab-pane name="invocations" :label="t('app.mcpAggregation.invocations')">
-            <el-table v-loading="store.loading" :data="store.invocations" row-key="id" class="mcp-table">
-              <el-table-column prop="tool_alias" :label="t('app.mcpAggregation.alias')" />
-              <el-table-column :label="t('app.mcpAggregation.status')"><template #default="{ row }">{{ statusLabel(row.status) }}</template></el-table-column>
-              <el-table-column prop="policy_decision" :label="t('app.mcpAggregation.decision')" />
-              <el-table-column prop="ai_status" :label="t('app.mcpAggregation.aiStatus')" />
-              <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
-            </el-table>
+            <div v-loading="store.loading" class="audit-service-list">
+              <section v-for="service in invocationGroups" :key="service.serverId || service.serverName" class="audit-service-card">
+                <header class="audit-service-header">
+                  <div><small>{{ t('app.mcpAggregation.server') }}</small><h3>{{ service.serverName }}</h3></div>
+                  <el-tag type="primary" effect="plain">{{ service.tools.length }} {{ t('app.mcpAggregation.tools') }} · {{ service.callCount }} {{ t('app.mcpAggregation.calls') }}</el-tag>
+                </header>
+                <div v-for="tool in service.tools" :key="tool.alias" class="audit-tool-group">
+                  <div class="audit-tool-header">
+                    <strong>{{ tool.alias }}</strong>
+                    <span>{{ tool.callCount }} {{ t('app.mcpAggregation.calls') }}</span>
+                  </div>
+                  <el-table :data="tool.clients" row-key="key" class="audit-client-table">
+                    <el-table-column :label="t('app.mcpAggregation.calledClient')" min-width="220">
+                      <template #default="{ row }"><div class="audit-client-name">{{ row.clientName }}</div><small>{{ row.clientKey }}</small></template>
+                    </el-table-column>
+                    <el-table-column prop="callCount" :label="t('app.mcpAggregation.callCount')" width="100" />
+                    <el-table-column :label="t('app.mcpAggregation.status')" width="110"><template #default="{ row }">{{ statusLabel(row.lastStatus) }}</template></el-table-column>
+                    <el-table-column :label="t('app.mcpAggregation.decision')" width="110"><template #default="{ row }">{{ statusLabel(row.lastPolicyDecision || '') }}</template></el-table-column>
+                    <el-table-column :label="t('app.mcpAggregation.lastCalledAt')" min-width="175"><template #default="{ row }">{{ formatTime(row.lastCalledAt) }}</template></el-table-column>
+                    <el-table-column :label="t('app.mcpAggregation.actions')" width="110" fixed="right">
+                      <template #default="{ row }">
+                        <el-button
+                          link
+                          type="danger"
+                          :disabled="!row.clientId || !row.toolEnabled"
+                          :loading="auditDisabling === row.lastInvocationId"
+                          @click="disableInvocationTool(row.lastInvocationId, service.serverName, tool.alias, row.clientName)"
+                        >{{ row.toolEnabled ? t('app.mcpAggregation.disable') : t('app.mcpAggregation.toolDisabled') }}</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </section>
+              <el-empty v-if="!store.loading && invocationGroups.length === 0" :description="t('app.mcpAggregation.empty')" />
+            </div>
+            <ListPagination :page="pagination.invocations.page" :page-size="pagination.invocations.pageSize" :total="store.invocationTotal" @change="changePage('invocations', $event)" />
           </el-tab-pane>
           <el-tab-pane name="security" :label="t('app.mcpAggregation.security')">
-            <el-table v-loading="store.loading" :data="store.securityVerdicts" row-key="id" class="mcp-table">
-              <el-table-column prop="invocation_id" :label="t('app.mcpAggregation.invocation')" show-overflow-tooltip />
-              <el-table-column prop="deterministic_severity" :label="t('app.mcpAggregation.deterministic')" />
-              <el-table-column prop="ai_verdict" :label="t('app.mcpAggregation.aiStatus')" />
-              <el-table-column prop="overall_risk" :label="t('app.mcpAggregation.overallRisk')" />
-              <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
-            </el-table>
+            <section class="security-section">
+              <div class="security-rules-trigger">
+                <el-button type="primary" @click="securityRulesDrawerVisible = true">{{ t('app.mcpAggregation.viewSecurityRules') }}</el-button>
+              </div>
+            </section>
+
+            <section class="security-section">
+              <div class="section-heading"><div><h3>{{ t('app.mcpAggregation.securityVerdicts') }}</h3><p>{{ t('app.mcpAggregation.securityVerdictsHint') }}</p></div></div>
+              <el-table v-loading="store.loading" :data="store.securityVerdicts" row-key="id" class="mcp-table">
+                <el-table-column prop="server_name" :label="t('app.mcpAggregation.server')" min-width="170" />
+                <el-table-column prop="tool_alias" :label="t('app.mcpAggregation.alias')" min-width="150" />
+                <el-table-column :label="t('app.mcpAggregation.calledClient')" min-width="170"><template #default="{ row }"><div>{{ row.client_name || '—' }}</div><small class="muted">{{ row.client_key }}</small></template></el-table-column>
+                <el-table-column :label="t('app.mcpAggregation.matchedRules')" min-width="220" show-overflow-tooltip><template #default="{ row }">{{ matchedRulesLabel(row.matched_rules, row.evidence) }}</template></el-table-column>
+                <el-table-column :label="t('app.mcpAggregation.deterministic')" width="120"><template #default="{ row }"><el-tag :type="severityTag(row.deterministic_severity)" size="small">{{ severityLabel(row.deterministic_severity) }}</el-tag></template></el-table-column>
+                <el-table-column :label="t('app.mcpAggregation.overallRisk')" width="110"><template #default="{ row }"><el-tag :type="severityTag(row.overall_risk)" size="small">{{ severityLabel(row.overall_risk) }}</el-tag></template></el-table-column>
+                <el-table-column :label="t('app.mcpAggregation.evidence')" min-width="230" show-overflow-tooltip><template #default="{ row }">{{ evidenceLabel(row.evidence) }}</template></el-table-column>
+                <el-table-column :label="t('app.mcpAggregation.lastCalledAt')" min-width="175"><template #default="{ row }">{{ formatTime(row.invocation_created_at || row.updated_at) }}</template></el-table-column>
+                <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
+              </el-table>
+              <ListPagination :page="pagination.security.page" :page-size="pagination.security.pageSize" :total="store.securityTotal" @change="changePage('security', $event)" />
+            </section>
           </el-tab-pane>
         </el-tabs>
     </el-card>
@@ -199,19 +243,11 @@
         <el-form-item :label="t('app.mcpAggregation.clientKey')" required><el-input v-model="clientEndpointForm.client_key" maxlength="80" placeholder="codex-aegis" /></el-form-item>
         <el-form-item :label="t('app.mcpAggregation.clientName')" required><el-input v-model="clientEndpointForm.display_name" maxlength="160" /></el-form-item>
         <el-form-item :label="t('app.mcpAggregation.boundService')" required>
-          <el-select v-model="clientEndpointForm.server_id" class="full-width" @change="onEndpointServerChange">
+          <el-select v-model="clientEndpointForm.server_id" class="full-width">
             <el-option v-for="server in publishedServers" :key="server.id" :value="server.id" :label="server.display_name" />
           </el-select>
         </el-form-item>
-        <el-form-item :label="t('app.mcpAggregation.toolControl')">
-          <div v-if="endpointToolOptions.length" class="endpoint-tool-options">
-            <div v-for="tool in endpointToolOptions" :key="tool.alias" class="endpoint-tool-option">
-              <div><strong>{{ tool.alias }}</strong><small>{{ tool.description || tool.title || '—' }}</small></div>
-              <el-switch v-model="endpointEnabledTools[tool.alias]" />
-            </div>
-          </div>
-          <el-empty v-else :description="t('app.mcpAggregation.noPublishedTools')" :image-size="72" />
-        </el-form-item>
+        <el-alert :title="t('app.mcpAggregation.endpointToolsManagedInGrant')" type="info" show-icon :closable="false" />
         <el-alert :title="t('app.mcpAggregation.endpointTokenOnce')" type="info" show-icon :closable="false" />
         <div class="drawer-actions"><el-button type="primary" native-type="submit" :loading="clientEndpointSubmitting">{{ t('app.mcpAggregation.generateEndpoint') }}</el-button><el-button @click="clientEndpointVisible = false">{{ t('app.mcpAggregation.cancel') }}</el-button></div>
       </el-form>
@@ -225,6 +261,22 @@
           <el-switch v-model="tool.enabled" :loading="toolUpdating === tool.alias" @change="toggleEndpointTool(tool)" />
         </div>
       </template>
+    </el-drawer>
+
+    <el-drawer v-model="securityRulesDrawerVisible" :title="t('app.mcpAggregation.securityRules')" size="92%" destroy-on-close>
+      <div class="security-rules-drawer">
+        <p class="drawer-description">{{ t('app.mcpAggregation.securityRulesHint') }}</p>
+        <el-table v-loading="store.loading" :data="store.securityRules" row-key="id" class="mcp-table compact-table">
+          <el-table-column prop="name" :label="t('app.mcpAggregation.ruleName')" min-width="210" />
+          <el-table-column :label="t('app.mcpAggregation.rulePhase')" width="100"><template #default="{ row }">{{ rulePhaseLabel(row.phase) }}</template></el-table-column>
+          <el-table-column :label="t('app.mcpAggregation.ruleMatcher')" min-width="250"><template #default="{ row }">{{ ruleDefinitionLabel(row.definition) }}</template></el-table-column>
+          <el-table-column :label="t('app.mcpAggregation.risk')" width="100"><template #default="{ row }"><el-tag :type="severityTag(row.severity)" size="small">{{ severityLabel(row.severity) }}</el-tag></template></el-table-column>
+          <el-table-column :label="t('app.mcpAggregation.protectionAction')" width="110"><template #default="{ row }">{{ ruleActionLabel(row.definition) }}</template></el-table-column>
+          <el-table-column :label="t('app.mcpAggregation.status')" width="110" fixed="right"><template #default="{ row }"><el-switch :model-value="row.enabled" :loading="securityRuleUpdating === row.id" @change="toggleSecurityRule(row, Boolean($event))" /></template></el-table-column>
+          <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
+        </el-table>
+        <ListPagination :page="pagination.securityRules.page" :page-size="pagination.securityRules.pageSize" :total="store.securityRuleTotal" @change="changePage('securityRules', $event)" />
+      </div>
     </el-drawer>
 
     <el-dialog v-model="createdEndpointVisible" :title="t('app.mcpAggregation.endpointCreated')" width="620px" destroy-on-close>
@@ -248,11 +300,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, Plus, Setting } from '@element-plus/icons-vue'
+import { Connection, Delete, Plus, Setting } from '@element-plus/icons-vue'
+import ListPagination from '@/components/ListPagination.vue'
 import type { MCPApprovalDecisionStatus } from '@/api/mcpAggregation'
 import { useMCPAggregationStore } from '@/store/mcpAggregation'
-import type { MCPClientEndpoint, MCPClientEndpointCreated, MCPOnboardingPayload, MCPServer, MCPToolRevision } from '@/types/mcpAggregation'
+import type { MCPClientEndpoint, MCPClientEndpointCreated, MCPOnboardingPayload, MCPSecurityRule, MCPServer, MCPToolRevision } from '@/types/mcpAggregation'
 import { getStoredAuth } from '@/utils/auth'
+import { groupMCPInvocations } from '@/utils/mcpInvocationAudit'
 
 const { t } = useI18n()
 const store = useMCPAggregationStore()
@@ -261,6 +315,7 @@ const onboardingVisible = ref(false)
 const clientEndpointVisible = ref(false)
 const endpointToolsVisible = ref(false)
 const createdEndpointVisible = ref(false)
+const securityRulesDrawerVisible = ref(false)
 const submitting = ref(false)
 const clientEndpointSubmitting = ref(false)
 const selectedServer = ref<MCPServer | null>(null)
@@ -268,28 +323,33 @@ const selectedEndpoint = ref<MCPClientEndpoint | null>(null)
 const createdEndpoint = ref<MCPClientEndpointCreated | null>(null)
 const approvalSubmitting = ref('')
 const toolUpdating = ref('')
+const auditDisabling = ref('')
+const securityRuleUpdating = ref('')
 const clientEndpointForm = reactive({ client_key: '', display_name: '', server_id: '' })
-const endpointEnabledTools = reactive<Record<string, boolean>>({})
 const currentUsername = computed(() => getStoredAuth()?.username || '')
 const currentRole = computed(() => getStoredAuth()?.role || '')
 const filters = reactive({ keyword: '', environment: '', status: '', risk_tier: '' })
 const form = reactive<MCPOnboardingPayload>({ display_name: '', endpoint_url: '', auth_type: 'oauth2', credential_ref: '', environment: 'test', publish_policy: 'approval_required' })
+type PageKey = 'servers' | 'tools' | 'clients' | 'approvals' | 'invocations' | 'security' | 'securityRules'
+const pagination = reactive<Record<PageKey, { page: number; pageSize: number }>>({
+  servers: { page: 1, pageSize: 10 }, tools: { page: 1, pageSize: 10 }, clients: { page: 1, pageSize: 10 },
+  approvals: { page: 1, pageSize: 10 }, invocations: { page: 1, pageSize: 10 }, security: { page: 1, pageSize: 10 },
+  securityRules: { page: 1, pageSize: 10 },
+})
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 
-const toolRows = computed(() => store.tools.map(tool => {
-  const server = store.servers.find(item => item.active_revision_id === tool.server_revision_id)
-  return {
-    ...tool,
-    serverName: server?.display_name || '—',
-    serverRevisionId: tool.server_revision_id,
-  }
-}))
-const publishedServers = computed(() => store.servers.filter(server => server.lifecycle_status === 'published' && server.active_revision_id))
-const endpointToolOptions = computed(() => {
-  if (!clientEndpointForm.server_id) return [] as MCPToolRevision[]
-  const server = store.servers.find(item => item.id === clientEndpointForm.server_id)
-  return store.tools.filter(tool => tool.server_revision_id === server?.active_revision_id && tool.status === 'approved')
+const toolGroups = computed(() => {
+  const groups = new Map<string, { serverId: string; serverName: string; tools: MCPToolRevision[] }>()
+  store.tools.forEach((tool) => {
+    const key = tool.server_id || tool.server_revision_id
+    const group = groups.get(key) || { serverId: key, serverName: tool.server_name || '—', tools: [] }
+    group.tools.push(tool)
+    groups.set(key, group)
+  })
+  return Array.from(groups.values())
 })
+const publishedServers = computed(() => store.serverOptions.filter(server => server.lifecycle_status === 'published' && server.active_revision_id))
+const invocationGroups = computed(() => groupMCPInvocations(store.invocations))
 
 const metrics = computed(() => [
   { key: 'servers', tab: 'servers', label: t('app.mcpAggregation.remoteServers'), value: store.overview?.remote_servers ?? '—' },
@@ -300,27 +360,41 @@ const metrics = computed(() => [
 ])
 
 async function load() {
-  try { await store.loadPrimary({ ...filters }) } catch { /* store contains safe error state */ }
+  try {
+    await store.loadPrimary({ ...filters, page: pagination.servers.page, page_size: pagination.servers.pageSize })
+  } catch { /* store contains safe error state */ }
 }
 
 async function onTabChange(name: string | number) {
-  try { await store.loadTab(String(name)) } catch { /* store exposes the primary error state */ }
+  const tab = String(name) as PageKey
+  try {
+    if (tab === 'servers') await load()
+    else if (tab === 'security') await Promise.all([loadTabPage('security'), loadTabPage('securityRules')])
+    else await loadTabPage(tab)
+  } catch { /* store exposes the primary error state */ }
 }
 
-function resetFilters() { filters.keyword = ''; filters.environment = ''; filters.status = ''; filters.risk_tier = ''; load() }
+async function loadTabPage(tab: PageKey) {
+  const state = pagination[tab]
+  const params = { page: state.page, page_size: state.pageSize }
+  if (tab === 'securityRules') return store.loadSecurityRules(params)
+  return store.loadTab(tab, params)
+}
+
+async function changePage(tab: PageKey, page: number) {
+  pagination[tab].page = page
+  if (tab === 'servers') await load()
+  else await loadTabPage(tab)
+}
+
+function queryServers() { pagination.servers.page = 1; load() }
+function resetFilters() { filters.keyword = ''; filters.environment = ''; filters.status = ''; filters.risk_tier = ''; pagination.servers.page = 1; load() }
 
 function openClientEndpoint() {
   clientEndpointForm.client_key = ''
   clientEndpointForm.display_name = ''
   clientEndpointForm.server_id = publishedServers.value[0]?.id || ''
-  Object.keys(endpointEnabledTools).forEach(key => delete endpointEnabledTools[key])
-  onEndpointServerChange()
   clientEndpointVisible.value = true
-}
-
-function onEndpointServerChange() {
-  Object.keys(endpointEnabledTools).forEach(key => delete endpointEnabledTools[key])
-  endpointToolOptions.value.forEach(tool => { endpointEnabledTools[tool.alias] = true })
 }
 
 function enabledToolCount(row: MCPClientEndpoint) { return row.tools.filter(tool => tool.enabled).length }
@@ -345,6 +419,41 @@ async function toggleEndpointTool(tool: { alias: string; enabled: boolean }) {
   } finally { toolUpdating.value = '' }
 }
 
+async function retireServer(row: MCPServer) {
+  try {
+    await ElMessageBox.confirm(
+      t('app.mcpAggregation.deleteServerConfirm', { name: row.display_name }),
+      t('app.mcpAggregation.deleteConfirmTitle'),
+      { type: 'warning', confirmButtonText: t('app.mcpAggregation.delete'), cancelButtonText: t('app.mcpAggregation.cancel') },
+    )
+    await store.retireServer(row.id)
+    if (selectedServer.value?.id === row.id) selectedServer.value = null
+    ElMessage.success(t('app.mcpAggregation.deleteServerSucceeded'))
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.deleteServerFailed'))
+  }
+}
+
+async function revokeClientEndpoint(row: MCPClientEndpoint) {
+  try {
+    await ElMessageBox.confirm(
+      t('app.mcpAggregation.deleteClientConfirm', { name: row.display_name }),
+      t('app.mcpAggregation.deleteConfirmTitle'),
+      { type: 'warning', confirmButtonText: t('app.mcpAggregation.delete'), cancelButtonText: t('app.mcpAggregation.cancel') },
+    )
+    await store.revokeClientEndpoint(row.client_id)
+    if (selectedEndpoint.value?.client_id === row.client_id) {
+      selectedEndpoint.value = null
+      endpointToolsVisible.value = false
+    }
+    ElMessage.success(t('app.mcpAggregation.deleteClientSucceeded'))
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.deleteClientFailed'))
+  }
+}
+
 async function submitClientEndpoint() {
   if (!clientEndpointForm.client_key.trim() || !clientEndpointForm.display_name.trim() || !clientEndpointForm.server_id) {
     ElMessage.warning(t('app.mcpAggregation.clientEndpointRequired'))
@@ -357,13 +466,13 @@ async function submitClientEndpoint() {
       display_name: clientEndpointForm.display_name.trim(),
       client_type: 'service',
       server_id: clientEndpointForm.server_id,
-      tool_allowlist: Object.keys(endpointEnabledTools).filter(alias => endpointEnabledTools[alias]),
     })
     createdEndpoint.value = result
     clientEndpointVisible.value = false
     createdEndpointVisible.value = true
     activeTab.value = 'clients'
-    await store.loadTab('clients')
+    pagination.clients.page = 1
+    await loadTabPage('clients')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.clientEndpointCreateFailed'))
   } finally { clientEndpointSubmitting.value = false }
@@ -391,6 +500,38 @@ function formatSchema(value: Record<string, unknown>) {
   return serialized.length > 180 ? `${serialized.slice(0, 177)}...` : serialized
 }
 function riskTag(value: string) { return value === 'l4' ? 'danger' : value === 'l3' ? 'warning' : value === 'l2' ? 'primary' : 'success' }
+function severityTag(value: string) { return value === 'critical' || value === 'high' ? 'danger' : value === 'medium' ? 'warning' : 'success' }
+function severityLabel(value: string) {
+  return ({ low: '低', medium: '中', high: '高', critical: '严重' } as Record<string, string>)[value] || value || '—'
+}
+function rulePhaseLabel(value: string) { return value === 'pre' ? t('app.mcpAggregation.beforeCall') : t('app.mcpAggregation.afterCall') }
+function ruleActionLabel(definition: Record<string, unknown>) { return definition.action === 'block' ? t('app.mcpAggregation.block') : t('app.mcpAggregation.auditOnly') }
+function ruleDefinitionLabel(definition: Record<string, unknown>) {
+  const matcherLabels: Record<string, string> = {
+    tool_risk_at_least: `工具风险 ≥ ${String(definition.threshold || '').toUpperCase()}`,
+    sensitive_output_keys: '敏感结果字段', response_size_bytes: `结果大小 > ${Math.round(Number(definition.threshold || 0) / 1024)} KiB`,
+    sensitive_input_keys: '敏感输入字段', input_patterns: '路径 / SQL / Shell / Header 注入特征',
+    output_patterns: '工具结果提示词注入特征', call_failed: '上游调用失败',
+  }
+  return matcherLabels[String(definition.matcher)] || String(definition.matcher || '—')
+}
+function matchedRulesLabel(rules?: string[], evidence?: unknown[]) {
+  if (rules && rules.length > 0) return rules.join('、')
+  if (Array.isArray(evidence) && evidence.some((item) => item && typeof item === 'object' && (item as Record<string, unknown>).reason === 'historical_payload_unavailable')) {
+    return t('app.mcpAggregation.historicalProjection')
+  }
+  return t('app.mcpAggregation.noRuleMatched')
+}
+function evidenceLabel(value: unknown[]) {
+  if (!Array.isArray(value) || value.length === 0) return '—'
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') return String(item)
+    const row = item as Record<string, unknown>
+    if (row.result === 'no_rule_matched') return t('app.mcpAggregation.noRuleMatched')
+    if (row.reason === 'historical_payload_unavailable') return t('app.mcpAggregation.historicalProjection')
+    return String(row.rule_key || row.type || '—')
+  }).join('、')
+}
 function statusTag(value: string) { return ['failed', 'quarantined', 'suspended', 'rejected'].includes(value) ? 'danger' : ['pending', 'awaiting_approval', 'review_required', 'drift_detected'].includes(value) ? 'warning' : value === 'active' || value === 'published' ? 'success' : 'info' }
 function statusLabel(value: string) {
   const labels: Record<string, string> = {
@@ -400,8 +541,36 @@ function statusLabel(value: string) {
     approved: '已审核', published: '已发布', pending: '待审批', rejected: '已拒绝', cancelled: '已取消',
     draft: '草稿', review_required: '待审核', quarantined: '已隔离', suspended: '已暂停', drift_detected: '检测到漂移',
     failed: '失败', retired: '已退役', discovered: '已发现',
+    started: '调用中', succeeded: '成功', allow: '允许', deny: '拒绝',
   }
   return labels[value] || value || '—'
+}
+
+async function disableInvocationTool(invocationId: string, serverName: string, toolAlias: string, clientName: string) {
+  try {
+    await ElMessageBox.confirm(
+      t('app.mcpAggregation.disableToolConfirm', { server: serverName, tool: toolAlias, client: clientName }),
+      t('app.mcpAggregation.disableToolTitle'),
+      { type: 'warning' },
+    )
+    auditDisabling.value = invocationId
+    await store.disableInvocationTool(invocationId)
+    ElMessage.success(t('app.mcpAggregation.disableToolSucceeded'))
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.disableToolFailed'))
+  } finally {
+    auditDisabling.value = ''
+  }
+}
+async function toggleSecurityRule(rule: MCPSecurityRule, enabled: boolean) {
+  securityRuleUpdating.value = rule.id
+  try {
+    await store.setSecurityRuleEnabled(rule.id, enabled)
+    ElMessage.success(enabled ? t('app.mcpAggregation.ruleEnabled') : t('app.mcpAggregation.ruleDisabled'))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.ruleUpdateFailed'))
+  } finally { securityRuleUpdating.value = '' }
 }
 function approvalTypeLabel(value: string) { return value === 'admission' ? t('app.mcpAggregation.approvalTypeAdmission') : statusLabel(value) }
 function approvalSubjectLabel(value: string) { return value === 'server_revision' ? t('app.mcpAggregation.subjectTypeServerRevision') : value }
@@ -430,7 +599,7 @@ async function decideApproval(row: { id: string; status: string; request_digest?
     )
     approvalSubmitting.value = row.id
     await store.decideApproval(row.id, status, row.request_digest, result.value.trim())
-    await Promise.all([load(), store.loadTab('approvals')])
+    await Promise.all([load(), loadTabPage('approvals')])
     ElMessage.success(t('app.mcpAggregation.approvalSucceeded'))
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
@@ -444,7 +613,7 @@ async function decideApproval(row: { id: string; status: string; request_digest?
 
 onMounted(() => {
   load()
-  refreshTimer = setInterval(load, 10_000)
+  refreshTimer = setInterval(() => store.loadOverview(), 10_000)
 })
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
@@ -462,10 +631,32 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .filter-bar .el-input { width: 220px; }
 .filter-bar .el-select { width: 140px; }
 .mcp-table { min-height: 260px; }
-.tool-table { min-width: 1180px; }
-.tool-service { color: #0f172a; font-weight: 700; }
-.tool-revision { display: block; margin-top: 4px; color: #94a3b8; font-size: 11px; }
+.tool-table { min-width: 980px; }
+.tool-service-list { min-height: 260px; }
+.tool-service-card { overflow: hidden; margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 14px; background: #fff; }
+.tool-service-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; background: #f8fafc; }
+.tool-service-header small { color: #64748b; }
+.tool-service-header h3 { margin: 4px 0 0; color: #0f172a; font-size: 16px; }
 .approval-blocked { color: #94a3b8; font-size: 12px; }
+.audit-service-list { min-height: 260px; }
+.audit-service-card { overflow: hidden; margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 14px; background: #fff; }
+.audit-service-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; background: #f8fafc; }
+.audit-service-header small { color: #64748b; }
+.audit-service-header h3 { margin: 4px 0 0; color: #0f172a; font-size: 16px; }
+.audit-tool-group + .audit-tool-group { border-top: 1px solid #e2e8f0; }
+.audit-tool-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; color: #334155; background: #fff; }
+.audit-tool-header span, .audit-client-table small { color: #64748b; font-size: 12px; }
+.audit-client-name { color: #0f172a; font-weight: 600; }
+.audit-client-table { width: 100%; }
+.security-rules-trigger { display: flex; align-items: center; }
+.security-section + .security-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid #e2e8f0; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.section-heading h3 { margin: 0; color: #0f172a; font-size: 17px; }
+.section-heading p { margin: 5px 0 0; color: #64748b; font-size: 12px; }
+.compact-table { min-height: 180px; }
+.muted { color: #64748b; }
+.security-rules-drawer { min-width: 960px; }
+.security-rules-drawer .drawer-description { margin: 0 0 16px; color: #64748b; font-size: 13px; }
 .client-endpoint-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .client-endpoint-toolbar strong, .client-endpoint-toolbar span { display: block; }
 .client-endpoint-toolbar span { margin-top: 4px; color: #64748b; font-size: 12px; }

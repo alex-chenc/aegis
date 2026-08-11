@@ -80,7 +80,27 @@ type agentConversationQueryResult struct {
 	TotalPages    int                               `json:"total_pages"`
 	HasNextPage   bool                              `json:"has_next_page"`
 	HasPrevious   bool                              `json:"has_previous_page"`
+	RiskSummary   agentConversationRiskSummary      `json:"risk_summary"`
 	Items         []agentConversationSessionSummary `json:"items"`
+}
+
+// agentConversationRiskSummary keeps the exact high-risk objects ahead of the
+// full item list. The runtime may truncate long tool results, so final
+// conclusions must not lose the affected session IDs and their evidence.
+// Risk category names are deliberately not inferred from aggregate counters.
+type agentConversationRiskSummary struct {
+	HighRiskCount       int                           `json:"high_risk_count"`
+	ActiveHighRiskCount int                           `json:"active_high_risk_count"`
+	UnknownRiskCount    int                           `json:"unknown_risk_count"`
+	RiskTypesAvailable  bool                          `json:"risk_types_available"`
+	HighRiskSessions    []agentConversationRiskDigest `json:"high_risk_sessions"`
+}
+
+type agentConversationRiskDigest struct {
+	ID           uuid.UUID `json:"id"`
+	State        string    `json:"state"`
+	RuleHitCount int64     `json:"rule_hit_count"`
+	ItemCount    int64     `json:"item_count"`
 }
 
 // agentConversationSessionSummary is intentionally smaller than the storage
@@ -642,6 +662,10 @@ func makeConversationQueryHandler(s AgentConversationForTools) assistant.ToolHan
 			totalPages = int((result.Total + int64(size) - 1) / int64(size))
 		}
 		items := make([]agentConversationSessionSummary, 0, len(result.Items))
+		riskSummary := agentConversationRiskSummary{
+			RiskTypesAvailable: false,
+			HighRiskSessions:   make([]agentConversationRiskDigest, 0),
+		}
 		for _, session := range result.Items {
 			items = append(items, agentConversationSessionSummary{
 				ID:           session.ID,
@@ -657,6 +681,21 @@ func makeConversationQueryHandler(s AgentConversationForTools) assistant.ToolHan
 				FirstSeenAt:  session.FirstSeenAt,
 				LastSeenAt:   session.LastSeenAt,
 			})
+			switch strings.ToLower(strings.TrimSpace(session.RiskLevel)) {
+			case model.AgentSessionRiskHigh:
+				riskSummary.HighRiskCount++
+				if strings.EqualFold(session.State, model.AgentSessionStateActive) {
+					riskSummary.ActiveHighRiskCount++
+				}
+				riskSummary.HighRiskSessions = append(riskSummary.HighRiskSessions, agentConversationRiskDigest{
+					ID:           session.ID,
+					State:        session.State,
+					RuleHitCount: session.RuleHitCount,
+					ItemCount:    session.ItemCount,
+				})
+			case "", "unknown":
+				riskSummary.UnknownRiskCount++
+			}
 		}
 		return agentConversationQueryResult{
 			Page:          page,
@@ -666,6 +705,7 @@ func makeConversationQueryHandler(s AgentConversationForTools) assistant.ToolHan
 			TotalPages:    totalPages,
 			HasNextPage:   totalPages > page,
 			HasPrevious:   page > 1,
+			RiskSummary:   riskSummary,
 			Items:         items,
 		}, nil
 	}
