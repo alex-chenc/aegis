@@ -16,9 +16,9 @@ Catalog 和 Grant，通过 `mcp-gateway` 调用远程 MCP Server。
    ToolAuthorization -> mapping-bound plan -> agent-runtime` 链路。
 2. 不把上游 MCP 的动态 Tool 直接注册到 `ToolRegistry`，也不允许模型直接选举任意
    `tool_alias` 作为 Runtime 工具名；模型面对的是稳定的高层 Assistant capability。
-3. 第一阶段只开放 `MCP.Aggregated.Catalog.List`、`MCP.Aggregated.Tool.List` 和
-   `MCP.Aggregated.Query` 三类只读能力。写工具、策略、授权、发布、凭据轮换和
-   Break-glass 不进入普通智能体模式。
+3. Assistant 同时开放四类只读查询能力，以及一个受审批保护的远程 MCP Server
+   onboarding 控制能力和对应的状态查询能力。该控制能力只创建平台异步接入任务，
+   不把上游 MCP 写工具、策略、授权、发布、凭据轮换或 Break-glass 暴露给模型。
 4. Assistant 的用户身份、会话、运行、消息和工具调用 ID 必须由 Aegis 后端签名传递，
    不能由模型参数或上游 MCP 返回值提供。
 5. V6.1 Assistant 权限/审批和 V6.3 MCP Client/Grant/Policy 是两层独立门禁，任何一层
@@ -86,8 +86,9 @@ Catalog 和 Grant，通过 `mcp-gateway` 调用远程 MCP Server。
 
 ### 3.2 非目标
 
-- 不在普通对话中开放 MCP Server onboarding、Catalog 发布、Grant 修改、策略编辑、
-  凭据管理、审计 payload reveal 或 Break-glass；
+- 不把 Catalog 发布、Grant 修改、策略编辑、凭据管理、审计 payload reveal 或
+  Break-glass 暴露为普通对话工具；远程 MCP Server onboarding 允许由 Assistant 在
+  用户明确提出请求并通过 Assistant 审批后创建受管异步任务；
 - 不把 MCP `tools/list` 的全部工具 schema 无界注入模型上下文；
 - 不由模型直接决定任意 endpoint、上游 Server、Credential 或用户身份；
 - 不把 MCP 返回的 prompt、description、resource link 或工具结果当作系统指令；
@@ -108,6 +109,8 @@ Catalog 和 Grant，通过 `mcp-gateway` 调用远程 MCP Server。
    不改变 Assistant 的工具目录、权限、计划或审批状态。
 6. Gateway、MCP runtime、旧 Catalog、上游或审计依赖不可用时，Assistant 明确返回
    blocked/degraded/unknown，不自动绕过到旧直连路径。
+7. 用户明确请求远程 MCP 接入时，LLM 先识别意图并选择受控 onboarding capability，
+   后端创建可审计异步任务；未授权、未审批或接入失败时不得声称已完成。
 
 ## 4. 目标架构
 
@@ -170,10 +173,18 @@ Assistant MCP Client
 | `MCP.Aggregated.Tool.List` | `list_mcp_tools` | contextual | readonly | 返回指定 Catalog 的审核后 alias、用途、风险、schema 摘要 |
 | `MCP.Aggregated.Query` | `query_aggregated_mcp` | primary/contextual | medium | 调用已授权的只读 Tool，返回脱敏证据 |
 | `MCP.Aggregated.Invocation.Get` | `get_mcp_invocation` | companion/contextual | readonly | 查询调用状态、规则结果和证据引用 |
+| `MCP.Aggregation.Server.Onboard` | `onboard_mcp_server` | primary | high/write | 创建受管远程 MCP 接入任务，触发 endpoint 校验、发现、安全扫描和发布审批 |
+| `MCP.Aggregation.Server.Onboarding.Get` | `get_mcp_onboarding_status` | companion | readonly | 查询接入任务状态、失败原因和已发布 Server 摘要 |
 
-以上四个能力统一挂在 V6.3 工作流 `mcp_aggregation_query` 下。该工作流是
-Assistant 第一层意图卡和第二层闭合 Capability Catalog 的唯一入口；旧的
+前四个只读能力统一挂在 V6.3 工作流 `mcp_aggregation_query` 下；后两个能力统一挂在
+`mcp_aggregation_onboarding` 下。两个工作流分别是 Assistant 第一层意图卡和第二层
+闭合 Capability Catalog 的唯一入口；旧的
 `external_evidence` 仅保留给 V6.0 兼容链路，不能替代新的 MCP 聚合工作流。
+
+`MCP.Aggregation.Server.Onboard` 仍由大模型负责从用户请求中提取 endpoint、环境和
+认证引用等参数，但后端只接受 opaque credential reference，不接受或回显原始 secret；
+工具本身必须经过 Assistant 授权/审批，并通过 `MCPPlatformService.CreateOnboardingJob`
+创建异步任务。后续由 `MCP.Aggregation.Server.Onboarding.Get` 按任务 ID 观察终态。
 
 ### 5.1 `MCP.Aggregated.Query` 参数原则
 
@@ -362,8 +373,8 @@ mcp_platform:
 - `internal/assistant/mcp_gateway_client.go`：Gateway HTTP/MCP client，负责协议、超时、
   bounded body、错误映射和不可信结果包装；
 - `internal/assistant/mcp_invocation_context.go`：内部上下文签名、TTL、nonce 和脱敏；
-- `internal/assistant/tools/mcp_aggregation_tools.go`：四个稳定高层 ToolSpec，不动态
-  注册上游工具；
+- `internal/assistant/tools/mcp_aggregation_tools.go`：四个只读聚合 ToolSpec，以及受控
+  onboarding/status ToolSpec；不动态注册上游工具；
 - `internal/assistant/tool_exposure.go`/`workflow_registry.go`：增加 Assistant MCP
   capability、workflow 和暴露策略；
 - `internal/service/mcp_platform_service.go`：抽取/扩展 `RuntimeInvocationContext`，
@@ -480,7 +491,7 @@ high、critical 或 unknown 改成 safe。
 
 - 补齐四阶段脱敏摘要、MinIO 加密 payload、Kafka outbox 和 invocation 关联查询；
 - 增加 `Invocation.Get`、规则证据和前端状态展示；
-- 仍不开放 Assistant 写工具。
+- 不开放原始 MCP 写工具；远程 Server onboarding 只作为受审批的控制面任务入口。
 
 ### P3：受控写能力（后续独立评审）
 
@@ -523,10 +534,15 @@ high、critical 或 unknown 改成 safe。
 - Assistant 不自动生成或回显 Client Token。启用前必须先在 MCP 聚合管控页面创建专用
   Client 授权，再通过 `MCP_ASSISTANT_CLIENT_KEY` 和
   `MCP_ASSISTANT_CLIENT_TOKEN` 注入 api-server；`MCP_ASSISTANT_ENABLED` 默认为关闭。
-- 新 Assistant 只注册四个固定高层工具：`MCP.Aggregated.Catalog.List`、
+- 新 Assistant 注册四个固定只读聚合工具：`MCP.Aggregated.Catalog.List`、
   `MCP.Aggregated.Tool.List`、`MCP.Aggregated.Query` 和
-  `MCP.Aggregated.Invocation.Get`。上游工具名只作为 Gateway 返回的数据，不能进入
-  ToolRegistry，也不能绕过 ToolDispatcher。
+  `MCP.Aggregated.Invocation.Get`，以及固定的受审批控制面工具
+  `MCP.Aggregation.Server.Onboard` 和
+  `MCP.Aggregation.Server.Onboarding.Get`。上游工具名只作为 Gateway 返回的数据，不能
+  进入 ToolRegistry，也不能绕过 ToolDispatcher。
+- 用户明确提出“接入/注册/连接远程 MCP”时，Assistant 不直接返回管控页面说明；请求
+  经过 LLM 意图识别和 capability mapping 后调用 onboarding 工具，创建异步任务并以
+  任务状态作为事实依据。
 - `MCP.Aggregated.Query` 每次调用前重新读取 Client 的当前工具授权，只接受 Gateway
   返回且风险为 L1/L2 的 approved 工具；Assistant 上下文使用 Runtime Secret 做 HMAC
   签名后进入 invocation 的操作者审计字段。

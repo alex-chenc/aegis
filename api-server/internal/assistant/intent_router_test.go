@@ -93,6 +93,13 @@ func TestExplicitWorkflowRequirementsRouteManagedMCPQueries(t *testing.T) {
 	}
 }
 
+func TestExplicitWorkflowRequirementsRouteMCPOnboarding(t *testing.T) {
+	got := explicitWorkflowRequirements("把这个接入到 http://aegis-mcp:8085/mcp")
+	if len(got) != 1 || got[0] != MCPAggregationOnboardingWorkflowID {
+		t.Fatalf("required workflows = %#v, want [%s]", got, MCPAggregationOnboardingWorkflowID)
+	}
+}
+
 func TestMCPAggregationQueryRequestDoesNotMatchOnboardingOrConceptualQuestions(t *testing.T) {
 	if mcpAggregationQueryRequest("把这个接入到远程 MCP") {
 		t.Fatal("MCP onboarding must be handled by the control-plane guard")

@@ -2,11 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"api-server/internal/assistant"
 	"api-server/internal/model"
+	"api-server/internal/service"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -19,6 +22,136 @@ type MCPAggregationToolDeps struct {
 	Gateway     *assistant.MCPGatewayClient
 	Invocations MCPInvocationReader
 	Logger      *zap.Logger
+}
+
+type MCPOnboardingToolDeps struct {
+	Platform *service.MCPPlatformService
+	Logger   *zap.Logger
+}
+
+// RegisterMCPOnboardingTool exposes the governed control-plane mutation to the
+// Assistant. The tool creates an asynchronous onboarding job; the service
+// remains responsible for endpoint validation, discovery, security scanning,
+// approval and release publication.
+func RegisterMCPOnboardingTool(registry *assistant.ToolRegistry, deps MCPOnboardingToolDeps) error {
+	if deps.Platform == nil {
+		return fmt.Errorf("MCP platform service is required")
+	}
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return registry.Register(&assistant.ToolSpec{
+		Name:               "MCP.Aggregation.Server.Onboard",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpCreate,
+		Capability:         "onboard_mcp_server",
+		Description:        "Create a governed asynchronous onboarding job for a remote MCP Server.",
+		ModelDescription:   "Use only when the user explicitly asks to connect, register, or add a remote MCP Server. This creates a job and does not bypass approval or publish policy.",
+		Aliases:            []string{"接入远程MCP", "注册MCP服务", "onboard remote MCP"},
+		Tags:               []string{"v6.3", "mcp", "aggregation", "onboarding", "write"},
+		ObjectTypes:        []string{"mcp_server", "remote_mcp_server", "mcp_onboarding_job"},
+		Risk:               assistant.ToolRiskHigh,
+		AutoCallable:       false,
+		RequiresApproval:   true,
+		Idempotent:         true,
+		DefaultWhitelisted: false,
+		Enabled:            true,
+		ExposurePolicy: assistant.ToolExposurePolicy{
+			Exposure: assistant.ToolExposurePrimary, WorkflowIDs: []string{assistant.MCPAggregationOnboardingWorkflowID},
+			Discoverable: true, DirectCallable: true, CatalogPriority: 210,
+		},
+		ExecutionContract: assistant.ToolExecutionContract{Mode: assistant.ToolExecutionAsynchronous, CompletionCapability: "get_mcp_onboarding_status"},
+		ResultContract: assistant.ToolResultContract{
+			AcceptedOnSuccess: true, OperationStatusField: "operation_status", PendingValues: []string{"accepted", "created", "validating_endpoint", "discovering", "security_scanning", "awaiting_approval", "publishing", "active"}, FailureValues: []string{"failed", "cancelled"}, OperationRefFields: []string{"job_id"},
+		},
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"endpoint_url":   map[string]interface{}{"type": "string", "description": "Remote MCP streamable HTTP endpoint supplied by the user."},
+				"display_name":   map[string]interface{}{"type": "string", "description": "Human-readable server name; inferred from endpoint host when omitted."},
+				"auth_type":      map[string]interface{}{"type": "string", "enum": []string{"none", "oauth2", "bearer", "api_key"}, "description": "Authentication type; defaults to none for development endpoints."},
+				"credential_ref": map[string]interface{}{"type": "string", "description": "Opaque credential reference, never a raw secret."},
+				"environment":    map[string]interface{}{"type": "string", "enum": []string{"dev", "staging", "prod"}, "description": "Deployment environment; defaults to dev."},
+				"publish_policy": map[string]interface{}{"type": "string", "enum": []string{"manual", "auto_if_l1"}, "description": "Release policy; defaults to auto_if_l1."},
+			},
+			"required": []string{"endpoint_url"},
+		},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			invocation, ok := assistant.ToolInvocationFromContext(ctx)
+			if !ok || strings.TrimSpace(invocation.Operator) == "" {
+				return nil, fmt.Errorf("trusted Assistant operator context is required")
+			}
+			endpoint := strings.TrimSpace(getStringArg(args, "endpoint_url", ""))
+			if endpoint == "" {
+				return nil, fmt.Errorf("endpoint_url is required")
+			}
+			displayName := strings.TrimSpace(getStringArg(args, "display_name", ""))
+			if displayName == "" {
+				displayName = inferredMCPDisplayName(endpoint)
+			}
+			environment := strings.TrimSpace(getStringArg(args, "environment", "dev"))
+			authType := strings.TrimSpace(getStringArg(args, "auth_type", model.MCPPlatformAuthNone))
+			publishPolicy := strings.TrimSpace(getStringArg(args, "publish_policy", "auto_if_l1"))
+			credentialRef := strings.TrimSpace(getStringArg(args, "credential_ref", ""))
+			idempotencyKey := mcpOnboardingIdempotencyKey(invocation.SessionID, endpoint, displayName, environment, authType, publishPolicy)
+			job, err := deps.Platform.CreateOnboardingJob(ctx, service.MCPOnboardingRequest{DisplayName: displayName, EndpointURL: endpoint, AuthType: authType, CredentialRef: credentialRef, Environment: environment, PublishPolicy: publishPolicy}, idempotencyKey, invocation.Operator)
+			if err != nil {
+				logger.Warn("assistant_mcp_onboarding_job_failed", zap.String("operator", invocation.Operator), zap.Error(err))
+				return nil, err
+			}
+			logger.Info("assistant_mcp_onboarding_job_created", zap.String("job_id", job.ID.String()), zap.String("operator", invocation.Operator), zap.String("status", job.Status))
+			return map[string]interface{}{"operation_status": "accepted", "job_id": job.ID.String(), "status": job.Status, "step": job.Step, "display_name": job.DisplayName, "endpoint_display": job.EndpointDisplay, "environment": job.Environment, "publish_policy": job.PublishPolicy}, nil
+		},
+		ServiceBinding: assistant.ServiceBinding{Component: "api-server", File: "api-server/internal/service/mcp_platform_service.go", Function: "MCPPlatformService.CreateOnboardingJob"},
+	})
+}
+
+func RegisterMCPOnboardingStatusTool(registry *assistant.ToolRegistry, deps MCPOnboardingToolDeps) error {
+	if deps.Platform == nil {
+		return fmt.Errorf("MCP platform service is required")
+	}
+	return registry.Register(&assistant.ToolSpec{
+		Name: "MCP.Aggregation.Server.Onboarding.Get", Domain: assistant.DomainExternalMCP, Operation: assistant.OpGet,
+		Capability: "get_mcp_onboarding_status", Description: "Get the bounded status of an Assistant-created MCP onboarding job.",
+		ModelDescription: "Use the exact job_id returned by MCP.Aggregation.Server.Onboard to observe onboarding progress.", Aliases: []string{"MCP接入状态", "MCP onboarding status"}, Tags: []string{"v6.3", "mcp", "aggregation", "onboarding", "status"}, ObjectTypes: []string{"mcp_onboarding_job"},
+		Risk: assistant.ToolRiskReadonly, AutoCallable: true, Idempotent: true, DefaultWhitelisted: true, Enabled: true,
+		ExposurePolicy: assistant.ToolExposurePolicy{Exposure: assistant.ToolExposureCompanion, WorkflowIDs: []string{assistant.MCPAggregationOnboardingWorkflowID}, Discoverable: false, DirectCallable: true},
+		ArgsSchema:     objectSchema(map[string]interface{}{"job_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact onboarding job UUID returned by the onboarding tool."}}),
+		ResultContract: assistant.ToolResultContract{OperationStatusField: "status", SuccessValues: []string{"active"}, PendingValues: []string{"created", "validating_endpoint", "awaiting_auth", "authenticating", "discovering", "validating_tools", "security_scanning", "classifying", "building_release", "awaiting_approval", "publishing"}, FailureValues: []string{"failed", "cancelled"}},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			id, err := parseUUID(args, "job_id")
+			if err != nil {
+				return nil, err
+			}
+			job, err := deps.Platform.GetJob(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{"job_id": job.ID.String(), "status": job.Status, "step": job.Step, "server_id": uuidString(job.ServerID), "display_name": job.DisplayName, "endpoint_display": job.EndpointDisplay, "environment": job.Environment, "error_code": job.ErrorCode, "error_message": job.ErrorMessage, "revision_id": uuidString(job.RevisionID), "completed_at": job.CompletedAt}, nil
+		},
+		ServiceBinding: assistant.ServiceBinding{Component: "api-server", File: "api-server/internal/service/mcp_platform_service.go", Function: "MCPPlatformService.GetJob"},
+	})
+}
+
+func uuidString(value *uuid.UUID) string {
+	if value == nil {
+		return ""
+	}
+	return value.String()
+}
+
+func inferredMCPDisplayName(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err == nil && strings.TrimSpace(parsed.Hostname()) != "" {
+		return "Remote MCP " + parsed.Hostname()
+	}
+	return "Remote MCP Server"
+}
+
+func mcpOnboardingIdempotencyKey(sessionID, endpoint, displayName, environment, authType, publishPolicy string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{sessionID, endpoint, displayName, environment, authType, publishPolicy}, "\x00")))
+	return "assistant-mcp-" + fmt.Sprintf("%x", sum[:])[:56]
 }
 
 // RegisterMCPAggregationTools registers a fixed Assistant facade. Upstream

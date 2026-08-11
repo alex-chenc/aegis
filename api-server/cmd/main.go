@@ -648,6 +648,16 @@ func main() {
 			logger.Info("managed MCP Assistant tools registered", zap.Bool("client_authorization_configured", true))
 		}
 	}
+	// Onboarding is a governed Assistant workflow backed by the MCP platform
+	// service. It remains available even when the read-only aggregation facade
+	// is disabled; the onboarding job itself performs endpoint validation,
+	// discovery, security review, and approval before publication.
+	if err := assistantTools.RegisterMCPOnboardingTool(toolRegistry, assistantTools.MCPOnboardingToolDeps{Platform: mcpPlatformService, Logger: assistantLogger}); err != nil {
+		logger.Error("failed to register MCP onboarding Assistant tool", zap.Error(err))
+	}
+	if err := assistantTools.RegisterMCPOnboardingStatusTool(toolRegistry, assistantTools.MCPOnboardingToolDeps{Platform: mcpPlatformService, Logger: assistantLogger}); err != nil {
+		logger.Error("failed to register MCP onboarding status Assistant tool", zap.Error(err))
+	}
 	if !cfg.MCPPlatform.AssistantMCPEnabled {
 		if err := assistantTools.RegisterExternalMCPTools(toolRegistry, assistantTools.ExternalMCPToolDeps{
 			SourceService:  mcpSvc,

@@ -296,7 +296,13 @@ func explicitWorkflowRequirements(query string) []string {
 	); index >= 0 {
 		requirements = append(requirements, requirement{workflowID: detectionPackageLifecycleWorkflowID, index: index})
 	}
-	if mcpAggregationQueryRequest(normalized) {
+	if isMCPOnboardingRequest(normalized) {
+		index := firstExplicitPhraseIndex(normalized, "mcp", "远程模型上下文协议", "接入", "注册", "连接", "connect", "register", "onboard")
+		if index < 0 {
+			index = 0
+		}
+		requirements = append(requirements, requirement{workflowID: MCPAggregationOnboardingWorkflowID, index: index})
+	} else if mcpAggregationQueryRequest(normalized) {
 		index := firstExplicitPhraseIndex(normalized,
 			"mcp", "远程模型上下文协议", "聚合",
 			"mcp catalog", "mcp tool", "mcp query", "mcp invocation",

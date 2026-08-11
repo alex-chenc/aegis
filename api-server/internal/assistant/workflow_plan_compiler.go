@@ -23,6 +23,10 @@ const (
 // must bind their exposure policy to the same closed workflow contract.
 const MCPAggregationQueryWorkflowID = "mcp_aggregation_query"
 
+// MCPAggregationOnboardingWorkflowID is the Assistant workflow for creating
+// a remote MCP onboarding job through the governed control plane.
+const MCPAggregationOnboardingWorkflowID = "mcp_aggregation_onboarding"
+
 var exactCVEIDPattern = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]{4,}\b`)
 
 // ArgValueKind classifies how a bound argument value must be typed so the

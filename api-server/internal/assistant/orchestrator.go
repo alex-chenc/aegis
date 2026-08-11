@@ -195,20 +195,6 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		contextRefs, _ = o.contextLoader.ResolveSession(ctx, input.SessionID)
 	}
 
-	// MCP Server onboarding is a control-plane mutation in V6.3. Handle it
-	// deterministically before the LLM stages so the Assistant does not ask an
-	// ambiguous clarification or fall back to a misleading “missing context”
-	// answer. The actual onboarding remains available from the MCP aggregation
-	// control page, followed by explicit Client authorization and configuration.
-	if shouldGuideMCPOnboarding(input) {
-		o.logger.Info("assistant MCP onboarding routed to control-plane guidance",
-			zap.String("session_id", input.SessionID),
-			zap.String("run_id", input.RunID),
-			zap.Bool("resumed_pending_clarification", input.PendingClarification != nil),
-		)
-		return o.mcpOnboardingGuidanceResponse(input)
-	}
-
 	// 4. 意图识别
 	workflowRegistry := NewWorkflowRegistry()
 	intentInput := IntentInput{
@@ -253,6 +239,16 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			zap.String("session_id", input.SessionID),
 			zap.String("run_id", input.RunID),
 		)
+	}
+	// A clearly expressed onboarding request is a write operation even if the
+	// classifier under-reports its write/approval flags. Keep the LLM intent and
+	// decomposition stages, but make the security-critical control-plane policy
+	// deterministic so the onboarding capability cannot be silently rejected as
+	// a read-only query.
+	if isMCPOnboardingRequest(input.UserMessage) || isMCPOnboardingRequest(input.OriginalUserMessage) {
+		intent.NeedWrite = true
+		intent.NeedApproval = true
+		intent.RiskHint = ToolRiskHigh
 	}
 	workflowCards, err := workflowRegistry.Resolve(intent.WorkflowIDs)
 	if err != nil {
@@ -443,61 +439,6 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.Int("tools_count", len(toolDescriptors)),
 	)
 	return o.runAgentRuntime(ctx, input, contextRefs, *selection, toolDescriptors, useAIAnalysisFlow, authorization, approvalMode)
-}
-
-func (o *Orchestrator) mcpOnboardingGuidanceResponse(input RunInput) (*RunResult, error) {
-	msgID := "msg_" + input.RunID
-	response := mcpOnboardingGuidance(input.Locale)
-
-	o.runManager.Publish(input.SessionID, NewEvent(EventIntentDetected, input.SessionID, input.RunID, map[string]interface{}{
-		"domains":      []string{string(DomainExternalMCP)},
-		"action":       "control_plane_guidance",
-		"object":       "mcp_aggregation",
-		"workflow_ids": []string{},
-		"confidence":   1.0,
-	}))
-	o.runManager.Publish(input.SessionID, NewEvent(EventToolsSelected, input.SessionID, input.RunID, map[string]interface{}{
-		"selected_tools":  []string{},
-		"candidate_tools": []string{},
-		"selection_mode":  "control_plane_guidance",
-	}))
-	o.runManager.Publish(input.SessionID, EventMessageDeltaPayload(input.SessionID, input.RunID, msgID, response))
-
-	o.mergeSessionMetadata(context.Background(), input.SessionID, map[string]interface{}{
-		pendingClarificationMetadataKey: nil,
-		"current_run_status":            "completed",
-		"goal_outcome":                  agentruntime.GoalSucceeded,
-	})
-	o.persistSessionRuntimeEvents(
-		context.Background(),
-		input.SessionID,
-		msgID,
-		compactRuntimeDisplayEvents(o.extractRunHistory(input.SessionID), input.RunID, msgID),
-	)
-
-	if o.messageRepo != nil {
-		if err := o.messageRepo.Create(context.Background(), &model.AssistantMessage{
-			ID:        uuid.New(),
-			SessionID: input.SessionID,
-			MessageID: msgID,
-			Role:      "assistant",
-			Content:   response,
-			Thinking:  o.extractThinkingFromHistory(input.SessionID),
-		}); err != nil {
-			o.logger.Error("failed to save MCP onboarding guidance message",
-				zap.String("session_id", input.SessionID),
-				zap.String("run_id", input.RunID),
-				zap.Error(err),
-			)
-		}
-	}
-
-	return &RunResult{
-		MessageID:   msgID,
-		FinalAnswer: response,
-		RunStatus:   "completed",
-		GoalOutcome: agentruntime.GoalSucceeded,
-	}, nil
 }
 
 func (o *Orchestrator) clarificationResponse(

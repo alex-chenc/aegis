@@ -93,6 +93,21 @@ func TestWorkflowRegistryIncludesManagedMCPAggregationContract(t *testing.T) {
 	}
 }
 
+func TestWorkflowRegistryIncludesManagedMCPOnboardingContract(t *testing.T) {
+	workflow, err := NewWorkflowRegistry().Resolve([]string{MCPAggregationOnboardingWorkflowID})
+	if err != nil || len(workflow) != 1 {
+		t.Fatalf("managed MCP onboarding workflow = %#v, err=%v", workflow, err)
+	}
+	if workflow[0].Risk != ToolRiskHigh || workflow[0].Domain != DomainExternalMCP {
+		t.Fatalf("managed MCP onboarding metadata = %#v", workflow[0])
+	}
+	for _, capability := range []string{"onboard_mcp_server", "get_mcp_onboarding_status"} {
+		if !containsExactString(workflow[0].ExposedCapabilities, capability) {
+			t.Fatalf("managed MCP onboarding capability %q missing from %#v", capability, workflow[0].ExposedCapabilities)
+		}
+	}
+}
+
 func TestCapabilityCatalogUsesClosedSelectedWorkflowAllowlist(t *testing.T) {
 	toolRegistry := NewToolRegistry()
 	for _, tool := range []*ToolSpec{

@@ -23,30 +23,3 @@ func TestIsMCPOnboardingRequest(t *testing.T) {
 		})
 	}
 }
-
-func TestShouldGuideMCPOnboardingForClarificationContinuation(t *testing.T) {
-	input := RunInput{
-		UserMessage: "当前系统内的 MCP 聚合方案",
-		PendingClarification: &PendingClarification{
-			OriginalQuery: "把这个接入到远程 MCP",
-			Question:      "请明确要接入的具体对象是什么？",
-		},
-	}
-	if !shouldGuideMCPOnboarding(input) {
-		t.Fatal("expected MCP clarification continuation to be handled by control-plane guidance")
-	}
-
-	input.UserMessage = "查询主机健康状态"
-	if shouldGuideMCPOnboarding(input) {
-		t.Fatal("unrelated replacement request must not be intercepted")
-	}
-}
-
-func TestMCPOnboardingGuidanceLocale(t *testing.T) {
-	if got := mcpOnboardingGuidance(LocaleZhCN); got == "" || got == mcpOnboardingGuidance(LocaleEnUS) {
-		t.Fatal("expected Chinese MCP onboarding guidance")
-	}
-	if got := mcpOnboardingGuidance(LocaleEnUS); got == "" || got == mcpOnboardingGuidance(LocaleZhCN) {
-		t.Fatal("expected English MCP onboarding guidance")
-	}
-}
