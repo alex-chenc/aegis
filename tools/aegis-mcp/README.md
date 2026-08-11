@@ -1,42 +1,50 @@
-# Aegis Host Query MCP
+# Aegis Remote MCP Server
 
-这是一个只读的本地 stdio MCP Server，供 Codex 查询 Aegis 已登记主机。
+这里是一个由 Aegis 自身提供的远程 MCP Server，默认使用 MCP Streamable HTTP：
 
-## 工具
-
-- `list_hosts(query?)`：按主机名或 IP 子串查询主机。
-- `get_host(host_id)`：按 UUID 查询主机详情和在线状态。
-
-## 认证
-
-MCP Server 调用 `api-server` 时需要 Aegis 登录会话 Token：
-
-```bash
-export AEGIS_API_URL=http://127.0.0.1:8082
-export AEGIS_API_TOKEN='从 Aegis 登录接口获取的 session token'
+```text
+POST http://<host>:8085/mcp
+GET  http://<host>:8085/health
 ```
 
-也可以使用本地文件，推荐权限为 0600：
+它只暴露只读工具：
+
+- `get_aegis_health`：查询 Aegis API 健康状态，不需要 Aegis Session Token；
+- `list_hosts(query?)`：查询 Aegis 主机列表，需要 `AEGIS_API_TOKEN` 或 Token 文件；
+- `get_host(host_id)`：查询主机详情，需要 `AEGIS_API_TOKEN` 或 Token 文件。
+
+## 本地运行
 
 ```bash
-install -d -m 700 ~/.config/aegis
-install -m 600 /path/to/token ~/.config/aegis/mcp-token
-export AEGIS_API_TOKEN_FILE=/absolute/path/to/mcp-token
+AEGIS_API_URL=http://127.0.0.1:8082 \
+python3 /code/aegis/tools/aegis-mcp/aegis_mcp.py \
+  --transport http --host 0.0.0.0 --port 8085
 ```
 
-## 手动运行
+旧的 stdio 开发方式仍然可用：
 
 ```bash
-python3 /code/aegis/tools/aegis-mcp/aegis_mcp.py
+python3 /code/aegis/tools/aegis-mcp/aegis_mcp.py --transport stdio
 ```
 
-## Codex 注册
+如果希望保护 MCP 入口，可配置 `AEGIS_MCP_ACCESS_TOKEN`；服务端会要求
+`Authorization: Bearer <token>`，不会在日志中打印 Token。
 
-```bash
-codex mcp add aegis-hosts \
-  --env AEGIS_API_URL=http://127.0.0.1:8082 \
-  --env AEGIS_API_TOKEN_FILE=/root/.config/aegis/mcp-token \
-  -- python3 /code/aegis/tools/aegis-mcp/aegis_mcp.py
+## 接入 Aegis 聚合平台
+
+开发环境使用以下远程地址：
+
+```text
+http://aegis-mcp:8085/mcp
 ```
 
-注册后可用 `codex mcp get aegis-hosts` 检查配置。Token 文件不存在或 Token 过期时，工具会返回可读错误，不会让 MCP 进程退出。
+在“系统配置 → MCP 聚合管控”中创建远程接入任务：
+
+- 服务名称：`Aegis Local MCP`
+- Endpoint：`http://aegis-mcp:8085/mcp`
+- 认证：`none`（仅用于本地发现；调用主机工具时仍需配置 API Token）
+- 环境：`dev`
+- 发布策略：`manual`
+
+平台会执行 `initialize`、`tools/list`、工具 Schema 校验、安全扫描和审批记录。
+未经审批和发布的工具不会进入可用 Catalog。

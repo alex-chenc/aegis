@@ -102,6 +102,11 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.AgentSessionRuleHit{},
 		&model.AgentSessionAIRun{},
 		&model.AgentSessionAIChunk{},
+		// MCP V6.3 tables are created by the formal 033/034 SQL migrations.
+		// Do not include them in AutoMigrate: PostgreSQL unique constraints and
+		// SQL indexes are intentionally managed by migrations, and GORM may try
+		// to drop/recreate a constraint with a different generated name during
+		// startup. The models remain runtime mappings for repositories/tests.
 	); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)

@@ -86,6 +86,20 @@ func TestExplicitWorkflowRequirementsKeepScanBeforeDetectionPackage(t *testing.T
 	}
 }
 
+func TestExplicitWorkflowRequirementsRouteCodexSecurityQuestionsToAgentGuard(t *testing.T) {
+	got := explicitWorkflowRequirements("分析一下，目前 Codex 智能体有哪些安全问题")
+	if len(got) != 1 || got[0] != agentGuardObservationWorkflowID {
+		t.Fatalf("required workflows = %#v, want [%s]", got, agentGuardObservationWorkflowID)
+	}
+}
+
+func TestExplicitWorkflowRequirementsRouteAgentGuardControlSeparately(t *testing.T) {
+	got := explicitWorkflowRequirements("请冻结 Codex 智能体的执行单元")
+	if len(got) != 1 || got[0] != agentGuardControlWorkflowID {
+		t.Fatalf("required workflows = %#v, want [%s]", got, agentGuardControlWorkflowID)
+	}
+}
+
 func TestIntentRouterContinuationContractPreservesPendingArtifacts(t *testing.T) {
 	input := IntentInput{
 		AvailableWorkflows: NewWorkflowRegistry().List(),

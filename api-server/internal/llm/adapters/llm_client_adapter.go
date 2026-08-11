@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
@@ -34,6 +35,9 @@ func NewLLMClientAdapter(client *llm.LLMClient, alertCtx map[string]interface{})
 // request into the format expected by the underlying LLM client and returns the
 // response.
 func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMRequest) (agentruntime.LLMResponse, error) {
+	requestCtx, cancel := boundedLLMRequestContext(ctx, req.Timeout)
+	defer cancel()
+
 	// Convert agent-runtime messages to llm.Message slice.
 	messages := make([]llm.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -70,7 +74,7 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 		responseFormat = &llm.ResponseFormat{Type: "json_object"}
 	}
 
-	result, err := a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, responseFormat)
+	result, err := a.client.ChatCompletionWithMessagesFormatResult(requestCtx, messages, temperature, responseFormat)
 	if err != nil && responseFormat != nil {
 		// Some thinking-mode and Anthropic-compatible models reject response_format.
 		// Keep execution available, while the runtime still enforces descriptor and
@@ -82,7 +86,7 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 				zap.Error(err),
 			)
 		}
-		result, err = a.client.ChatCompletionWithMessagesFormatResult(ctx, messages, temperature, nil)
+		result, err = a.client.ChatCompletionWithMessagesFormatResult(requestCtx, messages, temperature, nil)
 	}
 	if err != nil {
 		return agentruntime.LLMResponse{}, fmt.Errorf("llm completion failed: %w", err)
@@ -110,6 +114,15 @@ func (a *LLMClientAdapter) Complete(ctx context.Context, req agentruntime.LLMReq
 			TotalTokens:      result.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+// boundedLLMRequestContext makes the runtime's per-call timeout effective even
+// when the underlying provider client has a larger default retry budget.
+func boundedLLMRequestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func translateResponseFormat(format *agentruntime.ResponseFormat) *llm.ResponseFormat {

@@ -42,6 +42,88 @@ func TestToolDecisionEngineRejectsConceptWriteTool(t *testing.T) {
 	}
 }
 
+func TestToolDecisionEngineDoesNotBindAgentGuardScopeToMissingPreviousStep(t *testing.T) {
+	registry := NewToolRegistry()
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "AgentGuard.Posture.Assess",
+		Domain:             DomainAgentGuard,
+		Operation:          OpGet,
+		Capability:         "assess_agent_guard_posture",
+		Description:        "Assess Agent Guard posture.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ArgsSchema:         map[string]interface{}{"type": "object"},
+	})
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "AgentGuard.Scope.Investigate",
+		Domain:             DomainAgentGuard,
+		Operation:          OpGet,
+		Capability:         "investigate_agent_guard_scope",
+		Description:        "Investigate one exact Agent Guard scope.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"scope_type": map[string]interface{}{"type": "string"}, "scope_id": map[string]interface{}{"type": "string"}},
+			"required":   []string{"scope_type", "scope_id"},
+		},
+	})
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "AgentGuard.Evidence.List",
+		Domain:             DomainAgentGuard,
+		Operation:          OpList,
+		Capability:         "list_agent_guard_evidence",
+		Description:        "List Agent Guard evidence.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"kind": map[string]interface{}{"type": "string"}},
+			"required":   []string{"kind"},
+		},
+	})
+	engine := newDecisionTestEngine(registry)
+	intent := IntentResult{Domains: []string{"agent_guard"}, Action: "query", Object: "ai_agent", RiskHint: ToolRiskReadonly, Confidence: 0.9}
+
+	t.Run("missing exact scope is rejected instead of becoming previous_step", func(t *testing.T) {
+		breakdown := makeDecisionBreakdown(t, "分析智能体安全问题", intent, nil, []string{"assess_agent_guard_posture", "investigate_agent_guard_scope", "list_agent_guard_evidence"})
+		plan, err := engine.Decide(context.Background(), ToolDecisionInput{Query: "分析智能体安全问题", Intent: intent, Breakdown: breakdown})
+		if err != nil {
+			t.Fatalf("Decide returned error: %v", err)
+		}
+		if containsExactString(plan.ToolNames(), "AgentGuard.Scope.Investigate") {
+			t.Fatalf("scope investigation must not be authorized without an exact reference: %#v", plan.ToolNames())
+		}
+		assertRejectedDecision(t, plan, "AgentGuard.Scope.Investigate")
+		assertRejectedDecision(t, plan, "AgentGuard.Evidence.List")
+		if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+			t.Fatalf("authorized plan must remain valid after scope rejection: %v", err)
+		}
+	})
+
+	t.Run("exact scope is deterministically bound", func(t *testing.T) {
+		breakdown := makeDecisionBreakdown(t, "调查 finding f-123", intent, nil, []string{"investigate_agent_guard_scope"})
+		breakdown.Parameters = IntentParameters{"scope_type": "finding", "scope_id": "f-123"}
+		plan, err := engine.Decide(context.Background(), ToolDecisionInput{Query: "调查 finding f-123", Intent: intent, Breakdown: breakdown})
+		if err != nil {
+			t.Fatalf("Decide returned error: %v", err)
+		}
+		step := findPlanStep(plan, "AgentGuard.Scope.Investigate")
+		if step == nil {
+			t.Fatalf("expected exact scope step, got %#v", plan.ToolNames())
+		}
+		if step.Args["scope_type"] != "finding" || step.Args["scope_id"] != "f-123" {
+			t.Fatalf("scope args = %#v", step.Args)
+		}
+		if step.ArgSources["scope_type"].SourceType == "previous_step" || step.ArgSources["scope_id"].SourceType == "previous_step" {
+			t.Fatalf("exact scope args must not depend on previous_step: %#v", step.ArgSources)
+		}
+		if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+			t.Fatalf("exact scope plan must validate: %v", err)
+		}
+	})
+}
+
 func TestToolDecisionEngineDoesNotAuthorizeCompanionsOfRejectedProducer(t *testing.T) {
 	registry := newDecisionTestRegistry(t)
 	for _, tool := range []*ToolSpec{

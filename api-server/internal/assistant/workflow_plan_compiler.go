@@ -14,6 +14,8 @@ const (
 	vulnerabilityRemediationWorkflowID  = "vulnerability_remediation"
 	weakPasswordAssessmentWorkflowID    = "weak_password_assessment"
 	detectionPackageLifecycleWorkflowID = "detection_package_lifecycle"
+	agentGuardObservationWorkflowID     = "agent_guard_observation"
+	agentGuardControlWorkflowID         = "agent_guard_control"
 )
 
 var exactCVEIDPattern = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]{4,}\b`)

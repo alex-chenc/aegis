@@ -152,6 +152,7 @@ func main() {
 	agentGuardActionRepo := repository.NewAgentGuardActionRepository(db)
 	agentGuardToolFindingRepo := repository.NewAgentGuardToolFindingRepository(db)
 	agentSessionRepo := repository.NewAgentSessionRepository(db)
+	mcpPlatformRepo := repository.NewMCPPlatformRepository(db)
 
 	if err := agentGuardCatalogRepo.VerifyBuiltinManifest(context.Background()); err != nil {
 		if cfg.AgentGuard.Enabled {
@@ -435,7 +436,14 @@ func main() {
 	agentSessionAI := service.NewConfiguredAgentSessionAIClient(configRepo, cfg.LLM.TimeoutSeconds, cfg.LLM.MaxRetries)
 	agentSessionService := service.NewAgentSessionService(agentSessionRepo, agentSessionAI, logger.Get().Named("agent_session"))
 	agentSessionService.SetCollectionDispatcher(serverClient)
+	agentConfigSecurityService := service.NewAgentConfigSecurityService(serverClient, logger.Get().Named("agent_config_security"))
 	agentSessionHandler := handler.NewAgentSessionHandler(agentSessionService, logger.Get().Named("agent_session_handler"))
+	mcpPlatformService := service.NewMCPPlatformService(mcpPlatformRepo, logger.Get())
+	mcpPlatformService.SetCatalogSigningKey(cfg.MCPPlatform.CatalogSigningKey)
+	mcpPlatformHandler := handler.NewMCPPlatformHandler(mcpPlatformService, logger.Get())
+	mcpPlatformHandler.SetRuntimeSecret(cfg.MCPPlatform.RuntimeSharedSecret)
+	mcpPlatformHandler.SetPublicGatewayBaseURL(cfg.MCPPlatform.PublicGatewayBaseURL)
+	logger.Info("mcp_platform_control_plane_configured")
 	if cfg.AgentSession.Enabled {
 		groupID := strings.TrimSpace(cfg.Kafka.GroupID)
 		if groupID == "" {
@@ -459,7 +467,7 @@ func main() {
 	)
 	agentGuardHandler.SetBundleService(agentGuardBundleService)
 	agentGuardHandler.SetRuntimeSettingsService(agentGuardRuntimeSettingsService, agentGuardRuntimeSettingsService)
-	agentGuardHandler.SetConfigScanner(service.NewAgentConfigSecurityService(serverClient, logger.Get().Named("agent_config_security")))
+	agentGuardHandler.SetConfigScanner(agentConfigSecurityService)
 	agentGuardHandler.SetAnalysisService(agentGuardAnalysisService)
 	agentGuardHandler.SetActionService(agentGuardActionService)
 	logger.Info("Weak password detection module initialized")
@@ -500,6 +508,21 @@ func main() {
 		hostVulnerabilityScriptService,
 		weakPasswordService,
 	)
+	if cfg.AgentGuard.Enabled {
+		if err := assistantTools.RegisterAgentGuardTools(toolRegistry, assistantTools.AgentGuardToolDeps{
+			Query:         agentGuardQueryRepo,
+			Catalog:       agentGuardCatalogRepo,
+			Analysis:      agentGuardAnalysisService,
+			Actions:       agentGuardActionService,
+			Runtime:       agentGuardRuntimeSettingsService,
+			ConfigScanner: agentConfigSecurityService,
+			Conversations: agentSessionService,
+		}); err != nil {
+			logger.Warn("failed to register agent guard assistant tools", zap.Error(err))
+		}
+	} else {
+		logger.Info("agent guard assistant tools disabled by configuration")
+	}
 	toolCatalog := assistant.NewToolCatalog(toolRegistry)
 	toolPolicyService := assistant.NewToolPolicyService(assistant.ToolPolicyServiceDeps{
 		PolicyRepo:   assistantToolPolicyRepo,
@@ -701,7 +724,7 @@ func main() {
 	}
 
 	// Initialize HTTP router
-	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler, agentGuardHandler, agentSessionHandler)
+	router := api.NewRouter(roleRepo, authService, authHandler, configHandler, hostHandler, templateHandler, taskHandler, taskHandlerWithHealing, agentHandler, ruleHandler, vulnerabilityHandler, detectionHandler, detectionPkgHandler, websocketHandler, notificationHandler, aiAnalysisHandler, commandAuditHandler, auditLogHandler, assetHandler, weakPasswordHandler, assistantHandler, agentGuardHandler, agentSessionHandler, mcpPlatformHandler)
 	router.Setup()
 
 	// Start HTTP server

@@ -319,6 +319,12 @@ func (e *ToolDecisionEngine) newToolPlanStep(name string, input ToolDecisionInpu
 			argSources = resolvedSources
 		}
 	}
+	if name == "AgentGuard.Scope.Investigate" {
+		if resolvedArgs, resolvedSources, ok := deterministicAgentGuardScopePlanArgs(breakdown, input.ContextRefs); ok {
+			args = resolvedArgs
+			argSources = resolvedSources
+		}
+	}
 	reason := decisionStepReason(tool, contract, input, breakdown)
 	return ToolPlanStep{
 		ToolName:         name,
@@ -671,6 +677,16 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 			return record, false
 		}
 	}
+	if name == "AgentGuard.Scope.Investigate" {
+		if _, _, ok := deterministicAgentGuardScopePlanArgs(breakdown, input.ContextRefs); !ok {
+			reason := "请提供要调查的 Agent Guard 范围类型和精确 ID（instance/session/execution_unit/behavior/runtime_event/finding/analysis/action）。"
+			gates = append(gates, HardGateResult{Name: "required_entities", Passed: false, Reason: reason})
+			record.Decision = toolDecisionClarificationRequired
+			record.Reason = reason
+			record.HardGateResults = gates
+			return record, false
+		}
+	}
 	if missing, question := e.missingRequiredEntity(contract, input, breakdown); missing {
 		gates = append(gates, HardGateResult{Name: "required_entities", Passed: false, Reason: question})
 		record.Decision = toolDecisionClarificationRequired
@@ -685,6 +701,9 @@ func (e *ToolDecisionEngine) evaluateCandidate(name string, input ToolDecisionIn
 	record.HardGateResults = gates
 	record.ApprovalState = approvalStateForContract(contract)
 	_, sources := bindPlanArgs(contract, input, breakdown)
+	if name == "AgentGuard.Scope.Investigate" {
+		_, sources, _ = deterministicAgentGuardScopePlanArgs(breakdown, input.ContextRefs)
+	}
 	record.ArgSources = sources
 	return record, true
 }
@@ -728,6 +747,103 @@ func deterministicHostResolvePlanArgs(breakdown *IntentBreakdown, contextRefs []
 	return args, sources, true
 }
 
+var agentGuardScopeTypes = map[string]string{
+	"instance":               "instance",
+	"runtime_instance":       "instance",
+	"agent_runtime_instance": "instance",
+	"session":                "session",
+	"behavior_session":       "session",
+	"execution_unit":         "execution_unit",
+	"executionunit":          "execution_unit",
+	"behavior":               "behavior",
+	"behavior_event":         "behavior",
+	"runtime_event":          "runtime_event",
+	"finding":                "finding",
+	"analysis":               "analysis",
+	"action":                 "action",
+}
+
+func deterministicAgentGuardScopePlanArgs(breakdown *IntentBreakdown, contextRefs []ContextRefInput) (map[string]interface{}, map[string]ArgSource, bool) {
+	if breakdown == nil {
+		return nil, nil, false
+	}
+
+	var scopeType, scopeID string
+	sources := make(map[string]ArgSource, 2)
+	if value, ok := firstStringIntentParameter(breakdown.Parameters, "scope_type", "agent_guard_scope_type"); ok {
+		scopeType = normalizeAgentGuardScopeType(value)
+		sources["scope_type"] = ArgSource{SourceType: "intent_parameters", SourceRef: "scope_type", Confidence: 1}
+	}
+	if value, ok := firstStringIntentParameter(breakdown.Parameters, "scope_id", "agent_guard_scope_id"); ok {
+		scopeID = strings.TrimSpace(value)
+		sources["scope_id"] = ArgSource{SourceType: "intent_parameters", SourceRef: "scope_id", Confidence: 1}
+	}
+
+	if scopeType == "" || scopeID == "" {
+		if kind := normalizeAgentGuardScopeType(breakdown.Scope.Kind); kind != "" && len(breakdown.Scope.ObjectIDs) == 1 {
+			scopeType = kind
+			scopeID = strings.TrimSpace(breakdown.Scope.ObjectIDs[0])
+			sources["scope_type"] = ArgSource{SourceType: "intent_scope", SourceRef: breakdown.Scope.Kind, Confidence: 0.95}
+			sources["scope_id"] = ArgSource{SourceType: "intent_scope", SourceRef: "object_ids", Confidence: 0.95}
+		}
+	}
+
+	if scopeType == "" || scopeID == "" {
+		for _, object := range breakdown.Objects {
+			kind := normalizeAgentGuardScopeType(object.Type)
+			if kind == "" {
+				kind = normalizeAgentGuardScopeType(object.Category)
+			}
+			if kind == "" || strings.TrimSpace(object.ID) == "" {
+				continue
+			}
+			scopeType = kind
+			scopeID = strings.TrimSpace(object.ID)
+			sources["scope_type"] = ArgSource{SourceType: "intent_object", SourceRef: object.Type, Confidence: 0.95}
+			sources["scope_id"] = ArgSource{SourceType: "intent_object", SourceRef: object.Type, Confidence: 0.95}
+			break
+		}
+	}
+
+	if scopeType == "" || scopeID == "" {
+		for _, ref := range contextRefs {
+			kind := normalizeAgentGuardScopeType(ref.ObjectType)
+			if kind == "" || strings.TrimSpace(ref.ObjectID) == "" {
+				continue
+			}
+			scopeType = kind
+			scopeID = strings.TrimSpace(ref.ObjectID)
+			sources["scope_type"] = ArgSource{SourceType: "page_context", SourceRef: ref.ObjectType, Confidence: 0.95}
+			sources["scope_id"] = ArgSource{SourceType: "page_context", SourceRef: ref.ObjectType, Confidence: 0.95}
+			break
+		}
+	}
+
+	if scopeType == "" || scopeID == "" {
+		return nil, nil, false
+	}
+	return map[string]interface{}{"scope_type": scopeType, "scope_id": scopeID}, sources, true
+}
+
+func firstStringIntentParameter(parameters IntentParameters, keys ...string) (string, bool) {
+	for _, key := range keys {
+		value, ok := parameters[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text), true
+		}
+	}
+	return "", false
+}
+
+func normalizeAgentGuardScopeType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	return agentGuardScopeTypes[value]
+}
+
 // checkDeniedIntents 检查 LLM 候选能力是否命中工具的 denied_intents 或 negative_cases。
 // 返回 (是否拒绝, 拒绝原因)。
 func (e *ToolDecisionEngine) checkDeniedIntents(contract ToolUseContract, breakdown *IntentBreakdown) (bool, string) {
@@ -757,6 +873,41 @@ func (e *ToolDecisionEngine) checkDeniedIntents(contract ToolUseContract, breakd
 
 func (e *ToolDecisionEngine) missingRequiredEntity(contract ToolUseContract, input ToolDecisionInput, breakdown *IntentBreakdown) (bool, string) {
 	if len(contract.RequiredEntities) == 0 {
+		return false, ""
+	}
+	if contract.ToolName == "AgentGuard.Scope.Investigate" {
+		if _, _, ok := deterministicAgentGuardScopePlanArgs(breakdown, input.ContextRefs); !ok {
+			return true, "请提供要调查的 Agent Guard 范围类型和精确 ID（instance/session/execution_unit/behavior/runtime_event/finding/analysis/action）。"
+		}
+		return false, ""
+	}
+	if contract.Domain == string(DomainAgentGuard) {
+		// Agent Guard references are exact identifiers or explicit enum values.
+		// The generic resolver must not infer that a prior step will provide an
+		// arbitrary required argument merely because several capabilities were
+		// selected for the same request.
+		for _, entity := range contract.RequiredEntities {
+			satisfied := false
+			for _, alternative := range strings.Split(entity, "|") {
+				alternative = strings.TrimSpace(alternative)
+				binding, ok := bindingForEntity(contract.ArgBindings, alternative)
+				if !ok {
+					binding = ArgBindingRule{
+						ArgName:     alternative,
+						Entity:      inferEntityFromArgName(alternative),
+						SourceOrder: []string{"user_message", "page_context", "session_context"},
+						Required:    true,
+					}
+				}
+				if value, _ := resolveArgBySourceOrderWithoutPreviousStep(binding, input, breakdown); value != nil {
+					satisfied = true
+					break
+				}
+			}
+			if !satisfied {
+				return true, fmt.Sprintf("请补充执行所需参数 %s，或提供精确的 Agent Guard 上下文引用。", entity)
+			}
+		}
 		return false, ""
 	}
 	for _, entity := range contract.RequiredEntities {

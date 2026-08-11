@@ -71,6 +71,19 @@ func TestApplyFixedPlanRuntimeLimitsPreservesAsyncPollingBudget(t *testing.T) {
 	}
 }
 
+func TestApplyModelOnlyRuntimeLimitsBoundsExplanationRuns(t *testing.T) {
+	cfg := DefaultAgentRuntimeConfig(0)
+	if !applyModelOnlyRuntimeLimits(&cfg, nil, nil) {
+		t.Fatal("expected model-only limits to apply")
+	}
+	if cfg.TaskTimeout != modelOnlyRuntimeTaskTimeout || cfg.ModelTimeout != modelOnlyRuntimeModelTimeout {
+		t.Fatalf("model-only limits = task:%s model:%s", cfg.TaskTimeout, cfg.ModelTimeout)
+	}
+	if applyModelOnlyRuntimeLimits(&cfg, []string{"Host.List"}, nil) {
+		t.Fatal("tool-enabled run must retain the normal runtime budget")
+	}
+}
+
 func TestApplyFixedPlanRuntimeLimitsKeepsLongRunningScanObservable(t *testing.T) {
 	cfg := DefaultAgentRuntimeConfig(0)
 	plan := &ToolExecutionPlan{Steps: []ToolPlanStep{

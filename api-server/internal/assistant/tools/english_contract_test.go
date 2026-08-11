@@ -30,6 +30,7 @@ func TestAllBuiltInToolModelContractsAreEnglish(t *testing.T) {
 		{"task", func() error { return RegisterTaskTools(registry, TaskToolDeps{}) }},
 		{"vulnerability", func() error { return RegisterVulnerabilityTools(registry, VulnerabilityToolDeps{}) }},
 		{"weak_password", func() error { return RegisterWeakPasswordTools(registry, WeakPasswordToolDeps{}) }},
+		{"agent_guard", func() error { return RegisterAgentGuardTools(registry, AgentGuardToolDeps{}) }},
 	}
 	for _, registration := range registrations {
 		if err := registration.call(); err != nil {

@@ -40,6 +40,11 @@ const (
 	DomainInvestigation ToolDomain = "investigation"
 	DomainExternalMCP   ToolDomain = "external_mcp"
 	DomainNotification  ToolDomain = "notification"
+	// DomainAgentGuard groups the high-level Assistant facade for agent
+	// runtime posture, evidence, configuration and controlled actions. Policy
+	// authoring remains an HTTP/admin concern and is intentionally not exposed
+	// through this domain.
+	DomainAgentGuard ToolDomain = "agent_guard"
 )
 
 // ToolOperation 工具操作类型枚举

@@ -367,6 +367,13 @@ func buildEvidenceGroundedFallback(ledger runtimeEvidenceLedger) string {
 // presented as a successful business task. It intentionally reports only
 // durable evidence summaries and never echoes model reasoning or raw payloads.
 func buildFailedGoalFallback(ledger runtimeEvidenceLedger) string {
+	if len(ledger.ActualToolNames) == 0 &&
+		!ledger.VulnerabilityWorkflow &&
+		!ledger.VulnerabilityRemediation &&
+		!ledger.WeakPasswordWorkflow &&
+		len(ledger.AssetCollectionTaskIDs) == 0 {
+		return "分析未完成，本轮未执行任何工具操作，也未取得可验证结果。请稍后重试。"
+	}
 	var b strings.Builder
 	b.WriteString("任务未完成，不能认定扫描、修复或验证已经执行成功。")
 	if len(ledger.FailedToolNames) > 0 {

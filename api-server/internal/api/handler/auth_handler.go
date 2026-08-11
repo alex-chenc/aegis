@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"api-server/internal/model"
 	"api-server/internal/repository"
@@ -88,10 +89,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	role := h.resolveUserRole(session.Username)
 	c.JSON(http.StatusOK, gin.H{
-		"token":               session.Token,
-		"username":            session.Username,
+		"token":                 session.Token,
+		"username":              session.Username,
 		"force_password_change": session.ForcePasswordChange,
-		"role":                role,
+		"role":                  role,
+		"capabilities":          h.capabilitiesForRole(role),
+		"capability_version":    "role-policy-v1",
+		"capability_expires_at": time.Now().UTC().Add(15 * time.Minute),
 	})
 }
 
@@ -106,6 +110,9 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"username":              authCtx.Username,
 		"force_password_change": authCtx.ForcePasswordChange,
 		"role":                  role,
+		"capabilities":          h.capabilitiesForRole(role),
+		"capability_version":    "role-policy-v1",
+		"capability_expires_at": time.Now().UTC().Add(15 * time.Minute),
 	})
 }
 
@@ -136,6 +143,13 @@ func (h *AuthHandler) resolveUserRole(username string) string {
 	}
 	_ = h.roleRepo.SetRole(username, model.RoleSecurityAnalyst)
 	return model.RoleSecurityAnalyst
+}
+
+func (h *AuthHandler) capabilitiesForRole(role string) []string {
+	if h.roleRepo == nil {
+		return nil
+	}
+	return h.roleRepo.ListPermissions(role)
 }
 
 func (h *AuthHandler) ChangeCredentials(c *gin.Context) {

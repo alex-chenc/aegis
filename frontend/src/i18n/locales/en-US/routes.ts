@@ -46,4 +46,5 @@ export default {
   ebpfHooks: 'eBPF Hook Allowlist',
   toolPolicy: 'Agent Tool Permissions',
   assistant: 'Agent Mode',
+  mcpAggregationControl: 'MCP Aggregation Control',
 }

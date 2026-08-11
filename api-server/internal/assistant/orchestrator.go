@@ -111,6 +111,14 @@ type RunInput struct {
 	RecoveryContext      *RecoveryResumeContext
 }
 
+const (
+	// Intent classification and decomposition are bounded control-plane stages.
+	// They only produce routing metadata, so a slow reasoning provider must not
+	// hold an Assistant run for the full long-running task budget.
+	assistantIntentStageTimeout    = 90 * time.Second
+	assistantDecomposeStageTimeout = 90 * time.Second
+)
+
 // RunResult 运行结果
 type RunResult struct {
 	MessageID   string                          `json:"message_id"`
@@ -196,8 +204,17 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		RequiredWorkflowIDs:  explicitWorkflowRequirements(input.UserMessage),
 		PendingClarification: input.PendingClarification,
 	}
-	intent, err := o.intentRouter.Classify(ctx, intentInput)
+	intentCtx, cancelIntent := context.WithTimeout(ctx, assistantIntentStageTimeout)
+	intent, err := o.intentRouter.Classify(intentCtx, intentInput)
+	cancelIntent()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			o.logger.Warn("assistant intent classification timed out",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Duration("timeout", assistantIntentStageTimeout),
+			)
+		}
 		return nil, fmt.Errorf("classify assistant intent: %w", err)
 	}
 	effectiveQuery, effectiveWorkflowIDs, resumedPending := resolveContinuationQuery(
@@ -260,7 +277,8 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		zap.Int("registered_count", o.toolRegistry.Count()),
 		zap.Int("exposed_count", len(capabilityCatalog)),
 	)
-	intentBreakdown, err := o.intentDecomposer.Decompose(ctx, IntentDecomposeInput{
+	decomposeCtx, cancelDecompose := context.WithTimeout(ctx, assistantDecomposeStageTimeout)
+	intentBreakdown, err := o.intentDecomposer.Decompose(decomposeCtx, IntentDecomposeInput{
 		Query:                  input.UserMessage,
 		Intent:                 intent,
 		ContextRefs:            intentInput.ContextRefs,
@@ -268,7 +286,15 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		AvailableWorkflows:     workflowCards,
 		EnableLLMDecomposition: true,
 	})
+	cancelDecompose()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			o.logger.Warn("assistant intent decomposition timed out",
+				zap.String("session_id", input.SessionID),
+				zap.String("run_id", input.RunID),
+				zap.Duration("timeout", assistantDecomposeStageTimeout),
+			)
+		}
 		o.logger.Error("assistant llm intent decomposition failed",
 			zap.String("session_id", input.SessionID),
 			zap.String("run_id", input.RunID),

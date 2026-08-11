@@ -245,6 +245,26 @@ func inferEntityFromArgName(argName string) string {
 
 func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 	switch contract.ToolName {
+	case "AgentGuard.Scope.Investigate":
+		// Scope investigation is intentionally an exact-reference operation.
+		// It must never fall back to a previous_step binding: posture/evidence
+		// summaries do not guarantee a single scope_type/scope_id pair.
+		contract.RequiredEntities = []string{"scope_type", "scope_id"}
+		contract.Preconditions = []string{"exact_agent_guard_scope_reference"}
+		contract.ArgBindings = []ArgBindingRule{
+			{
+				ArgName:     "scope_type",
+				Entity:      "scope_type",
+				SourceOrder: []string{"user_message", "page_context", "session_context"},
+				Required:    true,
+			},
+			{
+				ArgName:     "scope_id",
+				Entity:      "scope_id",
+				SourceOrder: []string{"user_message", "page_context", "session_context"},
+				Required:    true,
+			},
+		}
 	case "Asset.Collection.Trigger":
 		contract.AllowedIntents = []string{"execute_asset_collection", "refresh_asset_inventory"}
 		contract.DeniedIntents = []string{"explain_asset_collection", "query_asset_collection_history"}

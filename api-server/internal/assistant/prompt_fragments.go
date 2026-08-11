@@ -38,7 +38,7 @@ Determine the requested scope first, collect relevant evidence through available
 		Keywords:    []string{"host", "asset", "server", "online", "offline", "inventory"},
 		Priority:    70,
 		Content: `## Host and asset queries
-Use the available tool contracts to locate the requested objects and retrieve only the detail needed for the user's goal. Respect pagination and user scope. Reuse IDs from actual results, and never assume that one object represents the full requested set.`,
+Use the available tool contracts to locate the requested objects and retrieve only the detail needed for the user's goal. Respect pagination and user scope. Reuse IDs from actual results, and never assume that one object represents the full requested set. For paginated results, read page, page_size, returned_count, total, total_pages, and has_next_page before interpreting items. If the user requests the complete set and has_next_page is true, continue with the next page; never infer the total from the visible item list or claim the total is unknown when the result metadata provides it.`,
 	},
 	{
 		Name:        "asset_inventory",

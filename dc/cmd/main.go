@@ -16,6 +16,7 @@ import (
 	"dc/internal/llm"
 	"dc/internal/llm_analyzer"
 	"dc/internal/pipeline"
+	mcpPipeline "dc/internal/pipeline/mcp"
 	"dc/internal/repository"
 	"dc/internal/server"
 	"dc/internal/sessionaudit"
@@ -147,6 +148,15 @@ func main() {
 		defer sessionConsumer.Close()
 		logger.Info("agent_session_projection_configured", zap.String("topic", sessionaudit.Topic))
 	}
+	var mcpConsumer *mcpPipeline.Consumer
+	mcpConsumer = mcpPipeline.NewConsumer(cfg.Kafka.Brokers, cfg.Kafka.GroupID, db, logger.Get().Named("mcp_invocation_projection"))
+	go func() {
+		if err := mcpConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("mcp_invocation_consumer_stopped", zap.Error(err))
+		}
+	}()
+	defer mcpConsumer.Close()
+	logger.Info("mcp_invocation_projection_configured", zap.String("topic", mcpPipeline.Topic))
 
 	logger.Info("agent_guard_projection_configured",
 		zap.Bool("projection_enabled", cfg.AgentGuard.ProjectionEnabled),

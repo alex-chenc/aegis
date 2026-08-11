@@ -202,6 +202,10 @@ func (f *RuntimeFactory) Build(ctx context.Context, req RuntimeBuildRequest) (*R
 		runtimeConfig.AllowHighRiskTools = true
 		runtimeConfig.AllowDangerousTools = true
 		profile += "_fixed_plan"
+	} else if applyModelOnlyRuntimeLimits(&runtimeConfig, req.SelectedTools, req.ExecutionPlan) {
+		// Model-only explanations have no backend operation to observe. Bound
+		// their planner and answer path independently from long-running scans.
+		profile += "_model_only"
 	}
 	if f.memoryRepo != nil {
 		runtimeConfig.EnableExperience = true
@@ -409,6 +413,8 @@ func (f *RuntimeFactory) buildUserContext(contextRefs []ContextRefResult) map[st
 }
 
 const (
+	modelOnlyRuntimeTaskTimeout            = 90 * time.Second
+	modelOnlyRuntimeModelTimeout           = 60 * time.Second
 	fixedPlanBaseToolCallsPerStep          = 6
 	fixedPlanAsyncObservationDefault       = "default"
 	fixedPlanAsyncObservationLongRunning   = "long_running_scan"
@@ -456,6 +462,15 @@ func applyFixedPlanRuntimeLimits(config *agentruntime.RuntimeConfig, plan *ToolE
 	config.MaxToolCallsPerStep = perStepBudget
 	config.MaxToolCalls = len(plan.Steps)*perStepBudget + fixedPlanTotalCallReserve
 	return observationProfile
+}
+
+func applyModelOnlyRuntimeLimits(config *agentruntime.RuntimeConfig, selectedTools []string, plan *ToolExecutionPlan) bool {
+	if config == nil || len(selectedTools) > 0 || plan != nil {
+		return false
+	}
+	config.TaskTimeout = modelOnlyRuntimeTaskTimeout
+	config.ModelTimeout = modelOnlyRuntimeModelTimeout
+	return true
 }
 
 func fixedPlanContainsLongRunningScan(plan *ToolExecutionPlan) bool {

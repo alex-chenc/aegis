@@ -36,6 +36,7 @@ type Router struct {
 	assistantHandler       *handler.AssistantHandler
 	agentGuardHandler      *handler.AgentGuardHandler
 	agentSessionHandler    *handler.AgentSessionHandler
+	mcpPlatformHandler     *handler.MCPPlatformHandler
 }
 
 func NewRouter(
@@ -62,6 +63,7 @@ func NewRouter(
 	assistantHandler *handler.AssistantHandler,
 	agentGuardHandler *handler.AgentGuardHandler,
 	agentSessionHandler *handler.AgentSessionHandler,
+	mcpPlatformHandler *handler.MCPPlatformHandler,
 ) *Router {
 	return &Router{
 		roleRepo:               roleRepo,
@@ -87,6 +89,7 @@ func NewRouter(
 		assistantHandler:       assistantHandler,
 		agentGuardHandler:      agentGuardHandler,
 		agentSessionHandler:    agentSessionHandler,
+		mcpPlatformHandler:     mcpPlatformHandler,
 	}
 }
 
@@ -110,6 +113,9 @@ func (r *Router) Setup() {
 	// 内部端点：Server 服务将 agent 终态结果实时推回，驱动自动验证/自愈。
 	// 注册在鉴权中间件之前，仅允许内网访问。
 	r.engine.POST("/internal/task-result", r.taskHandler.ReportTaskResult)
+	if r.mcpPlatformHandler != nil {
+		r.mcpPlatformHandler.RegisterRuntimeRoutes(r.engine)
+	}
 
 	// API v1 路由组
 	v1 := r.engine.Group("/api/v1")
@@ -188,6 +194,9 @@ func (r *Router) Setup() {
 				r.roleMiddleware(repository.PermissionAgentGuardEvidenceRead),
 				r.roleMiddleware(repository.PermissionAgentGuardAnalysisRun),
 			)
+		}
+		if r.mcpPlatformHandler != nil {
+			r.mcpPlatformHandler.RegisterRoutes(v1, r.roleMiddleware)
 		}
 
 		// 模板接口

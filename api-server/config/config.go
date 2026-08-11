@@ -16,6 +16,7 @@ type Config struct {
 	Agent        AgentConfig        `mapstructure:"agent"`
 	AgentGuard   AgentGuardConfig   `mapstructure:"agent_guard"`
 	AgentSession AgentSessionConfig `mapstructure:"agent_session"`
+	MCPPlatform  MCPPlatformConfig  `mapstructure:"mcp_platform"`
 	SelfHealing  SelfHealingConfig  `mapstructure:"self_healing"`
 	Kafka        KafkaConfig        `mapstructure:"kafka"`
 	GRPC         GRPCConfig         `mapstructure:"grpc"`
@@ -98,6 +99,16 @@ type AgentGuardConfig struct {
 
 type AgentSessionConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+}
+
+type MCPPlatformConfig struct {
+	GatewayBaseURL       string `mapstructure:"gateway_base_url"`
+	PublicGatewayBaseURL string `mapstructure:"public_gateway_base_url"`
+	RuntimeSharedSecret  string `mapstructure:"runtime_shared_secret"`
+	MaxRequestBytes      int64  `mapstructure:"max_request_bytes"`
+	MaxResponseBytes     int64  `mapstructure:"max_response_bytes"`
+	UpstreamTimeoutSec   int    `mapstructure:"upstream_timeout_seconds"`
+	CatalogSigningKey    string `mapstructure:"catalog_signing_key"`
 }
 
 type SelfHealingConfig struct {
@@ -193,6 +204,18 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if enabled, ok := getEnvBool("AGENT_SESSION_ENABLED"); ok {
 		cfg.AgentSession.Enabled = enabled
+	}
+	if gatewayBaseURL := getEnv("MCP_GATEWAY_BASE_URL"); gatewayBaseURL != "" {
+		cfg.MCPPlatform.GatewayBaseURL = gatewayBaseURL
+	}
+	if publicGatewayBaseURL := getEnv("MCP_GATEWAY_PUBLIC_BASE_URL"); publicGatewayBaseURL != "" {
+		cfg.MCPPlatform.PublicGatewayBaseURL = publicGatewayBaseURL
+	}
+	if runtimeSharedSecret := getEnv("MCP_GATEWAY_RUNTIME_SECRET"); runtimeSharedSecret != "" {
+		cfg.MCPPlatform.RuntimeSharedSecret = runtimeSharedSecret
+	}
+	if signingKey := getEnv("MCP_CATALOG_SIGNING_KEY"); signingKey != "" {
+		cfg.MCPPlatform.CatalogSigningKey = signingKey
 	}
 	if enabled, ok := getEnvBool("AGENT_GUARD_POLICY_WRITE_ENABLED"); ok {
 		cfg.AgentGuard.PolicyWriteEnabled = enabled

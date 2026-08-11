@@ -9,6 +9,9 @@ export interface AuthSession {
   username: string
   force_password_change: boolean
   role?: string
+  capabilities?: string[]
+  capability_version?: string
+  capability_expires_at?: string
 }
 
 export interface ChangeCredentialsPayload {

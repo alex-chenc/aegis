@@ -18,6 +18,29 @@ const (
 	PermissionAgentGuardActionResume  = "agent_guard:action:resume"
 	PermissionAgentGuardActionKill    = "agent_guard:action:kill"
 	PermissionAgentGuardSettings      = "agent_guard:settings"
+	PermissionMCPOnboardingRead       = "mcp:onboarding:read"
+	PermissionMCPOnboardingCreate     = "mcp:onboarding:create"
+	PermissionMCPOnboardingOperate    = "mcp:onboarding:operate"
+	PermissionMCPServerRead           = "mcp:server:read"
+	PermissionMCPServerWrite          = "mcp:server:write"
+	PermissionMCPServerDiscover       = "mcp:server:discover"
+	PermissionMCPServerReview         = "mcp:server:review"
+	PermissionMCPCatalogRead          = "mcp:catalog:read"
+	PermissionMCPCatalogWrite         = "mcp:catalog:write"
+	PermissionMCPCatalogPublish       = "mcp:catalog:publish"
+	PermissionMCPClientRead           = "mcp:client:read"
+	PermissionMCPClientWrite          = "mcp:client:write"
+	PermissionMCPGrantWrite           = "mcp:grant:write"
+	PermissionMCPApprovalRead         = "mcp:approval:read"
+	PermissionMCPApprovalDecide       = "mcp:approval:decide"
+	PermissionMCPInvocationRead       = "mcp:invocation:read"
+	PermissionMCPAuditPayloadRead     = "mcp:audit:payload:read"
+	PermissionMCPSecurityRead         = "mcp:security:read"
+	PermissionMCPSecurityAIRetry      = "mcp:security:ai:retry"
+	PermissionMCPPolicyRead           = "mcp:policy:read"
+	PermissionMCPPolicyWrite          = "mcp:policy:write"
+	PermissionMCPPolicyPublish        = "mcp:policy:publish"
+	PermissionMCPBreakGlass           = "mcp:break_glass"
 )
 
 type RoleRepo struct {
@@ -74,13 +97,41 @@ func (r *RoleRepo) SetRole(userID, role string) error {
 }
 
 func (r *RoleRepo) HasPermission(role, operation string) bool {
-	permissions := map[string][]string{
+	permissions := permissionMap()
+	ops, ok := permissions[role]
+	if !ok {
+		return false
+	}
+	for _, op := range ops {
+		if op == operation {
+			return true
+		}
+	}
+	return false
+}
+
+// ListPermissions returns a copy so authentication responses cannot mutate
+// the process-wide role policy.
+func (r *RoleRepo) ListPermissions(role string) []string {
+	items := permissionMap()[role]
+	return append([]string(nil), items...)
+}
+
+func permissionMap() map[string][]string {
+	return map[string][]string{
 		model.RoleSecurityAnalyst: {
 			"view",
 			"draft",
 			"ai_generate",
 			PermissionAgentGuardRead,
 			PermissionAgentGuardAnalysisRead,
+			PermissionMCPOnboardingRead,
+			PermissionMCPServerRead,
+			PermissionMCPCatalogRead,
+			PermissionMCPClientRead,
+			PermissionMCPApprovalRead,
+			PermissionMCPInvocationRead,
+			PermissionMCPSecurityRead,
 		},
 		model.RoleSecurityDeveloper: {
 			"view",
@@ -94,6 +145,17 @@ func (r *RoleRepo) HasPermission(role, operation string) bool {
 			PermissionAgentGuardAnalysisRead,
 			PermissionAgentGuardPolicyWrite,
 			PermissionAgentGuardAnalysisRun,
+			PermissionMCPOnboardingRead,
+			PermissionMCPOnboardingCreate,
+			PermissionMCPOnboardingOperate,
+			PermissionMCPServerRead,
+			PermissionMCPServerDiscover,
+			PermissionMCPServerReview,
+			PermissionMCPCatalogRead,
+			PermissionMCPClientRead,
+			PermissionMCPApprovalRead,
+			PermissionMCPInvocationRead,
+			PermissionMCPSecurityRead,
 		},
 		model.RoleAdmin: {
 			"view",
@@ -118,16 +180,29 @@ func (r *RoleRepo) HasPermission(role, operation string) bool {
 			PermissionAgentGuardActionResume,
 			PermissionAgentGuardActionKill,
 			PermissionAgentGuardSettings,
+			PermissionMCPOnboardingRead,
+			PermissionMCPOnboardingCreate,
+			PermissionMCPOnboardingOperate,
+			PermissionMCPServerRead,
+			PermissionMCPServerWrite,
+			PermissionMCPServerDiscover,
+			PermissionMCPServerReview,
+			PermissionMCPCatalogRead,
+			PermissionMCPCatalogWrite,
+			PermissionMCPCatalogPublish,
+			PermissionMCPClientRead,
+			PermissionMCPClientWrite,
+			PermissionMCPGrantWrite,
+			PermissionMCPApprovalRead,
+			PermissionMCPApprovalDecide,
+			PermissionMCPInvocationRead,
+			PermissionMCPAuditPayloadRead,
+			PermissionMCPSecurityRead,
+			PermissionMCPSecurityAIRetry,
+			PermissionMCPPolicyRead,
+			PermissionMCPPolicyWrite,
+			PermissionMCPPolicyPublish,
+			PermissionMCPBreakGlass,
 		},
 	}
-	ops, ok := permissions[role]
-	if !ok {
-		return false
-	}
-	for _, op := range ops {
-		if op == operation {
-			return true
-		}
-	}
-	return false
 }

@@ -70,7 +70,7 @@ func isAuthPublicPath(path string) bool {
 	// Internal endpoint used by the Server service to push agent task results
 	// back in real time (see TaskHandler.ReportTaskResult). Must be reachable
 	// without a token; only expose it on the internal network.
-	if path == "/internal/task-result" {
+	if path == "/internal/task-result" || strings.HasPrefix(path, "/internal/mcp-runtime/") {
 		return true
 	}
 

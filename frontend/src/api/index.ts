@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { clearStoredAuth, getAuthToken, getStoredAuth } from '@/utils/auth'
+import { clearCapabilitySnapshot } from '@/utils/capabilities'
 import { getCurrentLocale, translate } from '@/i18n'
 
 const request = axios.create({
@@ -53,6 +54,7 @@ request.interceptors.response.use(
         }
         return Promise.reject(new Error(translate('common.messages.unauthorized')))
       } else if (status === 403) {
+        clearCapabilitySnapshot()
         errorMsg = localizeAPIError(
           error.response?.data?.error_code,
           error.response?.data?.params,
@@ -84,6 +86,7 @@ const ERROR_MESSAGE_KEYS: Record<string, string> = {
   RESOURCE_NOT_FOUND: 'common.messages.resourceNotFound',
   UNAUTHORIZED: 'common.messages.unauthorized',
   FORBIDDEN: 'common.messages.forbidden',
+  MCP_APPROVAL_SELF_DECISION: 'app.mcpAggregation.selfApprovalForbidden',
   AGENT_NOT_CONNECTED: 'common.messages.agentNotConnected',
   AGENT_SESSION_COLLECTION_FAILED: 'common.messages.agentSessionCollectionFailed',
 }

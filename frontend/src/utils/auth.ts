@@ -1,4 +1,5 @@
 import type { AuthSession } from '@/api/auth'
+import { clearCapabilitySnapshot, setCapabilitySnapshot } from '@/utils/capabilities'
 
 const AUTH_STORAGE_KEY = 'aegis-auth'
 
@@ -23,6 +24,9 @@ export function getStoredAuth(): StoredAuth | null {
 }
 
 export function saveAuthSession(session: AuthSession) {
+  const expiresAt = session.capability_expires_at ? Date.parse(session.capability_expires_at) : 0
+  const ttlMs = expiresAt > Date.now() ? expiresAt - Date.now() : 15 * 60 * 1000
+  setCapabilitySnapshot(session.capabilities, Number(session.capability_version?.replace(/\D/g, '')) || 1, ttlMs)
   const auth: StoredAuth = {
     token: session.token,
     username: session.username,
@@ -34,6 +38,7 @@ export function saveAuthSession(session: AuthSession) {
 
 export function clearStoredAuth() {
   localStorage.removeItem(AUTH_STORAGE_KEY)
+  clearCapabilitySnapshot()
 }
 
 export function getAuthToken() {

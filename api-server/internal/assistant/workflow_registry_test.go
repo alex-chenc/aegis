@@ -56,6 +56,24 @@ func TestWorkflowRegistryResolvesOnlyExactRegisteredIDs(t *testing.T) {
 	}
 }
 
+func TestWorkflowRegistryIncludesAgentGuardObservationAndControlContracts(t *testing.T) {
+	registry := NewWorkflowRegistry()
+	observation, err := registry.Resolve([]string{agentGuardObservationWorkflowID})
+	if err != nil || len(observation) != 1 {
+		t.Fatalf("agent guard observation workflow = %#v, err=%v", observation, err)
+	}
+	if observation[0].Domain != DomainAgentGuard || !containsExactString(observation[0].ExposedCapabilities, "query_agent_conversations") {
+		t.Fatalf("agent guard observation contract = %#v", observation[0])
+	}
+	control, err := registry.Resolve([]string{agentGuardControlWorkflowID})
+	if err != nil || len(control) != 1 {
+		t.Fatalf("agent guard control workflow = %#v, err=%v", control, err)
+	}
+	if control[0].Risk != ToolRiskHigh || !containsExactString(control[0].ExposedCapabilities, "kill_agent_guard_instance") {
+		t.Fatalf("agent guard control contract = %#v", control[0])
+	}
+}
+
 func TestCapabilityCatalogUsesClosedSelectedWorkflowAllowlist(t *testing.T) {
 	toolRegistry := NewToolRegistry()
 	for _, tool := range []*ToolSpec{

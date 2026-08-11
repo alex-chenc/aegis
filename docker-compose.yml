@@ -79,6 +79,9 @@ services:
       - ./migrations/030_v6.2_zcode_agent_guard_profile.sql:/migrations/030_v6.2_zcode_agent_guard_profile.sql:ro
       - ./migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro
       - ./migrations/032_v6.3_agent_session_awareness.sql:/migrations/032_v6.3_agent_session_awareness.sql:ro
+      - ./migrations/033_v6.3_mcp_platform_control_plane.sql:/migrations/033_v6.3_mcp_platform_control_plane.sql:ro
+      - ./migrations/034_v6.3_mcp_platform_audit_analysis.sql:/migrations/034_v6.3_mcp_platform_audit_analysis.sql:ro
+      - ./migrations/035_v6.3_mcp_client_endpoints.sql:/migrations/035_v6.3_mcp_client_endpoints.sql:ro
     command:
       - "psql"
       - "-v"
@@ -97,6 +100,12 @@ services:
       - "/migrations/031_v6.2_agent_escape_permission_first.sql"
       - "-f"
       - "/migrations/032_v6.3_agent_session_awareness.sql"
+      - "-f"
+      - "/migrations/033_v6.3_mcp_platform_control_plane.sql"
+      - "-f"
+      - "/migrations/034_v6.3_mcp_platform_audit_analysis.sql"
+      - "-f"
+      - "/migrations/035_v6.3_mcp_client_endpoints.sql"
     networks:
       - aegis-network
 
@@ -300,6 +309,10 @@ services:
       AGENT_GUARD_ACTION_ENABLED: ${AGENT_GUARD_ACTION_ENABLED:-false}
       AGENT_GUARD_TOOL_ADAPTER_ENABLED: ${AGENT_GUARD_TOOL_ADAPTER_ENABLED:-false}
       AGENT_GUARD_SCOPE_SIGNING_KEY: ${AGENT_GUARD_SCOPE_SIGNING_KEY:-}
+      MCP_GATEWAY_BASE_URL: ${MCP_GATEWAY_BASE_URL:-http://mcp-gateway:8084}
+      MCP_GATEWAY_PUBLIC_BASE_URL: ${MCP_GATEWAY_PUBLIC_BASE_URL:-http://localhost:8084}
+      MCP_CATALOG_SIGNING_KEY: ${MCP_CATALOG_SIGNING_KEY:-}
+      MCP_GATEWAY_RUNTIME_SECRET: ${MCP_GATEWAY_RUNTIME_SECRET:-change-me-mcp-gateway-runtime}
     ports:
       - "8082:8082"
       - "19093:19093"
@@ -311,6 +324,57 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # V6.3 MCP data-plane gateway. Runtime client endpoints are authorized by
+  # api-server; the legacy signed Catalog snapshot mode remains fail-closed.
+  mcp-gateway:
+    build: ./mcp-gateway
+    container_name: aegis-mcp-gateway
+    restart: unless-stopped
+    depends_on:
+      api-server:
+        condition: service_healthy
+    environment:
+      MCP_GATEWAY_PORT: 8084
+      MCP_GATEWAY_SNAPSHOT_FILE: ${MCP_GATEWAY_SNAPSHOT_FILE:-}
+      MCP_GATEWAY_SIGNING_KEY: ${MCP_GATEWAY_SIGNING_KEY:-}
+      MCP_GATEWAY_RUNTIME_BASE_URL: ${MCP_GATEWAY_RUNTIME_BASE_URL:-http://api-server:8082}
+      MCP_GATEWAY_RUNTIME_SECRET: ${MCP_GATEWAY_RUNTIME_SECRET:-change-me-mcp-gateway-runtime}
+    ports:
+      - "8084:8084"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "/mcp-gateway", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Aegis itself exposed as a remote, read-only MCP Server. The control plane
+  # admits this exact dev endpoint through the normal onboarding/approval flow.
+  aegis-mcp:
+    build: ./tools/aegis-mcp
+    container_name: aegis-local-mcp
+    restart: unless-stopped
+    environment:
+      AEGIS_API_URL: http://api-server:8082
+      AEGIS_MCP_HOST: 0.0.0.0
+      AEGIS_MCP_PORT: 8085
+      AEGIS_MCP_LOG_LEVEL: ${AEGIS_MCP_LOG_LEVEL:-INFO}
+    depends_on:
+      api-server:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    networks:
+      - aegis-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Shared eBPF builder base image (V5.8)
   ebpf-builder-base:

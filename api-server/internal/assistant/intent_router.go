@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"api-server/internal/llm"
@@ -295,14 +296,48 @@ func explicitWorkflowRequirements(query string) []string {
 	); index >= 0 {
 		requirements = append(requirements, requirement{workflowID: detectionPackageLifecycleWorkflowID, index: index})
 	}
-	if len(requirements) == 2 && requirements[1].index < requirements[0].index {
-		requirements[0], requirements[1] = requirements[1], requirements[0]
+	if agentGuardSecurityQuery(normalized) {
+		index := firstExplicitPhraseIndex(normalized,
+			"codex", "claude code", "claude", "智能体", "agent",
+		)
+		if index < 0 {
+			index = firstExplicitPhraseIndex(normalized,
+				"安全", "security", "风险", "漏洞", "prompt injection", "jailbreak", "越权", "敏感信息",
+			)
+		}
+		requirements = append(requirements, requirement{workflowID: agentGuardObservationWorkflowID, index: index})
 	}
+	if agentGuardControlQuery(normalized) {
+		index := firstExplicitPhraseIndex(normalized,
+			"采集", "collect", "冻结", "freeze", "恢复", "resume", "终止", "kill", "删除", "delete", "修改设置", "update settings",
+		)
+		requirements = append(requirements, requirement{workflowID: agentGuardControlWorkflowID, index: index})
+	}
+	sort.SliceStable(requirements, func(i, j int) bool {
+		if requirements[i].index != requirements[j].index {
+			return requirements[i].index < requirements[j].index
+		}
+		return requirements[i].workflowID < requirements[j].workflowID
+	})
 	ids := make([]string, 0, len(requirements))
 	for _, item := range requirements {
 		ids = append(ids, item.workflowID)
 	}
 	return dedupeStrings(ids)
+}
+
+func agentGuardSecurityQuery(query string) bool {
+	if !containsAnyFold(query, "codex", "claude code", "claude", "智能体", "ai agent", "agent") {
+		return false
+	}
+	return containsAnyFold(query, "安全", "security", "风险", "漏洞", "prompt injection", "jailbreak", "越权", "敏感信息", "secret")
+}
+
+func agentGuardControlQuery(query string) bool {
+	if !containsAnyFold(query, "codex", "claude code", "claude", "智能体", "ai agent", "agent") {
+		return false
+	}
+	return containsAnyFold(query, "采集", "collect", "冻结", "freeze", "恢复", "resume", "终止", "kill", "删除", "delete", "修改设置", "update settings")
 }
 
 func firstExplicitPhraseIndex(query string, phrases ...string) int {

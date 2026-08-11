@@ -150,6 +150,11 @@
           <span>{{ t('app.menu.weakPassword') }}</span>
         </el-menu-item>
 
+        <el-menu-item index="/settings/mcp-aggregation">
+          <el-icon><Connection /></el-icon>
+          <span>{{ t('app.menu.mcpAggregationControl') }}</span>
+        </el-menu-item>
+
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -255,7 +260,6 @@ const router = useRouter()
 const { t, locale } = useI18n()
 const isSidebarCollapsed = ref(false)
 const sidebarLayout = computed(() => getSidebarLayout(locale.value))
-
 // 模式切换
 const currentMode = ref<'normal' | 'assistant'>('normal')
 const modeOptions = computed(() => [

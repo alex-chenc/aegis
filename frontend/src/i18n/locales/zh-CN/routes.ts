@@ -46,4 +46,5 @@ export default {
   ebpfHooks: 'eBPF Hook 白名单',
   toolPolicy: '智能体工具权限',
   assistant: '智能体模式',
+  mcpAggregationControl: 'MCP 聚合管控',
 }

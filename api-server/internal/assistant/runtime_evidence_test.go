@@ -105,6 +105,16 @@ func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
 	}
 }
 
+func TestBuildFailedGoalFallbackForModelOnlyRunIsNotScanSpecific(t *testing.T) {
+	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{})
+	if !strings.Contains(fallback, "分析未完成") {
+		t.Fatalf("model-only fallback = %q", fallback)
+	}
+	if strings.Contains(fallback, "扫描、修复或验证") {
+		t.Fatalf("model-only fallback must not claim a scan workflow: %q", fallback)
+	}
+}
+
 func TestRuntimeEvidenceReportsRunningVulnerabilityScanWithoutRemediationClaims(t *testing.T) {
 	scanID := "92d158f6-e8e8-460d-9e61-43fdd7533933"
 	result := &agentruntime.TaskResult{

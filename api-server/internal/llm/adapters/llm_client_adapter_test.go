@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	agentruntime "github.com/alex-chenc/agent-runtime"
 	"go.uber.org/zap"
@@ -111,6 +112,35 @@ func TestCompleteEnforcesJSONModeForFinalSummary(t *testing.T) {
 	}
 	if captured.ResponseFormat == nil || captured.ResponseFormat.Type != "json_object" {
 		t.Fatalf("summary response_format = %#v, want json_object", captured.ResponseFormat)
+	}
+}
+
+func TestCompleteHonorsRuntimeRequestTimeout(t *testing.T) {
+	previousLogger := applogger.Logger
+	applogger.Logger = zap.NewNop()
+	defer func() { applogger.Logger = previousLogger }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	client := llm.NewLLMClient("test-key", server.URL+"/v1", "test-model", 30, 1)
+	adapter := NewLLMClientAdapter(client, nil)
+	started := time.Now()
+	_, err := adapter.Complete(context.Background(), agentruntime.LLMRequest{
+		Purpose:  agentruntime.PurposePlan,
+		Timeout:  40 * time.Millisecond,
+		Messages: []agentruntime.LLMMessage{{Role: "user", Content: "plan"}},
+	})
+	if err == nil {
+		t.Fatal("expected request timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("runtime request timeout was not enforced, elapsed=%s", elapsed)
 	}
 }
 

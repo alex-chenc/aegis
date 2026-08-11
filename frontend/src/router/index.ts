@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getStoredAuth } from '@/utils/auth'
+import { canCapability } from '@/utils/capabilities'
 import Login from '../views/Login.vue'
 import ForcePasswordChange from '../views/ForcePasswordChange.vue'
 import Dashboard from '../views/Dashboard.vue'
@@ -309,6 +310,12 @@ const routes = [
     meta: { titleKey: 'routes.ebpfHooks' }
   },
   {
+    path: '/settings/mcp-aggregation',
+    name: 'MCPAggregationControl',
+    component: () => import('../views/settings/MCPAggregationControl.vue'),
+    meta: { titleKey: 'routes.mcpAggregationControl', permission: 'mcp:server:read' }
+  },
+  {
     path: '/settings/tool-policy',
     name: 'ToolPolicySettings',
     component: () => import('../views/settings/AssistantToolPolicySettings.vue'),
@@ -347,7 +354,21 @@ router.beforeEach((to) => {
     return '/hosts'
   }
 
+  const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
+  if (requiredPermission && !hasFrontendPermission(auth?.role, requiredPermission)) {
+    return '/hosts'
+  }
+
   return true
 })
+
+function hasFrontendPermission(role: string | undefined, permission: string): boolean {
+  if (!permission.startsWith('mcp:')) return true
+  if (!canCapability(permission)) return false
+  // The backend remains authoritative. This client-side check only prevents
+  // navigation flicker for known Aegis roles; capability refresh/403 handling
+  // is still performed by the API layer.
+	return !role || role === 'admin' || role === 'security_developer' || role === 'security_analyst'
+}
 
 export default router
