@@ -1,6 +1,33 @@
-# Aegis 智能主机安全系统（V6.2）
+# Aegis 智能主机安全系统（V6.3）
 
 中文 | [English](README_EN.md)
+
+## V6.3 MCP 聚合管控
+
+V6.3 新增远程 MCP 聚合治理平台，将远程 MCP Server 的接入、工具发现与发布、Client 授权、审批、调用审计和安全分析纳入统一控制面。智能体模式仍由大模型负责理解用户意图和编排流程，MCP 平台负责确定性身份校验、权限边界、风险规则和执行结果约束。
+
+![MCP 聚合管控](docs/screenshots/ui-refresh/ai_mcp.png)
+
+### MCP 聚合能力
+
+- 支持远程 MCP Server 接入、endpoint 校验、工具发现、风险分级、安全扫描、审批和发布。
+- 通过 MCP Gateway、Catalog、Client Grant 和工具白名单控制调用范围；Client endpoint 默认绑定一个已发布服务。
+- 记录每次 MCP 工具调用、来源 Client、服务、工具、状态、策略判定和安全规则命中，支持按 Client 禁用工具。
+- 智能体只使用已授权的只读聚合能力；远程服务接入和已有服务的 Client 授权都需要用户明确意图与审批。
+- 远程服务删除采用可恢复退役语义，并同步撤销关联 Client、工具和运行时凭证，避免已删除对象继续出现在业务列表或被调用。
+
+### MCP Client 接入
+
+1. 在「系统配置 / MCP 聚合管控」中添加并审批 Remote MCP Server。
+2. 在「Client 授权」中选择已发布服务创建 Client，并保存页面一次性显示的 Token。
+3. 将生成的 endpoint 和 Token 配置到 MCP Client：
+
+   ~~~text
+   Endpoint: http://<Aegis_HOST>:8084/mcp/v1/clients/<client_key>
+   Authorization: Bearer <one-time-token>
+   ~~~
+
+4. 如需让 Aegis Assistant 使用该 Client，在 api-server 配置 MCP_ASSISTANT_ENABLED、MCP_ASSISTANT_CLIENT_KEY 和 MCP_ASSISTANT_CLIENT_TOKEN。Token 只在创建时显示，数据库仅保存摘要。
 
 ## 项目概述
 

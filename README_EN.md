@@ -1,6 +1,33 @@
-# Aegis Intelligent Host Security System (V6.2)
+# Aegis Intelligent Host Security System (V6.3)
 
 [中文](README.md) | English
+
+## V6.3 MCP Aggregation Governance
+
+V6.3 adds a remote MCP aggregation governance platform. Remote MCP Server onboarding, tool discovery and publication, Client authorization, approvals, invocation auditing, and security analysis are managed through one control plane. The Agent mode still uses the LLM for user-intent understanding and workflow orchestration, while the MCP platform deterministically enforces identity, permissions, risk rules, and execution-result constraints.
+
+![MCP aggregation governance](docs/screenshots/ui-refresh/ai_mcp.png)
+
+### MCP aggregation capabilities
+
+- Supports remote MCP Server onboarding, endpoint validation, tool discovery, risk classification, security scanning, approval, and publication.
+- Uses the MCP Gateway, Catalog, Client Grant, and tool allowlists to control access; each Client endpoint is bound to one published service.
+- Records every MCP tool invocation, Client, service, tool, status, policy decision, and security-rule hit, with per-Client tool disable support.
+- The Agent uses only authorized read-only aggregation capabilities; remote onboarding and Client authorization require explicit user intent and approval.
+- Remote-service deletion is a reversible retirement that also revokes related Clients, tools, and runtime credentials, so retired objects cannot remain operational or appear in active business lists.
+
+### MCP Client connection
+
+1. Open **System Configuration / MCP Aggregation Governance** and add and approve a Remote MCP Server.
+2. In **Client Authorization**, select a published service, create a Client, and save the one-time Token shown by the page.
+3. Configure the MCP Client with the generated endpoint and Token:
+
+   ~~~text
+   Endpoint: http://<Aegis_HOST>:8084/mcp/v1/clients/<client_key>
+   Authorization: Bearer <one-time-token>
+   ~~~
+
+4. To let the Aegis Assistant use this Client, configure MCP_ASSISTANT_ENABLED, MCP_ASSISTANT_CLIENT_KEY, and MCP_ASSISTANT_CLIENT_TOKEN in api-server. The Token is shown only at creation time; only its digest is stored in the database.
 
 ## Overview
 
