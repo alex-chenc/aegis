@@ -211,6 +211,10 @@ func TestMCPDeletesRevokeAuthorizationAndRetireServer(t *testing.T) {
 	if err := db.Create(&model.MCPServerRevision{ID: revisionID, ServerID: serverID, RevisionNo: 1, ProtocolVersion: "2025-11-25", ToolsSnapshot: []byte(`[]`), Digest: "retire-digest", Status: model.MCPPlatformServerApproved, CreatedBy: "admin", CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
+	approvalID := uuid.New()
+	if err := db.Create(&model.MCPApprovalRequest{ID: approvalID, ApprovalType: model.MCPPlatformApprovalAdmission, SubjectType: "server_revision", SubjectID: revisionID, RequestedBy: "admin", Status: model.MCPPlatformApprovalPending, RequestDigest: "retire-digest", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
 	first, err := svc.CreateClientEndpoint(context.Background(), MCPClientEndpointCreateRequest{ClientKey: "revoke-me", DisplayName: "Revoke Me", ClientType: "service", ServerID: serverID}, "admin", "http://localhost:8084")
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +243,14 @@ func TestMCPDeletesRevokeAuthorizationAndRetireServer(t *testing.T) {
 	var revokedGrant model.MCPClientGrant
 	if err := db.First(&revokedGrant, "id = ?", second.GrantID).Error; err != nil || revokedGrant.Status != "revoked" {
 		t.Fatalf("expected server retirement to revoke grant, grant=%#v err=%v", revokedGrant, err)
+	}
+	var cancelledApproval model.MCPApprovalRequest
+	if err := db.First(&cancelledApproval, "id = ?", approvalID).Error; err != nil || cancelledApproval.Status != model.MCPPlatformApprovalCancelled {
+		t.Fatalf("expected pending approval for retired server to be cancelled, approval=%#v err=%v", cancelledApproval, err)
+	}
+	approvals, total, err := svc.ListApprovals(context.Background(), "", 1, 10)
+	if err != nil || total != 0 || len(approvals) != 0 {
+		t.Fatalf("expected retired server approval to be hidden from active approval list, approvals=%#v total=%d err=%v", approvals, total, err)
 	}
 }
 

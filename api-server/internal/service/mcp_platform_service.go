@@ -731,7 +731,7 @@ func (s *MCPPlatformService) Overview(ctx context.Context) (map[string]interface
 	if err != nil {
 		return nil, err
 	}
-	pending, err := s.repo.CountByTable(ctx, "mcp_approval_requests", "status = ?", model.MCPPlatformApprovalPending)
+	pending, err := s.repo.CountPendingApprovals(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -761,7 +761,7 @@ func (s *MCPPlatformService) RetireServer(ctx context.Context, id uuid.UUID, ope
 	if err != nil {
 		return nil, err
 	}
-	revokedClients, err := s.repo.RetireServer(ctx, id)
+	revokedClients, err := s.repo.RetireServer(ctx, id, operator)
 	if err != nil {
 		return nil, err
 	}
@@ -1017,19 +1017,26 @@ func (s *MCPPlatformService) DecideApproval(ctx context.Context, id uuid.UUID, e
 	if expectedDigest == "" || expectedDigest != current.RequestDigest {
 		return nil, errors.New("approval request digest mismatch")
 	}
+	var revision *model.MCPServerRevision
+	var server *model.MCPServer
+	if current.SubjectType == "server_revision" {
+		revision, err = s.repo.GetServerRevision(ctx, current.SubjectID)
+		if err != nil {
+			return nil, err
+		}
+		server, err = s.repo.GetServer(ctx, revision.ServerID)
+		if err != nil {
+			return nil, err
+		}
+		if server.LifecycleStatus == model.MCPPlatformServerRetired {
+			return nil, errors.New("approval target server is retired")
+		}
+	}
 	item, err := s.repo.UpdateApprovalDecision(ctx, id, expectedDigest, status, operator, reason)
 	if err != nil {
 		return nil, err
 	}
 	if current.SubjectType == "server_revision" {
-		revision, revisionErr := s.repo.GetServerRevision(ctx, current.SubjectID)
-		if revisionErr != nil {
-			return nil, revisionErr
-		}
-		server, serverErr := s.repo.GetServer(ctx, revision.ServerID)
-		if serverErr != nil {
-			return nil, serverErr
-		}
 		if status == model.MCPPlatformApprovalApproved {
 			server.LifecycleStatus = model.MCPPlatformServerPublished
 			server.PublishedToolCount = server.ToolCount

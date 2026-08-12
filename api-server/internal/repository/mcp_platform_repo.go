@@ -185,7 +185,7 @@ func (r *MCPPlatformRepository) UpdateServer(ctx context.Context, server *model.
 // revisions, catalog releases, grants, credentials, or invocation history.
 // Client endpoints bound to the service are revoked in the same transaction so
 // no credential remains usable after the service is retired.
-func (r *MCPPlatformRepository) RetireServer(ctx context.Context, serverID uuid.UUID) (int64, error) {
+func (r *MCPPlatformRepository) RetireServer(ctx context.Context, serverID uuid.UUID, operator string) (int64, error) {
 	tx := r.db.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return 0, tx.Error
@@ -203,6 +203,23 @@ func (r *MCPPlatformRepository) RetireServer(ctx context.Context, serverID uuid.
 	}
 	if result.RowsAffected == 0 {
 		return rollback(ErrMCPPlatformNotFound)
+	}
+
+	// A retired server can no longer be approved. Cancel its pending admission
+	// reviews in the same transaction so a stale approval cannot publish the
+	// retired server again.
+	approvalResult := tx.Model(&model.MCPApprovalRequest{}).
+		Where("subject_type = ?", "server_revision").
+		Where("subject_id IN (?)", tx.Table("mcp_server_revisions").Select("id").Where("server_id = ?", serverID)).
+		Where("status = ?", model.MCPPlatformApprovalPending).
+		Updates(map[string]interface{}{
+			"status":          model.MCPPlatformApprovalCancelled,
+			"decided_by":      operator,
+			"decision_reason": "remote MCP server retired",
+			"decided_at":      time.Now().UTC(),
+		})
+	if approvalResult.Error != nil {
+		return rollback(approvalResult.Error)
 	}
 
 	clientIDs := tx.Table("mcp_client_grants AS grant_row").
@@ -625,16 +642,32 @@ func (r *MCPPlatformRepository) UpdateInvocation(ctx context.Context, id uuid.UU
 func (r *MCPPlatformRepository) ListApprovals(ctx context.Context, status string, page, pageSize int) ([]model.MCPApprovalRequest, int64, error) {
 	var items []model.MCPApprovalRequest
 	var total int64
-	tx := r.db.WithContext(ctx).Model(&model.MCPApprovalRequest{})
+	tx := r.db.WithContext(ctx).Table("mcp_approval_requests AS approval").
+		Joins("LEFT JOIN mcp_server_revisions AS approval_revision ON approval_revision.id = approval.subject_id AND approval.subject_type = ?", "server_revision").
+		Joins("LEFT JOIN mcp_servers AS approval_server ON approval_server.id = approval_revision.server_id").
+		Where("(approval.subject_type <> ? OR approval_server.id IS NULL OR approval_server.lifecycle_status <> ?)", "server_revision", model.MCPPlatformServerRetired)
 	if status != "" {
-		tx = tx.Where("status = ?", status)
+		tx = tx.Where("approval.status = ?", status)
 	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	p, s := normalizePage(page, pageSize)
-	err := tx.Order("created_at DESC").Offset((p - 1) * s).Limit(s).Find(&items).Error
+	err := tx.Select("approval.*").Order("approval.created_at DESC").Offset((p - 1) * s).Limit(s).Find(&items).Error
 	return items, total, err
+}
+
+// CountPendingApprovals returns actionable approvals only. Reviews belonging
+// to retired services are historical records and must not affect the live
+// dashboard counter.
+func (r *MCPPlatformRepository) CountPendingApprovals(ctx context.Context) (int64, error) {
+	var total int64
+	tx := r.db.WithContext(ctx).Table("mcp_approval_requests AS approval").
+		Joins("LEFT JOIN mcp_server_revisions AS approval_revision ON approval_revision.id = approval.subject_id AND approval.subject_type = ?", "server_revision").
+		Joins("LEFT JOIN mcp_servers AS approval_server ON approval_server.id = approval_revision.server_id").
+		Where("approval.status = ?", model.MCPPlatformApprovalPending).
+		Where("(approval.subject_type <> ? OR approval_server.id IS NULL OR approval_server.lifecycle_status <> ?)", "server_revision", model.MCPPlatformServerRetired)
+	return total, tx.Count(&total).Error
 }
 
 func (r *MCPPlatformRepository) ListInvocations(ctx context.Context, page, pageSize int) ([]MCPInvocationAuditRow, int64, error) {
