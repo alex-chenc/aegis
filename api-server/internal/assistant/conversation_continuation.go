@@ -47,6 +47,12 @@ func pendingClarificationFromMetadata(metadata map[string]interface{}) *PendingC
 
 func resolveContinuationQuery(currentQuery string, intent IntentResult, pending *PendingClarification) (string, []string, bool) {
 	currentQuery = strings.TrimSpace(currentQuery)
+	// An explicit Client authorization is a new goal even when the previous
+	// turn left a Server-onboarding clarification in session metadata. Do not
+	// merge the old endpoint question or onboarding workflow into this request.
+	if isMCPClientAuthorizationRequest(currentQuery) {
+		return currentQuery, dedupeStrings(intent.WorkflowIDs), false
+	}
 	if pending == nil || !strings.EqualFold(intent.ContinuationMode, "resume_pending") {
 		return currentQuery, dedupeStrings(intent.WorkflowIDs), false
 	}

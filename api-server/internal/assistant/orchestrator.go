@@ -217,6 +217,11 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 		}
 		return nil, fmt.Errorf("classify assistant intent: %w", err)
 	}
+	if input.PendingClarification != nil && isMCPClientAuthorizationRequest(input.UserMessage) {
+		// Treat an explicit Client authorization as a replacement request even
+		// if the classifier conservatively marked it as a pending answer.
+		intent.ContinuationMode = "new_request"
+	}
 	effectiveQuery, effectiveWorkflowIDs, resumedPending := resolveContinuationQuery(
 		input.UserMessage,
 		intent,
@@ -240,12 +245,13 @@ func (o *Orchestrator) Run(ctx context.Context, input RunInput) (*RunResult, err
 			zap.String("run_id", input.RunID),
 		)
 	}
-	// A clearly expressed onboarding request is a write operation even if the
-	// classifier under-reports its write/approval flags. Keep the LLM intent and
-	// decomposition stages, but make the security-critical control-plane policy
-	// deterministic so the onboarding capability cannot be silently rejected as
-	// a read-only query.
-	if isMCPOnboardingRequest(input.UserMessage) || isMCPOnboardingRequest(input.OriginalUserMessage) {
+	// Clearly expressed MCP control-plane mutations are write operations even if
+	// the classifier under-reports its write/approval flags. Keep the LLM intent
+	// and decomposition stages, but make the security-critical policy
+	// deterministic so onboarding and Client authorization cannot be silently
+	// rejected as read-only queries.
+	if isMCPOnboardingRequest(input.UserMessage) || isMCPOnboardingRequest(input.OriginalUserMessage) ||
+		isMCPClientAuthorizationRequest(input.UserMessage) || isMCPClientAuthorizationRequest(input.OriginalUserMessage) {
 		intent.NeedWrite = true
 		intent.NeedApproval = true
 		intent.RiskHint = ToolRiskHigh

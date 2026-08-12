@@ -100,6 +100,24 @@ func TestExplicitWorkflowRequirementsRouteMCPOnboarding(t *testing.T) {
 	}
 }
 
+func TestExplicitWorkflowRequirementsRouteMCPClientAuthorizationBeforeOnboarding(t *testing.T) {
+	got := explicitWorkflowRequirements("已审批，新增一个 Client 授权，接入这个服务 Remote MCP aegis-mcp，最后把端点和密钥给我")
+	if len(got) != 1 || got[0] != MCPAggregationClientAuthorizationWorkflowID {
+		t.Fatalf("required workflows = %#v, want [%s]", got, MCPAggregationClientAuthorizationWorkflowID)
+	}
+}
+
+func TestNormalizeMCPWorkflowSelectionRemovesOnboardingForClientAuthorization(t *testing.T) {
+	result := &IntentResult{WorkflowIDs: []string{
+		MCPAggregationOnboardingWorkflowID,
+		MCPAggregationClientAuthorizationWorkflowID,
+	}}
+	normalizeMCPWorkflowSelection(result, "已审批，新增一个 Client 授权，接入这个服务 Remote MCP aegis-mcp")
+	if len(result.WorkflowIDs) != 1 || result.WorkflowIDs[0] != MCPAggregationClientAuthorizationWorkflowID {
+		t.Fatalf("workflow_ids = %#v, want only [%s]", result.WorkflowIDs, MCPAggregationClientAuthorizationWorkflowID)
+	}
+}
+
 func TestMCPAggregationQueryRequestDoesNotMatchOnboardingOrConceptualQuestions(t *testing.T) {
 	if mcpAggregationQueryRequest("把这个接入到远程 MCP") {
 		t.Fatal("MCP onboarding must be handled by the control-plane guard")

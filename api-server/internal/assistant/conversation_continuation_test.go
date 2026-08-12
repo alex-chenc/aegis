@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestResolveContinuationQueryClientAuthorizationReplacesPendingOnboarding(t *testing.T) {
+	query := "已审批，新增一个 Client 授权，接入这个服务 Remote MCP aegis-mcp"
+	gotQuery, gotWorkflows, resumed := resolveContinuationQuery(query, IntentResult{
+		ContinuationMode: "resume_pending",
+		WorkflowIDs:      []string{MCPAggregationClientAuthorizationWorkflowID},
+	}, &PendingClarification{
+		OriginalQuery: "把这个接入到远程 MCP",
+		Question:      "请提供 endpoint_url",
+		WorkflowIDs:   []string{MCPAggregationOnboardingWorkflowID},
+	})
+	if resumed {
+		t.Fatal("Client authorization must not resume pending onboarding")
+	}
+	if gotQuery != query {
+		t.Fatalf("query = %q, want %q", gotQuery, query)
+	}
+	if len(gotWorkflows) != 1 || gotWorkflows[0] != MCPAggregationClientAuthorizationWorkflowID {
+		t.Fatalf("workflow_ids = %#v, want [%s]", gotWorkflows, MCPAggregationClientAuthorizationWorkflowID)
+	}
+}
+
 func TestApplySessionMetadataUpdatesDeletesConsumedPendingClarification(t *testing.T) {
 	metadata := map[string]interface{}{
 		pendingClarificationMetadataKey: map[string]interface{}{"question": "old"},

@@ -137,6 +137,7 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 		return IntentResult{}, fmt.Errorf("classify intent with llm: %w", err)
 	}
 	normalizeLLMIntentResult(&result)
+	normalizeMCPWorkflowSelection(&result, input.Query)
 	if contractErr := validateIntentResultContract(result, input, requiredWorkflowIDs); contractErr != nil {
 		r.logger.Warn("assistant first-layer intent contract correction requested",
 			zap.String("error_category", "workflow_contract_validation"),
@@ -159,6 +160,7 @@ func (r *IntentRouter) ClassifyWithLLM(ctx context.Context, input IntentInput) (
 			return IntentResult{}, fmt.Errorf("correct intent classifier contract with llm: %w", err)
 		}
 		normalizeLLMIntentResult(&result)
+		normalizeMCPWorkflowSelection(&result, input.Query)
 		if err := validateIntentResultContract(result, input, requiredWorkflowIDs); err != nil {
 			r.logger.Error("assistant first-layer intent contract correction failed",
 				zap.String("error_category", "workflow_contract_validation"),
@@ -209,6 +211,23 @@ func normalizeLLMIntentResult(result *IntentResult) {
 	if result.RiskHint == "" {
 		result.RiskHint = ToolRiskReadonly
 	}
+}
+
+// normalizeMCPWorkflowSelection prevents the broad wording "接入这个服务"
+// from reintroducing Server onboarding after an explicit Client-authorization
+// requirement has already been identified.
+func normalizeMCPWorkflowSelection(result *IntentResult, query string) {
+	if result == nil || !isMCPClientAuthorizationRequest(query) {
+		return
+	}
+	filtered := make([]string, 0, len(result.WorkflowIDs))
+	for _, workflowID := range result.WorkflowIDs {
+		if strings.EqualFold(strings.TrimSpace(workflowID), MCPAggregationOnboardingWorkflowID) {
+			continue
+		}
+		filtered = append(filtered, workflowID)
+	}
+	result.WorkflowIDs = dedupeStrings(filtered)
 }
 
 func validateLLMIntentResultAgainstWorkflowCatalog(result IntentResult, workflows []WorkflowSpec) error {
@@ -296,7 +315,13 @@ func explicitWorkflowRequirements(query string) []string {
 	); index >= 0 {
 		requirements = append(requirements, requirement{workflowID: detectionPackageLifecycleWorkflowID, index: index})
 	}
-	if isMCPOnboardingRequest(normalized) {
+	if isMCPClientAuthorizationRequest(normalized) {
+		index := firstExplicitPhraseIndex(normalized, "client", "客户端", "授权", "authorization", "authorize", "grant")
+		if index < 0 {
+			index = 0
+		}
+		requirements = append(requirements, requirement{workflowID: MCPAggregationClientAuthorizationWorkflowID, index: index})
+	} else if isMCPOnboardingRequest(normalized) {
 		index := firstExplicitPhraseIndex(normalized, "mcp", "远程模型上下文协议", "接入", "注册", "连接", "connect", "register", "onboard")
 		if index < 0 {
 			index = 0
