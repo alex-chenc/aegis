@@ -141,7 +141,7 @@ func (h *AssistantHandler) CreateSession(c *gin.Context) {
 	}
 	req.Locale = assistant.NormalizeLocale(req.Locale)
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	session, err := h.assistantService.CreateSession(c.Request.Context(), req, operator)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -203,7 +203,7 @@ func (h *AssistantHandler) SendMessage(c *gin.Context) {
 	}
 	req.Locale = assistant.NormalizeLocale(req.Locale)
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	handle, err := h.assistantService.SendMessage(c.Request.Context(), sessionID, req, operator)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -232,7 +232,7 @@ func (h *AssistantHandler) StreamSession(c *gin.Context) {
 // CancelRun 取消运行
 func (h *AssistantHandler) CancelRun(c *gin.Context) {
 	sessionID := c.Param("session_id")
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 
 	if err := h.assistantService.CancelRun(c.Request.Context(), sessionID, operator); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -270,7 +270,7 @@ func (h *AssistantHandler) UploadSessionFile(c *gin.Context) {
 	}
 
 	purpose := c.DefaultPostForm("purpose", assistant.AssistantUploadPurposeAnalysis)
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	result, err := h.fileUploadSvc.UploadSessionFile(c.Request.Context(), sessionID, file, purpose, operator)
 	if err != nil {
 		h.logger.Warn("assistant file upload failed",
@@ -362,7 +362,7 @@ func (h *AssistantHandler) DecideRecovery(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "action_id is required"})
 		return
 	}
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	result, err := h.assistantService.DecideRecovery(
 		c.Request.Context(),
 		c.Param("recovery_id"),
@@ -449,7 +449,7 @@ func (h *AssistantHandler) UpdateToolApprovalPolicy(c *gin.Context) {
 		return
 	}
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	if err := h.policyService.SetApprovalMode(c.Request.Context(), req.Mode, operator); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -470,7 +470,7 @@ func (h *AssistantHandler) UpdateToolWhitelist(c *gin.Context) {
 		return
 	}
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	if err := h.policyService.UpdateWhitelist(c.Request.Context(), toolName, req.Whitelisted, operator); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -489,7 +489,7 @@ func (h *AssistantHandler) BatchUpdateToolWhitelist(c *gin.Context) {
 		return
 	}
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	if err := h.policyService.BatchUpdateWhitelist(c.Request.Context(), req.Items, operator); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -500,7 +500,7 @@ func (h *AssistantHandler) BatchUpdateToolWhitelist(c *gin.Context) {
 
 // ResetToolWhitelistDefaults 重置工具白名单默认值
 func (h *AssistantHandler) ResetToolWhitelistDefaults(c *gin.Context) {
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	if err := h.policyService.ResetDefaultWhitelist(c.Request.Context(), operator); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -531,7 +531,7 @@ func (h *AssistantHandler) Approve(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	result, err := h.approvalGate.Approve(c.Request.Context(), approvalID, operator, req.Comment)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -579,7 +579,7 @@ func (h *AssistantHandler) Reject(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	approval, err := h.approvalGate.Reject(c.Request.Context(), approvalID, operator, req.Comment)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -608,7 +608,7 @@ func (h *AssistantHandler) CreateHostAttackInvestigation(c *gin.Context) {
 		return
 	}
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	input := model.HostAttackInvestigationInput{
 		HostID:   req.HostID,
 		AlertIDs: req.AlertIDs,
@@ -719,7 +719,7 @@ func (h *AssistantHandler) CreateMCPSource(c *gin.Context) {
 		return
 	}
 
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	source.CreatedBy = operator
 
 	if err := h.mcpService.CreateSource(c.Request.Context(), &source); err != nil {
@@ -728,6 +728,20 @@ func (h *AssistantHandler) CreateMCPSource(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": source})
+}
+
+// assistantOperator resolves the authenticated actor used for Assistant
+// session, approval, audit, and trusted tool-invocation context. AuthRequired
+// stores the canonical identity as auth_username; the username fallback keeps
+// existing handler tests and trusted internal callers compatible.
+func assistantOperator(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if operator := strings.TrimSpace(c.GetString("auth_username")); operator != "" {
+		return operator
+	}
+	return strings.TrimSpace(c.GetString("username"))
 }
 
 // GetMCPSource 获取 MCP 数据源（脱敏）
@@ -785,7 +799,7 @@ func (h *AssistantHandler) UpdateMCPSource(c *gin.Context) {
 	}
 
 	source.SourceID = sourceID
-	operator := c.GetString("username")
+	operator := assistantOperator(c)
 	source.UpdatedBy = operator
 
 	if err := h.mcpService.UpdateSource(c.Request.Context(), &source); err != nil {
