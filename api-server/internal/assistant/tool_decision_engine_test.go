@@ -42,6 +42,47 @@ func TestToolDecisionEngineRejectsConceptWriteTool(t *testing.T) {
 	}
 }
 
+func TestToolDecisionEngineBindsMCPOnboardingEndpointFromUserMessage(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "MCP.Aggregation.Server.Onboard",
+		Domain:             DomainExternalMCP,
+		Operation:          OpCreate,
+		Capability:         "onboard_mcp_server",
+		Description:        "Create a governed remote MCP onboarding job.",
+		Risk:               ToolRiskHigh,
+		DefaultWhitelisted: false,
+		RequiresApproval:   true,
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"endpoint_url": map[string]interface{}{"type": "string"}},
+			"required":   []string{"endpoint_url"},
+		},
+	})
+	engine := newDecisionTestEngine(registry)
+	endpoint := "http://aegis-mcp:8085/mcp"
+	query := "把这个接入到" + endpoint + "把这个接入到远程 MCP"
+	intent := IntentResult{Domains: []string{"external_mcp"}, Action: "create", Object: "mcp_server", RiskHint: ToolRiskHigh, NeedWrite: true, NeedApproval: true, Confidence: 0.95}
+	breakdown := makeDecisionBreakdown(t, query, intent, nil, []string{"onboard_mcp_server"})
+	plan, err := engine.Decide(context.Background(), ToolDecisionInput{Query: query, Intent: intent, Breakdown: breakdown})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	step := findPlanStep(plan, "MCP.Aggregation.Server.Onboard")
+	if step == nil {
+		t.Fatalf("expected onboarding step, got tools=%v rejected=%#v", plan.ToolNames(), plan.RejectedToolRecords)
+	}
+	if got := step.Args["endpoint_url"]; got != endpoint {
+		t.Fatalf("endpoint_url = %#v, want %q", got, endpoint)
+	}
+	if source := step.ArgSources["endpoint_url"]; source.SourceType != "user_message" {
+		t.Fatalf("endpoint_url source = %#v, want user_message", source)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+		t.Fatalf("onboarding plan must validate without a previous-step dependency: %v", err)
+	}
+}
+
 func TestToolDecisionEngineDoesNotBindAgentGuardScopeToMissingPreviousStep(t *testing.T) {
 	registry := NewToolRegistry()
 	registerDecisionTestTool(t, registry, &ToolSpec{

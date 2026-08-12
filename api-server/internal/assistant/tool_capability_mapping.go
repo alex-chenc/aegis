@@ -245,6 +245,21 @@ func inferEntityFromArgName(argName string) string {
 
 func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 	switch contract.ToolName {
+	case "MCP.Aggregation.Server.Onboard":
+		// The onboarding endpoint is supplied by the user in the current
+		// request. It is not an async result and must never be rebound from a
+		// previous step, otherwise the compiled plan can reject the first step
+		// before the onboarding job is created.
+		contract.RequiredEntities = []string{"endpoint_url"}
+		contract.ArgBindings = []ArgBindingRule{{
+			ArgName:     "endpoint_url",
+			Entity:      "endpoint_url",
+			SourceOrder: []string{"user_message"},
+			Required:    true,
+		}}
+		contract.Preconditions = []string{"explicit_remote_mcp_endpoint", "approval_required"}
+		contract.RequiresExplicitUserIntent = true
+		contract.RequiresApproval = true
 	case "AgentGuard.Scope.Investigate":
 		// Scope investigation is intentionally an exact-reference operation.
 		// It must never fall back to a previous_step binding: posture/evidence

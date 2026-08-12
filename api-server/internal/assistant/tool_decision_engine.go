@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ const (
 	toolDecisionRejected              = "rejected"
 	toolDecisionClarificationRequired = "clarification_required"
 )
+
+var explicitHTTPURLPattern = regexp.MustCompile(`(?i)https?://[A-Za-z0-9._~:/\[\]@!$&'()*+,;=%-]+`)
 
 type ToolDecisionConfig struct {
 	Enabled                      bool
@@ -1024,6 +1027,11 @@ func resolveArgBySourceOrder(binding ArgBindingRule, input ToolDecisionInput, br
 				return ids, ArgSource{SourceType: "page_context", SourceRef: binding.Entity, Confidence: 0.95}
 			}
 		case "user_message":
+			if strings.EqualFold(strings.TrimSpace(binding.ArgName), "endpoint_url") {
+				if endpoint := explicitHTTPURL(input.Query); endpoint != "" {
+					return endpoint, ArgSource{SourceType: "user_message", SourceRef: "endpoint_url", Confidence: 1}
+				}
+			}
 			if value, ref := extractArgFromBreakdown(binding, breakdown); value != nil {
 				return value, ArgSource{SourceType: "user_message", SourceRef: ref, Confidence: 0.8}
 			}
@@ -1037,6 +1045,15 @@ func resolveArgBySourceOrder(binding ArgBindingRule, input ToolDecisionInput, br
 		}
 	}
 	return nil, ArgSource{}
+}
+
+// explicitHTTPURL extracts only the ASCII URL token from the user's message.
+// This intentionally stops before adjacent Chinese text, which is common in
+// chat input such as "http://host/mcp把这个接入". The endpoint still goes
+// through MCP platform validation after binding.
+func explicitHTTPURL(query string) string {
+	match := explicitHTTPURLPattern.FindString(query)
+	return strings.TrimSpace(match)
 }
 
 func resolveArgBySourceOrderWithoutPreviousStep(binding ArgBindingRule, input ToolDecisionInput, breakdown *IntentBreakdown) (interface{}, ArgSource) {
