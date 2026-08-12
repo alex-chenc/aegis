@@ -71,4 +71,7 @@ func TestRegisterMCPOnboardingToolsBindsGovernedWorkflow(t *testing.T) {
 	if companion.ExposurePolicy.Exposure != assistant.ToolExposureCompanion {
 		t.Fatalf("onboarding status exposure = %s", companion.ExposurePolicy.Exposure)
 	}
+	if required := companion.ArgsSchema["required"]; required == nil {
+		t.Fatal("onboarding status must declare job_id as a required argument")
+	}
 }

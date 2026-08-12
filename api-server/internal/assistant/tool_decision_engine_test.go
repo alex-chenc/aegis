@@ -83,6 +83,65 @@ func TestToolDecisionEngineBindsMCPOnboardingEndpointFromUserMessage(t *testing.
 	}
 }
 
+func TestToolDecisionEngineBindsMCPOnboardingStatusFromPreviousStep(t *testing.T) {
+	registry := newDecisionTestRegistry(t)
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "MCP.Aggregation.Server.Onboard",
+		Domain:             DomainExternalMCP,
+		Operation:          OpCreate,
+		Capability:         "onboard_mcp_server",
+		Description:        "Create a governed remote MCP onboarding job.",
+		Risk:               ToolRiskHigh,
+		DefaultWhitelisted: false,
+		RequiresApproval:   true,
+		ExecutionContract: ToolExecutionContract{
+			Mode:                 ToolExecutionAsynchronous,
+			CompletionCapability: "get_mcp_onboarding_status",
+		},
+		ResultContract: ToolResultContract{OperationRefFields: []string{"job_id"}},
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"endpoint_url": map[string]interface{}{"type": "string"}},
+			"required":   []string{"endpoint_url"},
+		},
+	})
+	registerDecisionTestTool(t, registry, &ToolSpec{
+		Name:               "MCP.Aggregation.Server.Onboarding.Get",
+		Domain:             DomainExternalMCP,
+		Operation:          OpGet,
+		Capability:         "get_mcp_onboarding_status",
+		Description:        "Get the status of an MCP onboarding job.",
+		Risk:               ToolRiskReadonly,
+		DefaultWhitelisted: true,
+		ArgsSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"job_id": map[string]interface{}{"type": "string", "format": "uuid"}},
+			"required":   []string{"job_id"},
+		},
+	})
+
+	query := "把这个接入到http://aegis-mcp:8085/mcp"
+	intent := IntentResult{Domains: []string{"external_mcp"}, Action: "create", Object: "mcp_server", RiskHint: ToolRiskHigh, NeedWrite: true, NeedApproval: true, Confidence: 0.95}
+	breakdown := makeDecisionBreakdown(t, query, intent, nil, []string{"onboard_mcp_server", "get_mcp_onboarding_status"})
+	plan, err := newDecisionTestEngine(registry).Decide(context.Background(), ToolDecisionInput{Query: query, Intent: intent, Breakdown: breakdown})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	status := findPlanStep(plan, "MCP.Aggregation.Server.Onboarding.Get")
+	if status == nil {
+		t.Fatalf("expected onboarding status step, got tools=%v rejected=%#v", plan.ToolNames(), plan.RejectedToolRecords)
+	}
+	if source := status.ArgSources["job_id"]; source.SourceType != "previous_step" {
+		t.Fatalf("job_id source = %#v, want previous_step", source)
+	}
+	if _, ok := status.Args["job_id"]; ok {
+		t.Fatalf("job_id must be injected from the onboarding outcome, got compiled args %#v", status.Args)
+	}
+	if err := NewCompiledPlanValidator(registry, nil).Validate(plan, nil); err != nil {
+		t.Fatalf("onboarding status dependency must validate against job_id result: %v", err)
+	}
+}
+
 func TestToolDecisionEngineDoesNotBindAgentGuardScopeToMissingPreviousStep(t *testing.T) {
 	registry := NewToolRegistry()
 	registerDecisionTestTool(t, registry, &ToolSpec{

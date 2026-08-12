@@ -117,7 +117,14 @@ func RegisterMCPOnboardingStatusTool(registry *assistant.ToolRegistry, deps MCPO
 		ModelDescription: "Use the exact job_id returned by MCP.Aggregation.Server.Onboard to observe onboarding progress.", Aliases: []string{"MCP接入状态", "MCP onboarding status"}, Tags: []string{"v6.3", "mcp", "aggregation", "onboarding", "status"}, ObjectTypes: []string{"mcp_onboarding_job"},
 		Risk: assistant.ToolRiskReadonly, AutoCallable: true, Idempotent: true, DefaultWhitelisted: true, Enabled: true,
 		ExposurePolicy: assistant.ToolExposurePolicy{Exposure: assistant.ToolExposureCompanion, WorkflowIDs: []string{assistant.MCPAggregationOnboardingWorkflowID}, Discoverable: false, DirectCallable: true},
-		ArgsSchema:     objectSchema(map[string]interface{}{"job_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact onboarding job UUID returned by the onboarding tool."}}),
+		ArgsSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"job_id": map[string]interface{}{"type": "string", "format": "uuid", "description": "Exact onboarding job UUID returned by the onboarding tool."},
+			},
+			"required":             []string{"job_id"},
+			"additionalProperties": false,
+		},
 		ResultContract: assistant.ToolResultContract{OperationStatusField: "status", SuccessValues: []string{"active"}, PendingValues: []string{"created", "validating_endpoint", "awaiting_auth", "authenticating", "discovering", "validating_tools", "security_scanning", "classifying", "building_release", "awaiting_approval", "publishing"}, FailureValues: []string{"failed", "cancelled"}},
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			id, err := parseUUID(args, "job_id")
