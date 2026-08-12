@@ -658,6 +658,9 @@ func main() {
 	if err := assistantTools.RegisterMCPOnboardingStatusTool(toolRegistry, assistantTools.MCPOnboardingToolDeps{Platform: mcpPlatformService, Logger: assistantLogger}); err != nil {
 		logger.Error("failed to register MCP onboarding status Assistant tool", zap.Error(err))
 	}
+	if err := assistantTools.RegisterMCPClientAuthorizationTool(toolRegistry, assistantTools.MCPClientAuthorizationToolDeps{Platform: mcpPlatformService, PublicGatewayURL: cfg.MCPPlatform.PublicGatewayBaseURL, Logger: assistantLogger}); err != nil {
+		logger.Error("failed to register MCP Client authorization Assistant tool", zap.Error(err))
+	}
 	if !cfg.MCPPlatform.AssistantMCPEnabled {
 		if err := assistantTools.RegisterExternalMCPTools(toolRegistry, assistantTools.ExternalMCPToolDeps{
 			SourceService:  mcpSvc,

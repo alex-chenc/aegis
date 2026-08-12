@@ -86,9 +86,10 @@ Catalog 和 Grant，通过 `mcp-gateway` 调用远程 MCP Server。
 
 ### 3.2 非目标
 
-- 不把 Catalog 发布、Grant 修改、策略编辑、凭据管理、审计 payload reveal 或
-  Break-glass 暴露为普通对话工具；远程 MCP Server onboarding 允许由 Assistant 在
-  用户明确提出请求并通过 Assistant 审批后创建受管异步任务；
+- 不把 Catalog 发布、任意 Grant 修改、策略编辑、凭据管理、审计 payload reveal 或
+  Break-glass 暴露为普通对话工具；允许一个独立的高层 Client 授权能力在用户明确
+  指定已发布服务、通过 Assistant 审批后创建受限 Client endpoint，但不接受原始
+  endpoint、Catalog 或任意 Grant 参数；远程 MCP Server onboarding 仍按受管异步任务执行；
 - 不把 MCP `tools/list` 的全部工具 schema 无界注入模型上下文；
 - 不由模型直接决定任意 endpoint、上游 Server、Credential 或用户身份；
 - 不把 MCP 返回的 prompt、description、resource link 或工具结果当作系统指令；
@@ -175,6 +176,7 @@ Assistant MCP Client
 | `MCP.Aggregated.Invocation.Get` | `get_mcp_invocation` | companion/contextual | readonly | 查询调用状态、规则结果和证据引用 |
 | `MCP.Aggregation.Server.Onboard` | `onboard_mcp_server` | primary | high/write | 创建受管远程 MCP 接入任务，触发 endpoint 校验、发现、安全扫描和发布审批 |
 | `MCP.Aggregation.Server.Onboarding.Get` | `get_mcp_onboarding_status` | companion | readonly | 查询接入任务状态、失败原因和已发布 Server 摘要 |
+| `MCP.Aggregation.Client.Authorize` | `authorize_mcp_client` | primary | high/write | 按已发布服务名创建受审批的 Client endpoint；不接收原始 endpoint，服务名不唯一时要求 server_id |
 
 前四个只读能力统一挂在 V6.3 工作流 `mcp_aggregation_query` 下；后两个能力统一挂在
 `mcp_aggregation_onboarding` 下。两个工作流分别是 Assistant 第一层意图卡和第二层
@@ -531,8 +533,11 @@ high、critical 或 unknown 改成 safe。
   `retired`；为 Client 授权提供 `DELETE /mcp-platform/client-endpoints/:client_id`，
   语义是撤销 grant、credential 和 Client 状态。两者均保留历史版本、调用和审计数据，
   前端提供二次确认的删除按钮。
-- Assistant 不自动生成或回显 Client Token。启用前必须先在 MCP 聚合管控页面创建专用
-  Client 授权，再通过 `MCP_ASSISTANT_CLIENT_KEY` 和
+- Assistant 的只读聚合 Client 仍不自动生成或回显平台内置 Token。新增的
+  `MCP.Aggregation.Client.Authorize` 仅在用户明确要求为已有已发布服务创建 Client、且
+  通过 Assistant 审批后执行；它按服务名解析 Server，不接受 endpoint_url，服务名有多个
+  匹配时必须要求 server_id。创建结果中的 Token 仅在本次结果中返回一次，日志不得记录。
+  平台内置 Assistant Client 仍必须通过 `MCP_ASSISTANT_CLIENT_KEY` 和
   `MCP_ASSISTANT_CLIENT_TOKEN` 注入 api-server；`MCP_ASSISTANT_ENABLED` 默认为关闭。
 - 新 Assistant 注册四个固定只读聚合工具：`MCP.Aggregated.Catalog.List`、
   `MCP.Aggregated.Tool.List`、`MCP.Aggregated.Query` 和
@@ -543,6 +548,10 @@ high、critical 或 unknown 改成 safe。
 - 用户明确提出“接入/注册/连接远程 MCP”时，Assistant 不直接返回管控页面说明；请求
   经过 LLM 意图识别和 capability mapping 后调用 onboarding 工具，创建异步任务并以
   任务状态作为事实依据。
+- 用户明确提出“为已有 MCP 服务新增 Client 授权”时，Assistant 经过独立的
+  `mcp_aggregation_client_authorization` workflow 调用 `MCP.Aggregation.Client.Authorize`；
+  该流程只接收服务名/可选 server_id 和 Client 展示信息，禁止把已有服务误路由到
+  onboarding，也禁止向用户索要或接受 endpoint_url。
 - `MCP.Aggregated.Query` 每次调用前重新读取 Client 的当前工具授权，只接受 Gateway
   返回且风险为 L1/L2 的 approved 工具；Assistant 上下文使用 Runtime Secret 做 HMAC
   签名后进入 invocation 的操作者审计字段。

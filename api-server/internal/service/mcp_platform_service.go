@@ -745,6 +745,20 @@ func (s *MCPPlatformService) Overview(ctx context.Context) (map[string]interface
 func (s *MCPPlatformService) ListServers(ctx context.Context, q repository.MCPServerQuery) ([]model.MCPServer, int64, error) {
 	return s.repo.ListServers(ctx, q)
 }
+
+// FindPublishedServers resolves an Assistant-provided service name against
+// the operational MCP catalog. Raw endpoint URLs are intentionally not
+// accepted here; Client authorization must bind to a published server record.
+func (s *MCPPlatformService) FindPublishedServers(ctx context.Context, serviceName string) ([]model.MCPServer, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return nil, errors.New("service_name is required")
+	}
+	items, _, err := s.repo.ListServers(ctx, repository.MCPServerQuery{
+		Keyword: serviceName, Status: model.MCPPlatformServerPublished, Page: 1, PageSize: 100,
+	})
+	return items, err
+}
 func (s *MCPPlatformService) GetServer(ctx context.Context, id uuid.UUID) (*model.MCPServer, error) {
 	return s.repo.GetServer(ctx, id)
 }

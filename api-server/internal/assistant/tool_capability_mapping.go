@@ -260,6 +260,20 @@ func applyBuiltinToolContractOverrides(contract *ToolUseContract) {
 		contract.Preconditions = []string{"explicit_remote_mcp_endpoint", "approval_required"}
 		contract.RequiresExplicitUserIntent = true
 		contract.RequiresApproval = true
+	case "MCP.Aggregation.Client.Authorize":
+		// Existing-service Client authorization resolves a published server by
+		// name. It must never inherit endpoint_url from onboarding or ask the
+		// model to provide a raw endpoint for an already registered service.
+		contract.RequiredEntities = []string{"service_name"}
+		contract.ArgBindings = []ArgBindingRule{{
+			ArgName:     "service_name",
+			Entity:      "service_name",
+			SourceOrder: []string{"user_message"},
+			Required:    true,
+		}}
+		contract.Preconditions = []string{"explicit_client_authorization", "published_mcp_service_reference", "approval_required"}
+		contract.RequiresExplicitUserIntent = true
+		contract.RequiresApproval = true
 	case "AgentGuard.Scope.Investigate":
 		// Scope investigation is intentionally an exact-reference operation.
 		// It must never fall back to a previous_step binding: posture/evidence

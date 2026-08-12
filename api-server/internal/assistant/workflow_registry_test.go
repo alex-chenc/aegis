@@ -108,6 +108,19 @@ func TestWorkflowRegistryIncludesManagedMCPOnboardingContract(t *testing.T) {
 	}
 }
 
+func TestWorkflowRegistryIncludesManagedMCPClientAuthorizationContract(t *testing.T) {
+	workflow, err := NewWorkflowRegistry().Resolve([]string{MCPAggregationClientAuthorizationWorkflowID})
+	if err != nil || len(workflow) != 1 {
+		t.Fatalf("managed MCP Client authorization workflow = %#v, err=%v", workflow, err)
+	}
+	if workflow[0].Version != "6.3" || workflow[0].Domain != DomainExternalMCP || workflow[0].Risk != ToolRiskHigh {
+		t.Fatalf("managed MCP Client authorization metadata = %#v", workflow[0])
+	}
+	if !containsExactString(workflow[0].ExposedCapabilities, "authorize_mcp_client") {
+		t.Fatalf("managed MCP Client authorization capability missing: %#v", workflow[0])
+	}
+}
+
 func TestCapabilityCatalogUsesClosedSelectedWorkflowAllowlist(t *testing.T) {
 	toolRegistry := NewToolRegistry()
 	for _, tool := range []*ToolSpec{

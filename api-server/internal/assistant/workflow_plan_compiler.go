@@ -27,6 +27,10 @@ const MCPAggregationQueryWorkflowID = "mcp_aggregation_query"
 // a remote MCP onboarding job through the governed control plane.
 const MCPAggregationOnboardingWorkflowID = "mcp_aggregation_onboarding"
 
+// MCPAggregationClientAuthorizationWorkflowID is the Assistant workflow for
+// authorizing a new Client against an already published MCP service.
+const MCPAggregationClientAuthorizationWorkflowID = "mcp_aggregation_client_authorization"
+
 var exactCVEIDPattern = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]{4,}\b`)
 
 // ArgValueKind classifies how a bound argument value must be typed so the

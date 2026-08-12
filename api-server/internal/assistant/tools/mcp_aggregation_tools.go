@@ -29,6 +29,180 @@ type MCPOnboardingToolDeps struct {
 	Logger   *zap.Logger
 }
 
+// MCPClientAuthorizationPlatform is the bounded control-plane surface needed
+// to authorize a Client against an existing published service. Keeping this
+// interface narrow makes the Assistant path testable and prevents it from
+// receiving raw endpoint or credential-management capabilities.
+type MCPClientAuthorizationPlatform interface {
+	FindPublishedServers(context.Context, string) ([]model.MCPServer, error)
+	GetServer(context.Context, uuid.UUID) (*model.MCPServer, error)
+	CreateClientEndpoint(context.Context, service.MCPClientEndpointCreateRequest, string, string) (*service.MCPClientEndpointCreated, error)
+}
+
+type MCPClientAuthorizationToolDeps struct {
+	Platform         MCPClientAuthorizationPlatform
+	PublicGatewayURL string
+	Logger           *zap.Logger
+}
+
+// RegisterMCPClientAuthorizationTool exposes the explicit, approval-gated
+// operation for creating a Client endpoint against an already published MCP
+// service. It resolves service_name to a server record and never accepts a raw
+// endpoint URL.
+func RegisterMCPClientAuthorizationTool(registry *assistant.ToolRegistry, deps MCPClientAuthorizationToolDeps) error {
+	if deps.Platform == nil {
+		return fmt.Errorf("MCP platform service is required")
+	}
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return registry.Register(&assistant.ToolSpec{
+		Name:               "MCP.Aggregation.Client.Authorize",
+		Domain:             assistant.DomainExternalMCP,
+		Operation:          assistant.OpCreate,
+		Capability:         "authorize_mcp_client",
+		Description:        "Create a governed Client authorization for an existing published MCP service.",
+		ModelDescription:   "Use when the user asks to create a new Client authorization for an existing MCP service by name. Do not ask for or accept endpoint_url. Resolve service_name against published services; if multiple services have the same name, ask for server_id instead of guessing.",
+		Aliases:            []string{"新增MCP Client授权", "授权MCP Client", "创建MCP客户端", "authorize MCP client"},
+		Tags:               []string{"v6.3", "mcp", "aggregation", "client", "grant", "write"},
+		ObjectTypes:        []string{"mcp_client", "mcp_grant", "mcp_server"},
+		Risk:               assistant.ToolRiskHigh,
+		AutoCallable:       false,
+		RequiresApproval:   true,
+		Idempotent:         false,
+		DefaultWhitelisted: false,
+		Enabled:            true,
+		ExposurePolicy: assistant.ToolExposurePolicy{
+			Exposure: assistant.ToolExposurePrimary, WorkflowIDs: []string{assistant.MCPAggregationClientAuthorizationWorkflowID},
+			Discoverable: true, DirectCallable: true, CatalogPriority: 215,
+		},
+		ExecutionContract: assistant.ToolExecutionContract{Mode: assistant.ToolExecutionSynchronous},
+		ArgsSchema: objectSchema(map[string]interface{}{
+			"service_name": map[string]interface{}{"type": "string", "description": "Existing published MCP service display name or server key."},
+			"server_id":    map[string]interface{}{"type": "string", "format": "uuid", "description": "Optional exact server ID when service_name matches multiple published services."},
+			"client_key":   map[string]interface{}{"type": "string", "description": "Optional safe Client key; generated when omitted."},
+			"display_name": map[string]interface{}{"type": "string", "description": "Optional Client display name; generated when omitted."},
+			"client_type":  map[string]interface{}{"type": "string", "enum": []string{"service", "confidential"}, "description": "Client type; defaults to service."},
+		}),
+		ResultSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"status": map[string]interface{}{"type": "string"}, "server_id": map[string]interface{}{"type": "string"}, "server_name": map[string]interface{}{"type": "string"},
+			"client_id": map[string]interface{}{"type": "string"}, "client_key": map[string]interface{}{"type": "string"}, "endpoint": map[string]interface{}{"type": "string"},
+			"token": map[string]interface{}{"type": "string"}, "token_once": map[string]interface{}{"type": "boolean"},
+		}},
+		Preflight: func(_ context.Context, args map[string]interface{}) error {
+			if strings.TrimSpace(getStringArg(args, "service_name", "")) == "" {
+				return fmt.Errorf("service_name is required")
+			}
+			return nil
+		},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			invocation, ok := assistant.ToolInvocationFromContext(ctx)
+			if !ok || strings.TrimSpace(invocation.Operator) == "" {
+				return nil, fmt.Errorf("trusted Assistant operator context is required")
+			}
+			server, err := resolvePublishedMCPServer(ctx, deps.Platform, strings.TrimSpace(getStringArg(args, "service_name", "")), strings.TrimSpace(getStringArg(args, "server_id", "")))
+			if err != nil {
+				logger.Warn("assistant_mcp_client_authorization_target_failed", zap.String("operator", invocation.Operator), zap.Error(err))
+				return nil, err
+			}
+			clientKey := strings.TrimSpace(getStringArg(args, "client_key", ""))
+			if clientKey == "" {
+				clientKey = generatedMCPClientKey(invocation.SessionID, *server)
+			}
+			displayName := strings.TrimSpace(getStringArg(args, "display_name", ""))
+			if displayName == "" {
+				displayName = "Assistant Client · " + server.DisplayName
+			}
+			clientType := strings.TrimSpace(getStringArg(args, "client_type", "service"))
+			created, err := deps.Platform.CreateClientEndpoint(ctx, service.MCPClientEndpointCreateRequest{ClientKey: clientKey, DisplayName: displayName, ClientType: clientType, ServerID: server.ID}, invocation.Operator, deps.PublicGatewayURL)
+			if err != nil {
+				logger.Warn("assistant_mcp_client_authorization_failed", zap.String("operator", invocation.Operator), zap.String("server_id", server.ID.String()), zap.Error(err))
+				return nil, err
+			}
+			logger.Info("assistant_mcp_client_authorization_created", zap.String("operator", invocation.Operator), zap.String("server_id", server.ID.String()), zap.String("client_id", created.ClientID.String()), zap.String("grant_id", created.GrantID.String()))
+			return map[string]interface{}{
+				"status": created.Status, "server_id": server.ID.String(), "server_name": server.DisplayName,
+				"client_id": created.ClientID.String(), "client_key": created.ClientKey, "endpoint": created.Endpoint,
+				"token": created.Token, "token_once": true,
+			}, nil
+		},
+		ServiceBinding: assistant.ServiceBinding{Component: "api-server", File: "api-server/internal/service/mcp_platform_service.go", Function: "MCPPlatformService.CreateClientEndpoint"},
+	})
+}
+
+func resolvePublishedMCPServer(ctx context.Context, platform MCPClientAuthorizationPlatform, serviceName, serverID string) (*model.MCPServer, error) {
+	if serverID != "" {
+		id, err := uuid.Parse(serverID)
+		if err != nil {
+			return nil, fmt.Errorf("server_id must be a valid UUID")
+		}
+		server, err := platform.GetServer(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if server.LifecycleStatus != model.MCPPlatformServerPublished || server.ActiveRevisionID == nil {
+			return nil, fmt.Errorf("MCP service %q is not published", serviceName)
+		}
+		return server, nil
+	}
+	items, err := platform.FindPublishedServers(ctx, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	items = exactMCPServiceMatches(items, serviceName)
+	if len(items) == 0 {
+		return nil, fmt.Errorf("published MCP service %q was not found", serviceName)
+	}
+	if len(items) > 1 {
+		candidates := make([]string, 0, len(items))
+		for _, item := range items {
+			candidates = append(candidates, fmt.Sprintf("%s (%s, %s)", item.ID.String(), item.DisplayName, item.Environment))
+		}
+		return nil, fmt.Errorf("published MCP service %q is ambiguous; provide server_id. Candidates: %s", serviceName, strings.Join(candidates, "; "))
+	}
+	return &items[0], nil
+}
+
+func exactMCPServiceMatches(items []model.MCPServer, serviceName string) []model.MCPServer {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return nil
+	}
+	exact := make([]model.MCPServer, 0, len(items))
+	for _, item := range items {
+		if strings.EqualFold(item.DisplayName, serviceName) || strings.EqualFold(item.ServerKey, serviceName) || strings.EqualFold(item.EndpointDisplay, serviceName) {
+			exact = append(exact, item)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return items
+}
+
+func generatedMCPClientKey(sessionID string, server model.MCPServer) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{sessionID, server.ID.String()}, "\x00")))
+	base := sanitizeMCPClientKey(server.ServerKey)
+	if base == "" {
+		base = "mcp"
+	}
+	if len(base) > 36 {
+		base = base[:36]
+	}
+	return fmt.Sprintf("assistant-%s-%x", base, sum[:4])
+}
+
+func sanitizeMCPClientKey(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Trim(b.String(), "-_")
+}
+
 // RegisterMCPOnboardingTool exposes the governed control-plane mutation to the
 // Assistant. The tool creates an asynchronous onboarding job; the service
 // remains responsible for endpoint validation, discovery, security scanning,
@@ -47,7 +221,7 @@ func RegisterMCPOnboardingTool(registry *assistant.ToolRegistry, deps MCPOnboard
 		Operation:          assistant.OpCreate,
 		Capability:         "onboard_mcp_server",
 		Description:        "Create a governed asynchronous onboarding job for a remote MCP Server.",
-		ModelDescription:   "Use only when the user explicitly asks to connect, register, or add a remote MCP Server. This creates a job and does not bypass approval or publish policy.",
+		ModelDescription:   "Use only when the user explicitly asks to connect, register, or add a remote MCP Server that is not already registered. If the user names an existing MCP service or asks for a Client authorization, use MCP.Aggregation.Client.Authorize instead; this tool requires endpoint_url and never resolves an existing service by name.",
 		Aliases:            []string{"接入远程MCP", "注册MCP服务", "onboard remote MCP"},
 		Tags:               []string{"v6.3", "mcp", "aggregation", "onboarding", "write"},
 		ObjectTypes:        []string{"mcp_server", "remote_mcp_server", "mcp_onboarding_job"},
