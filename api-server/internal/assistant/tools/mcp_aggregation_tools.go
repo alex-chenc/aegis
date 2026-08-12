@@ -151,6 +151,7 @@ func resolvePublishedMCPServer(ctx context.Context, platform MCPClientAuthorizat
 		return nil, err
 	}
 	items = exactMCPServiceMatches(items, serviceName)
+	items = collapseEquivalentMCPServices(items)
 	if len(items) == 0 {
 		return nil, fmt.Errorf("published MCP service %q was not found", serviceName)
 	}
@@ -162,6 +163,62 @@ func resolvePublishedMCPServer(ctx context.Context, platform MCPClientAuthorizat
 		return nil, fmt.Errorf("published MCP service %q is ambiguous; provide server_id. Candidates: %s", serviceName, strings.Join(candidates, "; "))
 	}
 	return &items[0], nil
+}
+
+// collapseEquivalentMCPServices handles historical duplicate registrations
+// of the same published service. A duplicate is safe to collapse only when
+// its user-visible identity, environment, transport, authentication mode,
+// risk tier, and endpoint display all match. Distinct candidates remain
+// ambiguous and still require an explicit server_id.
+func collapseEquivalentMCPServices(items []model.MCPServer) []model.MCPServer {
+	if len(items) < 2 {
+		return items
+	}
+	result := make([]model.MCPServer, 0, len(items))
+	indexes := make(map[string]int, len(items))
+	for _, item := range items {
+		key := equivalentMCPServiceKey(item)
+		if key == "" {
+			result = append(result, item)
+			continue
+		}
+		if index, exists := indexes[key]; exists {
+			if mcpServerIsNewer(item, result[index]) {
+				result[index] = item
+			}
+			continue
+		}
+		indexes[key] = len(result)
+		result = append(result, item)
+	}
+	return result
+}
+
+func equivalentMCPServiceKey(item model.MCPServer) string {
+	values := []string{
+		strings.ToLower(strings.TrimSpace(item.DisplayName)),
+		strings.ToLower(strings.TrimSpace(item.Environment)),
+		strings.ToLower(strings.TrimSpace(item.Transport)),
+		strings.ToLower(strings.TrimSpace(item.AuthType)),
+		strings.ToLower(strings.TrimSpace(item.RiskTier)),
+		strings.ToLower(strings.TrimSpace(item.EndpointDisplay)),
+	}
+	for _, value := range values {
+		if value == "" {
+			return ""
+		}
+	}
+	return strings.Join(values, "\x00")
+}
+
+func mcpServerIsNewer(candidate, current model.MCPServer) bool {
+	if candidate.UpdatedAt.After(current.UpdatedAt) {
+		return true
+	}
+	if candidate.UpdatedAt.Equal(current.UpdatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
+	}
+	return false
 }
 
 func exactMCPServiceMatches(items []model.MCPServer, serviceName string) []model.MCPServer {

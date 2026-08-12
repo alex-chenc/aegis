@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"api-server/internal/assistant"
 	"api-server/internal/model"
@@ -152,5 +153,36 @@ func TestMCPClientAuthorizationRejectsAmbiguousServiceName(t *testing.T) {
 	_, err := tool.Handler(ctx, map[string]interface{}{"service_name": "Remote MCP aegis-mcp"})
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "server_id") {
 		t.Fatalf("expected an explicit server_id clarification for duplicate services, got %v", err)
+	}
+}
+
+func TestMCPClientAuthorizationCollapsesEquivalentDuplicateRegistrations(t *testing.T) {
+	oldID, newID := uuid.New(), uuid.New()
+	oldRevision, newRevision := uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	base := func(id, revision uuid.UUID, updatedAt time.Time) model.MCPServer {
+		return model.MCPServer{
+			ID: id, ServerKey: "mcp_duplicate", DisplayName: "Remote MCP aegis-mcp", Environment: "dev",
+			Transport: model.MCPPlatformTransportStreamableHTTP, AuthType: model.MCPPlatformAuthNone,
+			RiskTier: model.MCPPlatformRiskL2, EndpointDisplay: "http://aegis-mcp:8085/mcp",
+			LifecycleStatus: model.MCPPlatformServerPublished, ActiveRevisionID: &revision,
+			CreatedAt: updatedAt.Add(-time.Hour), UpdatedAt: updatedAt,
+		}
+	}
+	old := base(oldID, oldRevision, now.Add(-time.Minute))
+	newer := base(newID, newRevision, now)
+	newer.ServerKey = "mcp_duplicate_new"
+	fake := &fakeMCPClientAuthorizationPlatform{servers: []model.MCPServer{old, newer}}
+	registry := assistant.NewToolRegistry()
+	if err := RegisterMCPClientAuthorizationTool(registry, MCPClientAuthorizationToolDeps{Platform: fake}); err != nil {
+		t.Fatal(err)
+	}
+	tool, _ := registry.Get("MCP.Aggregation.Client.Authorize")
+	ctx := assistant.WithToolInvocationContext(context.Background(), assistant.ToolInvocationContext{SessionID: "session-1", Operator: "admin"})
+	if _, err := tool.Handler(ctx, map[string]interface{}{"service_name": "Remote MCP aegis-mcp"}); err != nil {
+		t.Fatalf("equivalent duplicate registrations should resolve: %v", err)
+	}
+	if fake.request.ServerID != newID {
+		t.Fatalf("canonical server_id = %s, want newest %s", fake.request.ServerID, newID)
 	}
 }

@@ -176,7 +176,7 @@ Assistant MCP Client
 | `MCP.Aggregated.Invocation.Get` | `get_mcp_invocation` | companion/contextual | readonly | 查询调用状态、规则结果和证据引用 |
 | `MCP.Aggregation.Server.Onboard` | `onboard_mcp_server` | primary | high/write | 创建受管远程 MCP 接入任务，触发 endpoint 校验、发现、安全扫描和发布审批 |
 | `MCP.Aggregation.Server.Onboarding.Get` | `get_mcp_onboarding_status` | companion | readonly | 查询接入任务状态、失败原因和已发布 Server 摘要 |
-| `MCP.Aggregation.Client.Authorize` | `authorize_mcp_client` | primary | high/write | 按已发布服务名创建受审批的 Client endpoint；不接收原始 endpoint，服务名不唯一时要求 server_id |
+| `MCP.Aggregation.Client.Authorize` | `authorize_mcp_client` | primary | high/write | 按已发布服务名创建受审批的 Client endpoint；不接收原始 endpoint；等价重复注册自动选最近更新记录，关键属性不同才要求 server_id |
 
 前四个只读能力统一挂在 V6.3 工作流 `mcp_aggregation_query` 下；后两个能力统一挂在
 `mcp_aggregation_onboarding` 下。两个工作流分别是 Assistant 第一层意图卡和第二层
@@ -535,8 +535,10 @@ high、critical 或 unknown 改成 safe。
   前端提供二次确认的删除按钮。
 - Assistant 的只读聚合 Client 仍不自动生成或回显平台内置 Token。新增的
   `MCP.Aggregation.Client.Authorize` 仅在用户明确要求为已有已发布服务创建 Client、且
-  通过 Assistant 审批后执行；它按服务名解析 Server，不接受 endpoint_url，服务名有多个
-  匹配时必须要求 server_id。创建结果中的 Token 仅在本次结果中返回一次，日志不得记录。
+  通过 Assistant 审批后执行；它按服务名解析 Server，不接受 endpoint_url。历史上同一
+  服务的等价重复注册（服务名、环境、Endpoint、传输、认证和风险一致）自动
+  选最近更新记录；关键属性不同的多个匹配才要求 server_id。创建结果中的 Token 仅在
+  本次结果中返回一次，日志不得记录。
   平台内置 Assistant Client 仍必须通过 `MCP_ASSISTANT_CLIENT_KEY` 和
   `MCP_ASSISTANT_CLIENT_TOKEN` 注入 api-server；`MCP_ASSISTANT_ENABLED` 默认为关闭。
 - 新 Assistant 注册四个固定只读聚合工具：`MCP.Aggregated.Catalog.List`、
