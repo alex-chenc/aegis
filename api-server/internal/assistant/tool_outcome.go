@@ -22,6 +22,7 @@ func normalizeToolOutcome(tool *ToolSpec, data interface{}) *agentruntime.ToolOu
 	capability := BuildToolUseContract(tool).Capability
 	outcome.Capability = capability
 	payload := resultMap(data)
+	awaitingInput := false
 
 	if contract.AcceptedOnSuccess || tool.ExecutionContract.Mode == ToolExecutionAsynchronous {
 		outcome.OperationStatus = agentruntime.OperationAccepted
@@ -42,6 +43,14 @@ func normalizeToolOutcome(tool *ToolSpec, data interface{}) *agentruntime.ToolOu
 		case stringInFold(state, contract.FailureValues):
 			outcome.OperationStatus = agentruntime.OperationFailed
 			outcome.Terminal = true
+		case stringInFold(state, contract.AwaitingValues):
+			// The business operation is known and durable, but it cannot make
+			// progress until a human/platform decision is recorded. Treat this
+			// as a terminal observation for Runtime polling; the orchestrator
+			// converts the overall Assistant run to needs_input.
+			outcome.OperationStatus = agentruntime.OperationSkipped
+			outcome.Terminal = true
+			awaitingInput = true
 		case stringInFold(state, contract.PendingValues):
 			outcome.OperationStatus = agentruntime.OperationRunning
 			outcome.Terminal = false
@@ -68,10 +77,13 @@ func normalizeToolOutcome(tool *ToolSpec, data interface{}) *agentruntime.ToolOu
 	}
 	outcome.Facts = extractToolFacts(contract.FactBindings, payload)
 
-	if outcome.Terminal && (outcome.OperationStatus == agentruntime.OperationSucceeded || outcome.OperationStatus == agentruntime.OperationSkipped) {
+	if outcome.Terminal && (outcome.OperationStatus == agentruntime.OperationSucceeded || (outcome.OperationStatus == agentruntime.OperationSkipped && !awaitingInput)) {
 		outcome.SatisfiesCapabilities = dedupeStrings(append([]string{capability}, contract.SatisfiesCapabilities...))
 	}
 	outcome.Message = toolOutcomeMessage(outcome)
+	if awaitingInput {
+		outcome.Message = "The business operation is waiting for approval."
+	}
 	return outcome
 }
 

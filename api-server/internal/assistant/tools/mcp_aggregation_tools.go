@@ -125,7 +125,7 @@ func RegisterMCPOnboardingStatusTool(registry *assistant.ToolRegistry, deps MCPO
 			"required":             []string{"job_id"},
 			"additionalProperties": false,
 		},
-		ResultContract: assistant.ToolResultContract{OperationStatusField: "status", SuccessValues: []string{"active"}, PendingValues: []string{"created", "validating_endpoint", "awaiting_auth", "authenticating", "discovering", "validating_tools", "security_scanning", "classifying", "building_release", "awaiting_approval", "publishing"}, FailureValues: []string{"failed", "cancelled"}},
+		ResultContract: assistant.ToolResultContract{OperationStatusField: "status", SuccessValues: []string{"active"}, PendingValues: []string{"created", "validating_endpoint", "awaiting_auth", "authenticating", "discovering", "validating_tools", "security_scanning", "classifying", "building_release", "publishing"}, AwaitingValues: []string{"awaiting_approval"}, FailureValues: []string{"failed", "cancelled"}},
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			id, err := parseUUID(args, "job_id")
 			if err != nil {

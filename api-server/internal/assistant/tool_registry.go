@@ -97,10 +97,15 @@ type ToolPrerequisite struct {
 // ToolResultContract declares how a raw tool result becomes terminal business
 // evidence. Result normalization remains generic and driven by these fields.
 type ToolResultContract struct {
-	AcceptedOnSuccess     bool              `json:"accepted_on_success,omitempty"`
-	OperationStatusField  string            `json:"operation_status_field,omitempty"`
-	SuccessValues         []string          `json:"success_values,omitempty"`
-	PendingValues         []string          `json:"pending_values,omitempty"`
+	AcceptedOnSuccess    bool     `json:"accepted_on_success,omitempty"`
+	OperationStatusField string   `json:"operation_status_field,omitempty"`
+	SuccessValues        []string `json:"success_values,omitempty"`
+	PendingValues        []string `json:"pending_values,omitempty"`
+	// AwaitingValues are known non-terminal workflow states that require an
+	// external decision (for example, platform approval). Runtime stops
+	// polling at these states, while the Assistant maps the business outcome to
+	// needs_input instead of claiming success or reporting a timeout failure.
+	AwaitingValues        []string          `json:"awaiting_values,omitempty"`
 	FailureValues         []string          `json:"failure_values,omitempty"`
 	OperationRefFields    []string          `json:"operation_ref_fields,omitempty"`
 	ArtifactRefFields     []string          `json:"artifact_ref_fields,omitempty"`

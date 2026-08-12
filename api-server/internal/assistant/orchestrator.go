@@ -953,6 +953,16 @@ func (o *Orchestrator) runAgentRuntime(ctx context.Context, input RunInput, cont
 			)
 		}
 	}
+	if evidence.MCPOnboardingAwaitingApproval {
+		goalOutcome = agentruntime.GoalNeedsInput
+		response = buildMCPOnboardingAwaitingApprovalAnswer(evidence, input.Locale)
+		o.logger.Info("assistant MCP onboarding paused for platform approval",
+			zap.String("session_id", input.SessionID),
+			zap.String("run_id", input.RunID),
+			zap.String("job_id", evidence.MCPOnboardingJobID),
+			zap.String("status", evidence.MCPOnboardingStatus),
+		)
+	}
 	if goalOutcome == agentruntime.GoalFailed {
 		// agent-runtime may finish its control loop normally after a failed
 		// plan. Never expose that transport completion as a completed task.
@@ -1050,6 +1060,22 @@ func buildRecoveryRequiredAnswer(request *model.AssistantRecoveryRequest, locale
 		"\n- Review the impact and choose the next step in the recovery card. No security boundary will be expanded before you confirm.",
 	))
 	return b.String()
+}
+
+func buildMCPOnboardingAwaitingApprovalAnswer(ledger runtimeEvidenceLedger, locale string) string {
+	jobID := strings.TrimSpace(ledger.MCPOnboardingJobID)
+	if strings.EqualFold(strings.TrimSpace(locale), "zh-CN") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(locale)), "zh") {
+		answer := "远程 MCP 接入任务已创建，但当前正在等待平台审批，尚未发布为可用服务。请在“MCP 聚合管控”的审批中心完成审批；审批后可再次询问接入状态。"
+		if jobID != "" {
+			answer += "\n\n- 接入任务 ID：" + jobID
+		}
+		return answer
+	}
+	answer := "The remote MCP onboarding job was created, but it is waiting for platform approval and has not been published as an active service. Approve it in the MCP Aggregation Control approval center, then ask for the onboarding status again."
+	if jobID != "" {
+		answer += "\n\n- Onboarding job ID: " + jobID
+	}
+	return answer
 }
 
 func shouldPauseDetectionPackageBeforeActivation(

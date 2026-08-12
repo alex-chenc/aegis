@@ -105,6 +105,34 @@ func TestBuildFailedGoalFallbackNeverReportsCompleted(t *testing.T) {
 	}
 }
 
+func TestRuntimeEvidenceTracksMCPOnboardingApproval(t *testing.T) {
+	jobID := "8c63f281-4c17-4c13-ba6a-effc44d36c66"
+	result := &agentruntime.TaskResult{
+		StepExecutions: []agentruntime.StepExecution{{
+			ReactTurns: []agentruntime.ReactTurn{{Observation: &agentruntime.Observation{
+				CallID:   "call-mcp-status",
+				ToolName: "MCP.Aggregation.Server.Onboarding.Get",
+				Status:   agentruntime.ToolCallSuccess,
+				Content:  `{"job_id":"` + jobID + `","status":"awaiting_approval"}`,
+				Outcome: &agentruntime.ToolOutcome{
+					Capability:      "get_mcp_onboarding_status",
+					OperationStatus: agentruntime.OperationSkipped,
+					Terminal:        true,
+				},
+			}}},
+		}},
+	}
+
+	ledger := buildRuntimeEvidenceLedger(result)
+	if !ledger.MCPOnboardingAwaitingApproval || ledger.MCPOnboardingJobID != jobID || ledger.MCPOnboardingStatus != "awaiting_approval" {
+		t.Fatalf("MCP onboarding approval evidence = %#v", ledger)
+	}
+	answer := buildMCPOnboardingAwaitingApprovalAnswer(ledger, "zh-CN")
+	if !strings.Contains(answer, "等待平台审批") || !strings.Contains(answer, jobID) {
+		t.Fatalf("approval answer = %q", answer)
+	}
+}
+
 func TestBuildFailedGoalFallbackForModelOnlyRunIsNotScanSpecific(t *testing.T) {
 	fallback := buildFailedGoalFallback(runtimeEvidenceLedger{})
 	if !strings.Contains(fallback, "分析未完成") {

@@ -51,6 +51,9 @@ type runtimeEvidenceLedger struct {
 	AssetCollectionCoverage          map[string]int        `json:"asset_collection_coverage,omitempty"`
 	DetectionPackageID               string                `json:"detection_package_id,omitempty"`
 	DetectionPackageStatus           string                `json:"detection_package_status,omitempty"`
+	MCPOnboardingJobID               string                `json:"mcp_onboarding_job_id,omitempty"`
+	MCPOnboardingStatus              string                `json:"mcp_onboarding_status,omitempty"`
+	MCPOnboardingAwaitingApproval    bool                  `json:"mcp_onboarding_awaiting_approval,omitempty"`
 }
 
 func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidenceLedger {
@@ -112,6 +115,13 @@ func buildRuntimeEvidenceLedger(result *agentruntime.TaskResult) runtimeEvidence
 			}
 			evidence.Content = content
 			ledger.Calls = append(ledger.Calls, evidence)
+			if outcome := observation.Outcome; outcome != nil && outcome.Capability == "get_mcp_onboarding_status" {
+				if contentMap, ok := content.(map[string]interface{}); ok {
+					ledger.MCPOnboardingJobID = stringValue(contentMap["job_id"])
+					ledger.MCPOnboardingStatus = strings.ToLower(strings.TrimSpace(stringValue(contentMap["status"])))
+					ledger.MCPOnboardingAwaitingApproval = ledger.MCPOnboardingStatus == "awaiting_approval"
+				}
+			}
 			if strings.HasPrefix(observation.ToolName, "Package.") {
 				if contentMap, ok := content.(map[string]interface{}); ok {
 					if packageID := stringValue(contentMap["package_id"]); packageID != "" {

@@ -80,6 +80,30 @@ func TestNormalizeToolOutcomeUsesTerminalStatusEvidence(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolOutcomeStopsAtAwaitingApprovalWithoutClaimingSuccess(t *testing.T) {
+	tool := &ToolSpec{
+		Capability: "get_mcp_onboarding_status",
+		ResultContract: ToolResultContract{
+			OperationStatusField:  "status",
+			SuccessValues:         []string{"active"},
+			AwaitingValues:        []string{"awaiting_approval"},
+			FailureValues:         []string{"failed", "cancelled"},
+			SatisfiesCapabilities: []string{"onboard_mcp_server"},
+		},
+	}
+
+	outcome := normalizeToolOutcome(tool, map[string]interface{}{"job_id": "job-1", "status": "awaiting_approval"})
+	if !outcome.Terminal || outcome.OperationStatus != agentruntime.OperationSkipped {
+		t.Fatalf("awaiting approval must stop polling as skipped evidence: %#v", outcome)
+	}
+	if len(outcome.SatisfiesCapabilities) != 0 {
+		t.Fatalf("awaiting approval must not satisfy onboarding: %#v", outcome)
+	}
+	if outcome.Message != "The business operation is waiting for approval." {
+		t.Fatalf("awaiting approval message = %q", outcome.Message)
+	}
+}
+
 func TestNormalizeToolOutcomeCompletesSuccessfulObservationOfTerminalFailure(t *testing.T) {
 	tool := &ToolSpec{
 		Name:       "Example.QueryProgress",
