@@ -102,16 +102,19 @@ type AgentSessionConfig struct {
 }
 
 type MCPPlatformConfig struct {
-	GatewayBaseURL          string `mapstructure:"gateway_base_url"`
-	PublicGatewayBaseURL    string `mapstructure:"public_gateway_base_url"`
-	RuntimeSharedSecret     string `mapstructure:"runtime_shared_secret"`
-	AssistantMCPEnabled     bool   `mapstructure:"assistant_mcp_enabled"`
-	AssistantMCPClientKey   string `mapstructure:"assistant_mcp_client_key"`
-	AssistantMCPClientToken string `mapstructure:"assistant_mcp_client_token"`
-	MaxRequestBytes         int64  `mapstructure:"max_request_bytes"`
-	MaxResponseBytes        int64  `mapstructure:"max_response_bytes"`
-	UpstreamTimeoutSec      int    `mapstructure:"upstream_timeout_seconds"`
-	CatalogSigningKey       string `mapstructure:"catalog_signing_key"`
+	GatewayBaseURL           string `mapstructure:"gateway_base_url"`
+	PublicGatewayBaseURL     string `mapstructure:"public_gateway_base_url"`
+	RuntimeSharedSecret      string `mapstructure:"runtime_shared_secret"`
+	AssistantMCPEnabled      bool   `mapstructure:"assistant_mcp_enabled"`
+	AssistantMCPClientKey    string `mapstructure:"assistant_mcp_client_key"`
+	AssistantMCPClientToken  string `mapstructure:"assistant_mcp_client_token"`
+	MaxRequestBytes          int64  `mapstructure:"max_request_bytes"`
+	MaxResponseBytes         int64  `mapstructure:"max_response_bytes"`
+	UpstreamTimeoutSec       int    `mapstructure:"upstream_timeout_seconds"`
+	CatalogSigningKey        string `mapstructure:"catalog_signing_key"`
+	AuthorizationMode        string `mapstructure:"authorization_mode"`
+	DecisionTimeoutMS        int    `mapstructure:"decision_timeout_ms"`
+	MaxConcurrentEvaluations int    `mapstructure:"max_concurrent_evaluations"`
 }
 
 type SelfHealingConfig struct {
@@ -228,6 +231,15 @@ func overrideFromEnv(cfg *Config) {
 	}
 	if signingKey := getEnv("MCP_CATALOG_SIGNING_KEY"); signingKey != "" {
 		cfg.MCPPlatform.CatalogSigningKey = signingKey
+	}
+	if mode := getEnv("MCP_AUTHORIZATION_MODE"); mode != "" {
+		cfg.MCPPlatform.AuthorizationMode = mode
+	}
+	if timeout := getEnvInt("MCP_AUTHORIZATION_DECISION_TIMEOUT_MS"); timeout != 0 {
+		cfg.MCPPlatform.DecisionTimeoutMS = timeout
+	}
+	if max := getEnvInt("MCP_AUTHORIZATION_MAX_CONCURRENT_EVALUATIONS"); max != 0 {
+		cfg.MCPPlatform.MaxConcurrentEvaluations = max
 	}
 	if enabled, ok := getEnvBool("AGENT_GUARD_POLICY_WRITE_ENABLED"); ok {
 		cfg.AgentGuard.PolicyWriteEnabled = enabled

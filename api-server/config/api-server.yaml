@@ -83,6 +83,11 @@ mcp_platform:
   max_response_bytes: 10485760
   upstream_timeout_seconds: 30
   catalog_signing_key: ""
+  # Call-before authorization is fail-closed. Compatibility permits are
+  # generated only for explicitly created client/release-tool bindings.
+  authorization_mode: "enforce"
+  decision_timeout_ms: 20
+  max_concurrent_evaluations: 32
 
 # Self Healing Configuration
 self_healing:

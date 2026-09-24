@@ -49,65 +49,13 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to clean invalid thinking data: %w", err)
 	}
 
-	// Auto-migrate newer generic tables. Core legacy tables already exist in
-	// database with proper constraints.
-	if err := db.AutoMigrate(
-		&model.AIConfig{},
-		&model.LLMConfig{},
-		&model.ImageModelConfig{},
-		&model.Notification{},
-		&model.AuthUser{},
-		&model.AuthSession{},
-		&model.CommandAuditRule{},
-		&model.ScriptAuditLog{},
-		&model.SystemConfig{},
-		&model.AgentExecution{},
-		&model.AgentStepExecution{},
-		&model.AgentReflection{},
-		&model.AgentAudit{},
-		&model.AgentCorrection{},
-		&model.AgentToolCallRecord{},
-		&model.AgentModelError{},
-		&model.DetectionPackageDraft{},
-		&model.DetectionPackage{},
-		&model.DetectionPackageBuild{},
-		&model.DetectionPackageHostStatus{},
-		&model.DetectionPackageOperation{},
-		&model.EBPFHookAllowlistConfig{},
-		&model.CorrelationRule{},
-		&model.RolePermission{},
-		// V6.0 Assistant tables
-		&model.AssistantSession{},
-		&model.AssistantMessage{},
-		&model.AssistantContextRef{},
-		&model.AssistantToolCall{},
-		&model.AssistantOperation{},
-		&model.AssistantApproval{},
-		&model.AssistantRecoveryRequest{},
-		&model.AssistantToolSelection{},
-		&model.AssistantToolPolicy{},
-		&model.AssistantMemory{},
-		&model.AssistantInvestigationReport{},
-		&model.AssistantInvestigationEvidence{},
-		&model.ExternalMCPSource{},
-		&model.ExternalMCPQueryLog{},
-		// V6.1 CVE-level generic vulnerability scripts. Keep this in startup
-		// migration so existing persistent volumes do not depend on replaying
-		// migrations/001_init.sql.
-		&model.VulnerabilityScript{},
-		// V6.3 Agent Session Awareness projections and analysis runs.
-		&model.AgentConversationSession{},
-		&model.AgentConversationItem{},
-		&model.AgentSessionRuleDefinition{},
-		&model.AgentSessionRuleHit{},
-		&model.AgentSessionAIRun{},
-		&model.AgentSessionAIChunk{},
-		// MCP V6.3 tables are created by the formal 033/034 SQL migrations.
-		// Do not include them in AutoMigrate: PostgreSQL unique constraints and
-		// SQL indexes are intentionally managed by migrations, and GORM may try
-		// to drop/recreate a constraint with a different generated name during
-		// startup. The models remain runtime mappings for repositories/tests.
-	); err != nil {
+	// Auto-migrate only tables without a formal SQL migration. All migration
+	// owned tables already exist with their migration-defined constraints.
+	// RolePermission remains here because the legacy auth schema is not part of
+	// the root migrations mounted by docker-compose. MCP control-plane routes
+	// execute the role middleware, so omitting this table makes every request
+	// fail before the MCP repository is reached on existing volumes.
+	if err := db.AutoMigrate(autoMigrateModels()...); err != nil {
 		logger.Error("failed to auto migrate models", zap.Error(err))
 		return nil, fmt.Errorf("failed to auto migrate models: %w", err)
 	}
@@ -149,6 +97,23 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	return db, nil
+}
+
+func autoMigrateModels() []interface{} {
+	return []interface{}{
+		&model.AIConfig{},
+		&model.ImageModelConfig{},
+		&model.Notification{},
+		&model.RolePermission{},
+		// All remaining models are created and evolved by the formal SQL
+		// migrations. Keeping them out of AutoMigrate avoids GORM attempting
+		// to reconcile migration-owned constraint names on persistent volumes.
+		// MCP V6.3 tables are created by the formal 033/034 SQL migrations.
+		// Do not include them in AutoMigrate: PostgreSQL unique constraints and
+		// SQL indexes are intentionally managed by migrations, and GORM may try
+		// to drop/recreate a constraint with a different generated name during
+		// startup. The models remain runtime mappings for repositories/tests.
+	}
 }
 
 func ensureAssistantRecoverySchema(db *gorm.DB) error {

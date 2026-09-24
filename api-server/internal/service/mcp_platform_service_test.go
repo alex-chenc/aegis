@@ -37,8 +37,9 @@ func newMCPPlatformTestService(t *testing.T) (*MCPPlatformService, *gorm.DB) {
 		`CREATE TABLE mcp_client_grants (id text primary key, client_id text, catalog_id text, tool_allowlist text, resource_scope text, status text, expires_at datetime, created_by text, created_at datetime, updated_at datetime)`,
 		`CREATE TABLE mcp_client_credentials (id text primary key, client_id text, token_prefix text, token_hash text, status text, expires_at datetime, last_used_at datetime, created_by text, created_at datetime, updated_at datetime)`,
 		`CREATE TABLE mcp_approval_requests (id text primary key, approval_type text, subject_type text, subject_id text, requested_by text, status text, request_digest text, reason text, decision_reason text, decided_by text, created_at datetime, decided_at datetime)`,
-		`CREATE TABLE mcp_invocations (id text primary key, client_id text, catalog_release_id text, tool_revision_id text, user_id text, tool_alias text, status text, policy_decision text, rule_status text, ai_status text, request_digest text, result_digest text, created_at datetime, completed_at datetime)`,
-		`CREATE TABLE mcp_security_verdicts (id text primary key, invocation_id text, deterministic_severity text, ai_verdict text, overall_risk text, evidence text, updated_at datetime)`,
+		`CREATE TABLE mcp_invocations (id text primary key, client_id text, catalog_release_id text, tool_revision_id text, user_id text, tool_alias text, status text, policy_decision text, authorization_decision_id text, upstream_started boolean not null default false, completion_unknown boolean not null default false, rule_status text, ai_status text, request_digest text, result_digest text, created_at datetime, completed_at datetime)`,
+		`CREATE TABLE mcp_authorization_decisions (id text primary key, attempt_id text, decision_id text unique, invocation_id text, client_id text, credential_id text, grant_id text, catalog_release_id text, release_tool_id text, tool_revision_id text, user_id text, user_verified boolean, policy_revision text, policy_digest text, deployment_generation integer, outcome text, reason_code text, deny_rule_ids text, audit_rule_ids text, request_digest text, evaluator_elapsed_ms integer, upstream_started boolean, created_at datetime)`,
+		`CREATE TABLE mcp_security_verdicts (id text primary key, invocation_id text, engine text, source text, phase text, action text, policy_revision text, rule_ids text, audit_rule_ids text, deterministic_severity text, ai_verdict text, overall_risk text, evidence text, updated_at datetime)`,
 		`CREATE TABLE mcp_rule_definitions (id text primary key, rule_key text, version integer, name text, phase text, severity text, definition text, digest text, enabled boolean, created_at datetime)`,
 		`CREATE TABLE mcp_rule_hits (id text primary key, invocation_id text, rule_definition_id text, severity text, phase text, evidence text, created_at datetime)`,
 	} {
@@ -49,21 +50,6 @@ func newMCPPlatformTestService(t *testing.T) (*MCPPlatformService, *gorm.DB) {
 	svc := NewMCPPlatformService(repository.NewMCPPlatformRepository(db), zap.NewNop())
 	svc.client = &http.Client{Timeout: 2 * time.Second}
 	return svc, db
-}
-
-func seedMCPSecurityRules(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	now := time.Now().UTC()
-	for _, rule := range []model.MCPRuleDefinition{
-		{ID: uuid.New(), RuleKey: "block_l4_tool_call", Version: 1, Name: "Block L4", Phase: "pre", Severity: "critical", Definition: []byte(`{"matcher":"tool_risk_at_least","threshold":"l4","action":"block"}`), Digest: "l4", Enabled: true, CreatedAt: now},
-		{ID: uuid.New(), RuleKey: "block_sensitive_output_keys", Version: 1, Name: "Sensitive output", Phase: "post", Severity: "critical", Definition: []byte(`{"matcher":"sensitive_output_keys","keys":["token","password"],"action":"block"}`), Digest: "sensitive", Enabled: true, CreatedAt: now},
-		{ID: uuid.New(), RuleKey: "audit_upstream_failure", Version: 1, Name: "Upstream failure", Phase: "post", Severity: "medium", Definition: []byte(`{"matcher":"call_failed","action":"audit"}`), Digest: "failed", Enabled: true, CreatedAt: now},
-		{ID: uuid.New(), RuleKey: "block_injection_input", Version: 1, Name: "Injection input", Phase: "pre", Severity: "critical", Definition: []byte(`{"matcher":"input_patterns","patterns":["../"," union select "],"action":"block"}`), Digest: "injection", Enabled: true, CreatedAt: now},
-	} {
-		if err := db.Create(&rule).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 func TestMCPServerListHidesRetiredByDefault(t *testing.T) {
@@ -177,8 +163,18 @@ func TestMCPClientEndpointBindsOneServerAndFiltersTools(t *testing.T) {
 	if err := db.Where("server_revision_id = ? AND alias = ?", revisionID, "list_hosts").First(&listHosts).Error; err != nil {
 		t.Fatal(err)
 	}
-	invocation := &model.MCPInvocation{ID: uuid.New(), ClientID: &created.ClientID, ToolRevisionID: &listHosts.ID, UserID: created.ClientKey, ToolAlias: listHosts.Alias, Status: "succeeded", PolicyDecision: "allow", CreatedAt: now}
+	invocation := &model.MCPInvocation{ID: uuid.New(), ClientID: &created.ClientID, ToolRevisionID: &listHosts.ID, UserID: created.ClientKey, ToolAlias: listHosts.Alias, Status: "blocked", PolicyDecision: "deny", CreatedAt: now}
 	if err := db.Create(invocation).Error; err != nil {
+		t.Fatal(err)
+	}
+	decisionID := uuid.New()
+	if err := db.Create(&model.MCPAuthorizationDecision{
+		ID: uuid.New(), AttemptID: invocation.ID, DecisionID: decisionID, InvocationID: &invocation.ID,
+		ClientID: &created.ClientID, ToolRevisionID: &listHosts.ID, PolicyRevision: "codex-host-a-v1",
+		DeploymentGeneration: 1, Outcome: "deny", ReasonCode: "POLICY_DENIED",
+		DenyRuleIDs: []byte(`["host.query.host_a_denied"]`), AuditRuleIDs: []byte(`[]`),
+		CreatedAt: now,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	auditItems, total, err := svc.ListInvocations(context.Background(), 1, 100)
@@ -187,6 +183,9 @@ func TestMCPClientEndpointBindsOneServerAndFiltersTools(t *testing.T) {
 	}
 	if auditItems[0].ServerID != serverID || auditItems[0].ServerName != "Aegis Local MCP" || auditItems[0].ClientKey != "codex-aegis" || !auditItems[0].ToolEnabled {
 		t.Fatalf("expected service, Client and grant state on audit item: %#v", auditItems[0])
+	}
+	if auditItems[0].AuthorizationOutcome != "deny" || auditItems[0].AuthorizationReasonCode != "POLICY_DENIED" || auditItems[0].AuthorizationPolicyRevision != "codex-host-a-v1" || len(auditItems[0].AuthorizationDenyRuleIDs) != 1 || auditItems[0].AuthorizationDenyRuleIDs[0] != "host.query.host_a_denied" {
+		t.Fatalf("expected authorization denial fields on invocation audit item: %#v", auditItems[0])
 	}
 	disabled, err := svc.DisableInvocationTool(context.Background(), invocation.ID, "admin")
 	if err != nil || !disabled.Disabled || !disabled.Changed {
@@ -264,7 +263,6 @@ func TestMCPRuntimeCreatesSafeVerdictAndBlocksSensitiveResult(t *testing.T) {
 	defer upstream.Close()
 
 	svc, db := newMCPPlatformTestService(t)
-	seedMCPSecurityRules(t, db)
 	now := time.Now().UTC()
 	serverID, revisionID := uuid.New(), uuid.New()
 	serverURL := strings.Replace(upstream.URL, "127.0.0.1", "localhost", 1)
@@ -308,7 +306,7 @@ func TestMCPRuntimeCreatesSafeVerdictAndBlocksSensitiveResult(t *testing.T) {
 	if err := db.Order("updated_at DESC").First(&verdict).Error; err != nil {
 		t.Fatal(err)
 	}
-	if verdict.OverallRisk != "critical" {
+	if verdict.OverallRisk != "critical" || verdict.Engine != "rego" || verdict.Source != "rego" || verdict.Action != "deny" {
 		t.Fatalf("expected critical verdict for sensitive result: %#v", verdict)
 	}
 	securityItems, securityTotal, err := svc.ListSecurityVerdicts(context.Background(), 1, 10)
@@ -319,7 +317,7 @@ func TestMCPRuntimeCreatesSafeVerdictAndBlocksSensitiveResult(t *testing.T) {
 	for _, item := range securityItems {
 		if item.InvocationID == verdict.InvocationID {
 			for _, ruleName := range item.MatchedRules {
-				if ruleName == "Sensitive output" {
+				if ruleName == "mcp.security.output.sensitive-key.v1" {
 					matchedSensitiveRule = true
 				}
 			}
@@ -329,12 +327,12 @@ func TestMCPRuntimeCreatesSafeVerdictAndBlocksSensitiveResult(t *testing.T) {
 		t.Fatalf("expected verdict to expose matched rule name: %#v", securityItems)
 	}
 	var hitCount int64
-	if err := db.Model(&model.MCPRuleHit{}).Count(&hitCount).Error; err != nil || hitCount != 1 {
-		t.Fatalf("expected one rule hit, count=%d err=%v", hitCount, err)
+	if err := db.Model(&model.MCPRuleHit{}).Count(&hitCount).Error; err != nil || hitCount != 0 {
+		t.Fatalf("legacy rule hits must not be written, count=%d err=%v", hitCount, err)
 	}
 }
 
-func TestMCPRuntimeBlocksL4BeforeUpstreamAndRulesCanBeDisabled(t *testing.T) {
+func TestMCPRuntimeBlocksL4BeforeUpstreamWithRego(t *testing.T) {
 	upstreamCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls++
@@ -343,7 +341,6 @@ func TestMCPRuntimeBlocksL4BeforeUpstreamAndRulesCanBeDisabled(t *testing.T) {
 	}))
 	defer upstream.Close()
 	svc, db := newMCPPlatformTestService(t)
-	seedMCPSecurityRules(t, db)
 	now := time.Now().UTC()
 	serverID, revisionID := uuid.New(), uuid.New()
 	serverURL := strings.Replace(upstream.URL, "127.0.0.1", "localhost", 1)
@@ -367,23 +364,6 @@ func TestMCPRuntimeBlocksL4BeforeUpstreamAndRulesCanBeDisabled(t *testing.T) {
 	if upstreamCalls != 0 {
 		t.Fatalf("pre-call security rule reached upstream %d times", upstreamCalls)
 	}
-	rules, total, err := svc.ListSecurityRules(context.Background(), 1, 10)
-	if err != nil || total != 4 || len(rules) != 4 {
-		t.Fatalf("unexpected rules page items=%#v total=%d err=%v", rules, total, err)
-	}
-	var l4Rule model.MCPRuleDefinition
-	if err := db.Where("rule_key = ?", "block_l4_tool_call").First(&l4Rule).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.SetSecurityRuleEnabled(context.Background(), l4Rule.ID, false, "admin"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.RuntimeCall(context.Background(), created.Token, created.ClientKey, tool.Alias, json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("disabled rule should no longer block: %v", err)
-	}
-	if upstreamCalls != 1 {
-		t.Fatalf("expected one upstream call after rule disable, got %d", upstreamCalls)
-	}
 }
 
 func TestMCPRuntimeBlocksInjectionInputBeforeUpstream(t *testing.T) {
@@ -395,7 +375,6 @@ func TestMCPRuntimeBlocksInjectionInputBeforeUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 	svc, db := newMCPPlatformTestService(t)
-	seedMCPSecurityRules(t, db)
 	now := time.Now().UTC()
 	serverID, revisionID := uuid.New(), uuid.New()
 	serverURL := strings.Replace(upstream.URL, "127.0.0.1", "localhost", 1)

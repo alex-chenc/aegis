@@ -12,11 +12,25 @@ import type {
   MCPOnboardingPayload,
   MCPOverview,
   MCPPage,
-  MCPSecurityRule,
   MCPSecurityVerdict,
   MCPServer,
   MCPToolRevision,
+  MCPAuthorizationPolicy,
+  MCPAuthorizationPolicyStatus,
+  MCPAuthorizationPolicyValidation,
 } from '@/types/mcpAggregation'
+
+export function getMCPAuthorizationPolicy(): Promise<MCPAuthorizationPolicyStatus> {
+  return request.get('/mcp-platform/authorization/policies')
+}
+
+export function publishMCPAuthorizationPolicy(policy: MCPAuthorizationPolicy): Promise<unknown> {
+  return request.post('/mcp-platform/authorization/policies', policy)
+}
+
+export function validateMCPAuthorizationPolicy(policy: MCPAuthorizationPolicy): Promise<MCPAuthorizationPolicyValidation> {
+  return request.post('/mcp-platform/authorization/policies/validate', policy)
+}
 
 export function getMCPOverview(): Promise<MCPOverview> {
   return request.get('/mcp-platform/overview')
@@ -107,12 +121,4 @@ export function disableMCPInvocationTool(invocationId: string): Promise<MCPInvoc
 
 export function listMCPSecurityVerdicts(params: Record<string, unknown> = {}): Promise<MCPPage<MCPSecurityVerdict>> {
   return request.get('/mcp-platform/security-verdicts', { params })
-}
-
-export function listMCPSecurityRules(params: Record<string, unknown> = {}): Promise<MCPPage<MCPSecurityRule>> {
-  return request.get('/mcp-platform/security-rules', { params })
-}
-
-export function setMCPSecurityRuleEnabled(id: string, enabled: boolean): Promise<MCPSecurityRule> {
-  return request.put(`/mcp-platform/security-rules/${id}/enabled`, { enabled })
 }

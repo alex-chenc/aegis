@@ -441,6 +441,17 @@ func main() {
 	agentSkillSecurityService := service.NewAgentSkillSecurityService(serverClient, logger.Get().Named("agent_skill_security"), agentSkillSnapshotStore)
 	agentSessionHandler := handler.NewAgentSessionHandler(agentSessionService, logger.Get().Named("agent_session_handler"))
 	mcpPlatformService := service.NewMCPPlatformService(mcpPlatformRepo, logger.Get())
+	if cfg.MCPPlatform.DecisionTimeoutMS > 0 {
+		mcpPlatformService.SetAuthorizationTimeout(time.Duration(cfg.MCPPlatform.DecisionTimeoutMS) * time.Millisecond)
+	}
+	if cfg.MCPPlatform.MaxConcurrentEvaluations > 0 {
+		mcpPlatformService.SetAuthorizationConcurrency(cfg.MCPPlatform.MaxConcurrentEvaluations)
+	}
+	if err := mcpPlatformService.LoadAuthorizationPolicy(ctx); err != nil {
+		logger.Warn("mcp_authorization_policy_load_failed", zap.Error(err))
+	} else {
+		logger.Info("mcp_authorization_policy_loaded")
+	}
 	mcpPlatformService.SetCatalogSigningKey(cfg.MCPPlatform.CatalogSigningKey)
 	mcpPlatformHandler := handler.NewMCPPlatformHandler(mcpPlatformService, logger.Get())
 	mcpPlatformHandler.SetRuntimeSecret(cfg.MCPPlatform.RuntimeSharedSecret)

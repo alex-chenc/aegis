@@ -1,6 +1,17 @@
-# Aegis Intelligent Host Security System (V6.3)
+# Aegis Intelligent Host Security System (V6.4)
 
 [中文](README.md) | English
+
+## V6.4 Agent Skill Security (AIDR)
+
+V6.4 expands AIDR (AI Detection & Response) with Agent Skill inventory and security scanning. The Agent performs read-only collection of installed Skills for Codex, Claude Code, and OpenClaw. The server stores scan snapshots and revisions, then combines deterministic rules with AI analysis to detect prompt injection, poisoning, credential access, and high-risk execution capabilities.
+
+- Review host Skill inventories, sources, duplicate/override relationships, file contents, and revision changes.
+- Analyze Skills, referenced files, and scripts statically; collection and analysis never execute Skill content.
+- View rule findings, AI analysis, and scan coverage, with support for human triage and revision history.
+- Use host behavior evidence to distinguish risky capability from confirmed execution; Skills are not automatically modified or disabled.
+
+Design documents: [V6.4 Agent Skill Security](docs/aegis_system_design_v6.4/README.md)
 
 ## V6.3 MCP Aggregation Governance
 
@@ -29,11 +40,15 @@ V6.3 adds a remote MCP aggregation governance platform. Remote MCP Server onboar
 
 4. To let the Aegis Assistant use this Client, configure MCP_ASSISTANT_ENABLED, MCP_ASSISTANT_CLIENT_KEY, and MCP_ASSISTANT_CLIENT_TOKEN in api-server. The Token is shown only at creation time; only its digest is stored in the database.
 
+## V6.4 MCP Rego Security Policies
+
+MCP aggregation adds OPA/Rego-based pre-call authorization and post-call security decisions. Policies can be validated in the console and published as versioned releases. Pre-call rules inspect tools and arguments; post-call rules inspect upstream results. Policy compilation, evaluation, or contract failures are handled fail-closed. Historical Go rules remain available as read-only archives.
+
 ## Overview
 
-Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology, using a natural-language AI assistant to orchestrate end-to-end security operations across baselines, vulnerabilities, assets, alerts, and weak passwords, achieving dynamic audit management of host configurations, vulnerabilities, and weak passwords. V6.2 adds AI Agent runtime protection across behavior awareness, sandbox-escape detection, and configuration security checks, using deterministic rules, host-side sensors, and traceable evidence to close the loop from precise protection to automated response.
+Aegis is a next-generation AI-native host security platform. The system deeply integrates LLM technology, using a natural-language AI assistant to orchestrate end-to-end security operations across baselines, vulnerabilities, assets, alerts, and weak passwords, achieving dynamic audit management of host configurations, vulnerabilities, and weak passwords. AIDR (AI Detection & Response) covers AI Agent behavior awareness, escape detection, configuration security, and V6.4 Agent Skill scanning, using deterministic rules, host-side sensors, durable scan snapshots, and traceable evidence to close the detection and response loop.
 
-## AI Agent Protection (V6.2)
+## AIDR: AI Agent Detection and Response (V6.2–V6.4)
 
 V6.2 adds three protection capabilities for AI Agents such as Codex, Claude Code, OpenClaw, Hermes, and Zcode. They help security teams answer which Agent, session, and execution process performed an operation, and whether it crossed its effective boundary.
 

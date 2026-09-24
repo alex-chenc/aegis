@@ -9,6 +9,10 @@ export interface MCPInvocationClientGroup {
   lastInvocationId: string
   lastStatus: string
   lastPolicyDecision?: string
+  lastAuthorizationOutcome?: string
+  lastAuthorizationReasonCode?: string
+  lastAuthorizationDenyRuleIDs: string[]
+  lastAuthorizationAuditRuleIDs: string[]
   lastCalledAt: string
   toolEnabled: boolean
 }
@@ -72,6 +76,10 @@ export function groupMCPInvocations(items: MCPInvocation[]): MCPInvocationServic
         lastInvocationId: invocation.id,
         lastStatus: invocation.status,
         lastPolicyDecision: invocation.policy_decision,
+        lastAuthorizationOutcome: invocation.authorization_outcome,
+        lastAuthorizationReasonCode: invocation.authorization_reason_code,
+        lastAuthorizationDenyRuleIDs: invocation.authorization_deny_rule_ids || [],
+        lastAuthorizationAuditRuleIDs: invocation.authorization_audit_rule_ids || [],
         lastCalledAt: invocation.created_at,
         toolEnabled: invocation.tool_enabled && Boolean(invocation.tool_revision_id),
       }

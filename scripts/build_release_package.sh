@@ -226,7 +226,9 @@ copy_release_migration() {
     035_v6.3_mcp_client_endpoints.sql \
     036_v6.3_mcp_security_rules.sql \
     037_v6.4_agent_skill_security.sql \
-    038_v6.4_agent_skill_scan_snapshots.sql; do
+    038_v6.4_agent_skill_scan_snapshots.sql \
+    039_v6.3_mcp_opa_authorization.sql \
+    040_v6.4_mcp_rego_only_archive.sql; do
     test -s "${ROOT_DIR}/migrations/${migration}" || die "missing required release migration: ${ROOT_DIR}/migrations/${migration}"
     cp "${ROOT_DIR}/migrations/${migration}" "${RELEASE_DIR}/backend/migrations/${migration}"
     chmod 0644 "${RELEASE_DIR}/backend/migrations/${migration}"
@@ -302,6 +304,8 @@ services:
       - ./backend/migrations/036_v6.3_mcp_security_rules.sql:/migrations/036_v6.3_mcp_security_rules.sql:ro
       - ./backend/migrations/037_v6.4_agent_skill_security.sql:/migrations/037_v6.4_agent_skill_security.sql:ro
       - ./backend/migrations/038_v6.4_agent_skill_scan_snapshots.sql:/migrations/038_v6.4_agent_skill_scan_snapshots.sql:ro
+      - ./backend/migrations/039_v6.3_mcp_opa_authorization.sql:/migrations/039_v6.3_mcp_opa_authorization.sql:ro
+      - ./backend/migrations/040_v6.4_mcp_rego_only_archive.sql:/migrations/040_v6.4_mcp_rego_only_archive.sql:ro
     command:
       - "psql"
       - "-v"
@@ -332,6 +336,10 @@ services:
       - "/migrations/037_v6.4_agent_skill_security.sql"
       - "-f"
       - "/migrations/038_v6.4_agent_skill_scan_snapshots.sql"
+      - "-f"
+      - "/migrations/039_v6.3_mcp_opa_authorization.sql"
+      - "-f"
+      - "/migrations/040_v6.4_mcp_rego_only_archive.sql"
     networks:
       - aegis-network
 

@@ -310,27 +310,68 @@ type MCPApprovalRequest struct {
 func (MCPApprovalRequest) TableName() string { return "mcp_approval_requests" }
 
 type MCPInvocation struct {
-	ID               uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	ClientID         *uuid.UUID `gorm:"type:uuid;index" json:"client_id,omitempty"`
-	CatalogReleaseID *uuid.UUID `gorm:"type:uuid;index" json:"catalog_release_id,omitempty"`
-	ToolRevisionID   *uuid.UUID `gorm:"type:uuid;index" json:"tool_revision_id,omitempty"`
-	UserID           string     `gorm:"type:varchar(100);index" json:"user_id,omitempty"`
-	ToolAlias        string     `gorm:"type:varchar(255);not null" json:"tool_alias"`
-	Status           string     `gorm:"type:varchar(32);not null;index" json:"status"`
-	PolicyDecision   string     `gorm:"type:varchar(32)" json:"policy_decision,omitempty"`
-	RuleStatus       string     `gorm:"type:varchar(32)" json:"rule_status,omitempty"`
-	AIStatus         string     `gorm:"type:varchar(32)" json:"ai_status,omitempty"`
-	RequestDigest    string     `gorm:"type:varchar(80)" json:"request_digest,omitempty"`
-	ResultDigest     string     `gorm:"type:varchar(80)" json:"result_digest,omitempty"`
-	CreatedAt        time.Time  `gorm:"not null;default:now();index" json:"created_at"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	ID                      uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ClientID                *uuid.UUID `gorm:"type:uuid;index" json:"client_id,omitempty"`
+	CatalogReleaseID        *uuid.UUID `gorm:"type:uuid;index" json:"catalog_release_id,omitempty"`
+	ToolRevisionID          *uuid.UUID `gorm:"type:uuid;index" json:"tool_revision_id,omitempty"`
+	UserID                  string     `gorm:"type:varchar(100);index" json:"user_id,omitempty"`
+	ToolAlias               string     `gorm:"type:varchar(255);not null" json:"tool_alias"`
+	Status                  string     `gorm:"type:varchar(32);not null;index" json:"status"`
+	PolicyDecision          string     `gorm:"type:varchar(32)" json:"policy_decision,omitempty"`
+	AuthorizationDecisionID *uuid.UUID `gorm:"type:uuid;index" json:"authorization_decision_id,omitempty"`
+	UpstreamStarted         bool       `gorm:"not null;default:false" json:"upstream_started"`
+	CompletionUnknown       bool       `gorm:"not null;default:false" json:"completion_unknown"`
+	RuleStatus              string     `gorm:"type:varchar(32)" json:"rule_status,omitempty"`
+	AIStatus                string     `gorm:"type:varchar(32)" json:"ai_status,omitempty"`
+	RequestDigest           string     `gorm:"type:varchar(80)" json:"request_digest,omitempty"`
+	ResultDigest            string     `gorm:"type:varchar(80)" json:"result_digest,omitempty"`
+	CreatedAt               time.Time  `gorm:"not null;default:now();index" json:"created_at"`
+	CompletedAt             *time.Time `json:"completed_at,omitempty"`
 }
 
 func (MCPInvocation) TableName() string { return "mcp_invocations" }
 
+// MCPAuthorizationDecision is the durable call-before decision record. It is
+// separate from MCPInvocation so an early denial can be audited without
+// pretending an upstream invocation started.
+type MCPAuthorizationDecision struct {
+	ID                   uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	AttemptID            uuid.UUID      `gorm:"type:uuid;not null" json:"attempt_id"`
+	DecisionID           uuid.UUID      `gorm:"type:uuid;not null;uniqueIndex" json:"decision_id"`
+	InvocationID         *uuid.UUID     `gorm:"type:uuid;index" json:"invocation_id,omitempty"`
+	ClientID             *uuid.UUID     `gorm:"type:uuid;index" json:"client_id,omitempty"`
+	CredentialID         *uuid.UUID     `gorm:"type:uuid;index" json:"credential_id,omitempty"`
+	GrantID              *uuid.UUID     `gorm:"type:uuid;index" json:"grant_id,omitempty"`
+	CatalogReleaseID     *uuid.UUID     `gorm:"type:uuid;index" json:"catalog_release_id,omitempty"`
+	ReleaseToolID        *uuid.UUID     `gorm:"type:uuid;index" json:"release_tool_id,omitempty"`
+	ToolRevisionID       *uuid.UUID     `gorm:"type:uuid;index" json:"tool_revision_id,omitempty"`
+	UserID               string         `gorm:"type:varchar(100)" json:"user_id,omitempty"`
+	UserVerified         bool           `gorm:"not null;default:false" json:"user_verified"`
+	PolicyRevision       string         `gorm:"type:varchar(128)" json:"policy_revision,omitempty"`
+	PolicyDigest         string         `gorm:"type:varchar(80)" json:"policy_digest,omitempty"`
+	DeploymentGeneration int64          `gorm:"not null" json:"deployment_generation"`
+	Outcome              string         `gorm:"type:varchar(32);not null" json:"outcome"`
+	ReasonCode           string         `gorm:"type:varchar(64);not null" json:"reason_code"`
+	DenyRuleIDs          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"deny_rule_ids"`
+	AuditRuleIDs         datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"audit_rule_ids"`
+	RequestDigest        string         `gorm:"type:varchar(80)" json:"request_digest,omitempty"`
+	EvaluatorElapsedMS   int64          `gorm:"not null" json:"evaluator_elapsed_ms"`
+	UpstreamStarted      bool           `gorm:"not null;default:false" json:"upstream_started"`
+	CreatedAt            time.Time      `gorm:"not null;default:now();index" json:"created_at"`
+}
+
+func (MCPAuthorizationDecision) TableName() string { return "mcp_authorization_decisions" }
+
 type MCPSecurityVerdict struct {
 	ID                    uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	InvocationID          uuid.UUID      `gorm:"type:uuid;not null;uniqueIndex" json:"invocation_id"`
+	Engine                string         `gorm:"type:varchar(32);not null;default:rego" json:"engine"`
+	Source                string         `gorm:"type:varchar(32);not null;default:rego" json:"source"`
+	Phase                 string         `gorm:"type:varchar(16);not null;default:post" json:"phase"`
+	Action                string         `gorm:"type:varchar(16);not null;default:allow" json:"action"`
+	PolicyRevision        string         `gorm:"type:varchar(128)" json:"policy_revision,omitempty"`
+	RuleIDs               datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"rule_ids"`
+	AuditRuleIDs          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"audit_rule_ids"`
 	DeterministicSeverity string         `gorm:"type:varchar(16);not null" json:"deterministic_severity"`
 	AIVerdict             string         `gorm:"type:varchar(32)" json:"ai_verdict,omitempty"`
 	OverallRisk           string         `gorm:"type:varchar(16);not null" json:"overall_risk"`
@@ -382,6 +423,8 @@ type MCPAuditOutbox struct {
 
 func (MCPAuditOutbox) TableName() string { return "mcp_audit_outbox" }
 
+// MCPRuleDefinition is a read-only legacy projection retained for historical
+// foreign keys. MCP runtime decisions must use Rego and never load this type.
 type MCPRuleDefinition struct {
 	ID         uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	RuleKey    string         `gorm:"type:varchar(128);not null" json:"rule_key"`
@@ -397,6 +440,8 @@ type MCPRuleDefinition struct {
 
 func (MCPRuleDefinition) TableName() string { return "mcp_rule_definitions" }
 
+// MCPRuleHit is historical evidence from the removed Go matcher. New calls
+// persist Rego IDs and evidence on MCPSecurityVerdict instead.
 type MCPRuleHit struct {
 	ID               uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	InvocationID     uuid.UUID      `gorm:"type:uuid;not null;index" json:"invocation_id"`

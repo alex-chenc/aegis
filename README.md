@@ -1,6 +1,17 @@
-# Aegis 智能主机安全系统（V6.3）
+# Aegis 智能主机安全系统（V6.4）
 
 中文 | [English](README_EN.md)
+
+## V6.4 Agent Skill 安全（AIDR）
+
+V6.4 扩展 AIDR（AI Detection & Response，AI 智能体检测与响应），新增 Agent Skill 安全盘点与检测。Agent 对 Codex、Claude Code、OpenClaw 已安装的 Skill 做只读采集，服务端保存扫描快照和版本，结合确定性规则与 AI 分析识别提示词注入、投毒、凭据访问和高风险执行能力。
+
+- 查看主机上的 Skill 清单、来源、重复/覆盖关系、文件内容和版本变化。
+- 对 Skill、引用文件和脚本做静态分析；采集和分析过程不会执行 Skill 内容。
+- 展示规则发现、AI 分析和扫描覆盖状态，支持人工研判与历史版本追踪。
+- 以主机侧行为证据为准区分“具备风险能力”和“已实际执行”；不自动修改或禁用主机 Skill。
+
+设计文档：[V6.4 Agent Skill 安全](docs/aegis_system_design_v6.4/README.md)
 
 ## V6.3 MCP 聚合管控
 
@@ -29,11 +40,15 @@ V6.3 新增远程 MCP 聚合治理平台，将远程 MCP Server 的接入、工�
 
 4. 如需让 Aegis Assistant 使用该 Client，在 api-server 配置 MCP_ASSISTANT_ENABLED、MCP_ASSISTANT_CLIENT_KEY 和 MCP_ASSISTANT_CLIENT_TOKEN。Token 只在创建时显示，数据库仅保存摘要。
 
+## V6.4 MCP Rego 安全策略
+
+MCP 聚合管控新增基于 OPA/Rego 的调用前授权和调用后安全判定。策略可在控制台校验、版本化发布；调用前检查工具和参数，调用后检查上游结果。策略编译、执行或决策合同异常时按 fail-closed 处理；历史 Go 规则保留为只读归档。
+
 ## 项目概述
 
-Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台。系统深度集成大模型技术，以自然语言智能助手统一编排基线、漏洞、资产、告警与弱口令等安全运营闭环，实现主机配置、漏洞与弱口令的动态审计管理。V6.2 新增智能体运行防护，覆盖 AI Agent 的行为感知、隔离逃逸检测与配置安全检测，通过确定性规则、主机侧传感器和可追溯证据构建从精准防护到自动化响应的闭环。
+Aegis 智能主机安全智能体系统：新一代 AI 原生主机安全平台。系统深度集成大模型技术，以自然语言智能助手统一编排基线、漏洞、资产、告警与弱口令等安全运营闭环，实现主机配置、漏洞与弱口令的动态审计管理。AIDR（AI Detection & Response）覆盖 AI Agent 行为感知、逃逸检测、配置安全检测和 V6.4 Agent Skill 安全扫描，通过确定性规则、主机侧传感器、持久化扫描快照和可追溯证据构建检测与响应闭环。
 
-## 智能体防护（V6.2）
+## AIDR 智能体检测与响应（V6.2–V6.4）
 
 V6.2 面向 Codex、Claude Code、OpenClaw、Hermes、Zcode 等 AI Agent，新增三项智能体防护能力，帮助安全人员回答“哪个智能体、哪个会话、哪个执行进程做了什么，以及是否突破了预期边界”。
 

@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"api-server/internal/mcpauthz"
 	"api-server/internal/model"
 	"api-server/internal/repository"
 
@@ -33,7 +35,16 @@ var (
 	ErrMCPPlatformClientEndpointDenied = errors.New("mcp client endpoint access denied")
 	ErrMCPPlatformToolNotAllowed       = errors.New("mcp tool is not allowed for this client")
 	ErrMCPPlatformSecurityBlocked      = errors.New("mcp invocation blocked by security policy")
+	ErrMCPPlatformAuthorizationDenied  = errors.New("mcp invocation denied by authorization policy")
+	ErrMCPPlatformAuthorizationFailed  = errors.New("mcp authorization unavailable")
 )
+
+type AuthorizationPolicyValidation struct {
+	Valid           bool   `json:"valid"`
+	Revision        string `json:"revision"`
+	LanguageVersion string `json:"language_version"`
+	Digest          string `json:"digest"`
+}
 
 type MCPOnboardingRequest struct {
 	DisplayName     string     `json:"display_name" binding:"required"`
@@ -47,20 +58,39 @@ type MCPOnboardingRequest struct {
 }
 
 type MCPPlatformService struct {
-	repo              *repository.MCPPlatformRepository
-	logger            *zap.Logger
-	client            *http.Client
-	credentialBroker  func(context.Context, string) (string, error)
-	catalogSigningKey []byte
+	repo               *repository.MCPPlatformRepository
+	logger             *zap.Logger
+	client             *http.Client
+	credentialBroker   func(context.Context, string) (string, error)
+	catalogSigningKey  []byte
+	authorization      mcpauthz.Evaluator
+	authorizationTTL   time.Duration
+	authorizationSlots chan struct{}
+	authorizationMu    sync.RWMutex
+	security           mcpauthz.SecurityEvaluator
+	securityMu         sync.RWMutex
+	policyMu           sync.Mutex
 }
 
 func NewMCPPlatformService(repo *repository.MCPPlatformRepository, logger *zap.Logger) *MCPPlatformService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	compatibility := mcpauthz.NewCompatibilityEvaluator()
+	if err := compatibility.PrepareEmpty(); err != nil {
+		logger.Error("mcp_authorization_startup_prepare_failed", zap.Error(err))
+	}
+	security, securityErr := mcpauthz.PrepareSecurity(context.Background(), mcpauthz.SecurityPolicyRevision, mcpauthz.DefaultSecurityPolicy)
+	if securityErr != nil {
+		logger.Error("mcp_security_policy_prepare_failed", zap.Error(securityErr))
+	}
 	return &MCPPlatformService{
-		repo:   repo,
-		logger: logger.Named("mcp_platform"),
+		repo:               repo,
+		authorization:      compatibility,
+		authorizationTTL:   20 * time.Millisecond,
+		authorizationSlots: make(chan struct{}, 32),
+		security:           security,
+		logger:             logger.Named("mcp_platform"),
 		client: &http.Client{
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -73,6 +103,164 @@ func NewMCPPlatformService(repo *repository.MCPPlatformRepository, logger *zap.L
 			},
 		},
 	}
+}
+
+// SetSecurityEvaluator atomically swaps the prepared Rego security policy.
+// A nil evaluator is retained as fail closed; MCP calls cannot silently fall
+// back to the removed legacy Go matcher.
+func (s *MCPPlatformService) SetSecurityEvaluator(evaluator mcpauthz.SecurityEvaluator) {
+	s.securityMu.Lock()
+	s.security = evaluator
+	s.securityMu.Unlock()
+}
+
+// SetAuthorizationEvaluator atomically replaces the prepared policy adapter.
+// The default is an explicit compatibility permit for existing grants; new
+// deployments should install a prepared mcpauthz snapshot before enforce.
+func (s *MCPPlatformService) SetAuthorizationEvaluator(evaluator mcpauthz.Evaluator) {
+	if evaluator == nil {
+		compatibility := mcpauthz.NewCompatibilityEvaluator()
+		if err := compatibility.PrepareEmpty(); err != nil {
+			evaluator = mcpauthz.NewCompatibilityEvaluator()
+		} else {
+			evaluator = compatibility
+		}
+	}
+	s.authorizationMu.Lock()
+	defer s.authorizationMu.Unlock()
+	s.authorization = evaluator
+}
+
+func (s *MCPPlatformService) SetAuthorizationTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		s.authorizationMu.Lock()
+		s.authorizationTTL = timeout
+		s.authorizationMu.Unlock()
+	}
+}
+
+func (s *MCPPlatformService) SetAuthorizationConcurrency(max int) {
+	if max > 0 && max <= 1024 {
+		s.authorizationMu.Lock()
+		s.authorizationSlots = make(chan struct{}, max)
+		s.authorizationMu.Unlock()
+	}
+}
+
+// ConfigureAuthorizationPolicy validates and atomically activates a typed
+// policy. The policy is persisted as an immutable version before the in-memory
+// snapshot is switched; a compile or persistence failure leaves the prior
+// evaluator active. This is the minimal single-api-server management path.
+func (s *MCPPlatformService) ConfigureAuthorizationPolicy(ctx context.Context, policy mcpauthz.Policy, operator string) (*model.MCPPolicyVersion, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	prepared, err := mcpauthz.Prepare(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	source, err := json.Marshal(policy)
+	if err != nil {
+		prepared.Close()
+		return nil, err
+	}
+	digest := prepared.Digest()
+	set, err := s.repo.GetPolicySetByKey(ctx, "mcp-runtime-authorization")
+	if errors.Is(err, repository.ErrMCPPlatformNotFound) {
+		now := time.Now().UTC()
+		set = &model.MCPPolicySet{ID: uuid.New(), PolicyKey: "mcp-runtime-authorization", DisplayName: "MCP Runtime Authorization", Status: "active", CreatedBy: operator, CreatedAt: now, UpdatedAt: now}
+		if err := s.repo.CreatePolicySet(ctx, set); err != nil {
+			prepared.Close()
+			return nil, err
+		}
+	} else if err != nil {
+		prepared.Close()
+		return nil, err
+	}
+	versionNo, err := s.repo.NextPolicyVersion(ctx, set.ID)
+	if err != nil {
+		prepared.Close()
+		return nil, err
+	}
+	version := &model.MCPPolicyVersion{ID: uuid.New(), PolicySetID: set.ID, Version: versionNo, LanguageVersion: "rego.v1-controlled", Source: datatypes.JSON(source), Digest: digest, TestReport: datatypes.JSON([]byte(`{"status":"prepared"}`)), Status: "active", CreatedBy: operator, CreatedAt: time.Now().UTC()}
+	if strings.TrimSpace(policy.RegoSource) != "" {
+		version.LanguageVersion = "rego.v1"
+	}
+	if err := s.repo.ActivatePolicyVersion(ctx, version); err != nil {
+		prepared.Close()
+		return nil, err
+	}
+	s.SetAuthorizationEvaluator(prepared)
+	s.logger.Info("mcp_authorization_policy_activated", zap.String("policy_version_id", version.ID.String()), zap.Int64("version", version.Version), zap.String("operator", operator))
+	return version, nil
+}
+
+// ValidateAuthorizationPolicy compiles and contract-evaluates a candidate
+// without writing a version or replacing the active evaluator.
+func (s *MCPPlatformService) ValidateAuthorizationPolicy(ctx context.Context, policy mcpauthz.Policy) (*AuthorizationPolicyValidation, error) {
+	prepared, err := mcpauthz.Prepare(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	defer prepared.Close()
+	language := "rego.v1-controlled"
+	if strings.TrimSpace(policy.RegoSource) != "" {
+		language = "rego.v1"
+	}
+	return &AuthorizationPolicyValidation{Valid: true, Revision: policy.Revision, LanguageVersion: language, Digest: prepared.Digest()}, nil
+}
+
+// AuthorizationPolicyStatus is the safe management projection used by the UI.
+// It exposes the active typed compatibility fields or the validated Rego
+// source for users holding the policy-read permission.
+type AuthorizationPolicyStatus struct {
+	PolicyKey       string           `json:"policy_key"`
+	Status          string           `json:"status"`
+	Version         int64            `json:"version"`
+	LanguageVersion string           `json:"language_version"`
+	Digest          string           `json:"digest,omitempty"`
+	CreatedBy       string           `json:"created_by,omitempty"`
+	CreatedAt       *time.Time       `json:"created_at,omitempty"`
+	Policy          *mcpauthz.Policy `json:"policy,omitempty"`
+}
+
+func (s *MCPPlatformService) GetAuthorizationPolicyStatus(ctx context.Context) (*AuthorizationPolicyStatus, error) {
+	version, err := s.repo.GetLatestActivePolicyVersion(ctx, "mcp-runtime-authorization")
+	if errors.Is(err, repository.ErrMCPPlatformNotFound) {
+		return &AuthorizationPolicyStatus{PolicyKey: "mcp-runtime-authorization", Status: "empty"}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var policy mcpauthz.Policy
+	if err := json.Unmarshal(version.Source, &policy); err != nil {
+		return nil, fmt.Errorf("invalid active MCP authorization policy: %w", err)
+	}
+	return &AuthorizationPolicyStatus{
+		PolicyKey: "mcp-runtime-authorization", Status: version.Status,
+		Version: version.Version, LanguageVersion: version.LanguageVersion,
+		Digest: version.Digest, CreatedBy: version.CreatedBy,
+		CreatedAt: &version.CreatedAt, Policy: &policy,
+	}, nil
+}
+
+func (s *MCPPlatformService) LoadAuthorizationPolicy(ctx context.Context) error {
+	version, err := s.repo.GetLatestActivePolicyVersion(ctx, "mcp-runtime-authorization")
+	if errors.Is(err, repository.ErrMCPPlatformNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var policy mcpauthz.Policy
+	if err := json.Unmarshal(version.Source, &policy); err != nil {
+		return fmt.Errorf("invalid active MCP authorization policy: %w", err)
+	}
+	prepared, err := mcpauthz.Prepare(ctx, policy)
+	if err != nil {
+		return err
+	}
+	s.SetAuthorizationEvaluator(prepared)
+	return nil
 }
 
 // SetCredentialBroker injects the control-plane credential resolver. The
@@ -796,8 +984,9 @@ func (s *MCPPlatformService) GetJob(ctx context.Context, id uuid.UUID) (*model.M
 
 type MCPToolAuditItem struct {
 	model.MCPToolRevision
-	ServerID   uuid.UUID `json:"server_id"`
-	ServerName string    `json:"server_name"`
+	ServerID      uuid.UUID  `json:"server_id"`
+	ServerName    string     `json:"server_name"`
+	ReleaseToolID *uuid.UUID `json:"release_tool_id,omitempty"`
 }
 
 func (s *MCPPlatformService) ListTools(ctx context.Context, serverRevisionID *uuid.UUID, page, size int) ([]MCPToolAuditItem, int64, error) {
@@ -807,7 +996,7 @@ func (s *MCPPlatformService) ListTools(ctx context.Context, serverRevisionID *uu
 	}
 	items := make([]MCPToolAuditItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, MCPToolAuditItem{MCPToolRevision: row.MCPToolRevision, ServerID: row.ServerID, ServerName: row.ServerName})
+		items = append(items, MCPToolAuditItem{MCPToolRevision: row.MCPToolRevision, ServerID: row.ServerID, ServerName: row.ServerName, ReleaseToolID: row.ReleaseToolID})
 	}
 	return items, total, nil
 }
@@ -822,19 +1011,24 @@ func (s *MCPPlatformService) ListApprovals(ctx context.Context, status string, p
 }
 
 type MCPInvocationAuditItem struct {
-	ID             uuid.UUID  `json:"id"`
-	ClientID       *uuid.UUID `json:"client_id,omitempty"`
-	ClientKey      string     `json:"client_key"`
-	ClientName     string     `json:"client_name"`
-	ServerID       uuid.UUID  `json:"server_id"`
-	ServerName     string     `json:"server_name"`
-	ToolRevisionID *uuid.UUID `json:"tool_revision_id,omitempty"`
-	ToolAlias      string     `json:"tool_alias"`
-	ToolEnabled    bool       `json:"tool_enabled"`
-	Status         string     `json:"status"`
-	PolicyDecision string     `json:"policy_decision,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	ID                          uuid.UUID  `json:"id"`
+	ClientID                    *uuid.UUID `json:"client_id,omitempty"`
+	ClientKey                   string     `json:"client_key"`
+	ClientName                  string     `json:"client_name"`
+	ServerID                    uuid.UUID  `json:"server_id"`
+	ServerName                  string     `json:"server_name"`
+	ToolRevisionID              *uuid.UUID `json:"tool_revision_id,omitempty"`
+	ToolAlias                   string     `json:"tool_alias"`
+	ToolEnabled                 bool       `json:"tool_enabled"`
+	Status                      string     `json:"status"`
+	PolicyDecision              string     `json:"policy_decision,omitempty"`
+	AuthorizationOutcome        string     `json:"authorization_outcome,omitempty"`
+	AuthorizationReasonCode     string     `json:"authorization_reason_code,omitempty"`
+	AuthorizationPolicyRevision string     `json:"authorization_policy_revision,omitempty"`
+	AuthorizationDenyRuleIDs    []string   `json:"authorization_deny_rule_ids,omitempty"`
+	AuthorizationAuditRuleIDs   []string   `json:"authorization_audit_rule_ids,omitempty"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	CompletedAt                 *time.Time `json:"completed_at,omitempty"`
 }
 
 func (s *MCPPlatformService) ListInvocations(ctx context.Context, page, size int) ([]MCPInvocationAuditItem, int64, error) {
@@ -849,6 +1043,14 @@ func (s *MCPPlatformService) ListInvocations(ctx context.Context, page, size int
 	grantStates := make(map[uuid.UUID]invocationGrantState)
 	items := make([]MCPInvocationAuditItem, 0, len(rows))
 	for _, row := range rows {
+		var denyRuleIDs []string
+		if err := json.Unmarshal(row.AuthorizationDenyRuleIDs, &denyRuleIDs); err != nil || denyRuleIDs == nil {
+			denyRuleIDs = []string{}
+		}
+		var auditRuleIDs []string
+		if err := json.Unmarshal(row.AuthorizationAuditRuleIDs, &auditRuleIDs); err != nil || auditRuleIDs == nil {
+			auditRuleIDs = []string{}
+		}
 		enabled := false
 		if row.ClientID != nil {
 			state, found := grantStates[*row.ClientID]
@@ -880,7 +1082,10 @@ func (s *MCPPlatformService) ListInvocations(ctx context.Context, page, size int
 			ID: row.ID, ClientID: row.ClientID, ClientKey: row.ClientKey, ClientName: row.ClientName,
 			ServerID: serverID, ServerName: row.ServerName, ToolRevisionID: row.ToolRevisionID,
 			ToolAlias: row.ToolAlias, ToolEnabled: enabled, Status: row.Status,
-			PolicyDecision: row.PolicyDecision, CreatedAt: row.CreatedAt, CompletedAt: row.CompletedAt,
+			PolicyDecision: row.PolicyDecision, AuthorizationOutcome: row.AuthorizationOutcome,
+			AuthorizationReasonCode: row.AuthorizationReasonCode, AuthorizationPolicyRevision: row.AuthorizationPolicyRevision,
+			AuthorizationDenyRuleIDs: denyRuleIDs, AuthorizationAuditRuleIDs: auditRuleIDs,
+			CreatedAt: row.CreatedAt, CompletedAt: row.CompletedAt,
 		})
 	}
 	return items, total, nil
@@ -904,20 +1109,17 @@ func (s *MCPPlatformService) ListSecurityVerdicts(ctx context.Context, page, siz
 	if err != nil {
 		return nil, 0, err
 	}
-	invocationIDs := make([]uuid.UUID, 0, len(rows))
-	for _, row := range rows {
-		invocationIDs = append(invocationIDs, row.InvocationID)
-	}
-	matchedRules, err := s.repo.ListSecurityRuleMatchNames(ctx, invocationIDs)
-	if err != nil {
-		return nil, 0, err
-	}
 	items := make([]MCPSecurityVerdictAuditItem, 0, len(rows))
 	for _, row := range rows {
-		matched := matchedRules[row.InvocationID]
-		if matched == nil {
+		var matched []string
+		if err := json.Unmarshal(row.RuleIDs, &matched); err != nil || matched == nil {
 			matched = []string{}
 		}
+		var auditMatched []string
+		if err := json.Unmarshal(row.AuditRuleIDs, &auditMatched); err != nil || auditMatched == nil {
+			auditMatched = []string{}
+		}
+		matched = append(matched, auditMatched...)
 		serverID := uuid.Nil
 		if row.ServerID != nil {
 			serverID = *row.ServerID
@@ -929,19 +1131,6 @@ func (s *MCPPlatformService) ListSecurityVerdicts(ctx context.Context, page, siz
 		})
 	}
 	return items, total, nil
-}
-
-func (s *MCPPlatformService) ListSecurityRules(ctx context.Context, page, size int) ([]model.MCPRuleDefinition, int64, error) {
-	return s.repo.ListSecurityRules(ctx, page, size)
-}
-
-func (s *MCPPlatformService) SetSecurityRuleEnabled(ctx context.Context, id uuid.UUID, enabled bool, operator string) (*model.MCPRuleDefinition, error) {
-	item, err := s.repo.SetSecurityRuleEnabled(ctx, id, enabled)
-	if err != nil {
-		return nil, err
-	}
-	s.logger.Info("mcp_security_rule_enabled_changed", zap.String("rule_id", item.ID.String()), zap.String("rule_key", item.RuleKey), zap.String("operator", operator), zap.Bool("enabled", enabled))
-	return item, nil
 }
 
 type MCPCatalogCreateRequest struct {
@@ -1279,6 +1468,22 @@ func (s *MCPPlatformService) CreateClientEndpoint(ctx context.Context, req MCPCl
 	if err := s.repo.ActivateRelease(ctx, release.ID, release.ManifestDigest); err != nil {
 		return nil, err
 	}
+	compatibilityTools, err := s.repo.ListCatalogReleaseTools(ctx, release.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.authorizationMu.RLock()
+	compatibility, ok := s.authorization.(*mcpauthz.CompatibilityEvaluator)
+	s.authorizationMu.RUnlock()
+	if ok {
+		for _, releaseTool := range compatibilityTools {
+			if releaseTool.Status == "staged" || releaseTool.Status == "active" {
+				if err := compatibility.AllowWithTool(client.ID.String(), releaseTool.ID.String(), release.ID.String(), releaseTool.ToolRevisionID.String()); err != nil {
+					return nil, fmt.Errorf("prepare compatibility authorization policy: %w", err)
+				}
+			}
+		}
+	}
 	allowlistJSON, _ := json.Marshal(allowlist)
 	grant := &model.MCPClientGrant{ID: uuid.New(), ClientID: client.ID, CatalogID: catalog.ID, ToolAllowlist: datatypes.JSON(allowlistJSON), ResourceScope: datatypes.JSON([]byte(`{}`)), Status: "active", ExpiresAt: req.ExpiresAt, CreatedBy: operator, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := s.repo.CreateGrant(ctx, grant); err != nil {
@@ -1514,45 +1719,100 @@ type MCPRuntimeTool struct {
 	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
-func (s *MCPPlatformService) resolveRuntime(ctx context.Context, token, clientKey string) (*model.MCPClient, *model.MCPClientGrant, *model.MCPServer, []model.MCPToolRevision, error) {
+func (s *MCPPlatformService) resolveRuntime(ctx context.Context, token, clientKey string) (*model.MCPClient, *model.MCPClientGrant, *model.MCPServer, *model.MCPClientCredential, []model.MCPToolRevision, error) {
 	if len(token) < 20 || len(token) > 256 {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	sum := sha256.Sum256([]byte(token))
 	credential, err := s.repo.GetActiveClientCredentialByHash(ctx, hex.EncodeToString(sum[:]))
 	if err != nil {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	client, err := s.repo.GetClient(ctx, credential.ClientID)
 	if err != nil || client.Status != "active" || (clientKey != "" && client.ClientKey != clientKey) {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	grant, err := s.repo.GetActiveGrantByClientID(ctx, client.ID)
 	if err != nil {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	release, err := s.repo.GetActiveCatalogRelease(ctx, grant.CatalogID)
 	if err != nil || release.ServerRevisionID == nil {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	revision, err := s.repo.GetServerRevision(ctx, *release.ServerRevisionID)
 	if err != nil {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	server, err := s.repo.GetServer(ctx, revision.ServerID)
 	if err != nil || server.LifecycleStatus != model.MCPPlatformServerPublished || server.ActiveRevisionID == nil || *server.ActiveRevisionID != revision.ID {
-		return nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
+		return nil, nil, nil, nil, nil, ErrMCPPlatformClientEndpointDenied
 	}
 	_ = s.repo.TouchClientCredential(ctx, credential.ID, time.Now().UTC())
 	tools, err := s.repo.ListToolRevisions(ctx, &revision.ID)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
-	return client, grant, server, tools, nil
+	return client, grant, server, credential, tools, nil
+}
+
+// resolveRuntimeReleaseTools is the only runtime alias resolver. The
+// discovered revision is deliberately insufficient: aliases must be present
+// in the active immutable release bound to this grant, and the release mapping
+// must point back to the exact tool revision and schema.
+func (s *MCPPlatformService) resolveRuntimeReleaseTools(ctx context.Context, grant *model.MCPClientGrant, revisionID uuid.UUID, tools []model.MCPToolRevision) (map[string]model.MCPCatalogReleaseTool, error) {
+	release, err := s.repo.GetActiveCatalogRelease(ctx, grant.CatalogID)
+	if err != nil || release.ServerRevisionID == nil || *release.ServerRevisionID != revisionID {
+		return nil, ErrMCPPlatformToolNotAllowed
+	}
+	releaseTools, err := s.repo.ListCatalogReleaseTools(ctx, release.ID)
+	if err != nil {
+		return nil, err
+	}
+	byRevision := make(map[uuid.UUID]model.MCPToolRevision, len(tools))
+	for _, tool := range tools {
+		byRevision[tool.ID] = tool
+	}
+	result := make(map[string]model.MCPCatalogReleaseTool, len(releaseTools))
+	seenAliases := make(map[string]struct{}, len(releaseTools))
+	for _, releaseTool := range releaseTools {
+		if strings.TrimSpace(releaseTool.ExposedName) == "" {
+			return nil, ErrMCPPlatformToolNotAllowed
+		}
+		if _, duplicate := seenAliases[releaseTool.ExposedName]; duplicate {
+			return nil, ErrMCPPlatformToolNotAllowed
+		}
+		seenAliases[releaseTool.ExposedName] = struct{}{}
+		if releaseTool.Status != "active" {
+			continue
+		}
+		tool, ok := byRevision[releaseTool.ToolRevisionID]
+		if !ok || tool.Status != "approved" {
+			continue
+		}
+		if releaseTool.InputSchema == nil || tool.InputSchema == nil {
+			return nil, ErrMCPPlatformToolNotAllowed
+		}
+		releaseDigest, digestErr := mcpauthz.SchemaDigest(json.RawMessage(releaseTool.InputSchema))
+		toolDigest, toolErr := mcpauthz.SchemaDigest(json.RawMessage(tool.InputSchema))
+		if digestErr != nil || toolErr != nil || releaseDigest != toolDigest {
+			return nil, ErrMCPPlatformToolNotAllowed
+		}
+		result[releaseTool.ExposedName] = releaseTool
+	}
+	return result, nil
 }
 
 func (s *MCPPlatformService) RuntimeTools(ctx context.Context, token, clientKey string) ([]MCPRuntimeTool, error) {
-	_, grant, _, tools, err := s.resolveRuntime(ctx, token, clientKey)
+	client, grant, _, _, tools, err := s.resolveRuntime(ctx, token, clientKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(tools) == 0 {
+		return []MCPRuntimeTool{}, nil
+	}
+	revisionID := tools[0].ServerRevisionID
+	releaseTools, err := s.resolveRuntimeReleaseTools(ctx, grant, revisionID, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -1564,9 +1824,25 @@ func (s *MCPPlatformService) RuntimeTools(ctx context.Context, token, clientKey 
 	for _, alias := range allowlist {
 		allowed[alias] = struct{}{}
 	}
+	s.authorizationMu.RLock()
+	authorization := s.authorization
+	s.authorizationMu.RUnlock()
+	if authorization == nil {
+		return nil, fmt.Errorf("%w: evaluator unavailable", ErrMCPPlatformAuthorizationFailed)
+	}
+	visible, ok := authorization.(interface{ AllowsTool(string, string) bool })
+	if !ok {
+		return nil, fmt.Errorf("%w: evaluator does not expose tool visibility", ErrMCPPlatformAuthorizationFailed)
+	}
+	for alias, releaseTool := range releaseTools {
+		if !visible.AllowsTool(client.ID.String(), releaseTool.ID.String()) {
+			delete(releaseTools, alias)
+		}
+	}
 	result := make([]MCPRuntimeTool, 0, len(tools))
 	for _, tool := range tools {
-		if _, ok := allowed[tool.Alias]; !ok || tool.Status != "approved" {
+		releaseTool, mapped := releaseTools[tool.Alias]
+		if _, ok := allowed[tool.Alias]; !ok || !mapped || releaseTool.ToolRevisionID != tool.ID || tool.Status != "approved" {
 			continue
 		}
 		result = append(result, MCPRuntimeTool{Name: tool.Alias, Title: tool.Title, Description: tool.Description, RiskTier: tool.RiskTier, InputSchema: json.RawMessage(tool.InputSchema), OutputSchema: json.RawMessage(tool.OutputSchema)})
@@ -1578,11 +1854,18 @@ func (s *MCPPlatformService) RuntimeCall(ctx context.Context, token, clientKey, 
 	return s.RuntimeCallAs(ctx, token, clientKey, alias, arguments, "")
 }
 
-// RuntimeCallAs keeps the Client credential as the authorization identity and
-// optionally records a validated Assistant operator in the invocation audit.
-// Existing direct Client callers retain the historical client-key identity.
+// RuntimeCallAs keeps the Client credential as the authorization identity.
+// The legacy actor hint is accepted for API compatibility but is never used
+// as a user principal; verified delegation is a separate future boundary.
 func (s *MCPPlatformService) RuntimeCallAs(ctx context.Context, token, clientKey, alias string, arguments json.RawMessage, actor string) (map[string]interface{}, error) {
-	client, grant, server, tools, err := s.resolveRuntime(ctx, token, clientKey)
+	client, grant, server, credential, tools, err := s.resolveRuntime(ctx, token, clientKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(tools) == 0 {
+		return nil, ErrMCPPlatformToolNotAllowed
+	}
+	releaseTools, err := s.resolveRuntimeReleaseTools(ctx, grant, tools[0].ServerRevisionID, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -1604,318 +1887,267 @@ func (s *MCPPlatformService) RuntimeCallAs(ctx context.Context, token, clientKey
 			break
 		}
 	}
-	if selected == nil {
+	releaseTool, releaseMapped := releaseTools[alias]
+	if selected == nil || !releaseMapped || releaseTool.ToolRevisionID != selected.ID {
 		return nil, ErrMCPPlatformToolNotAllowed
 	}
-	if len(arguments) == 0 {
-		arguments = json.RawMessage(`{}`)
+	argumentObject, canonicalArguments, argumentErr := mcpauthz.DecodeArguments(arguments, json.RawMessage(releaseTool.InputSchema))
+	if argumentErr != nil {
+		return nil, argumentErr
 	}
-	if !json.Valid(arguments) || len(arguments) > 1<<20 {
-		return nil, errors.New("invalid tool arguments")
-	}
-	var argumentObject map[string]interface{}
-	if err := json.Unmarshal(arguments, &argumentObject); err != nil || argumentObject == nil {
-		return nil, errors.New("tool arguments must be a JSON object")
-	}
+	arguments = json.RawMessage(canonicalArguments)
 	now := time.Now().UTC()
-	userID := strings.TrimSpace(actor)
-	if userID == "" {
-		userID = client.ClientKey
-	}
-	invocation := &model.MCPInvocation{ID: uuid.New(), ClientID: &client.ID, ToolRevisionID: &selected.ID, UserID: userID, ToolAlias: alias, Status: "started", PolicyDecision: "allow", RequestDigest: digestJSON(arguments), CreatedAt: now}
+	// The legacy actor hint is intentionally excluded from authorization. It is
+	// supplied by an old shared-secret header and is not a verified user
+	// principal; a future delegation verifier must populate Principal.User.
+	_ = actor
+	invocation := &model.MCPInvocation{ID: uuid.New(), ClientID: &client.ID, CatalogReleaseID: &releaseTool.ReleaseID, ToolRevisionID: &selected.ID, UserID: "legacy", ToolAlias: alias, Status: "started", PolicyDecision: "pending", RequestDigest: digestJSON(arguments), CreatedAt: now}
 	if err := s.repo.CreateInvocation(ctx, invocation); err != nil {
 		return nil, err
 	}
-	preEvaluation, err := s.evaluateMCPSecurity(ctx, invocation.ID, "pre", selected, argumentObject, nil, nil)
+	decisionID := uuid.New()
+	input := mcpauthz.Input{
+		ContractVersion: mcpauthz.InputContractVersion, Operation: "tools/call",
+		Request:   mcpauthz.NowRequest(invocation.ID.String(), decisionID.String(), now),
+		Principal: mcpauthz.Principal{ClientID: client.ID.String(), CredentialID: credential.ID.String(), User: mcpauthz.User{Verified: false, ID: "", Roles: []string{}}},
+		Grant:     mcpauthz.Grant{ID: grant.ID.String(), Version: 1, ResourceScope: map[string]any{}},
+		Tool:      mcpauthz.Tool{CatalogReleaseID: releaseTool.ReleaseID.String(), ReleaseToolID: releaseTool.ID.String(), ToolRevisionID: selected.ID.String(), ServerRevisionID: selected.ServerRevisionID.String(), ExposedName: releaseTool.ExposedName, UpstreamName: selected.UpstreamName, RiskTier: selected.RiskTier},
+		Arguments: argumentObject,
+		Snapshot:  mcpauthz.Snapshot{DeploymentGeneration: 1, PolicyRevision: "compatibility-v1"},
+	}
+	if len(grant.ResourceScope) > 0 {
+		if err := json.Unmarshal(grant.ResourceScope, &input.Grant.ResourceScope); err != nil || input.Grant.ResourceScope == nil {
+			_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+			return nil, ErrMCPPlatformToolNotAllowed
+		}
+	}
+	if schemaDigest, digestErr := mcpauthz.SchemaDigest(json.RawMessage(selected.InputSchema)); digestErr == nil {
+		input.Tool.InputSchemaDigest = schemaDigest
+	} else {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, ErrMCPPlatformToolNotAllowed
+	}
+	s.authorizationMu.RLock()
+	authorization := s.authorization
+	authorizationTTL := s.authorizationTTL
+	slots := s.authorizationSlots
+	s.authorizationMu.RUnlock()
+	if authorization == nil {
+		authorization = mcpauthz.NewCompatibilityEvaluator()
+	}
+	policyRevision := "compatibility-v1"
+	if versioned, ok := authorization.(interface{ Revision() string }); ok && strings.TrimSpace(versioned.Revision()) != "" {
+		policyRevision = versioned.Revision()
+	}
+	input.Snapshot.PolicyRevision = policyRevision
+	if slots == nil {
+		slots = make(chan struct{}, 32)
+	}
+	waitTimer := time.NewTimer(5 * time.Millisecond)
+	select {
+	case slots <- struct{}{}:
+		if !waitTimer.Stop() {
+			<-waitTimer.C
+		}
+	case <-ctx.Done():
+		if !waitTimer.Stop() {
+			<-waitTimer.C
+		}
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: canceled while waiting", ErrMCPPlatformAuthorizationFailed)
+	case <-waitTimer.C:
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: evaluator queue full", ErrMCPPlatformAuthorizationFailed)
+	}
+	evaluationStarted := time.Now()
+	decision, authzErr := mcpauthz.EvaluateWithTimeout(ctx, authorization, input, authorizationTTL)
+	evaluatorElapsedMS := time.Since(evaluationStarted).Milliseconds()
+	<-slots
+	if authzErr != nil {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		s.logger.Warn("mcp_authorization_evaluation_failed", zap.String("invocation_id", invocation.ID.String()), zap.String("decision_id", decisionID.String()), zap.Error(authzErr))
+		return nil, fmt.Errorf("%w: %v", ErrMCPPlatformAuthorizationFailed, authzErr)
+	}
+	denyIDs, _ := json.Marshal(decision.DenyRuleIDs)
+	auditIDs, _ := json.Marshal(decision.AuditRuleIDs)
+	policyDigest := ""
+	if digestProvider, ok := authorization.(interface{ Digest() string }); ok {
+		policyDigest = digestProvider.Digest()
+	}
+	audit := &model.MCPAuthorizationDecision{
+		ID: uuid.New(), AttemptID: invocation.ID, DecisionID: decisionID, InvocationID: &invocation.ID,
+		ClientID: &client.ID, CredentialID: &credential.ID, GrantID: &grant.ID, CatalogReleaseID: &releaseTool.ReleaseID,
+		ReleaseToolID: &releaseTool.ID, ToolRevisionID: &selected.ID, UserID: "", UserVerified: false,
+		PolicyRevision: decision.PolicyRevision, PolicyDigest: policyDigest, DeploymentGeneration: input.Snapshot.DeploymentGeneration,
+		Outcome: map[bool]string{true: "allow", false: "deny"}[decision.Allow], ReasonCode: decision.ReasonCode,
+		DenyRuleIDs: datatypes.JSON(denyIDs), AuditRuleIDs: datatypes.JSON(auditIDs), RequestDigest: digestJSON(arguments),
+		EvaluatorElapsedMS: evaluatorElapsedMS, UpstreamStarted: false, CreatedAt: time.Now().UTC(),
+	}
+	if auditErr := s.repo.CreateAuthorizationDecision(ctx, audit); auditErr != nil {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: audit: %v", ErrMCPPlatformAuthorizationFailed, auditErr)
+	}
+	if linkErr := s.repo.LinkInvocationAuthorizationDecision(ctx, invocation.ID, decisionID); linkErr != nil {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: decision link: %v", ErrMCPPlatformAuthorizationFailed, linkErr)
+	}
+	if !decision.Allow {
+		if err := s.repo.UpdateInvocationPolicyDecision(ctx, invocation.ID, "deny"); err != nil {
+			_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+			return nil, fmt.Errorf("%w: decision persistence: %v", ErrMCPPlatformAuthorizationFailed, err)
+		}
+		if err := s.repo.UpdateInvocation(ctx, invocation.ID, "blocked", "", mcpPtrTime(time.Now().UTC())); err != nil {
+			return nil, fmt.Errorf("%w: invocation persistence: %v", ErrMCPPlatformAuthorizationFailed, err)
+		}
+		s.logger.Warn("mcp_invocation_denied_before_upstream", zap.String("invocation_id", invocation.ID.String()), zap.String("decision_id", decisionID.String()), zap.String("reason_code", decision.ReasonCode), zap.Strings("rule_ids", decision.DenyRuleIDs))
+		return nil, ErrMCPPlatformAuthorizationDenied
+	}
+	if err := s.repo.UpdateInvocationPolicyDecision(ctx, invocation.ID, "allow"); err != nil {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: decision persistence: %v", ErrMCPPlatformAuthorizationFailed, err)
+	}
+	_ = s.repo.UpdateInvocation(ctx, invocation.ID, "authorized", "", nil)
+	preEvaluation, err := s.evaluateMCPRego(ctx, "pre", invocation.ID, decisionID, selected, argumentObject, nil, nil, false, digestJSON(arguments))
 	if err != nil {
 		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
 		return nil, err
 	}
-	if preEvaluation.blocked {
+	if preEvaluation.Action == "deny" {
 		completedAt := time.Now().UTC()
-		if err := s.persistMCPSecurityEvaluation(ctx, invocation.ID, "blocked", "", completedAt, preEvaluation); err != nil {
+		if err := s.persistMCPSecurityEvaluation(ctx, invocation.ID, "blocked", "", completedAt, []mcpauthz.SecurityDecision{preEvaluation}); err != nil {
 			return nil, err
 		}
-		s.logger.Warn("mcp_invocation_blocked_by_security_rule", zap.String("invocation_id", invocation.ID.String()), zap.String("client_id", client.ID.String()), zap.String("server_id", server.ID.String()), zap.String("tool_alias", alias), zap.Strings("rule_keys", preEvaluation.ruleKeys))
+		s.logger.Warn("mcp_invocation_blocked_by_rego_security", zap.String("invocation_id", invocation.ID.String()), zap.String("client_id", client.ID.String()), zap.String("server_id", server.ID.String()), zap.String("tool_alias", alias), zap.Strings("rule_ids", preEvaluation.RuleIDs))
 		return nil, ErrMCPPlatformSecurityBlocked
+	}
+	if markErr := s.repo.MarkAuthorizationUpstreamStarted(ctx, decisionID); markErr != nil {
+		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", mcpPtrTime(time.Now().UTC()))
+		return nil, fmt.Errorf("%w: upstream-start audit: %v", ErrMCPPlatformAuthorizationFailed, markErr)
 	}
 	params := map[string]interface{}{"name": selected.UpstreamName, "arguments": json.RawMessage(arguments)}
 	result, callErr := s.rpc(ctx, mustURL(server.EndpointURL), "tools/call", params, server.AuthType, server.CredentialRef)
 	if callErr != nil {
 		completedAt := time.Now().UTC()
-		postEvaluation, evalErr := s.evaluateMCPSecurity(ctx, invocation.ID, "post", selected, argumentObject, nil, callErr)
+		postEvaluation, evalErr := s.evaluateMCPRego(ctx, "post", invocation.ID, decisionID, selected, argumentObject, nil, callErr, true, digestJSON(map[string]interface{}{"error": "upstream_failed"}))
 		if evalErr != nil {
 			_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", &completedAt)
 			return nil, callErr
 		}
-		if err := s.persistMCPSecurityEvaluation(ctx, invocation.ID, "failed", "", completedAt, mergeMCPSecurityEvaluations(preEvaluation, postEvaluation)); err != nil {
+		if err := s.persistMCPSecurityEvaluation(ctx, invocation.ID, "failed", "", completedAt, []mcpauthz.SecurityDecision{preEvaluation, postEvaluation}); err != nil {
 			s.logger.Error("mcp_security_evaluation_persist_failed", zap.String("invocation_id", invocation.ID.String()), zap.Error(err))
 		}
 		return nil, callErr
 	}
 	completedAt := time.Now().UTC()
-	postEvaluation, err := s.evaluateMCPSecurity(ctx, invocation.ID, "post", selected, argumentObject, result, nil)
+	postEvaluation, err := s.evaluateMCPRego(ctx, "post", invocation.ID, decisionID, selected, argumentObject, result, nil, true, digestJSON(result))
 	if err != nil {
 		_ = s.repo.UpdateInvocation(ctx, invocation.ID, "failed", "", &completedAt)
 		return nil, err
 	}
-	evaluation := mergeMCPSecurityEvaluations(preEvaluation, postEvaluation)
+	evaluation := []mcpauthz.SecurityDecision{preEvaluation, postEvaluation}
 	status := "succeeded"
-	if evaluation.blocked {
+	if postEvaluation.Action == "deny" || postEvaluation.Action == "redact" || postEvaluation.Action == "quarantine" {
 		status = "blocked"
 	}
 	if err := s.persistMCPSecurityEvaluation(ctx, invocation.ID, status, digestJSON(result), completedAt, evaluation); err != nil {
 		return nil, err
 	}
-	if evaluation.blocked {
-		s.logger.Warn("mcp_result_blocked_by_security_rule", zap.String("invocation_id", invocation.ID.String()), zap.String("client_id", client.ID.String()), zap.String("server_id", server.ID.String()), zap.String("tool_alias", alias), zap.Strings("rule_keys", evaluation.ruleKeys))
+	if postEvaluation.Action == "deny" || postEvaluation.Action == "redact" || postEvaluation.Action == "quarantine" {
+		s.logger.Warn("mcp_result_blocked_by_rego_security", zap.String("invocation_id", invocation.ID.String()), zap.String("client_id", client.ID.String()), zap.String("server_id", server.ID.String()), zap.String("tool_alias", alias), zap.Strings("rule_ids", postEvaluation.RuleIDs))
 		return nil, ErrMCPPlatformSecurityBlocked
 	}
 	return result, nil
 }
 
-type mcpSecurityEvaluation struct {
-	severity string
-	blocked  bool
-	hits     []model.MCPRuleHit
-	evidence []map[string]interface{}
-	ruleKeys []string
-}
-
-type mcpSecurityRuleDefinition struct {
-	Matcher   string      `json:"matcher"`
-	Threshold interface{} `json:"threshold"`
-	Keys      []string    `json:"keys"`
-	Patterns  []string    `json:"patterns"`
-	Action    string      `json:"action"`
-}
-
-func (s *MCPPlatformService) evaluateMCPSecurity(ctx context.Context, invocationID uuid.UUID, phase string, tool *model.MCPToolRevision, arguments, result map[string]interface{}, callErr error) (mcpSecurityEvaluation, error) {
-	evaluation := mcpSecurityEvaluation{severity: "low", evidence: []map[string]interface{}{}}
-	rules, err := s.repo.ListEnabledSecurityRules(ctx, phase)
+func (s *MCPPlatformService) evaluateMCPRego(ctx context.Context, phase string, invocationID, decisionID uuid.UUID, tool *model.MCPToolRevision, arguments, result map[string]interface{}, callErr error, upstreamStarted bool, payloadDigest string) (mcpauthz.SecurityDecision, error) {
+	s.securityMu.RLock()
+	evaluator := s.security
+	s.securityMu.RUnlock()
+	if evaluator == nil {
+		return mcpauthz.SecurityDecision{}, fmt.Errorf("%w: security evaluator unavailable", ErrMCPPlatformAuthorizationFailed)
+	}
+	status := "not_started"
+	if upstreamStarted {
+		status = "succeeded"
+		if callErr != nil {
+			status = "failed"
+		}
+	}
+	sizeBytes := int64(0)
+	if result != nil {
+		if encoded, err := json.Marshal(result); err == nil {
+			sizeBytes = int64(len(encoded))
+		}
+	}
+	input := mcpauthz.SecurityInput{
+		ContractVersion: mcpauthz.SecurityInputContractVersion,
+		Phase:           phase, Operation: "tools/call",
+		Request:   mcpauthz.SecurityRequest{InvocationID: invocationID.String(), DecisionID: decisionID.String(), ReceivedAtUnixMS: time.Now().UTC().UnixMilli()},
+		Tool:      mcpauthz.SecurityTool{ExposedName: tool.Alias, RiskTier: strings.ToLower(tool.RiskTier)},
+		Arguments: arguments, PayloadDigest: normalizeSecurityPayloadDigest(payloadDigest),
+		Upstream: mcpauthz.SecurityUpstream{Started: upstreamStarted, Status: status, ErrorClass: map[bool]string{true: "upstream_call_failed", false: ""}[callErr != nil], SizeBytes: sizeBytes},
+		Snapshot: mcpauthz.SecuritySnapshot{DeploymentGeneration: 1, PolicyRevision: mcpauthz.SecurityPolicyRevision},
+	}
+	if phase == "post" {
+		input.Result = result
+	}
+	if revisioned, ok := evaluator.(interface{ Revision() string }); ok && revisioned.Revision() != "" {
+		input.Snapshot.PolicyRevision = revisioned.Revision()
+	}
+	decision, err := evaluator.EvaluateSecurity(ctx, input)
 	if err != nil {
-		return evaluation, err
+		return mcpauthz.SecurityDecision{}, fmt.Errorf("%w: %v", ErrMCPPlatformAuthorizationFailed, err)
 	}
-	resultJSON, _ := json.Marshal(result)
-	for _, rule := range rules {
-		var definition mcpSecurityRuleDefinition
-		if err := json.Unmarshal(rule.Definition, &definition); err != nil {
-			s.logger.Warn("mcp_security_rule_definition_invalid", zap.String("rule_id", rule.ID.String()), zap.String("rule_key", rule.RuleKey), zap.Error(err))
-			continue
-		}
-		matched := false
-		evidence := map[string]interface{}{"rule_key": rule.RuleKey, "phase": phase, "action": definition.Action}
-		switch definition.Matcher {
-		case "tool_risk_at_least":
-			threshold, _ := definition.Threshold.(string)
-			matched = mcpRiskRank(tool.RiskTier) >= mcpRiskRank(threshold)
-			if matched {
-				evidence["tool_risk"] = tool.RiskTier
-				evidence["threshold"] = threshold
-			}
-		case "sensitive_output_keys":
-			paths := findMCPSensitiveKeyPaths(result, definition.Keys, "$")
-			matched = len(paths) > 0
-			if matched {
-				evidence["matched_paths"] = paths
-			}
-		case "sensitive_input_keys":
-			paths := findMCPSensitiveKeyPaths(arguments, definition.Keys, "$")
-			matched = len(paths) > 0
-			if matched {
-				evidence["matched_paths"] = paths
-			}
-		case "input_patterns":
-			paths, patterns := findMCPSuspiciousText(arguments, definition.Patterns)
-			matched = len(paths) > 0
-			if matched {
-				evidence["matched_paths"] = paths
-				evidence["matched_patterns"] = patterns
-			}
-		case "output_patterns":
-			paths, patterns := findMCPSuspiciousText(result, definition.Patterns)
-			matched = len(paths) > 0
-			if matched {
-				evidence["matched_paths"] = paths
-				evidence["matched_patterns"] = patterns
-			}
-		case "response_size_bytes":
-			threshold := 0
-			var raw map[string]interface{}
-			if json.Unmarshal(rule.Definition, &raw) == nil {
-				if value, ok := raw["threshold"].(float64); ok {
-					threshold = int(value)
-				}
-			}
-			matched = threshold > 0 && len(resultJSON) > threshold
-			if matched {
-				evidence["response_size_bytes"] = len(resultJSON)
-				evidence["threshold"] = threshold
-			}
-		case "call_failed":
-			matched = callErr != nil
-			if matched {
-				evidence["failure_class"] = "upstream_call_failed"
-			}
-		}
-		if !matched {
-			continue
-		}
-		evidenceJSON, _ := json.Marshal(evidence)
-		evaluation.hits = append(evaluation.hits, model.MCPRuleHit{ID: uuid.New(), InvocationID: invocationID, RuleDefinitionID: rule.ID, Severity: rule.Severity, Phase: phase, Evidence: datatypes.JSON(evidenceJSON), CreatedAt: time.Now().UTC()})
-		evaluation.evidence = append(evaluation.evidence, evidence)
-		evaluation.ruleKeys = append(evaluation.ruleKeys, rule.RuleKey)
-		if mcpSeverityRank(rule.Severity) > mcpSeverityRank(evaluation.severity) {
-			evaluation.severity = rule.Severity
-		}
-		if definition.Action == "block" {
-			evaluation.blocked = true
-		}
-	}
-	return evaluation, nil
+	return decision, nil
 }
 
-func (s *MCPPlatformService) persistMCPSecurityEvaluation(ctx context.Context, invocationID uuid.UUID, invocationStatus, resultDigest string, completedAt time.Time, evaluation mcpSecurityEvaluation) error {
+func normalizeSecurityPayloadDigest(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "sha256:") {
+		return raw
+	}
+	return "sha256:" + raw
+}
+
+func (s *MCPPlatformService) persistMCPSecurityEvaluation(ctx context.Context, invocationID uuid.UUID, invocationStatus, resultDigest string, completedAt time.Time, decisions []mcpauthz.SecurityDecision) error {
+	severity := "low"
 	ruleStatus := "safe"
-	if len(evaluation.hits) > 0 {
-		ruleStatus = "matched"
+	action := "allow"
+	phase := "post"
+	policyRevision := ""
+	ruleIDs := []string{}
+	auditIDs := []string{}
+	evidence := []mcpauthz.EvidenceRef{}
+	for _, decision := range decisions {
+		if decision.PolicyRevision != "" {
+			policyRevision = decision.PolicyRevision
+		}
+		if decision.Action == "deny" || decision.Action == "redact" || decision.Action == "quarantine" {
+			action = decision.Action
+			ruleStatus = "blocked"
+		}
+		if decision.Action == "audit" && ruleStatus != "blocked" {
+			action = "audit"
+			ruleStatus = "matched"
+		}
+		if decision.Phase == "pre" {
+			phase = "pre"
+		}
+		if decision.Severity == "critical" || (decision.Severity == "medium" && severity == "low") {
+			severity = decision.Severity
+		}
+		ruleIDs = append(ruleIDs, decision.RuleIDs...)
+		auditIDs = append(auditIDs, decision.AuditRuleIDs...)
+		evidence = append(evidence, decision.EvidenceRefs...)
 	}
-	if evaluation.blocked {
-		ruleStatus = "blocked"
-	}
-	evidence := evaluation.evidence
 	if len(evidence) == 0 {
-		evidence = []map[string]interface{}{{"type": "deterministic_evaluation", "result": "no_rule_matched"}}
+		evidence = []mcpauthz.EvidenceRef{{Stage: phase, Path: "$", Digest: resultDigest}}
 	}
+	ruleJSON, _ := json.Marshal(ruleIDs)
+	auditJSON, _ := json.Marshal(auditIDs)
 	evidenceJSON, _ := json.Marshal(evidence)
-	verdict := &model.MCPSecurityVerdict{ID: uuid.New(), InvocationID: invocationID, DeterministicSeverity: evaluation.severity, AIVerdict: "not_run", OverallRisk: evaluation.severity, Evidence: datatypes.JSON(evidenceJSON), UpdatedAt: completedAt}
-	return s.repo.SaveSecurityEvaluation(ctx, invocationID, invocationStatus, ruleStatus, "not_run", resultDigest, completedAt, evaluation.hits, verdict)
-}
-
-func mergeMCPSecurityEvaluations(left, right mcpSecurityEvaluation) mcpSecurityEvaluation {
-	result := mcpSecurityEvaluation{
-		severity: left.severity, blocked: left.blocked || right.blocked,
-		hits:     append(append([]model.MCPRuleHit{}, left.hits...), right.hits...),
-		evidence: append(append([]map[string]interface{}{}, left.evidence...), right.evidence...),
-		ruleKeys: append(append([]string{}, left.ruleKeys...), right.ruleKeys...),
-	}
-	if mcpSeverityRank(right.severity) > mcpSeverityRank(result.severity) {
-		result.severity = right.severity
-	}
-	return result
-}
-
-func mcpRiskRank(value string) int {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "l4":
-		return 4
-	case "l3":
-		return 3
-	case "l2":
-		return 2
-	case "l1":
-		return 1
-	default:
-		return 0
-	}
-}
-
-func mcpSeverityRank(value string) int {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "critical":
-		return 4
-	case "high":
-		return 3
-	case "medium":
-		return 2
-	case "low":
-		return 1
-	default:
-		return 0
-	}
-}
-
-func findMCPSensitiveKeyPaths(value interface{}, keys []string, path string) []string {
-	sensitive := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		sensitive[strings.ToLower(strings.TrimSpace(key))] = struct{}{}
-	}
-	paths := make([]string, 0)
-	var walk func(interface{}, string)
-	walk = func(current interface{}, currentPath string) {
-		switch typed := current.(type) {
-		case map[string]interface{}:
-			for key, child := range typed {
-				childPath := currentPath + "." + key
-				normalized := strings.ToLower(strings.TrimSpace(key))
-				for candidate := range sensitive {
-					if normalized == candidate || strings.Contains(normalized, candidate) {
-						paths = append(paths, childPath)
-						break
-					}
-				}
-				walk(child, childPath)
-			}
-		case []interface{}:
-			for index, child := range typed {
-				walk(child, fmt.Sprintf("%s[%d]", currentPath, index))
-			}
-		}
-	}
-	walk(value, path)
-	if len(paths) > 20 {
-		paths = paths[:20]
-	}
-	return paths
-}
-
-func findMCPSuspiciousText(value interface{}, patterns []string) ([]string, []string) {
-	normalizedPatterns := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		if normalized := strings.ToLower(strings.TrimSpace(pattern)); normalized != "" {
-			normalizedPatterns = append(normalizedPatterns, normalized)
-		}
-	}
-	paths := make([]string, 0)
-	matchedPatterns := make([]string, 0)
-	seenPattern := make(map[string]struct{})
-	var walk func(interface{}, string)
-	walk = func(current interface{}, path string) {
-		if len(paths) >= 20 {
-			return
-		}
-		switch typed := current.(type) {
-		case map[string]interface{}:
-			for key, child := range typed {
-				walk(child, path+"."+key)
-			}
-		case []interface{}:
-			for index, child := range typed {
-				walk(child, fmt.Sprintf("%s[%d]", path, index))
-			}
-		case string:
-			lower := strings.ToLower(typed)
-			pathMatched := false
-			for _, pattern := range normalizedPatterns {
-				if !strings.Contains(lower, pattern) {
-					continue
-				}
-				pathMatched = true
-				if _, exists := seenPattern[pattern]; !exists {
-					seenPattern[pattern] = struct{}{}
-					matchedPatterns = append(matchedPatterns, pattern)
-				}
-			}
-			if pathMatched {
-				paths = append(paths, path)
-			}
-		}
-	}
-	walk(value, "$")
-	if len(matchedPatterns) > 20 {
-		matchedPatterns = matchedPatterns[:20]
-	}
-	return paths, matchedPatterns
+	verdict := &model.MCPSecurityVerdict{ID: uuid.New(), InvocationID: invocationID, Engine: "rego", Source: "rego", Phase: phase, Action: action, PolicyRevision: policyRevision, RuleIDs: datatypes.JSON(ruleJSON), AuditRuleIDs: datatypes.JSON(auditJSON), DeterministicSeverity: severity, AIVerdict: "not_run", OverallRisk: severity, Evidence: datatypes.JSON(evidenceJSON), UpdatedAt: completedAt}
+	return s.repo.SaveSecurityEvaluation(ctx, invocationID, invocationStatus, ruleStatus, "not_run", resultDigest, completedAt, nil, verdict)
 }
 
 func mustURL(raw string) *url.URL {

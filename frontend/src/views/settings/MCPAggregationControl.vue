@@ -13,6 +13,9 @@
         <el-button type="success" :icon="Plus" @click="openClientEndpoint">
           {{ t('app.mcpAggregation.createClientEndpoint') }}
         </el-button>
+        <el-button type="warning" plain :icon="Setting" @click="focusPolicyEditor">
+          {{ t('app.mcpAggregation.configureOpaPolicy') }}
+        </el-button>
       </div>
     </section>
 
@@ -177,6 +180,9 @@
                     <el-table-column prop="callCount" :label="t('app.mcpAggregation.callCount')" width="100" />
                     <el-table-column :label="t('app.mcpAggregation.status')" width="110"><template #default="{ row }">{{ statusLabel(row.lastStatus) }}</template></el-table-column>
                     <el-table-column :label="t('app.mcpAggregation.decision')" width="110"><template #default="{ row }">{{ statusLabel(row.lastPolicyDecision || '') }}</template></el-table-column>
+                    <el-table-column :label="t('app.mcpAggregation.matchedRules')" min-width="220" show-overflow-tooltip>
+                      <template #default="{ row }">{{ [...row.lastAuthorizationDenyRuleIDs, ...row.lastAuthorizationAuditRuleIDs].join(', ') || '—' }}</template>
+                    </el-table-column>
                     <el-table-column :label="t('app.mcpAggregation.lastCalledAt')" min-width="175"><template #default="{ row }">{{ formatTime(row.lastCalledAt) }}</template></el-table-column>
                     <el-table-column :label="t('app.mcpAggregation.actions')" width="110" fixed="right">
                       <template #default="{ row }">
@@ -198,16 +204,20 @@
           </el-tab-pane>
           <el-tab-pane name="security" :label="t('app.mcpAggregation.security')">
             <section class="security-section">
-              <div class="security-rules-trigger">
-                <el-button type="primary" @click="securityRulesDrawerVisible = true">{{ t('app.mcpAggregation.viewSecurityRules') }}</el-button>
-              </div>
+              <el-alert type="info" show-icon :closable="false" :title="t('app.mcpAggregation.regoOnlySecurityNotice')" />
             </section>
 
             <section class="security-section">
-              <div class="section-heading"><div><h3>{{ t('app.mcpAggregation.securityVerdicts') }}</h3><p>{{ t('app.mcpAggregation.securityVerdictsHint') }}</p></div></div>
+              <div class="section-heading">
+                <div><h3>{{ t('app.mcpAggregation.securityVerdicts') }}</h3><p>{{ t('app.mcpAggregation.securityVerdictsHint') }}</p></div>
+                <el-button link type="primary" @click="activeTab = 'invocations'">{{ t('app.mcpAggregation.viewAuthorizationAudit') }}</el-button>
+              </div>
+              <el-alert type="info" show-icon :closable="false" class="security-boundary-notice" :title="t('app.mcpAggregation.regoSecurityBoundaryNotice')" />
               <el-table v-loading="store.loading" :data="store.securityVerdicts" row-key="id" class="mcp-table">
                 <el-table-column prop="server_name" :label="t('app.mcpAggregation.server')" min-width="170" />
                 <el-table-column prop="tool_alias" :label="t('app.mcpAggregation.alias')" min-width="150" />
+                <el-table-column prop="engine" label="Engine" width="90" />
+                <el-table-column prop="action" label="Action" width="100" />
                 <el-table-column :label="t('app.mcpAggregation.calledClient')" min-width="170"><template #default="{ row }"><div>{{ row.client_name || '—' }}</div><small class="muted">{{ row.client_key }}</small></template></el-table-column>
                 <el-table-column :label="t('app.mcpAggregation.matchedRules')" min-width="220" show-overflow-tooltip><template #default="{ row }">{{ matchedRulesLabel(row.matched_rules, row.evidence) }}</template></el-table-column>
                 <el-table-column :label="t('app.mcpAggregation.deterministic')" width="120"><template #default="{ row }"><el-tag :type="severityTag(row.deterministic_severity)" size="small">{{ severityLabel(row.deterministic_severity) }}</el-tag></template></el-table-column>
@@ -218,6 +228,73 @@
               </el-table>
               <ListPagination :page="pagination.security.page" :page-size="pagination.security.pageSize" :total="store.securityTotal" @change="changePage('security', $event)" />
             </section>
+          </el-tab-pane>
+          <el-tab-pane name="opaPolicy" :label="t('app.mcpAggregation.opaPolicyTab')">
+            <div id="mcp-opa-policy-pane" class="opa-policy-pane">
+              <div class="section-heading opa-policy-heading">
+                <div>
+                  <div class="opa-policy-title-row">
+                    <span class="opa-policy-badge">OPA</span>
+                    <h3>{{ t('app.mcpAggregation.opaPolicyTitle') }}</h3>
+                  </div>
+                  <p>{{ t('app.mcpAggregation.opaPolicyHint') }}</p>
+                </div>
+                <div class="opa-policy-status">
+                  <el-tag :type="policyStatusType">{{ policyStatusLabel }}</el-tag>
+                  <span v-if="store.authorizationPolicy?.version">v{{ store.authorizationPolicy.version }}</span>
+                  <el-button link type="primary" @click="loadAuthorizationPolicy">{{ t('app.mcpAggregation.refreshPolicy') }}</el-button>
+                </div>
+              </div>
+              <el-alert v-if="policyForbidden" type="warning" show-icon :closable="false" class="state-alert"
+                :title="t('app.mcpAggregation.policyReadForbidden')">
+                <p>{{ t('app.mcpAggregation.policyReadForbiddenHint') }}</p>
+              </el-alert>
+              <el-alert v-else-if="policyLoadError" type="error" show-icon :closable="false" class="state-alert" :title="policyLoadError" />
+              <el-alert v-else-if="policyPublishError" type="error" show-icon :closable="false" class="state-alert" :title="policyPublishError" />
+              <template v-else>
+                <el-descriptions v-if="store.authorizationPolicy?.policy" :column="3" border size="small" class="opa-policy-meta">
+                  <el-descriptions-item :label="t('app.mcpAggregation.policyRevision')">{{ store.authorizationPolicy.policy.revision }}</el-descriptions-item>
+                  <el-descriptions-item :label="t('app.mcpAggregation.policyDigest')"><code>{{ store.authorizationPolicy.digest || '—' }}</code></el-descriptions-item>
+                  <el-descriptions-item :label="t('app.mcpAggregation.policyPublishedBy')">{{ store.authorizationPolicy.created_by || '—' }}</el-descriptions-item>
+                </el-descriptions>
+                <el-empty v-else-if="!store.authorizationPolicy" :description="t('app.mcpAggregation.policyUnavailable')" />
+                <el-empty v-else :description="t('app.mcpAggregation.policyEmpty')" />
+
+                <div class="opa-policy-editor">
+                  <div class="section-heading">
+                    <div>
+                      <h3>{{ t('app.mcpAggregation.regoEditorTitle') }}</h3>
+                      <p>{{ t('app.mcpAggregation.regoEditorHint') }}</p>
+                    </div>
+                    <el-tag type="info" effect="plain">{{ t('app.mcpAggregation.regoContract') }}</el-tag>
+                  </div>
+                  <el-alert v-if="legacyPolicyLoaded" type="info" show-icon :closable="false" class="state-alert"
+                    :title="t('app.mcpAggregation.legacyPolicyNotice')" />
+                  <el-alert v-if="!canPublishPolicy" type="info" show-icon :closable="false"
+                    :title="t('app.mcpAggregation.policyPublishForbidden')">
+                    <p>{{ t('app.mcpAggregation.policyPublishForbiddenHint') }}</p>
+                  </el-alert>
+                  <el-form label-position="top" class="opa-rego-form">
+                    <el-form-item :label="t('app.mcpAggregation.policyRevision')">
+                      <el-input v-model="regoRevision" maxlength="128" show-word-limit :readonly="!canPublishPolicy" />
+                    </el-form-item>
+                    <el-form-item :label="t('app.mcpAggregation.regoSourceLabel')">
+                      <el-input v-model="regoSource" type="textarea" :rows="24" class="opa-rego-editor"
+                        :readonly="!canPublishPolicy" spellcheck="false" />
+                    </el-form-item>
+                    <div class="opa-rego-contract-hint">{{ t('app.mcpAggregation.regoContractHint') }}</div>
+                    <div class="opa-policy-actions">
+                      <el-tag v-if="regoValidation === 'valid'" type="success" size="small">{{ t('app.mcpAggregation.regoValid') }}</el-tag>
+                      <el-tag v-else-if="regoValidation === 'invalid'" type="danger" size="small">{{ t('app.mcpAggregation.regoInvalid') }}</el-tag>
+                      <el-button :disabled="!canPublishPolicy" @click="insertNewRegoRule">{{ t('app.mcpAggregation.newRegoRule') }}</el-button>
+                      <el-button :disabled="!canPublishPolicy" :loading="regoValidating" @click="validateRegoPolicy">{{ t('app.mcpAggregation.validateRego') }}</el-button>
+                      <el-button type="primary" :disabled="!canPublishPolicy || regoValidation !== 'valid'" :loading="policyPublishing" @click="publishPolicy">{{ t('app.mcpAggregation.publishAuthorizationPolicy') }}</el-button>
+                    </div>
+                  </el-form>
+                  <el-alert v-if="regoValidationMessage" :type="regoValidation === 'valid' ? 'success' : 'error'" show-icon :closable="false" class="state-alert" :title="regoValidationMessage" />
+                </div>
+              </template>
+            </div>
           </el-tab-pane>
         </el-tabs>
     </el-card>
@@ -263,22 +340,6 @@
       </template>
     </el-drawer>
 
-    <el-drawer v-model="securityRulesDrawerVisible" :title="t('app.mcpAggregation.securityRules')" size="92%" destroy-on-close>
-      <div class="security-rules-drawer">
-        <p class="drawer-description">{{ t('app.mcpAggregation.securityRulesHint') }}</p>
-        <el-table v-loading="store.loading" :data="store.securityRules" row-key="id" class="mcp-table compact-table">
-          <el-table-column prop="name" :label="t('app.mcpAggregation.ruleName')" min-width="210" />
-          <el-table-column :label="t('app.mcpAggregation.rulePhase')" width="100"><template #default="{ row }">{{ rulePhaseLabel(row.phase) }}</template></el-table-column>
-          <el-table-column :label="t('app.mcpAggregation.ruleMatcher')" min-width="250"><template #default="{ row }">{{ ruleDefinitionLabel(row.definition) }}</template></el-table-column>
-          <el-table-column :label="t('app.mcpAggregation.risk')" width="100"><template #default="{ row }"><el-tag :type="severityTag(row.severity)" size="small">{{ severityLabel(row.severity) }}</el-tag></template></el-table-column>
-          <el-table-column :label="t('app.mcpAggregation.protectionAction')" width="110"><template #default="{ row }">{{ ruleActionLabel(row.definition) }}</template></el-table-column>
-          <el-table-column :label="t('app.mcpAggregation.status')" width="110" fixed="right"><template #default="{ row }"><el-switch :model-value="row.enabled" :loading="securityRuleUpdating === row.id" @change="toggleSecurityRule(row, Boolean($event))" /></template></el-table-column>
-          <template #empty><el-empty :description="t('app.mcpAggregation.empty')" /></template>
-        </el-table>
-        <ListPagination :page="pagination.securityRules.page" :page-size="pagination.securityRules.pageSize" :total="store.securityRuleTotal" @change="changePage('securityRules', $event)" />
-      </div>
-    </el-drawer>
-
     <el-dialog v-model="createdEndpointVisible" :title="t('app.mcpAggregation.endpointCreated')" width="620px" destroy-on-close>
       <template v-if="createdEndpoint">
         <el-alert :title="t('app.mcpAggregation.endpointTokenOnce')" type="warning" show-icon :closable="false" />
@@ -297,25 +358,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Delete, Plus, Setting } from '@element-plus/icons-vue'
 import ListPagination from '@/components/ListPagination.vue'
 import type { MCPApprovalDecisionStatus } from '@/api/mcpAggregation'
 import { useMCPAggregationStore } from '@/store/mcpAggregation'
-import type { MCPClientEndpoint, MCPClientEndpointCreated, MCPOnboardingPayload, MCPSecurityRule, MCPServer, MCPToolRevision } from '@/types/mcpAggregation'
+import type { MCPAuthorizationPolicy, MCPClientEndpoint, MCPClientEndpointCreated, MCPOnboardingPayload, MCPServer, MCPToolRevision } from '@/types/mcpAggregation'
 import { getStoredAuth } from '@/utils/auth'
+import { canCapability } from '@/utils/capabilities'
 import { groupMCPInvocations } from '@/utils/mcpInvocationAudit'
+import { useRoute, useRouter } from 'vue-router'
 
 const { t } = useI18n()
 const store = useMCPAggregationStore()
-const activeTab = ref('servers')
+type PageKey = 'servers' | 'tools' | 'clients' | 'approvals' | 'invocations' | 'security' | 'opaPolicy'
+const route = useRoute()
+const router = useRouter()
+const validTabs = new Set<PageKey>(['servers', 'tools', 'clients', 'approvals', 'invocations', 'security', 'opaPolicy'])
+const initialTab = String(route.query.tab || '') as PageKey
+const activeTab = ref<PageKey>(validTabs.has(initialTab) ? initialTab : 'servers')
 const onboardingVisible = ref(false)
 const clientEndpointVisible = ref(false)
 const endpointToolsVisible = ref(false)
 const createdEndpointVisible = ref(false)
-const securityRulesDrawerVisible = ref(false)
 const submitting = ref(false)
 const clientEndpointSubmitting = ref(false)
 const selectedServer = ref<MCPServer | null>(null)
@@ -324,17 +391,25 @@ const createdEndpoint = ref<MCPClientEndpointCreated | null>(null)
 const approvalSubmitting = ref('')
 const toolUpdating = ref('')
 const auditDisabling = ref('')
-const securityRuleUpdating = ref('')
+const policyForbidden = ref(false)
+const policyLoadError = ref('')
+const policyPublishError = ref('')
+const policyPublishing = ref(false)
+const regoValidating = ref(false)
+const regoValidation = ref<'idle' | 'valid' | 'invalid'>('idle')
+const regoValidationMessage = ref('')
+const regoRevision = ref('mcp-rego-v1')
+const regoSource = ref('')
+const legacyPolicyLoaded = ref(false)
 const clientEndpointForm = reactive({ client_key: '', display_name: '', server_id: '' })
 const currentUsername = computed(() => getStoredAuth()?.username || '')
 const currentRole = computed(() => getStoredAuth()?.role || '')
 const filters = reactive({ keyword: '', environment: '', status: '', risk_tier: '' })
 const form = reactive<MCPOnboardingPayload>({ display_name: '', endpoint_url: '', auth_type: 'oauth2', credential_ref: '', environment: 'test', publish_policy: 'approval_required' })
-type PageKey = 'servers' | 'tools' | 'clients' | 'approvals' | 'invocations' | 'security' | 'securityRules'
 const pagination = reactive<Record<PageKey, { page: number; pageSize: number }>>({
   servers: { page: 1, pageSize: 10 }, tools: { page: 1, pageSize: 10 }, clients: { page: 1, pageSize: 10 },
   approvals: { page: 1, pageSize: 10 }, invocations: { page: 1, pageSize: 10 }, security: { page: 1, pageSize: 10 },
-  securityRules: { page: 1, pageSize: 10 },
+  opaPolicy: { page: 1, pageSize: 10 },
 })
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 
@@ -350,8 +425,54 @@ const toolGroups = computed(() => {
 })
 const publishedServers = computed(() => store.serverOptions.filter(server => server.lifecycle_status === 'published' && server.active_revision_id))
 const invocationGroups = computed(() => groupMCPInvocations(store.invocations))
+const canReadPolicy = computed(() => canCapability('mcp:policy:read'))
+const canPublishPolicy = computed(() => canCapability('mcp:policy:publish'))
+const policyStatusType = computed(() => policyForbidden.value ? 'warning' : policyLoadError.value ? 'danger' : store.authorizationPolicy?.status === 'active' ? 'success' : 'info')
+const policyStatusLabel = computed(() => policyForbidden.value ? t('app.mcpAggregation.policyReadOnly') : policyLoadError.value ? t('app.mcpAggregation.policyLoadFailed') : store.authorizationPolicy?.status === 'active' ? t('app.mcpAggregation.policyActive') : t('app.mcpAggregation.policyEmpty'))
 
-const metrics = computed(() => [
+const defaultRegoSource = `package aegis.mcp.authz
+
+import rego.v1
+
+# Replace this example with the rules for this MCP gateway.
+default allow := false
+
+allow if {
+  input.principal.client_id == "replace-client-id"
+  input.tool.release_tool_id == "replace-release-tool-id"
+  count(custom_deny_rule_ids) == 0
+}
+
+reason_code := "POLICY_ALLOWED" if allow
+reason_code := "POLICY_DENIED" if not allow
+# Keep this empty rule so the editor's new-rule template can add more
+# custom_deny_rule_ids rules safely.
+custom_deny_rule_ids contains "mcp.authz.example.placeholder" if false
+deny_rule_ids := sort([id | id := custom_deny_rule_ids[_]]) if allow
+deny_rule_ids := sort(array.concat(["NO_MATCHING_PERMIT"], [id | id := custom_deny_rule_ids[_]])) if not allow
+
+decision := {
+  "contract_version": "aegis.mcp.authz.decision.v1",
+  "allow": allow,
+  "reason_code": reason_code,
+  "deny_rule_ids": deny_rule_ids,
+  "audit_rule_ids": [],
+  "policy_revision": data.aegis_config.meta.revision,
+}`
+
+const newRegoRuleTemplate = `
+
+# New deny rule: change the rule id, tool name, parameter, and value.
+# IMPORTANT: this rule is effective only when your allow rule also checks
+# not custom_deny_rule_ids (or an equivalent deny condition).
+# rule_id: mcp.authz.example.deny_parameter
+custom_deny_rule_ids contains "mcp.authz.example.deny_parameter" if {
+  input.tool.exposed_name == "replace_tool"
+  input.arguments["replace_parameter"] == "replace_value"
+}
+`
+
+const metrics = computed<Array<{ key: string; tab: PageKey; label: string; value: number | string }>>(() => [
   { key: 'servers', tab: 'servers', label: t('app.mcpAggregation.remoteServers'), value: store.overview?.remote_servers ?? '—' },
   { key: 'tools', tab: 'tools', label: t('app.mcpAggregation.publishedTools'), value: store.overview?.published_tools ?? '—' },
   { key: 'clients', tab: 'clients', label: t('app.mcpAggregation.activeClients'), value: store.overview?.active_clients ?? '—' },
@@ -365,11 +486,73 @@ async function load() {
   } catch { /* store contains safe error state */ }
 }
 
+function hydratePolicyEditor(policy?: MCPAuthorizationPolicy) {
+  regoRevision.value = policy?.revision || 'mcp-rego-v1'
+  legacyPolicyLoaded.value = Boolean(policy && !policy.rego_source)
+  regoSource.value = policy?.rego_source || defaultRegoSource
+  regoValidation.value = 'idle'
+  regoValidationMessage.value = ''
+}
+async function loadAuthorizationPolicy() {
+  policyForbidden.value = false
+  policyLoadError.value = ''
+  if (!canReadPolicy.value) { policyForbidden.value = true; return }
+  try {
+    const status = await store.loadAuthorizationPolicy()
+    hydratePolicyEditor(status?.policy)
+  } catch (error) {
+    const typed = error as Error & { status?: number }
+    if (typed.status === 403) policyForbidden.value = true
+    else policyLoadError.value = typed.message || t('app.mcpAggregation.policyLoadFailed')
+  }
+}
+function insertNewRegoRule() {
+  if (!canPublishPolicy.value) return
+  const separator = regoSource.value.endsWith('\n') ? '' : '\n'
+  regoSource.value = `${regoSource.value}${separator}${newRegoRuleTemplate}`
+  regoValidation.value = 'idle'
+  regoValidationMessage.value = ''
+  ElMessage.success(t('app.mcpAggregation.regoNewRuleInserted'))
+}
+async function validateRegoPolicy(): Promise<boolean> {
+  regoValidating.value = true
+  regoValidation.value = 'idle'
+  regoValidationMessage.value = ''
+  try {
+    const result = await store.validateAuthorizationPolicy({ revision: regoRevision.value.trim(), rego_source: regoSource.value, permissions: {} })
+    regoValidation.value = result.valid ? 'valid' : 'invalid'
+    regoValidationMessage.value = result.valid ? t('app.mcpAggregation.regoValidationSucceeded') : t('app.mcpAggregation.regoInvalid')
+    return result.valid
+  } catch (error) {
+    regoValidation.value = 'invalid'
+    regoValidationMessage.value = error instanceof Error ? error.message : t('app.mcpAggregation.regoValidationFailed')
+    return false
+  } finally { regoValidating.value = false }
+}
+async function publishPolicy() {
+  if (regoValidation.value !== 'valid' && !(await validateRegoPolicy())) return
+  const policy: MCPAuthorizationPolicy = { revision: regoRevision.value.trim(), rego_source: regoSource.value, permissions: {} }
+  policyPublishing.value = true
+  policyPublishError.value = ''
+  try {
+    const status = await store.publishAuthorizationPolicy(policy)
+    hydratePolicyEditor(status?.policy)
+    legacyPolicyLoaded.value = false
+    ElMessage.success(t('app.mcpAggregation.policyPublished'))
+  } catch (error) {
+    const typed = error as Error & { status?: number }
+    policyPublishError.value = typed.status === 403 ? t('app.mcpAggregation.policyPublishForbidden') : typed.message || t('app.mcpAggregation.policyPublishFailed')
+    ElMessage.error(policyPublishError.value)
+  }
+  finally { policyPublishing.value = false }
+}
+
 async function onTabChange(name: string | number) {
   const tab = String(name) as PageKey
   try {
     if (tab === 'servers') await load()
-    else if (tab === 'security') await Promise.all([loadTabPage('security'), loadTabPage('securityRules')])
+    else if (tab === 'security') await loadTabPage('security')
+    else if (tab === 'opaPolicy') await loadAuthorizationPolicy()
     else await loadTabPage(tab)
   } catch { /* store exposes the primary error state */ }
 }
@@ -377,8 +560,11 @@ async function onTabChange(name: string | number) {
 async function loadTabPage(tab: PageKey) {
   const state = pagination[tab]
   const params = { page: state.page, page_size: state.pageSize }
-  if (tab === 'securityRules') return store.loadSecurityRules(params)
-  return store.loadTab(tab, params)
+  try {
+    return await store.loadTab(tab, params)
+  } catch (error) {
+    throw error
+  }
 }
 
 async function changePage(tab: PageKey, page: number) {
@@ -395,6 +581,12 @@ function openClientEndpoint() {
   clientEndpointForm.display_name = ''
   clientEndpointForm.server_id = publishedServers.value[0]?.id || ''
   clientEndpointVisible.value = true
+}
+
+function focusPolicyEditor() {
+  activeTab.value = 'opaPolicy'
+  void loadAuthorizationPolicy()
+  requestAnimationFrame(() => document.getElementById('mcp-opa-policy-pane')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 function enabledToolCount(row: MCPClientEndpoint) { return row.tools.filter(tool => tool.enabled).length }
@@ -504,17 +696,6 @@ function severityTag(value: string) { return value === 'critical' || value === '
 function severityLabel(value: string) {
   return ({ low: '低', medium: '中', high: '高', critical: '严重' } as Record<string, string>)[value] || value || '—'
 }
-function rulePhaseLabel(value: string) { return value === 'pre' ? t('app.mcpAggregation.beforeCall') : t('app.mcpAggregation.afterCall') }
-function ruleActionLabel(definition: Record<string, unknown>) { return definition.action === 'block' ? t('app.mcpAggregation.block') : t('app.mcpAggregation.auditOnly') }
-function ruleDefinitionLabel(definition: Record<string, unknown>) {
-  const matcherLabels: Record<string, string> = {
-    tool_risk_at_least: `工具风险 ≥ ${String(definition.threshold || '').toUpperCase()}`,
-    sensitive_output_keys: '敏感结果字段', response_size_bytes: `结果大小 > ${Math.round(Number(definition.threshold || 0) / 1024)} KiB`,
-    sensitive_input_keys: '敏感输入字段', input_patterns: '路径 / SQL / Shell / Header 注入特征',
-    output_patterns: '工具结果提示词注入特征', call_failed: '上游调用失败',
-  }
-  return matcherLabels[String(definition.matcher)] || String(definition.matcher || '—')
-}
 function matchedRulesLabel(rules?: string[], evidence?: unknown[]) {
   if (rules && rules.length > 0) return rules.join('、')
   if (Array.isArray(evidence) && evidence.some((item) => item && typeof item === 'object' && (item as Record<string, unknown>).reason === 'historical_payload_unavailable')) {
@@ -563,15 +744,6 @@ async function disableInvocationTool(invocationId: string, serverName: string, t
     auditDisabling.value = ''
   }
 }
-async function toggleSecurityRule(rule: MCPSecurityRule, enabled: boolean) {
-  securityRuleUpdating.value = rule.id
-  try {
-    await store.setSecurityRuleEnabled(rule.id, enabled)
-    ElMessage.success(enabled ? t('app.mcpAggregation.ruleEnabled') : t('app.mcpAggregation.ruleDisabled'))
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : t('app.mcpAggregation.ruleUpdateFailed'))
-  } finally { securityRuleUpdating.value = '' }
-}
 function approvalTypeLabel(value: string) { return value === 'admission' ? t('app.mcpAggregation.approvalTypeAdmission') : statusLabel(value) }
 function approvalSubjectLabel(value: string) { return value === 'server_revision' ? t('app.mcpAggregation.subjectTypeServerRevision') : value }
 function canDecideApproval(row: { requested_by: string }) {
@@ -613,13 +785,40 @@ async function decideApproval(row: { id: string; status: string; request_digest?
 
 onMounted(() => {
   load()
+  if (activeTab.value !== 'servers') onTabChange(activeTab.value)
   refreshTimer = setInterval(() => store.loadOverview(), 10_000)
+})
+watch(() => route.query.tab, (value) => {
+  const candidate = String(value || '') as PageKey
+  if (validTabs.has(candidate) && activeTab.value !== candidate) activeTab.value = candidate
+})
+watch(activeTab, (value) => {
+  const nextTab = value === 'servers' ? undefined : value
+  if (route.query.tab !== nextTab) router.replace({ query: { ...route.query, tab: nextTab } })
 })
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
 
 <style scoped>
 .mcp-hero { margin-bottom: 18px; }
+.opa-policy-pane { padding: 2px 0 12px; }
+.opa-policy-heading { margin-bottom: 14px; }
+.opa-policy-title-row { display: flex; align-items: center; gap: 9px; }
+.opa-policy-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 38px; height: 24px; border-radius: 6px; color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb); font-size: 11px; font-weight: 800; letter-spacing: .06em; }
+.opa-policy-status { display: flex; align-items: center; gap: 10px; color: #64748b; font-size: 12px; }
+.opa-policy-meta { margin-bottom: 20px; }
+.opa-policy-editor { margin-top: 22px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+.opa-policy-form { display: grid; gap: 14px; }
+.opa-policy-global-fields { display: grid; grid-template-columns: minmax(220px, 1fr) 180px; gap: 12px; }
+.opa-policy-rule-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(180px, 1fr) 150px 100px minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid #dbe4ee; border-radius: 12px; background: #f8fafc; }
+.opa-policy-remove { margin-bottom: 18px; }
+.opa-policy-actions { display: flex; justify-content: flex-end; }
+.opa-rego-form { display: grid; gap: 12px; }
+.opa-rego-editor :deep(textarea) { min-height: 420px; padding: 16px; color: #e2e8f0; background: #0f172a; border-color: #1e293b; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.6; }
+.opa-rego-editor :deep(textarea:read-only) { cursor: not-allowed; opacity: .9; }
+.opa-rego-contract-hint { padding: 10px 12px; border-radius: 8px; color: #475569; background: #f8fafc; font-size: 12px; line-height: 1.5; }
+@media (max-width: 1200px) { .opa-policy-rule-row { grid-template-columns: repeat(3, minmax(160px, 1fr)); } }
+@media (max-width: 700px) { .opa-policy-global-fields, .opa-policy-rule-row { grid-template-columns: 1fr; } .opa-policy-status { flex-wrap: wrap; } }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .hero-kicker { display: inline-flex; margin-bottom: 8px; color: #0891b2; font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
@@ -648,15 +847,11 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .audit-tool-header span, .audit-client-table small { color: #64748b; font-size: 12px; }
 .audit-client-name { color: #0f172a; font-weight: 600; }
 .audit-client-table { width: 100%; }
-.security-rules-trigger { display: flex; align-items: center; }
 .security-section + .security-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid #e2e8f0; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .section-heading h3 { margin: 0; color: #0f172a; font-size: 17px; }
 .section-heading p { margin: 5px 0 0; color: #64748b; font-size: 12px; }
-.compact-table { min-height: 180px; }
 .muted { color: #64748b; }
-.security-rules-drawer { min-width: 960px; }
-.security-rules-drawer .drawer-description { margin: 0 0 16px; color: #64748b; font-size: 13px; }
 .client-endpoint-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .client-endpoint-toolbar strong, .client-endpoint-toolbar span { display: block; }
 .client-endpoint-toolbar span { margin-top: 4px; color: #64748b; font-size: 12px; }

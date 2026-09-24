@@ -14,12 +14,13 @@ import {
   updateMCPClientEndpointTools,
   listMCPInvocations,
   listMCPServers,
-  listMCPSecurityRules,
   listMCPSecurityVerdicts,
   listMCPTools,
-  setMCPSecurityRuleEnabled,
+  getMCPAuthorizationPolicy,
+  publishMCPAuthorizationPolicy,
+  validateMCPAuthorizationPolicy,
 } from '@/api/mcpAggregation'
-import type { MCPApprovalRequest, MCPClientEndpoint, MCPClientEndpointCreated, MCPInvocation, MCPOnboardingJob, MCPOnboardingPayload, MCPOverview, MCPServer, MCPCatalog, MCPSecurityRule, MCPSecurityVerdict, MCPToolRevision } from '@/types/mcpAggregation'
+import type { MCPApprovalRequest, MCPAuthorizationPolicy, MCPAuthorizationPolicyStatus, MCPClientEndpoint, MCPClientEndpointCreated, MCPInvocation, MCPOnboardingJob, MCPOnboardingPayload, MCPOverview, MCPServer, MCPCatalog, MCPSecurityVerdict, MCPToolRevision } from '@/types/mcpAggregation'
 import type { MCPApprovalDecisionStatus } from '@/api/mcpAggregation'
 
 function errorMessage(error: unknown): string {
@@ -46,8 +47,7 @@ export const useMCPAggregationStore = defineStore('mcpAggregation', {
     invocationTotal: 0,
     securityVerdicts: [] as MCPSecurityVerdict[],
     securityTotal: 0,
-    securityRules: [] as MCPSecurityRule[],
-    securityRuleTotal: 0,
+    authorizationPolicy: null as MCPAuthorizationPolicyStatus | null,
     loading: false,
     error: '',
     lastUpdatedAt: '',
@@ -140,24 +140,23 @@ export const useMCPAggregationStore = defineStore('mcpAggregation', {
         this.loading = false
       }
     },
-    async loadSecurityRules(params: Record<string, unknown> = { page: 1, page_size: 10 }) {
-      this.loading = true
-      this.error = ''
+    async loadAuthorizationPolicy() {
       try {
-        const result = await listMCPSecurityRules(params)
-        this.securityRules = result.items
-        this.securityRuleTotal = result.total
+        this.authorizationPolicy = await getMCPAuthorizationPolicy()
+        return this.authorizationPolicy
       } catch (error) {
         this.error = errorMessage(error)
         throw error
-      } finally {
-        this.loading = false
       }
     },
-    async setSecurityRuleEnabled(id: string, enabled: boolean) {
-      const result = await setMCPSecurityRuleEnabled(id, enabled)
-      this.securityRules = this.securityRules.map(item => item.id === id ? result : item)
-      return result
+    async publishAuthorizationPolicy(policy: MCPAuthorizationPolicy) {
+      await publishMCPAuthorizationPolicy(policy)
+      // Re-read the active projection so the editor reflects the canonical
+      // persisted source/revision after activation, including normalized data.
+      return this.loadAuthorizationPolicy()
+    },
+    async validateAuthorizationPolicy(policy: MCPAuthorizationPolicy) {
+      return validateMCPAuthorizationPolicy(policy)
     },
     async createClientEndpoint(payload: { client_key: string; display_name: string; client_type: string; server_id: string }): Promise<MCPClientEndpointCreated> {
       const result = await createMCPClientEndpoint(payload)

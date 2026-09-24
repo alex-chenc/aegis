@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMCPClientEndpoint, createMCPOnboardingJob, decideMCPApproval, deleteMCPClientEndpoint, deleteMCPServer, disableMCPInvocationTool, getMCPOverview, listMCPClientEndpoints, listMCPServers, listMCPSecurityRules, listMCPTools, setMCPSecurityRuleEnabled, updateMCPClientEndpointTools } from './mcpAggregation'
+import { createMCPClientEndpoint, createMCPOnboardingJob, decideMCPApproval, deleteMCPClientEndpoint, deleteMCPServer, disableMCPInvocationTool, getMCPAuthorizationPolicy, getMCPOverview, listMCPClientEndpoints, listMCPServers, listMCPTools, publishMCPAuthorizationPolicy, updateMCPClientEndpointTools, validateMCPAuthorizationPolicy } from './mcpAggregation'
 
 const { deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({ deleteMock: vi.fn(), getMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn() }))
 
@@ -12,6 +12,26 @@ describe('MCP aggregation API', () => {
     getMock.mockResolvedValueOnce({ remote_servers: 1 })
     await getMCPOverview()
     expect(getMock).toHaveBeenCalledWith('/mcp-platform/overview')
+  })
+
+  it('loads the controlled OPA policy projection', async () => {
+    getMock.mockResolvedValueOnce({ status: 'empty', policy_key: 'mcp-runtime-authorization' })
+    await getMCPAuthorizationPolicy()
+    expect(getMock).toHaveBeenCalledWith('/mcp-platform/authorization/policies')
+  })
+
+  it('validates Rego source through the server policy endpoint', async () => {
+    const policy = { revision: 'ui-r1', permissions: {}, rego_source: 'package aegis.mcp.authz' }
+    postMock.mockResolvedValueOnce({ valid: true, revision: 'ui-r1' })
+    await validateMCPAuthorizationPolicy(policy)
+    expect(postMock).toHaveBeenCalledWith('/mcp-platform/authorization/policies/validate', policy)
+  })
+
+  it('publishes Rego source through the policy endpoint', async () => {
+    const policy = { revision: 'ui-r1', permissions: {}, rego_source: 'package aegis.mcp.authz' }
+    postMock.mockResolvedValueOnce({ status: 'active', version: 1 })
+    await publishMCPAuthorizationPolicy(policy)
+    expect(postMock).toHaveBeenCalledWith('/mcp-platform/authorization/policies', policy)
   })
 
   it('keeps server filters in query parameters', async () => {
@@ -92,12 +112,4 @@ describe('MCP aggregation API', () => {
     expect(postMock).toHaveBeenCalledWith('/mcp-platform/invocations/invocation-1/disable-tool')
   })
 
-  it('lists and toggles deterministic security rules', async () => {
-    getMock.mockResolvedValueOnce({ items: [], total: 0 })
-    putMock.mockResolvedValueOnce({ id: 'rule-1', enabled: false })
-    await listMCPSecurityRules({ page: 1, page_size: 10 })
-    await setMCPSecurityRuleEnabled('rule-1', false)
-    expect(getMock).toHaveBeenCalledWith('/mcp-platform/security-rules', { params: { page: 1, page_size: 10 } })
-    expect(putMock).toHaveBeenCalledWith('/mcp-platform/security-rules/rule-1/enabled', { enabled: false })
-  })
 })

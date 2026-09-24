@@ -80,6 +80,7 @@ export interface MCPToolRevision {
   risk_tier: string
   status: string
   created_at: string
+  release_tool_id?: string
 }
 
 export interface MCPClient {
@@ -160,6 +161,11 @@ export interface MCPInvocation {
   tool_enabled: boolean
   status: string
   policy_decision?: string
+  authorization_outcome?: string
+  authorization_reason_code?: string
+  authorization_policy_revision?: string
+  authorization_deny_rule_ids?: string[]
+  authorization_audit_rule_ids?: string[]
   created_at: string
   completed_at?: string
 }
@@ -186,23 +192,51 @@ export interface MCPSecurityVerdict {
   invocation_status: string
   invocation_created_at: string
   deterministic_severity: string
+  engine: string
+  source: string
+  phase: string
+  action: string
+  policy_revision?: string
+  rule_ids: string[]
+  audit_rule_ids: string[]
   matched_rules: string[]
   overall_risk: string
   evidence: unknown[]
   updated_at: string
 }
 
-export interface MCPSecurityRule {
-  id: string
-  rule_key: string
+export interface MCPAuthorizationPermission {
+  catalog_release_id: string
+  tool_revision_id: string
+  require_user: boolean
+  user_ids: string[]
+  project_ids: string[]
+  max_limit: number
+}
+
+export interface MCPAuthorizationPolicy {
+  revision: string
+  permissions: Record<string, Record<string, MCPAuthorizationPermission>>
+  block_risk_at_least?: string
+  rego_source?: string
+}
+
+export interface MCPAuthorizationPolicyStatus {
+  policy_key: string
+  status: 'empty' | 'active' | string
   version: number
-  name: string
-  phase: 'pre' | 'post'
-  severity: string
-  definition: Record<string, unknown>
+  language_version?: string
+  digest?: string
+  created_by?: string
+  created_at?: string
+  policy?: MCPAuthorizationPolicy
+}
+
+export interface MCPAuthorizationPolicyValidation {
+  valid: boolean
+  revision: string
+  language_version: string
   digest: string
-  enabled: boolean
-  created_at: string
 }
 
 export interface MCPPage<T> {

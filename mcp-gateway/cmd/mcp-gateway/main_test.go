@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -117,6 +118,27 @@ func TestClientEndpointRequiresBearerToken(t *testing.T) {
 	g.handleMCP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized status, got %d", recorder.Code)
+	}
+}
+
+func TestRuntimeRPCErrorDistinguishesAuthorizationPolicyDeny(t *testing.T) {
+	g := &gateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	recorder := httptest.NewRecorder()
+	g.writeRuntimeRPCError(recorder, 7, fmt.Errorf("runtime request rejected (403): mcp invocation denied by authorization policy"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected JSON-RPC response, got %d", recorder.Code)
+	}
+	var response struct {
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != -32005 || response.Error.Message != "tool call denied by authorization policy" {
+		t.Fatalf("unexpected policy denial mapping: %#v", response.Error)
 	}
 }
 

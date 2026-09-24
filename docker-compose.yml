@@ -85,6 +85,8 @@ services:
       - ./migrations/036_v6.3_mcp_security_rules.sql:/migrations/036_v6.3_mcp_security_rules.sql:ro
       - ./migrations/037_v6.4_agent_skill_security.sql:/migrations/037_v6.4_agent_skill_security.sql:ro
       - ./migrations/038_v6.4_agent_skill_scan_snapshots.sql:/migrations/038_v6.4_agent_skill_scan_snapshots.sql:ro
+      - ./migrations/039_v6.3_mcp_opa_authorization.sql:/migrations/039_v6.3_mcp_opa_authorization.sql:ro
+      - ./migrations/040_v6.4_mcp_rego_only_archive.sql:/migrations/040_v6.4_mcp_rego_only_archive.sql:ro
     command:
       - "psql"
       - "-v"
@@ -115,6 +117,10 @@ services:
       - "/migrations/037_v6.4_agent_skill_security.sql"
       - "-f"
       - "/migrations/038_v6.4_agent_skill_scan_snapshots.sql"
+      - "-f"
+      - "/migrations/039_v6.3_mcp_opa_authorization.sql"
+      - "-f"
+      - "/migrations/040_v6.4_mcp_rego_only_archive.sql"
     networks:
       - aegis-network
 

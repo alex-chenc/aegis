@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"api-server/internal/mcpauthz"
 	"api-server/internal/repository"
 	"api-server/internal/service"
 
@@ -67,8 +69,69 @@ func (h *MCPPlatformHandler) RegisterRoutes(api *gin.RouterGroup, permissions fu
 	group.GET("/invocations", permissions(repository.PermissionMCPInvocationRead), h.ListInvocations)
 	group.POST("/invocations/:id/disable-tool", permissions(repository.PermissionMCPGrantWrite), h.DisableInvocationTool)
 	group.GET("/security-verdicts", permissions(repository.PermissionMCPSecurityRead), h.ListSecurityVerdicts)
-	group.GET("/security-rules", permissions(repository.PermissionMCPPolicyRead), h.ListSecurityRules)
-	group.PUT("/security-rules/:id/enabled", permissions(repository.PermissionMCPPolicyWrite), h.SetSecurityRuleEnabled)
+	group.GET("/authorization/policies", permissions(repository.PermissionMCPPolicyRead), h.GetAuthorizationPolicy)
+	group.POST("/authorization/policies/validate", permissions(repository.PermissionMCPPolicyRead), h.ValidateAuthorizationPolicy)
+	group.POST("/authorization/policies", permissions(repository.PermissionMCPPolicyPublish), h.ConfigureAuthorizationPolicy)
+}
+
+func (h *MCPPlatformHandler) ValidateAuthorizationPolicy(c *gin.Context) {
+	policy, err := decodeAuthorizationPolicy(c)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_authorization_policy", err)
+		return
+	}
+	result, err := h.service.ValidateAuthorizationPolicy(c.Request.Context(), policy)
+	if err != nil {
+		h.writeError(c, http.StatusUnprocessableEntity, "authorization_policy_validation_failed", err)
+		return
+	}
+	h.success(c, result)
+}
+
+func (h *MCPPlatformHandler) GetAuthorizationPolicy(c *gin.Context) {
+	status, err := h.service.GetAuthorizationPolicyStatus(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "authorization_policy_status_failed", err)
+		return
+	}
+	h.success(c, status)
+}
+
+// ConfigureAuthorizationPolicy accepts the typed compatibility DTO or one
+// constrained Rego source module; the service owns compilation and contract
+// validation before activation.
+func (h *MCPPlatformHandler) ConfigureAuthorizationPolicy(c *gin.Context) {
+	policy, err := decodeAuthorizationPolicy(c)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_authorization_policy", err)
+		return
+	}
+	version, err := h.service.ConfigureAuthorizationPolicy(c.Request.Context(), policy, authOperator(c))
+	if err != nil {
+		h.writeError(c, http.StatusUnprocessableEntity, "authorization_policy_activation_failed", err)
+		return
+	}
+	h.successStatus(c, http.StatusCreated, version)
+}
+
+func decodeAuthorizationPolicy(c *gin.Context) (mcpauthz.Policy, error) {
+	var policy mcpauthz.Policy
+	// Policy management is a control-plane boundary. Keep the payload bounded,
+	// reject unknown fields and trailing JSON values before service validation.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return mcpauthz.Policy{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("authorization policy must contain one JSON object")
+		}
+		return mcpauthz.Policy{}, err
+	}
+	return policy, nil
 }
 
 // RegisterRuntimeRoutes exposes only the gateway-to-api-server data plane.
@@ -378,6 +441,9 @@ func (h *MCPPlatformHandler) RuntimeCall(c *gin.Context) {
 	if !h.validRuntimeRequest(c) {
 		return
 	}
+	// Keep the internal route bounded even when called directly without the
+	// gateway's envelope limit.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 	var req mcpRuntimeCallRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ToolAlias) == "" {
 		h.runtimeJSONError(c, http.StatusBadRequest, "invalid runtime call")
@@ -434,7 +500,11 @@ func (h *MCPPlatformHandler) validRuntimeRequest(c *gin.Context) bool {
 
 func (h *MCPPlatformHandler) runtimeError(c *gin.Context, err error) {
 	status := http.StatusForbidden
-	if !errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) && !errors.Is(err, service.ErrMCPPlatformToolNotAllowed) && !errors.Is(err, service.ErrMCPPlatformSecurityBlocked) {
+	if errors.Is(err, mcpauthz.ErrInvalidArguments) {
+		status = http.StatusBadRequest
+	} else if errors.Is(err, service.ErrMCPPlatformAuthorizationFailed) {
+		status = http.StatusServiceUnavailable
+	} else if !errors.Is(err, service.ErrMCPPlatformClientEndpointDenied) && !errors.Is(err, service.ErrMCPPlatformToolNotAllowed) && !errors.Is(err, service.ErrMCPPlatformSecurityBlocked) && !errors.Is(err, service.ErrMCPPlatformAuthorizationDenied) {
 		status = http.StatusBadGateway
 	}
 	h.runtimeJSONError(c, status, safeHandlerError(err))
@@ -542,39 +612,6 @@ func (h *MCPPlatformHandler) ListSecurityVerdicts(c *gin.Context) {
 	}
 	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
 }
-func (h *MCPPlatformHandler) ListSecurityRules(c *gin.Context) {
-	page, size := mcpPageParams(c)
-	items, total, err := h.service.ListSecurityRules(c.Request.Context(), page, size)
-	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "security_rule_list_failed", err)
-		return
-	}
-	h.success(c, gin.H{"items": items, "total": total, "page": page, "page_size": size})
-}
-
-type mcpSecurityRuleEnabledRequest struct {
-	Enabled *bool `json:"enabled" binding:"required"`
-}
-
-func (h *MCPPlatformHandler) SetSecurityRuleEnabled(c *gin.Context) {
-	ruleID, err := parseMCPID(c.Param("id"))
-	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "invalid_security_rule_id", err)
-		return
-	}
-	var req mcpSecurityRuleEnabledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.writeError(c, http.StatusBadRequest, "invalid_security_rule_state", err)
-		return
-	}
-	item, err := h.service.SetSecurityRuleEnabled(c.Request.Context(), ruleID, *req.Enabled, authOperator(c))
-	if err != nil {
-		h.notFoundOrError(c, "security_rule_update_failed", err)
-		return
-	}
-	h.success(c, item)
-}
-
 func (h *MCPPlatformHandler) success(c *gin.Context, data interface{}) {
 	h.successStatus(c, http.StatusOK, data)
 }

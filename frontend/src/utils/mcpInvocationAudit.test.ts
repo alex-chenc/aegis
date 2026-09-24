@@ -39,4 +39,18 @@ describe('MCP invocation audit grouping', () => {
       lastInvocationId: 'latest',
     })
   })
+
+  it('keeps pre-call authorization rule IDs visible for blocked invocations', () => {
+    const groups = groupMCPInvocations([invocation({
+      id: 'blocked-host-a', status: 'blocked', policy_decision: 'deny',
+      authorization_outcome: 'deny', authorization_reason_code: 'POLICY_DENIED',
+      authorization_deny_rule_ids: ['host.query.host_a_denied'],
+    })])
+
+    expect(groups[0].tools[0].clients[0]).toMatchObject({
+      lastStatus: 'blocked',
+      lastPolicyDecision: 'deny',
+      lastAuthorizationDenyRuleIDs: ['host.query.host_a_denied'],
+    })
+  })
 })

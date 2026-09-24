@@ -3,11 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"api-server/internal/model"
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -32,24 +34,30 @@ type MCPOnboardingJobQuery struct {
 // Client identities needed by the governance UI. It deliberately excludes raw
 // request and response payloads.
 type MCPInvocationAuditRow struct {
-	ID             uuid.UUID  `gorm:"column:id"`
-	ClientID       *uuid.UUID `gorm:"column:client_id"`
-	ToolRevisionID *uuid.UUID `gorm:"column:tool_revision_id"`
-	ToolAlias      string     `gorm:"column:tool_alias"`
-	Status         string     `gorm:"column:status"`
-	PolicyDecision string     `gorm:"column:policy_decision"`
-	CreatedAt      time.Time  `gorm:"column:created_at"`
-	CompletedAt    *time.Time `gorm:"column:completed_at"`
-	ClientKey      string     `gorm:"column:client_key"`
-	ClientName     string     `gorm:"column:client_name"`
-	ServerID       *uuid.UUID `gorm:"column:server_id"`
-	ServerName     string     `gorm:"column:server_name"`
+	ID                          uuid.UUID      `gorm:"column:id"`
+	ClientID                    *uuid.UUID     `gorm:"column:client_id"`
+	ToolRevisionID              *uuid.UUID     `gorm:"column:tool_revision_id"`
+	ToolAlias                   string         `gorm:"column:tool_alias"`
+	Status                      string         `gorm:"column:status"`
+	PolicyDecision              string         `gorm:"column:policy_decision"`
+	AuthorizationOutcome        string         `gorm:"column:authorization_outcome"`
+	AuthorizationReasonCode     string         `gorm:"column:authorization_reason_code"`
+	AuthorizationPolicyRevision string         `gorm:"column:authorization_policy_revision"`
+	AuthorizationDenyRuleIDs    datatypes.JSON `gorm:"column:authorization_deny_rule_ids"`
+	AuthorizationAuditRuleIDs   datatypes.JSON `gorm:"column:authorization_audit_rule_ids"`
+	CreatedAt                   time.Time      `gorm:"column:created_at"`
+	CompletedAt                 *time.Time     `gorm:"column:completed_at"`
+	ClientKey                   string         `gorm:"column:client_key"`
+	ClientName                  string         `gorm:"column:client_name"`
+	ServerID                    *uuid.UUID     `gorm:"column:server_id"`
+	ServerName                  string         `gorm:"column:server_name"`
 }
 
 type MCPToolAuditRow struct {
 	model.MCPToolRevision
-	ServerID   uuid.UUID `gorm:"column:server_id"`
-	ServerName string    `gorm:"column:server_name"`
+	ServerID      uuid.UUID  `gorm:"column:server_id"`
+	ServerName    string     `gorm:"column:server_name"`
+	ReleaseToolID *uuid.UUID `gorm:"column:release_tool_id"`
 }
 
 type MCPSecurityVerdictAuditRow struct {
@@ -295,7 +303,8 @@ func (r *MCPPlatformRepository) ListToolAuditRows(ctx context.Context, serverRev
 		return nil, 0, err
 	}
 	p, s := normalizePage(page, pageSize)
-	err := tx.Select("tool.*, server.id AS server_id, server.display_name AS server_name").
+	err := tx.Joins("LEFT JOIN mcp_catalog_release_tools AS release_tool ON release_tool.tool_revision_id = tool.id AND release_tool.status = 'active'").
+		Select("tool.*, server.id AS server_id, server.display_name AS server_name, release_tool.id AS release_tool_id").
 		Order("server.display_name ASC, tool.alias ASC").Offset((p - 1) * s).Limit(s).Scan(&items).Error
 	return items, total, err
 }
@@ -619,6 +628,115 @@ func (r *MCPPlatformRepository) CreateInvocation(ctx context.Context, item *mode
 	return r.db.WithContext(ctx).Create(item).Error
 }
 
+func (r *MCPPlatformRepository) CreateAuthorizationDecision(ctx context.Context, item *model.MCPAuthorizationDecision) error {
+	err := r.db.WithContext(ctx).Create(item).Error
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "no such table") {
+		return fmt.Errorf("authorization decision table unavailable: %w", err)
+	}
+	return err
+}
+
+func (r *MCPPlatformRepository) GetPolicySetByKey(ctx context.Context, key string) (*model.MCPPolicySet, error) {
+	var item model.MCPPolicySet
+	err := r.db.WithContext(ctx).Where("policy_key = ?", key).First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrMCPPlatformNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *MCPPlatformRepository) CreatePolicySet(ctx context.Context, item *model.MCPPolicySet) error {
+	return r.db.WithContext(ctx).Create(item).Error
+}
+func (r *MCPPlatformRepository) CreatePolicyVersion(ctx context.Context, item *model.MCPPolicyVersion) error {
+	return r.db.WithContext(ctx).Create(item).Error
+}
+
+// ActivatePolicyVersion commits the new immutable version and retires the
+// previous active version in one database transaction. Keeping this pointer
+// transition atomic prevents a failed publish from leaving two active versions
+// or no version at all.
+func (r *MCPPlatformRepository) ActivatePolicyVersion(ctx context.Context, item *model.MCPPolicyVersion) error {
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Create(item).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Model(&model.MCPPolicyVersion{}).
+		Where("policy_set_id = ? AND status = ? AND id <> ?", item.PolicySetID, "active", item.ID).
+		Update("status", "superseded").Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+func (r *MCPPlatformRepository) SupersedePolicyVersions(ctx context.Context, policySetID uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&model.MCPPolicyVersion{}).Where("policy_set_id = ? AND status = ?", policySetID, "active").Update("status", "superseded").Error
+}
+
+func (r *MCPPlatformRepository) NextPolicyVersion(ctx context.Context, policySetID uuid.UUID) (int64, error) {
+	var maxNo *int64
+	if err := r.db.WithContext(ctx).Model(&model.MCPPolicyVersion{}).Where("policy_set_id = ?", policySetID).Select("MAX(version)").Scan(&maxNo).Error; err != nil {
+		return 0, err
+	}
+	if maxNo == nil {
+		return 1, nil
+	}
+	return *maxNo + 1, nil
+}
+
+func (r *MCPPlatformRepository) GetLatestActivePolicyVersion(ctx context.Context, key string) (*model.MCPPolicyVersion, error) {
+	var item model.MCPPolicyVersion
+	err := r.db.WithContext(ctx).Table("mcp_policy_versions AS version").Joins("JOIN mcp_policy_sets AS policy_set ON policy_set.id = version.policy_set_id").Where("policy_set.policy_key = ? AND version.status = ?", key, "active").Order("version.version DESC").First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrMCPPlatformNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *MCPPlatformRepository) UpdateInvocationPolicyDecision(ctx context.Context, id uuid.UUID, decision string) error {
+	return r.db.WithContext(ctx).Model(&model.MCPInvocation{}).Where("id = ?", id).Update("policy_decision", decision).Error
+}
+
+func (r *MCPPlatformRepository) LinkInvocationAuthorizationDecision(ctx context.Context, id, decisionID uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&model.MCPInvocation{}).Where("id = ?", id).Update("authorization_decision_id", decisionID).Error
+}
+
+func (r *MCPPlatformRepository) MarkAuthorizationUpstreamStarted(ctx context.Context, decisionID uuid.UUID) error {
+	tx := r.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	decisionUpdate := tx.Table("mcp_authorization_decisions").Where("decision_id = ?", decisionID).Update("upstream_started", true)
+	if decisionUpdate.Error != nil {
+		tx.Rollback()
+		return decisionUpdate.Error
+	}
+	if decisionUpdate.RowsAffected != 1 {
+		tx.Rollback()
+		return fmt.Errorf("authorization decision %s not found", decisionID)
+	}
+	invocationUpdate := tx.Table("mcp_invocations").Where("id = (SELECT invocation_id FROM mcp_authorization_decisions WHERE decision_id = ?)", decisionID).Update("upstream_started", true)
+	if invocationUpdate.Error != nil {
+		tx.Rollback()
+		return invocationUpdate.Error
+	}
+	if invocationUpdate.RowsAffected != 1 {
+		tx.Rollback()
+		return fmt.Errorf("invocation for authorization decision %s not found", decisionID)
+	}
+	return tx.Commit().Error
+}
+
 func (r *MCPPlatformRepository) GetInvocation(ctx context.Context, id uuid.UUID) (*model.MCPInvocation, error) {
 	var item model.MCPInvocation
 	err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error
@@ -680,12 +798,18 @@ func (r *MCPPlatformRepository) ListInvocations(ctx context.Context, page, pageS
 	p, s := normalizePage(page, pageSize)
 	err := tx.Select(`invocation.id, invocation.client_id, invocation.tool_revision_id,
 		invocation.tool_alias, invocation.status, invocation.policy_decision,
+		authz.outcome AS authorization_outcome,
+		authz.reason_code AS authorization_reason_code,
+		authz.policy_revision AS authorization_policy_revision,
+		COALESCE(authz.deny_rule_ids, '[]') AS authorization_deny_rule_ids,
+		COALESCE(authz.audit_rule_ids, '[]') AS authorization_audit_rule_ids,
 		invocation.created_at, invocation.completed_at,
 		COALESCE(client.client_key, '') AS client_key,
 		COALESCE(client.display_name, '') AS client_name,
 		server.id AS server_id,
 		COALESCE(server.display_name, '') AS server_name`).
 		Joins("LEFT JOIN mcp_clients AS client ON client.id = invocation.client_id").
+		Joins("LEFT JOIN mcp_authorization_decisions AS authz ON authz.invocation_id = invocation.id").
 		Joins("LEFT JOIN mcp_tool_revisions AS tool ON tool.id = invocation.tool_revision_id").
 		Joins("LEFT JOIN mcp_server_revisions AS revision ON revision.id = tool.server_revision_id").
 		Joins("LEFT JOIN mcp_servers AS server ON server.id = revision.server_id").
@@ -728,19 +852,9 @@ func (r *MCPPlatformRepository) ListSecurityVerdictAuditRows(ctx context.Context
 	return items, total, err
 }
 
-func (r *MCPPlatformRepository) ListSecurityRules(ctx context.Context, page, pageSize int) ([]model.MCPRuleDefinition, int64, error) {
-	var items []model.MCPRuleDefinition
-	var total int64
-	tx := r.db.WithContext(ctx).Model(&model.MCPRuleDefinition{})
-	if err := tx.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	p, s := normalizePage(page, pageSize)
-	err := tx.Order("phase ASC, severity DESC, rule_key ASC").Offset((p - 1) * s).Limit(s).Find(&items).Error
-	return items, total, err
-}
-
 func (r *MCPPlatformRepository) ListSecurityRuleMatchNames(ctx context.Context, invocationIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	// Historical compatibility only. The Rego runtime never calls this path;
+	// it is retained so old exports can still resolve legacy rule names.
 	result := make(map[uuid.UUID][]string)
 	if len(invocationIDs) == 0 {
 		return result, nil
@@ -766,27 +880,6 @@ func (r *MCPPlatformRepository) ListSecurityRuleMatchNames(ctx context.Context, 
 		result[row.InvocationID] = append(result[row.InvocationID], row.RuleName)
 	}
 	return result, nil
-}
-
-func (r *MCPPlatformRepository) ListEnabledSecurityRules(ctx context.Context, phase string) ([]model.MCPRuleDefinition, error) {
-	var items []model.MCPRuleDefinition
-	err := r.db.WithContext(ctx).Where("enabled = ? AND phase = ?", true, phase).Order("severity DESC, rule_key ASC").Find(&items).Error
-	return items, err
-}
-
-func (r *MCPPlatformRepository) SetSecurityRuleEnabled(ctx context.Context, id uuid.UUID, enabled bool) (*model.MCPRuleDefinition, error) {
-	result := r.db.WithContext(ctx).Model(&model.MCPRuleDefinition{}).Where("id = ?", id).Update("enabled", enabled)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected != 1 {
-		return nil, ErrMCPPlatformNotFound
-	}
-	var item model.MCPRuleDefinition
-	if err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error; err != nil {
-		return nil, err
-	}
-	return &item, nil
 }
 
 func (r *MCPPlatformRepository) SaveSecurityEvaluation(ctx context.Context, invocationID uuid.UUID, invocationStatus, ruleStatus, aiStatus, resultDigest string, completedAt time.Time, hits []model.MCPRuleHit, verdict *model.MCPSecurityVerdict) error {

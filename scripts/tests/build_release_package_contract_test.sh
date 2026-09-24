@@ -86,7 +86,7 @@ assert_mode() {
   fi
 }
 
-assert_db_migrate_only_runs_v62() {
+assert_db_migrate_only_runs_incremental() {
   local file="$1"
 
   if awk '
@@ -101,7 +101,19 @@ assert_db_migrate_only_runs_v62() {
       print
     }
   ' "${file}" |
-    grep -F -v -e '029_v6.2_agent_guard.sql' -e '030_v6.2_zcode_agent_guard_profile.sql' -e '031_v6.2_agent_escape_permission_first.sql' |
+    grep -F -v \
+      -e '029_v6.2_agent_guard.sql' \
+      -e '030_v6.2_zcode_agent_guard_profile.sql' \
+      -e '031_v6.2_agent_escape_permission_first.sql' \
+      -e '032_v6.3_agent_session_awareness.sql' \
+      -e '033_v6.3_mcp_platform_control_plane.sql' \
+      -e '034_v6.3_mcp_platform_audit_analysis.sql' \
+      -e '035_v6.3_mcp_client_endpoints.sql' \
+      -e '036_v6.3_mcp_security_rules.sql' \
+      -e '037_v6.4_agent_skill_security.sql' \
+      -e '038_v6.4_agent_skill_scan_snapshots.sql' \
+      -e '039_v6.3_mcp_opa_authorization.sql' \
+      -e '040_v6.4_mcp_rego_only_archive.sql' |
     grep -E -- 'migrations/[0-9]{3}[^/]*\.sql' >/dev/null; then
     fail "${file} db-migrate service references a historical migration"
   fi
@@ -121,6 +133,9 @@ assert_contains "${RELEASE_SCRIPT}" 'migrations/030_v6.2_zcode_agent_guard_profi
 assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/030_v6.2_zcode_agent_guard_profile.sql'
 assert_contains "${RELEASE_SCRIPT}" 'migrations/031_v6.2_agent_escape_permission_first.sql'
 assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/031_v6.2_agent_escape_permission_first.sql'
+assert_contains "${RELEASE_SCRIPT}" 'migrations/039_v6.3_mcp_opa_authorization.sql'
+assert_contains "${RELEASE_SCRIPT}" 'backend/migrations/039_v6.3_mcp_opa_authorization.sql'
+assert_contains "${RELEASE_SCRIPT}" 'migrations/040_v6.4_mcp_rego_only_archive.sql'
 assert_min_count "${RELEASE_SCRIPT}" 'copy_release_migration' 2
 assert_contains "${RELEASE_SCRIPT}" 'db-migrate:'
 assert_contains "${RELEASE_SCRIPT}" 'condition: service_completed_successfully'
@@ -134,6 +149,8 @@ if grep -F -- './migrations/001_init.sql:/docker-entrypoint-initdb.d/01-init.sql
 fi
 assert_contains "${ROOT_COMPOSE}" './migrations/029_v6.2_agent_guard.sql:/migrations/029_v6.2_agent_guard.sql:ro'
 assert_contains "${ROOT_COMPOSE}" './migrations/031_v6.2_agent_escape_permission_first.sql:/migrations/031_v6.2_agent_escape_permission_first.sql:ro'
+assert_contains "${ROOT_COMPOSE}" './migrations/039_v6.3_mcp_opa_authorization.sql:/migrations/039_v6.3_mcp_opa_authorization.sql:ro'
+assert_contains "${ROOT_COMPOSE}" './migrations/040_v6.4_mcp_rego_only_archive.sql:/migrations/040_v6.4_mcp_rego_only_archive.sql:ro'
 assert_min_count "${ROOT_COMPOSE}" 'condition: service_completed_successfully' 3
 
 for compose_contract in "${RELEASE_SCRIPT}" "${ROOT_COMPOSE}"; do
@@ -141,9 +158,11 @@ for compose_contract in "${RELEASE_SCRIPT}" "${ROOT_COMPOSE}"; do
   assert_service_contains "${compose_contract}" "db-migrate" 'ON_ERROR_STOP=1'
   assert_service_contains "${compose_contract}" "db-migrate" '/migrations/029_v6.2_agent_guard.sql'
   assert_service_contains "${compose_contract}" "db-migrate" '/migrations/031_v6.2_agent_escape_permission_first.sql'
+  assert_service_contains "${compose_contract}" "db-migrate" '/migrations/039_v6.3_mcp_opa_authorization.sql'
+  assert_service_contains "${compose_contract}" "db-migrate" '/migrations/040_v6.4_mcp_rego_only_archive.sql'
   assert_service_not_contains "${compose_contract}" "db-migrate" '/migrations/001'
   assert_service_not_contains "${compose_contract}" "db-migrate" 'backend/scripts/init.sql'
-  assert_db_migrate_only_runs_v62 "${compose_contract}"
+  assert_db_migrate_only_runs_incremental "${compose_contract}"
   for database_consumer in api-server server dc; do
     assert_service_contains \
       "${compose_contract}" \

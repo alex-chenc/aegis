@@ -320,6 +320,9 @@ func (g *gateway) writeRuntimeRPCError(w http.ResponseWriter, id interface{}, er
 	if strings.Contains(err.Error(), "security policy") {
 		code = -32004
 		message = "tool call blocked by security policy"
+	} else if strings.Contains(err.Error(), "authorization policy") || strings.Contains(err.Error(), "authorization denied") {
+		code = -32005
+		message = "tool call denied by authorization policy"
 	} else if strings.Contains(err.Error(), "not allowed") || strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "rejected (403)") {
 		code = -32003
 		message = "tool is not allowed for this client"

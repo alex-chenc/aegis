@@ -66,8 +66,15 @@ request.interceptors.response.use(
         }
       }
 
-      ElMessage.error(errorMsg)
-      return Promise.reject(new Error(errorMsg))
+      const isPolicyPermissionError = status === 403
+        && String(error.response?.config?.url || '').includes('/mcp-platform/')
+        && (String(error.response?.config?.url || '').includes('/authorization/policies')
+          )
+      if (!isPolicyPermissionError) ElMessage.error(errorMsg)
+      const apiError = new Error(errorMsg) as Error & { status?: number; errorCode?: string }
+      apiError.status = status
+      apiError.errorCode = data?.error_code
+      return Promise.reject(apiError)
     } else if (error.request) {
       // 请求已发送但没有收到响应
       const networkError = translate('common.messages.networkError')
